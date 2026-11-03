@@ -1,0 +1,55 @@
+{
+  "artifacts": {
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/github/deviceTest/RawLens-2.0.74-deviceTest-arm64-v8a.apk": "16a43630f8201f947b796cfa56c899de02a29cfd61215477b3162687f42af8c0",
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/androidTest/github/deviceTest/app-github-deviceTest-androidTest.apk": "c5de64dbe2bbf959b4c16fe6956dca82b00a1f846e96abf18a008add9e56e899"
+  },
+  "serial": "fe79feha9lmb6hhi",
+  "seconds_requested": 8,
+  "runs": [
+    {
+      "mode": [
+        1920,
+        1080,
+        30
+      ],
+      "out": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/docs/refactor/rcd-replacement/recordings-photo-candidate-cached/1920x1080-30-candidate-cached",
+      "instrumentation_ok": true,
+      "command": [
+        "shell",
+        "am",
+        "instrument",
+        "-w",
+        "-r",
+        "-e",
+        "class",
+        "com.matthew.rawlens.PhotoRcdRecordingDeviceTest",
+        "-e",
+        "authorizeRcdRecording",
+        "true",
+        "-e",
+        "width",
+        "1920",
+        "-e",
+        "height",
+        "1080",
+        "-e",
+        "fps",
+        "30",
+        "-e",
+        "seconds",
+        "8",
+        "-e",
+        "label",
+        "candidate-cached",
+        "-e",
+        "responseCache",
+        "true",
+        "-e",
+        "recordingCandidate",
+        "true",
+        "com.matthew.rawlens.rcdcheck.test/androidx.test.runner.AndroidJUnitRunner"
+      ]
+    }
+  ],
+  "scope": "Real RCD + separate grade + Main10/audio recording; actual cadence evaluated from sensor identities, not PTS alone"
+}

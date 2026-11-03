@@ -1,0 +1,277 @@
+{
+  "scope": "Fresh local verification APKs; no publication or signing-clearance claim",
+  "packages": [
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/github/release/RawLens-2.0.72-release.apk",
+      "flavor": "github",
+      "sha256": "0b9c082e1a11920802df1206653e6f814931d751a52a1f7f6ac94657bc1e8f9d",
+      "size_bytes": 93839304,
+      "filters": [],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309",
+            "spirv_sha256": "158ca32400d015d2386b72cf711e69e721588dd2677eb6435d62c25934b89b7d",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "82308bff71cb48c0cb63c7cfdb6ef5a7e850595138e4d2dc2bf2afbe4a2bc3d5",
+            "spirv_sha256": "0e390f1f47a80f79d40fae0b509d47d7f23c2b38df4e44a3f38e1780c4cf9629",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "51e854ab30e247cfacee24bcd7914bab7e8b6ad09058f0636e9ef8ec0bd3226a",
+      "native_libraries": [
+        {
+          "entry": "lib/arm64-v8a/librawLensPhotoRcd.so",
+          "sha256": "c3afb80ebbb34f350b59d0126570d3709a0c1ef8a5cc591e21765b5eb903ad21",
+          "required_jni_exports_present": true
+        },
+        {
+          "entry": "lib/armeabi-v7a/librawLensPhotoRcd.so",
+          "sha256": "e3bb6b2816dd122e4cbf234d8e8ac6daacd2f81b9719f8c190be929e0c08a307",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    },
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/github/release/RawLens-2.0.72-release-armeabi-v7a.apk",
+      "flavor": "github",
+      "sha256": "635d1859e40cfb09001cdac58d820289c9b68d004b3160f0ad475a0ac9ebeb95",
+      "size_bytes": 66295788,
+      "filters": [
+        {
+          "filterType": "ABI",
+          "value": "armeabi-v7a"
+        }
+      ],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309",
+            "spirv_sha256": "158ca32400d015d2386b72cf711e69e721588dd2677eb6435d62c25934b89b7d",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "82308bff71cb48c0cb63c7cfdb6ef5a7e850595138e4d2dc2bf2afbe4a2bc3d5",
+            "spirv_sha256": "0e390f1f47a80f79d40fae0b509d47d7f23c2b38df4e44a3f38e1780c4cf9629",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "51e854ab30e247cfacee24bcd7914bab7e8b6ad09058f0636e9ef8ec0bd3226a",
+      "native_libraries": [
+        {
+          "entry": "lib/armeabi-v7a/librawLensPhotoRcd.so",
+          "sha256": "e3bb6b2816dd122e4cbf234d8e8ac6daacd2f81b9719f8c190be929e0c08a307",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    },
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/github/release/RawLens-2.0.72-release-arm64-v8a.apk",
+      "flavor": "github",
+      "sha256": "71166c1fa2ef1865b1e16b1d92cf4161d8d79d04511bb4d638ce469ba7aaeeb1",
+      "size_bytes": 82256540,
+      "filters": [
+        {
+          "filterType": "ABI",
+          "value": "arm64-v8a"
+        }
+      ],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309",
+            "spirv_sha256": "158ca32400d015d2386b72cf711e69e721588dd2677eb6435d62c25934b89b7d",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "82308bff71cb48c0cb63c7cfdb6ef5a7e850595138e4d2dc2bf2afbe4a2bc3d5",
+            "spirv_sha256": "0e390f1f47a80f79d40fae0b509d47d7f23c2b38df4e44a3f38e1780c4cf9629",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "51e854ab30e247cfacee24bcd7914bab7e8b6ad09058f0636e9ef8ec0bd3226a",
+      "native_libraries": [
+        {
+          "entry": "lib/arm64-v8a/librawLensPhotoRcd.so",
+          "sha256": "c3afb80ebbb34f350b59d0126570d3709a0c1ef8a5cc591e21765b5eb903ad21",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    },
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/fdroid/release/RawLens-2.0.72-release.apk",
+      "flavor": "fdroid",
+      "sha256": "b5ab3c270a8b8b562c850e3f2c9f45761ae3a8d5acae86b0fe40f25777c87826",
+      "size_bytes": 90348518,
+      "filters": [],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309",
+            "spirv_sha256": "158ca32400d015d2386b72cf711e69e721588dd2677eb6435d62c25934b89b7d",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "82308bff71cb48c0cb63c7cfdb6ef5a7e850595138e4d2dc2bf2afbe4a2bc3d5",
+            "spirv_sha256": "0e390f1f47a80f79d40fae0b509d47d7f23c2b38df4e44a3f38e1780c4cf9629",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "51e854ab30e247cfacee24bcd7914bab7e8b6ad09058f0636e9ef8ec0bd3226a",
+      "native_libraries": [
+        {
+          "entry": "lib/arm64-v8a/librawLensPhotoRcd.so",
+          "sha256": "324e2b9091fcf96d631edf3d3404c52b4bf0ece3975d66f2fef08ba554f559c1",
+          "required_jni_exports_present": true
+        },
+        {
+          "entry": "lib/armeabi-v7a/librawLensPhotoRcd.so",
+          "sha256": "2cf5e3f3e6c1489b6cc16c265d315ffe907ce7f4b45e3c0a4a5a1179eb232ba2",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    },
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/fdroid/release/RawLens-2.0.72-release-arm64-v8a.apk",
+      "flavor": "fdroid",
+      "sha256": "d72f6b9f77111bef93b5db3ba227e8cee5c50bb05bb5d377267d3ad71918bcb2",
+      "size_bytes": 78208944,
+      "filters": [
+        {
+          "filterType": "ABI",
+          "value": "arm64-v8a"
+        }
+      ],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309",
+            "spirv_sha256": "158ca32400d015d2386b72cf711e69e721588dd2677eb6435d62c25934b89b7d",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "82308bff71cb48c0cb63c7cfdb6ef5a7e850595138e4d2dc2bf2afbe4a2bc3d5",
+            "spirv_sha256": "0e390f1f47a80f79d40fae0b509d47d7f23c2b38df4e44a3f38e1780c4cf9629",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "51e854ab30e247cfacee24bcd7914bab7e8b6ad09058f0636e9ef8ec0bd3226a",
+      "native_libraries": [
+        {
+          "entry": "lib/arm64-v8a/librawLensPhotoRcd.so",
+          "sha256": "324e2b9091fcf96d631edf3d3404c52b4bf0ece3975d66f2fef08ba554f559c1",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    },
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/fdroid/release/RawLens-2.0.72-release-armeabi-v7a.apk",
+      "flavor": "fdroid",
+      "sha256": "52497dc228c452611dc3b14b91d7cf3896b3620ec002fd43e970de4372319285",
+      "size_bytes": 66835706,
+      "filters": [
+        {
+          "filterType": "ABI",
+          "value": "armeabi-v7a"
+        }
+      ],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309",
+            "spirv_sha256": "158ca32400d015d2386b72cf711e69e721588dd2677eb6435d62c25934b89b7d",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "82308bff71cb48c0cb63c7cfdb6ef5a7e850595138e4d2dc2bf2afbe4a2bc3d5",
+            "spirv_sha256": "0e390f1f47a80f79d40fae0b509d47d7f23c2b38df4e44a3f38e1780c4cf9629",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "51e854ab30e247cfacee24bcd7914bab7e8b6ad09058f0636e9ef8ec0bd3226a",
+      "native_libraries": [
+        {
+          "entry": "lib/armeabi-v7a/librawLensPhotoRcd.so",
+          "sha256": "2cf5e3f3e6c1489b6cc16c265d315ffe907ce7f4b45e3c0a4a5a1179eb232ba2",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    }
+  ],
+  "all_checks_passed": true,
+  "source_baseline_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309"
+}

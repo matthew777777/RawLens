@@ -1,0 +1,59 @@
+{
+  "artifacts": {
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/github/deviceTest/RawLens-2.0.74-deviceTest-arm64-v8a.apk": "ee47ab9f52ae068828c8c8108d8757a98fb279c1dff4b8558d8caec0df41243a",
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/androidTest/github/deviceTest/app-github-deviceTest-androidTest.apk": "f9939af23425edf8cec340973d8f53fa2c6ac1dfb03e5e79fead8436c6953e08"
+  },
+  "installed_apk_sha256": "ee47ab9f52ae068828c8c8108d8757a98fb279c1dff4b8558d8caec0df41243a",
+  "serial": "fe79feha9lmb6hhi",
+  "seconds_requested": 30,
+  "runs": [
+    {
+      "mode": [
+        3840,
+        2160,
+        24
+      ],
+      "out": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/docs/refactor/rcd-replacement/recordings-independent-writer-fence/3840x2160-24-writer-fence",
+      "instrumentation_ok": true,
+      "command": [
+        "shell",
+        "am",
+        "instrument",
+        "-w",
+        "-r",
+        "-e",
+        "class",
+        "com.matthew.rawlens.PhotoRcdRecordingDeviceTest",
+        "-e",
+        "authorizeRcdRecording",
+        "true",
+        "-e",
+        "width",
+        "3840",
+        "-e",
+        "height",
+        "2160",
+        "-e",
+        "fps",
+        "24",
+        "-e",
+        "seconds",
+        "30",
+        "-e",
+        "label",
+        "writer-fence",
+        "-e",
+        "gpuWriter",
+        "true",
+        "-e",
+        "requirementsInput",
+        "true",
+        "-e",
+        "reconstructionScale",
+        "4",
+        "com.matthew.rawlens.rcdcheck.test/androidx.test.runner.AndroidJUnitRunner"
+      ]
+    }
+  ],
+  "scope": "Real RCD + separate grade + Main10/audio recording; actual cadence evaluated from sensor identities, not PTS alone"
+}

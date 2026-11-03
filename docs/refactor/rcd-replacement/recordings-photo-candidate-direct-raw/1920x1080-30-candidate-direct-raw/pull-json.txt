@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/1920x1080-30-candidate-direct-raw.json: 1 file pulled, 0 skipped. 3.2 MB/s (32096 bytes in 0.010s)

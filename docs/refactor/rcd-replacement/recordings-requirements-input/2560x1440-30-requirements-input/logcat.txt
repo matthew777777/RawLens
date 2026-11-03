@@ -1,0 +1,266 @@
+--------- beginning of crash
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: FATAL EXCEPTION: PlayerRender
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: Process: com.matthew.crs, PID: 18594
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: java.lang.IllegalStateException: Unable to retrieve AudioTrack pointer for getPosition()
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at android.media.AudioTrack.native_get_position(Native Method)
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at android.media.AudioTrack.getPlaybackHeadPosition(AudioTrack.java:2417)
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at py0.a(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:73)
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at my0.run(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:23)
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at java.lang.Thread.run(Thread.java:1571)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: FATAL EXCEPTION: CrawDecode
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: Process: com.matthew.crs, PID: 18594
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: java.lang.IllegalStateException: Unable to retrieve AudioTrack pointer for getPosition()
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at android.media.AudioTrack.native_get_position(Native Method)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at android.media.AudioTrack.getPlaybackHeadPosition(AudioTrack.java:2417)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at py0.a(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:73)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at ny0.b(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:64)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at l60.run(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:13)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1100)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at java.lang.Thread.run(Thread.java:1571)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: FATAL EXCEPTION: CrawDecode
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: Process: com.matthew.crs, PID: 18594
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: java.lang.IllegalStateException: Unable to retrieve AudioTrack pointer for getPosition()
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at android.media.AudioTrack.native_get_position(Native Method)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at android.media.AudioTrack.getPlaybackHeadPosition(AudioTrack.java:2417)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at py0.a(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:73)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at ny0.b(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:64)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at l60.run(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:13)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1100)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at java.lang.Thread.run(Thread.java:1571)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: FATAL EXCEPTION: main
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: Process: com.matthew.afprobe, PID: 10488
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: java.lang.NoClassDefFoundError: Failed resolution of: Lkotlin/jvm/internal/Intrinsics;
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at androidx.test.platform.app.AppComponentFactoryRegistry.instantiateApplication(AppComponentFactoryRegistry.kt:2)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at androidx.test.runner.MonitoringInstrumentation.newApplication(MonitoringInstrumentation.java:151)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at androidx.test.runner.AndroidJUnitRunner.newApplication(AndroidJUnitRunner.java:300)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.LoadedApk.makeApplicationInner(LoadedApk.java:1581)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.LoadedApk.makeApplicationInner(LoadedApk.java:1504)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.ActivityThread.handleBindApplication(ActivityThread.java:8699)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.ActivityThread.-$$Nest$mhandleBindApplication(ActivityThread.java:0)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2826)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: Caused by: java.lang.ClassNotFoundException: Didn't find class "kotlin.jvm.internal.Intrinsics" on path: DexPathList[[zip file "/data/app/~~E9O3EMdjeJyX0xXdDgk_lg==/com.matthew.afprobe-X7rr_Gj4dzi07AFHJ2ktBw==/base.apk"],nativeLibraryDirectories=[/data/app/~~E9O3EMdjeJyX0xXdDgk_lg==/com.matthew.afprobe-X7rr_Gj4dzi07AFHJ2ktBw==/lib/arm64, /system/lib64, /system_ext/lib64]]
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at dalvik.system.BaseDexClassLoader.findClass(BaseDexClassLoader.java:248)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at java.lang.ClassLoader.loadClass(ClassLoader.java:644)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at java.lang.ClassLoader.loadClass(ClassLoader.java:580)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	... 15 more
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 6078
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	... 13 more
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 7226
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	... 13 more
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 8026
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	... 13 more
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 8554
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	... 13 more
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 8616
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	... 13 more
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 8785
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	... 13 more
+--------- beginning of main
+11-01 21:09:10.906  6467  6510 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-01 21:09:10.906  6467  6510 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-01 21:09:10.914  6467  6510 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-01 21:09:10.915  6467  6510 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-01 21:09:10.915  6467  6510 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-01 21:09:10.963  6467  6510 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-01 21:09:12.972  6467  6510 I EncodedVideo: public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified
+11-01 21:09:12.972  6467  6510 I EncodedVideo: demosaic path=public-photo-rcd-validation
+11-01 21:09:13.320  6467  6510 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-01 21:09:13.320  6467  6510 I EncodedVideo: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+11-01 21:09:13.348  6467  6510 I EncodedVideo: preview 1920x1080 -> 480x270 box=4
+11-01 21:09:13.351  6467  6510 I EncodedVideo: ours P010 yStride=3840 uvStride=3840
+11-01 21:09:13.603  6467  6510 I EncodedVideo: audio AAC 2ch
+11-01 21:09:14.445  6467  6598 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=8.33D
+11-01 21:09:14.464  6467  6598 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-01 21:09:14.465  6467  6598 I EncodedVideo: RAW input app=2.0.74 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=plane-copy
+11-01 21:09:14.465  6467  6598 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 21:09:14.465  6467  6598 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=903453709938260 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=62,60,62,57,68,66,64,59,67,64,64,69,65,64,64,58,58,59,56,64,60,67,68,64,73,62,61,61,57,65,65,68,63,62,66,66,62,61,68,60,64,69,61,65,60,64,60,62,65,61,70,64,67,68,63,67,66,63,62,63,63,62,64,63,61,66,66,65,55,61,68,68,61,62,64,67,68,63,62,62,63,59,65,63,63,64,58,68,70,64,57,59,68,62,61,64,64,63,65,70,65,71,64,67,63,62,64,62,67,62,64,59,62,64,69,60,64,62,61,66,65,62,64,65,63,64,66,60
+11-01 21:09:16.343  6467  6598 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 21:09:16.343  6467  6598 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=903453776597260 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=63,68,65,65,63,60,66,70,66,59,57,72,64,66,70,71,63,59,64,61,69,61,68,67,63,66,68,62,58,63,64,66,66,71,64,70,64,61,68,53,71,64,63,65,63,65,63,70,62,69,59,68,69,65,68,64,61,61,55,67,56,58,65,60,66,66,61,59,63,69,58,64,68,66,70,65,63,66,65,72,66,66,68,66,64,66,62,64,61,73,61,62,68,63,68,62,72,60,70,65,63,57,75,64,51,67,67,65,64,70,54,62,63,68,60,70,71,60,58,56,64,62,66,66,62,63,60,57
+11-01 21:09:16.358  6467  6545 I EncodedVideo: EVdiag seq=0 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=6220800,1,6220800,33,1,16777219
+11-01 21:09:16.367  6467  6545 I EncodedVideo: EVdiag seq=0 stage=linear-p010 timestamp=903453709938260 size=1920x1080 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=81,525,498,84,518,504,81,503,501,66,512,542,65,512,529,85,522,529,94,501,499,77,525,509,77,509,503,80,526,519,67,527,511,67,515,522,79,507,527,79,518,532,72,517,509,84,518,498,82,528,527,79,508,524,66,515,511,72,514,512,77,532,507,65,516,519,95,520,529,86,513,530,105,506,564,81,538,515,84,505,516,77,509,513,77,524,539,67,509,508,69,507,505,71,510,507 sampleMs=8.740308
+11-01 21:09:16.373  6467  6545 I EncodedVideo: codec P010 yStride=3840(2Bpx) uStride=3840(4Bpx) vStride=3840(4Bpx) nplanes=3 uRem=2073598 vRem=2073598
+11-01 21:09:16.373  6467  6545 I EncodedVideo: codec input queue size=6220800 (capacity, not Y+U+V)
+11-01 21:09:16.380  6467  6545 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy image=1920x1080 format=54 crop=Rect(0, 0 - 1920, 1080) planes=0[row=3840 px=2 pos=0 limit=4147200 capacity=4147200] 1[row=3840 px=4 pos=0 limit=2073598 capacity=2073598] 2[row=3840 px=4 pos=0 limit=2073598 capacity=2073598]
+11-01 21:09:16.381  6467  6545 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy timestamp=903453709938260 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=81,525,498,84,518,504,81,503,501,66,512,542,65,512,529,85,522,529,94,501,499,77,525,509,77,509,503,80,526,519,67,527,511,67,515,522,79,507,527,79,518,532,72,517,509,84,518,498,82,528,527,79,508,524,66,515,511,72,514,512,77,532,507,65,516,519,95,520,529,86,513,530,105,506,564,81,538,515,84,505,516,77,509,513,77,524,539,67,509,508,69,507,505,71,510,507 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.876307
+11-01 21:09:16.454  6467  6579 I EncodedVideo: muxer started: video/hevc 1920x1080 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-01 21:09:17.919  6467  6546 I EncodedVideo: EVdiag seq=1 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=6220800,1,6220800,33,1,16777219
+11-01 21:09:17.923  6467  6546 I EncodedVideo: EVdiag seq=1 stage=linear-p010 timestamp=903453776597260 size=1920x1080 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=77,520,595,92,496,525,95,513,497,87,508,543,68,516,512,91,512,589,90,527,564,74,508,507,85,543,500,94,510,534,73,503,538,65,517,521,69,513,525,78,520,503,65,512,536,96,502,537,80,526,552,80,524,519,71,519,509,90,528,526,65,512,512,66,522,510,85,505,574,100,520,566,116,499,627,88,505,501,84,503,533,68,531,506,86,527,552,81,515,505,102,527,562,76,547,506 sampleMs=4.916692
+11-01 21:09:17.938  6467  6546 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy image=1920x1080 format=54 crop=Rect(0, 0 - 1920, 1080) planes=0[row=3840 px=2 pos=0 limit=4147200 capacity=4147200] 1[row=3840 px=4 pos=0 limit=2073598 capacity=2073598] 2[row=3840 px=4 pos=0 limit=2073598 capacity=2073598]
+11-01 21:09:17.938  6467  6546 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy timestamp=903453776597260 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=77,520,595,92,496,525,95,513,497,87,508,543,68,516,512,91,512,589,90,527,564,74,508,507,85,543,500,94,510,534,73,503,538,65,517,521,69,513,525,78,520,503,65,512,536,96,502,537,80,526,552,80,524,519,71,519,509,90,528,526,65,512,512,66,522,510,85,505,574,100,520,566,116,499,627,88,505,501,84,503,533,68,531,506,86,527,552,81,515,505,102,527,562,76,547,506 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.588538
+11-01 21:09:44.172  6467  6598 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=8.33D
+11-01 21:09:44.172  6467  6598 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 21:09:44.708  6467  6510 I EncodedVideo: stop completed durationMs=626
+11-01 21:10:00.486  8656  8680 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-01 21:10:00.486  8656  8680 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-01 21:10:00.490  8656  8680 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-01 21:10:00.491  8656  8680 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-01 21:10:00.491  8656  8680 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-01 21:10:00.543  8656  8680 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-01 21:10:02.539  8656  8680 I EncodedVideo: public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified
+11-01 21:10:02.539  8656  8680 I EncodedVideo: demosaic path=public-photo-rcd-validation
+11-01 21:10:02.671  8656  8680 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-01 21:10:02.672  8656  8680 I EncodedVideo: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+11-01 21:10:02.691  8656  8680 I EncodedVideo: preview 2560x1440 -> 640x360 box=4
+11-01 21:10:02.699  8656  8680 I EncodedVideo: ours P010 yStride=5120 uvStride=5120
+11-01 21:10:02.798  8656  8680 I EncodedVideo: audio AAC 2ch
+11-01 21:10:03.547  8656  8744 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.71D
+11-01 21:10:03.571  8656  8744 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-01 21:10:03.572  8656  8744 I EncodedVideo: RAW input app=2.0.74 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=plane-copy
+11-01 21:10:03.573  8656  8744 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 21:10:03.573  8656  8744 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=903502800812490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=82,75,68,84,79,83,79,96,122,65,83,99,150,93,120,105,188,79,159,216,152,87,161,155,48,56,78,60,75,69,87,92,80,55,64,84,86,73,88,86,128,68,107,134,140,88,130,144,120,67,123,132,101,76,94,107,85,71,80,62,75,66,99,70,72,64,83,101,104,71,109,100,104,72,95,120,78,65,91,111,113,65,131,101,72,68,65,82,64,73,65,80,56,78,76,61,88,73,81,77,87,77,85,114,82,62,81,91,87,75,72,73,58,65,72,81,80,70,72,78,77,82,81,84,67,62,95,74
+11-01 21:10:05.536  8656  8744 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 21:10:05.537  8656  8744 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=903502867471490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=95,60,78,95,87,62,77,87,91,67,99,104,101,80,109,132,126,95,124,134,183,80,181,193,74,70,93,98,60,73,58,72,83,77,85,88,79,58,97,84,98,61,91,108,173,86,142,167,93,67,74,106,92,73,89,89,51,52,67,70,80,59,62,59,83,89,117,108,107,83,96,94,112,89,128,105,122,75,107,86,89,71,96,98,72,59,99,107,91,70,60,94,79,71,75,69,87,78,81,79,107,77,102,114,64,67,64,79,74,75,73,96,73,74,83,69,79,66,55,75,81,60,98,87,79,55,71,73
+11-01 21:10:05.564  8656  8704 I EncodedVideo: EVdiag seq=0 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=11059200,1,11059200,33,1,16777219
+11-01 21:10:05.579  8656  8704 I EncodedVideo: EVdiag seq=0 stage=linear-p010 timestamp=903502800812490 size=2560x1440 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=166,569,433,226,496,503,224,438,512,309,513,485,374,420,503,330,430,559,93,494,571,117,511,568,177,577,527,165,513,478,280,506,542,256,411,531,272,496,500,188,530,492,124,522,505,140,531,567,162,471,537,194,486,539,168,450,509,139,516,603,192,486,540,214,605,528,81,528,542,124,545,510,212,495,499,203,489,479,138,466,519,115,574,494,123,546,510,131,470,534,181,499,505,209,452,523 sampleMs=14.869846
+11-01 21:10:05.584  8656  8704 I EncodedVideo: codec P010 yStride=5120(2Bpx) uStride=5120(4Bpx) vStride=5120(4Bpx) nplanes=3 uRem=3686398 vRem=3686398
+11-01 21:10:05.584  8656  8704 I EncodedVideo: codec input queue size=11059200 (capacity, not Y+U+V)
+11-01 21:10:05.597  8656  8704 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy image=2560x1440 format=54 crop=Rect(0, 0 - 2560, 1440) planes=0[row=5120 px=2 pos=0 limit=7372800 capacity=7372800] 1[row=5120 px=4 pos=0 limit=3686398 capacity=3686398] 2[row=5120 px=4 pos=0 limit=3686398 capacity=3686398]
+11-01 21:10:05.597  8656  8704 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy timestamp=903502800812490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=166,569,433,226,496,503,224,438,512,309,513,485,374,420,503,330,430,559,93,494,571,117,511,568,177,577,527,165,513,478,280,506,542,256,411,531,272,496,500,188,530,492,124,522,505,140,531,567,162,471,537,194,486,539,168,450,509,139,516,603,192,486,540,214,605,528,81,528,542,124,545,510,212,495,499,203,489,479,138,466,519,115,574,494,123,546,510,131,470,534,181,499,505,209,452,523 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.712616
+11-01 21:10:05.722  8656  8733 I EncodedVideo: muxer started: video/hevc 2560x1440 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-01 21:10:07.304  8656  8703 I EncodedVideo: EVdiag seq=1 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=11059200,1,11059200,33,1,16777219
+11-01 21:10:07.310  8656  8703 I EncodedVideo: EVdiag seq=1 stage=linear-p010 timestamp=903502867471490 size=2560x1440 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=207,472,502,150,503,532,219,493,535,226,528,563,242,583,546,370,385,564,156,525,512,91,553,528,174,491,563,143,501,495,151,450,533,237,420,478,214,512,509,152,490,527,114,526,479,129,495,515,212,560,523,270,528,523,164,468,541,202,532,586,171,553,494,167,520,551,113,501,584,142,558,555,259,519,497,238,478,507,130,470,571,117,553,499,122,505,501,111,498,508,230,459,547,256,439,470 sampleMs=5.562846
+11-01 21:10:07.326  8656  8703 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy image=2560x1440 format=54 crop=Rect(0, 0 - 2560, 1440) planes=0[row=5120 px=2 pos=0 limit=7372800 capacity=7372800] 1[row=5120 px=4 pos=0 limit=3686398 capacity=3686398] 2[row=5120 px=4 pos=0 limit=3686398 capacity=3686398]
+11-01 21:10:07.326  8656  8703 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy timestamp=903502867471490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=207,472,502,150,503,532,219,493,535,226,528,563,242,583,546,370,385,564,156,525,512,91,553,528,174,491,563,143,501,495,151,450,533,237,420,478,214,512,509,152,490,527,114,526,479,129,495,515,212,560,523,270,528,523,164,468,541,202,532,586,171,553,494,167,520,551,113,501,584,142,558,555,259,519,497,238,478,507,130,470,571,117,553,499,122,505,501,111,498,508,230,459,547,256,439,470 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.690461
+11-01 21:10:33.222  8656  8744 I EncodedVideo: Encoded Video AF PASSIVE_FOCUSED mode=CONT_VIDEO fd=6.75D
+11-01 21:10:33.741  8656  8680 I EncodedVideo: stop completed durationMs=658

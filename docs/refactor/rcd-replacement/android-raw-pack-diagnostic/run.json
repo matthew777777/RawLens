@@ -1,0 +1,94 @@
+{
+  "scope": "Pack-only diagnostic on uncontrolled phone workload; excludes camera import, CPU staging upload, RCD, grade/P010, encoding and recording cadence",
+  "serial": "fe79feha9lmb6hhi",
+  "remote_directory": "/data/local/tmp/rawlens-pack-diagnostic-2cc4317d1fcc",
+  "compile_command": [
+    "/Users/monikamalinowska/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android30-clang++",
+    "-std=c++17",
+    "-O2",
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/photo-rcd/raw_cell_pack_host.cc",
+    "-lvulkan",
+    "-static-libstdc++",
+    "-o",
+    "/private/tmp/rawlens-android-raw-pack-benchmark/raw-pack-diagnostic"
+  ],
+  "rows": [
+    {
+      "source": [
+        4080,
+        3060
+      ],
+      "crop": [
+        120,
+        450,
+        3840,
+        2160
+      ],
+      "packed_bytes": 16588800,
+      "packed_sha256": "27526b0d8104822e5561d15d5078685930eded3fd29ef2eaff8357806f1859fd",
+      "packing_exact": true,
+      "gpu_samples_ms_all": [
+        6.22523,
+        5.46177,
+        4.54062,
+        3.89877,
+        3.55292,
+        3.29569,
+        4.30308,
+        3.91069,
+        3.22469,
+        3.27715,
+        3.099,
+        4.86923
+      ],
+      "warmup_dispatches_excluded": 2,
+      "warm_sample_count": 10,
+      "gpu_median_warm_ms": 3.7258449999999996,
+      "gpu_p95_warm_ms": 4.86923,
+      "process_wall_ms_including_setup_file_io_and_adb": 465.6491669884417,
+      "stdout": "host device: Mali-G615 MC2 driver 184553472\npack_gpu_ms=[6.22523,5.46177,4.54062,3.89877,3.55292,3.29569,4.30308,3.91069,3.22469,3.27715,3.099,4.86923]"
+    },
+    {
+      "source": [
+        4080,
+        3060
+      ],
+      "crop": [
+        121,
+        451,
+        3839,
+        2159
+      ],
+      "packed_bytes": 16588800,
+      "packed_sha256": "70ee6e4f86add1c0f1aec42a2a3e3b320611413c5da720cf2d788b9cf9750445",
+      "packing_exact": true,
+      "gpu_samples_ms_all": [
+        3.09754,
+        4.25285,
+        4.92346,
+        5.79485,
+        4.70677,
+        7.13392,
+        2.77538,
+        2.82238,
+        3.71885,
+        3.727,
+        2.508,
+        4.19569
+      ],
+      "warmup_dispatches_excluded": 2,
+      "warm_sample_count": 10,
+      "gpu_median_warm_ms": 3.9613449999999997,
+      "gpu_p95_warm_ms": 7.13392,
+      "process_wall_ms_including_setup_file_io_and_adb": 453.0185000039637,
+      "stdout": "host device: Mali-G615 MC2 driver 184553472\npack_gpu_ms=[3.09754,4.25285,4.92346,5.79485,4.70677,7.13392,2.77538,2.82238,3.71885,3.727,2.508,4.19569]"
+    }
+  ],
+  "artifacts": {
+    "raw-pack-diagnostic": "2cc4317d1fcc1f9ce6f44fa8a438e6facec480ca96fd9fffc0ae77bbd57f6a39",
+    "pack.spv": "1981dcb03b096604547fa170a8968fb0af9fcfe50fd602e1543cd7a078d663de"
+  },
+  "recording_targets_passed": false,
+  "input_pattern": "row-repeated uint16 ramp: code(x,y)=(13*x)&65535",
+  "input_sha256": "a21620340e5c16ea06068c0a57123ee7e4f9db98df4ce52ef7f4af1d946b04de"
+}

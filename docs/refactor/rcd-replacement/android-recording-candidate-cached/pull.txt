@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-correctness/canonical.json: 1 file pulled, 0 skipped. 11.7 MB/s (62124 bytes in 0.005s)

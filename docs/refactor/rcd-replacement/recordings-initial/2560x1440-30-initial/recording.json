@@ -1,0 +1,995 @@
+{
+  "requested": [
+    2560,
+    1440,
+    30
+  ],
+  "cameraId": "0",
+  "profile": "BT709",
+  "preview": false,
+  "sourcePolicy": "FULL rung, existing 16:9 crop\/FOV, full-source RCD; no detail reduction",
+  "intervals": [
+    {
+      "second": 1,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=1791, framesAcquired=2, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=77)"
+    },
+    {
+      "second": 2,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=2793, framesAcquired=2, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=77)"
+    },
+    {
+      "second": 3,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=3795, framesAcquired=3, framesGraded=1, framesDropped=1, fileBytes=36425, waitFreeFrames=1, fallbackWaits=0, cpuChainMsAvg=1757.8043, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=4.0155063, ioBusyPct=40, encBusyPct=226, memPct=79)"
+    },
+    {
+      "second": 4,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=4797, framesAcquired=3, framesGraded=1, framesDropped=1, fileBytes=52307, waitFreeFrames=1, fallbackWaits=0, cpuChainMsAvg=1757.8043, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=1.3321215, ioBusyPct=40, encBusyPct=226, memPct=79)"
+    },
+    {
+      "second": 5,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=5801, framesAcquired=4, framesGraded=2, framesDropped=1, fileBytes=68174, waitFreeFrames=2, fallbackWaits=0, cpuChainMsAvg=1757.3076, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=1.1980288, ioBusyPct=41, encBusyPct=214, memPct=79)"
+    },
+    {
+      "second": 6,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=6804, framesAcquired=5, framesGraded=3, framesDropped=1, fileBytes=84225, waitFreeFrames=3, fallbackWaits=0, cpuChainMsAvg=1761.7999, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=1.1406344, ioBusyPct=40, encBusyPct=201, memPct=78)"
+    },
+    {
+      "second": 7,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=7806, framesAcquired=5, framesGraded=3, framesDropped=1, fileBytes=100375, waitFreeFrames=3, fallbackWaits=0, cpuChainMsAvg=1761.7999, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.8872695, ioBusyPct=40, encBusyPct=201, memPct=77)"
+    },
+    {
+      "second": 8,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=8808, framesAcquired=6, framesGraded=4, framesDropped=1, fileBytes=116396, waitFreeFrames=4, fallbackWaits=0, cpuChainMsAvg=1765.2068, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.90688723, ioBusyPct=39, encBusyPct=191, memPct=77)"
+    },
+    {
+      "second": 9,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=9813, framesAcquired=6, framesGraded=4, framesDropped=1, fileBytes=132315, waitFreeFrames=4, fallbackWaits=0, cpuChainMsAvg=1765.2068, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.7673622, ioBusyPct=39, encBusyPct=191, memPct=77)"
+    },
+    {
+      "second": 10,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=10816, framesAcquired=7, framesGraded=5, framesDropped=1, fileBytes=148366, waitFreeFrames=5, fallbackWaits=0, cpuChainMsAvg=1770.5095, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.79790115, ioBusyPct=40, encBusyPct=181, memPct=78)"
+    },
+    {
+      "second": 11,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=11819, framesAcquired=7, framesGraded=5, framesDropped=1, fileBytes=164448, waitFreeFrames=5, fallbackWaits=0, cpuChainMsAvg=1770.5095, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.70403856, ioBusyPct=40, encBusyPct=181, memPct=77)"
+    },
+    {
+      "second": 12,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=12821, framesAcquired=8, framesGraded=6, framesDropped=1, fileBytes=180686, waitFreeFrames=6, fallbackWaits=0, cpuChainMsAvg=1783.2485, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.7349752, ioBusyPct=39, encBusyPct=170, memPct=77)"
+    },
+    {
+      "second": 13,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=13825, framesAcquired=8, framesGraded=6, framesDropped=1, fileBytes=196535, waitFreeFrames=6, fallbackWaits=0, cpuChainMsAvg=1783.2485, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.664895, ioBusyPct=39, encBusyPct=170, memPct=78)"
+    },
+    {
+      "second": 14,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=14827, framesAcquired=9, framesGraded=7, framesDropped=2, fileBytes=212665, waitFreeFrames=7, fallbackWaits=0, cpuChainMsAvg=1800.2206, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.6938506, ioBusyPct=38, encBusyPct=159, memPct=78)"
+    },
+    {
+      "second": 15,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=15829, framesAcquired=9, framesGraded=7, framesDropped=2, fileBytes=228532, waitFreeFrames=7, fallbackWaits=0, cpuChainMsAvg=1800.2206, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.638365, ioBusyPct=38, encBusyPct=159, memPct=78)"
+    },
+    {
+      "second": 16,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=16832, framesAcquired=10, framesGraded=8, framesDropped=2, fileBytes=244745, waitFreeFrames=8, fallbackWaits=0, cpuChainMsAvg=1817.7275, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.6649289, ioBusyPct=39, encBusyPct=153, memPct=78)"
+    },
+    {
+      "second": 17,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=17834, framesAcquired=10, framesGraded=8, framesDropped=2, fileBytes=260751, waitFreeFrames=8, fallbackWaits=0, cpuChainMsAvg=1817.7275, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.6190841, ioBusyPct=39, encBusyPct=153, memPct=78)"
+    },
+    {
+      "second": 18,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=18837, framesAcquired=11, framesGraded=9, framesDropped=2, fileBytes=276865, waitFreeFrames=9, fallbackWaits=0, cpuChainMsAvg=1834.9489, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.6434707, ioBusyPct=39, encBusyPct=145, memPct=78)"
+    },
+    {
+      "second": 19,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=19840, framesAcquired=11, framesGraded=9, framesDropped=2, fileBytes=293041, waitFreeFrames=9, fallbackWaits=0, cpuChainMsAvg=1834.9489, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.6044757, ioBusyPct=39, encBusyPct=145, memPct=78)"
+    },
+    {
+      "second": 20,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=20844, framesAcquired=12, framesGraded=10, framesDropped=2, fileBytes=5566340, waitFreeFrames=10, fallbackWaits=0, cpuChainMsAvg=1848.6594, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.6267324, ioBusyPct=40, encBusyPct=138, memPct=78)"
+    },
+    {
+      "second": 21,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=21854, framesAcquired=12, framesGraded=10, framesDropped=2, fileBytes=5582348, waitFreeFrames=10, fallbackWaits=0, cpuChainMsAvg=1848.6594, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.5927511, ioBusyPct=40, encBusyPct=138, memPct=78)"
+    },
+    {
+      "second": 22,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=22857, framesAcquired=13, framesGraded=11, framesDropped=2, fileBytes=5598474, waitFreeFrames=11, fallbackWaits=0, cpuChainMsAvg=1861.6366, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.61348635, ioBusyPct=39, encBusyPct=134, memPct=78)"
+    },
+    {
+      "second": 23,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=23863, framesAcquired=13, framesGraded=11, framesDropped=2, fileBytes=5614512, waitFreeFrames=11, fallbackWaits=0, cpuChainMsAvg=1861.6366, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.58340216, ioBusyPct=39, encBusyPct=134, memPct=78)"
+    },
+    {
+      "second": 24,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=24870, framesAcquired=14, framesGraded=12, framesDropped=2, fileBytes=7528023, waitFreeFrames=12, fallbackWaits=0, cpuChainMsAvg=1873.6901, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.602618, ioBusyPct=40, encBusyPct=129, memPct=78)"
+    },
+    {
+      "second": 25,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=25873, framesAcquired=14, framesGraded=12, framesDropped=2, fileBytes=7544244, waitFreeFrames=12, fallbackWaits=0, cpuChainMsAvg=1873.6901, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.57582927, ioBusyPct=40, encBusyPct=129, memPct=78)"
+    },
+    {
+      "second": 26,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=26875, framesAcquired=15, framesGraded=13, framesDropped=3, fileBytes=8005899, waitFreeFrames=13, fallbackWaits=0, cpuChainMsAvg=1881.3715, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.59373546, ioBusyPct=39, encBusyPct=122, memPct=78)"
+    },
+    {
+      "second": 27,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=27879, framesAcquired=15, framesGraded=13, framesDropped=3, fileBytes=8022019, waitFreeFrames=13, fallbackWaits=0, cpuChainMsAvg=1881.3715, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.56950337, ioBusyPct=39, encBusyPct=122, memPct=78)"
+    },
+    {
+      "second": 28,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=28884, framesAcquired=16, framesGraded=14, framesDropped=3, fileBytes=8156641, waitFreeFrames=14, fallbackWaits=0, cpuChainMsAvg=1889.1816, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.5862163, ioBusyPct=39, encBusyPct=114, memPct=78)"
+    },
+    {
+      "second": 29,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=29890, framesAcquired=16, framesGraded=14, framesDropped=3, fileBytes=8172706, waitFreeFrames=14, fallbackWaits=0, cpuChainMsAvg=1889.1816, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.5640412, ioBusyPct=39, encBusyPct=114, memPct=78)"
+    },
+    {
+      "second": 30,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=30894, framesAcquired=17, framesGraded=15, framesDropped=3, fileBytes=8205592, waitFreeFrames=15, fallbackWaits=0, cpuChainMsAvg=1897.9978, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.5797507, ioBusyPct=37, encBusyPct=110, memPct=78)"
+    }
+  ],
+  "startWallNs": 885929640160193,
+  "stats": {
+    "aacBytes": 477044,
+    "audioChunks": 697,
+    "audioDropped": 15,
+    "audioFrames": 1427456,
+    "audioOutBufs": 1396,
+    "copyMsAvg": 10.59107,
+    "copyMsMax": 15.558461,
+    "cpuChainMsAvg": 1897.9978,
+    "cpuChainMsMax": 1989.941,
+    "cropRect": "3840x2160@(120,450)",
+    "cycleMsMax": 1992.2584,
+    "cycleOverBudget": 16,
+    "degradedFrames": 0,
+    "exportSize": "2560x1440",
+    "fallbackWaits": 0,
+    "fenceWaitMsAvg": 13.476563,
+    "fenceWaitMsMax": 21.559383,
+    "fileBytes": 8224013,
+    "frameErrors": 1,
+    "framesAcquired": 17,
+    "framesDropped": 4,
+    "framesGraded": 15,
+    "fusedFrames": 0,
+    "hasAudio": true,
+    "hasStabGyro": false,
+    "headDroppedFrames": 1,
+    "heatDegraded": false,
+    "inputStarved": 0,
+    "maxBacklogDepth": 7,
+    "outputBuffers": 16,
+    "outputBytes": 7736272,
+    "overBudgetFrames": 15,
+    "previewFrames": 0,
+    "previewSkipped": 15,
+    "profile": "BT709",
+    "rcdFrames": 15,
+    "resultMiss": 1,
+    "sensorSize": "4080x3060",
+    "shadedFrames": 15,
+    "stabGyroSamples": 0,
+    "staleResults": 16,
+    "thermalStatus": 0,
+    "true10Bit": true,
+    "waitFreeFrames": 15
+  },
+  "actualOutput": [
+    2560,
+    1440
+  ],
+  "trackFormats": [
+    "{track-id=1, level=16384, mime=video\/hevc, frame-count=15, profile=2, language=```, color-standard=1, display-width=2560, color-transfer=3, durationUs=12831900, display-height=1440, width=2560, color-range=2, max-input-size=1357064, frame-rate=1, height=1440, csd-0=java.nio.HeapByteBuffer[pos=0 lim=79 cap=79]}",
+    "{max-bitrate=128000, sample-rate=48000, track-id=2, mime=audio\/mp4a-latm, profile=2, bitrate=128000, language=```, aac-profile=2, encoder-delay=0, durationUs=29822700, channel-count=2, encoder-padding=0, max-input-size=554, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}"
+  ],
+  "fileBytes": 8224013,
+  "trace": {
+    "columns": [
+      "kind",
+      "wall_ns",
+      "sensor_ns",
+      "identity_or_pts",
+      "value"
+    ],
+    "kinds": {
+      "1": "capture-result",
+      "2": "acquired-image",
+      "3": "submitted-RCD",
+      "4": "queued-codec",
+      "5": "muxed-video",
+      "6": "RCD-render-wall-ns"
+    },
+    "events": [
+      [
+        2,
+        885931006952885,
+        885930956013260,
+        -1,
+        0
+      ],
+      [
+        1,
+        885931007980578,
+        885930956013260,
+        0,
+        33350000
+      ],
+      [
+        2,
+        885931035737193,
+        885930989342260,
+        -1,
+        0
+      ],
+      [
+        6,
+        885932779595886,
+        885930989342260,
+        0,
+        1742317154
+      ],
+      [
+        3,
+        885932794670116,
+        885930989342260,
+        0,
+        0
+      ],
+      [
+        1,
+        885932795154116,
+        885930989342260,
+        1,
+        33350000
+      ],
+      [
+        2,
+        885932795850655,
+        885931056001260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885932853839962,
+        885930989342260,
+        0,
+        0
+      ],
+      [
+        5,
+        885932946489732,
+        0,
+        0,
+        79
+      ],
+      [
+        5,
+        885932952620270,
+        0,
+        0,
+        1036336
+      ],
+      [
+        6,
+        885934543338732,
+        885931056001260,
+        1,
+        1746822154
+      ],
+      [
+        3,
+        885934549286655,
+        885931056001260,
+        1,
+        66659
+      ],
+      [
+        2,
+        885934550800886,
+        885931089331260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885934587189501,
+        885931056001260,
+        1,
+        66659
+      ],
+      [
+        5,
+        885934623860193,
+        0,
+        66659,
+        1357044
+      ],
+      [
+        6,
+        885936346613809,
+        885931089331260,
+        2,
+        1795550769
+      ],
+      [
+        3,
+        885936353212886,
+        885931089331260,
+        1,
+        99989
+      ],
+      [
+        2,
+        885936353795578,
+        885931122660260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885936377547270,
+        885931089331260,
+        2,
+        99989
+      ],
+      [
+        5,
+        885936406567270,
+        0,
+        99989,
+        634367
+      ],
+      [
+        6,
+        885938149537424,
+        885931122660260,
+        0,
+        1795431000
+      ],
+      [
+        3,
+        885938149903271,
+        885931122660260,
+        1,
+        133318
+      ],
+      [
+        2,
+        885938151786424,
+        885931155990260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885938173217501,
+        885931122660260,
+        3,
+        133318
+      ],
+      [
+        5,
+        885938205027578,
+        0,
+        133318,
+        347657
+      ],
+      [
+        6,
+        885939969949194,
+        885931155990260,
+        1,
+        1817802154
+      ],
+      [
+        3,
+        885939970319040,
+        885931155990260,
+        1,
+        166648
+      ],
+      [
+        2,
+        885939972164194,
+        885931189319260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885939996778424,
+        885931155990260,
+        4,
+        166648
+      ],
+      [
+        5,
+        885940029348271,
+        0,
+        166648,
+        353745
+      ],
+      [
+        6,
+        885941869857194,
+        885931189319260,
+        2,
+        1897432231
+      ],
+      [
+        3,
+        885941870250117,
+        885931189319260,
+        1,
+        199977
+      ],
+      [
+        2,
+        885941872418117,
+        885931222649260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885941896875348,
+        885931189319260,
+        5,
+        199977
+      ],
+      [
+        5,
+        885941918229425,
+        0,
+        199977,
+        321946
+      ],
+      [
+        6,
+        885943825206425,
+        885931222649260,
+        0,
+        1952504308
+      ],
+      [
+        3,
+        885943825590040,
+        885931222649260,
+        1,
+        233307
+      ],
+      [
+        1,
+        885943825734425,
+        885931022672260,
+        2,
+        33350000
+      ],
+      [
+        2,
+        885943829497194,
+        885931289308260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885943850152809,
+        885931222649260,
+        6,
+        233307
+      ],
+      [
+        5,
+        885943872613194,
+        0,
+        233307,
+        261133
+      ],
+      [
+        6,
+        885945805109809,
+        885931289308260,
+        1,
+        1974823308
+      ],
+      [
+        3,
+        885945805498733,
+        885931289308260,
+        2,
+        299966
+      ],
+      [
+        2,
+        885945807587348,
+        885931322638260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885945848855963,
+        885931289308260,
+        7,
+        299966
+      ],
+      [
+        5,
+        885945882210656,
+        0,
+        299966,
+        261940
+      ],
+      [
+        6,
+        885947797407348,
+        885931322638260,
+        2,
+        1989507616
+      ],
+      [
+        3,
+        885947797768194,
+        885931322638260,
+        2,
+        333296
+      ],
+      [
+        2,
+        885947800130963,
+        885932855797260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885947829388810,
+        885931322638260,
+        8,
+        333296
+      ],
+      [
+        5,
+        885947854487348,
+        0,
+        333296,
+        260871
+      ],
+      [
+        6,
+        885949771956579,
+        885932855797260,
+        0,
+        1971544616
+      ],
+      [
+        3,
+        885949772397194,
+        885932855797260,
+        2,
+        1866455
+      ],
+      [
+        2,
+        885949774240194,
+        885932889126260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885949817575348,
+        885932855797260,
+        9,
+        1866455
+      ],
+      [
+        5,
+        885949839997194,
+        0,
+        1866455,
+        422394
+      ],
+      [
+        6,
+        885951752410425,
+        885932889126260,
+        1,
+        1977891077
+      ],
+      [
+        3,
+        885951752884810,
+        885932889126260,
+        2,
+        1899784
+      ],
+      [
+        2,
+        885951753095887,
+        885934622263260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885951779886117,
+        885932889126260,
+        10,
+        1899784
+      ],
+      [
+        5,
+        885951813846656,
+        0,
+        1899784,
+        930128
+      ],
+      [
+        6,
+        885953735105195,
+        885934622263260,
+        2,
+        1981742769
+      ],
+      [
+        3,
+        885953735460887,
+        885934622263260,
+        2,
+        3632921
+      ],
+      [
+        2,
+        885953737346118,
+        885936422059260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885953762943271,
+        885934622263260,
+        11,
+        3632921
+      ],
+      [
+        5,
+        885953789788271,
+        0,
+        3632921,
+        967496
+      ],
+      [
+        6,
+        885955687739887,
+        885936422059260,
+        0,
+        1950035769
+      ],
+      [
+        3,
+        885955688107348,
+        885936422059260,
+        2,
+        5432717
+      ],
+      [
+        1,
+        885955688271041,
+        885931056001260,
+        3,
+        33350000
+      ],
+      [
+        2,
+        885955690706656,
+        885940021651260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885955722664579,
+        885936422059260,
+        12,
+        5432717
+      ],
+      [
+        5,
+        885955744927041,
+        0,
+        5432717,
+        445669
+      ],
+      [
+        6,
+        885957650080272,
+        885940021651260,
+        1,
+        1959009307
+      ],
+      [
+        3,
+        885957650470656,
+        885940021651260,
+        3,
+        9032309
+      ],
+      [
+        2,
+        885957652102426,
+        885941921435260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885957695113426,
+        885940021651260,
+        13,
+        9032309
+      ],
+      [
+        5,
+        885957708762349,
+        0,
+        9032309,
+        118645
+      ],
+      [
+        6,
+        885959629270656,
+        885941921435260,
+        2,
+        1976893846
+      ],
+      [
+        3,
+        885959629628503,
+        885941921435260,
+        3,
+        10932093
+      ],
+      [
+        2,
+        885959632237118,
+        885943887879260,
+        -1,
+        0
+      ],
+      [
+        4,
+        885959654402426,
+        885941921435260,
+        14,
+        10932093
+      ],
+      [
+        5,
+        885959679366041,
+        0,
+        10932093,
+        16822
+      ],
+      [
+        1,
+        885961191192887,
+        885931089331260,
+        4,
+        33350000
+      ],
+      [
+        1,
+        885961191340503,
+        885931122660260,
+        5,
+        33350000
+      ],
+      [
+        1,
+        885961191413118,
+        885931155990260,
+        6,
+        33350000
+      ],
+      [
+        1,
+        885961191440580,
+        885931189319260,
+        7,
+        33350000
+      ],
+      [
+        1,
+        885961191462733,
+        885931222649260,
+        8,
+        33350000
+      ],
+      [
+        1,
+        885961191479964,
+        885931255979260,
+        9,
+        33350000
+      ],
+      [
+        1,
+        885961191495964,
+        885931289308260,
+        10,
+        33350000
+      ],
+      [
+        1,
+        885961191511964,
+        885931322638260,
+        11,
+        33350000
+      ],
+      [
+        1,
+        885961191577195,
+        885932855797260,
+        13,
+        33350000
+      ],
+      [
+        1,
+        885961191916887,
+        885932889126260,
+        14,
+        33350000
+      ],
+      [
+        1,
+        885961191981426,
+        885934622263260,
+        16,
+        33350000
+      ],
+      [
+        1,
+        885961192003656,
+        885936422059260,
+        18,
+        33350000
+      ],
+      [
+        1,
+        885961192020580,
+        885938221855260,
+        20,
+        33350000
+      ],
+      [
+        1,
+        885961192094964,
+        885940021651260,
+        22,
+        33350000
+      ],
+      [
+        1,
+        885961192125118,
+        885941921435260,
+        24,
+        33350000
+      ],
+      [
+        1,
+        885961192146656,
+        885943887879260,
+        26,
+        33350000
+      ],
+      [
+        1,
+        885961192163656,
+        885943921208260,
+        27,
+        33350000
+      ],
+      [
+        1,
+        885961192183041,
+        885945887652260,
+        29,
+        33350000
+      ],
+      [
+        1,
+        885961192198118,
+        885947854096260,
+        31,
+        33350000
+      ],
+      [
+        1,
+        885961192235964,
+        885949853869260,
+        33,
+        33350000
+      ],
+      [
+        1,
+        885961192266656,
+        885951820313260,
+        35,
+        33350000
+      ],
+      [
+        1,
+        885961192284810,
+        885953786757260,
+        37,
+        33350000
+      ],
+      [
+        1,
+        885961192303349,
+        885955753201260,
+        39,
+        33350000
+      ],
+      [
+        1,
+        885961192318041,
+        885955786530260,
+        40,
+        33350000
+      ],
+      [
+        1,
+        885961192335580,
+        885957719644260,
+        42,
+        33350000
+      ],
+      [
+        1,
+        885961192369503,
+        885959686088260,
+        44,
+        33350000
+      ]
+    ]
+  },
+  "endWallNs": 885961391102733
+}

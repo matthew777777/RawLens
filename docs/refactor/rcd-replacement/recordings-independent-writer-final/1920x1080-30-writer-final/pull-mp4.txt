@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/1920x1080-30-writer-final.mp4: 1 file pulled, 0 skipped. 34.2 MB/s (121839519 bytes in 3.401s)

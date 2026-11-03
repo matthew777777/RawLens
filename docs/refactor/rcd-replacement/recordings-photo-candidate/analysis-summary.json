@@ -1,0 +1,35 @@
+[
+  {
+    "mode": "1920x1080-30-photo-candidate",
+    "passed": false,
+    "fps": 0.8721911954740953,
+    "render_ms": {
+      "median": 1097.197538,
+      "p95": 1193.627077,
+      "max": 1701.517539
+    },
+    "error": null
+  },
+  {
+    "mode": "2560x1440-30-photo-candidate",
+    "passed": false,
+    "fps": 0.8384175874138668,
+    "render_ms": {
+      "median": 1118.2256925000002,
+      "p95": 1217.756385,
+      "max": 1383.661846
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-photo-candidate",
+    "passed": false,
+    "fps": 0.8095683578125602,
+    "render_ms": {
+      "median": 1136.4999615000002,
+      "p95": 1242.770154,
+      "max": 1407.883769
+    },
+    "error": null
+  }
+]

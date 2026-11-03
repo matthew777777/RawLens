@@ -1,0 +1,501 @@
+--------- beginning of crash
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: FATAL EXCEPTION: PlayerRender
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: Process: com.matthew.crs, PID: 18594
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: java.lang.IllegalStateException: Unable to retrieve AudioTrack pointer for getPosition()
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at android.media.AudioTrack.native_get_position(Native Method)
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at android.media.AudioTrack.getPlaybackHeadPosition(AudioTrack.java:2417)
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at py0.a(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:73)
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at my0.run(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:23)
+10-29 19:07:01.486 18594 24357 E AndroidRuntime: 	at java.lang.Thread.run(Thread.java:1571)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: FATAL EXCEPTION: CrawDecode
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: Process: com.matthew.crs, PID: 18594
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: java.lang.IllegalStateException: Unable to retrieve AudioTrack pointer for getPosition()
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at android.media.AudioTrack.native_get_position(Native Method)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at android.media.AudioTrack.getPlaybackHeadPosition(AudioTrack.java:2417)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at py0.a(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:73)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at ny0.b(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:64)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at l60.run(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:13)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1100)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+10-29 19:07:01.486 18594 23416 E AndroidRuntime: 	at java.lang.Thread.run(Thread.java:1571)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: FATAL EXCEPTION: CrawDecode
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: Process: com.matthew.crs, PID: 18594
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: java.lang.IllegalStateException: Unable to retrieve AudioTrack pointer for getPosition()
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at android.media.AudioTrack.native_get_position(Native Method)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at android.media.AudioTrack.getPlaybackHeadPosition(AudioTrack.java:2417)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at py0.a(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:73)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at ny0.b(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:64)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at l60.run(r8-map-id-c46521a95f7be1e341742848c671ca40db78e22ef31a00f09b6332c683853c24:13)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1100)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+10-29 19:07:01.488 18594 23417 E AndroidRuntime: 	at java.lang.Thread.run(Thread.java:1571)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: FATAL EXCEPTION: main
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: Process: com.matthew.afprobe, PID: 10488
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: java.lang.NoClassDefFoundError: Failed resolution of: Lkotlin/jvm/internal/Intrinsics;
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at androidx.test.platform.app.AppComponentFactoryRegistry.instantiateApplication(AppComponentFactoryRegistry.kt:2)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at androidx.test.runner.MonitoringInstrumentation.newApplication(MonitoringInstrumentation.java:151)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at androidx.test.runner.AndroidJUnitRunner.newApplication(AndroidJUnitRunner.java:300)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.LoadedApk.makeApplicationInner(LoadedApk.java:1581)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.LoadedApk.makeApplicationInner(LoadedApk.java:1504)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.ActivityThread.handleBindApplication(ActivityThread.java:8699)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.ActivityThread.-$$Nest$mhandleBindApplication(ActivityThread.java:0)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2826)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: Caused by: java.lang.ClassNotFoundException: Didn't find class "kotlin.jvm.internal.Intrinsics" on path: DexPathList[[zip file "/data/app/~~E9O3EMdjeJyX0xXdDgk_lg==/com.matthew.afprobe-X7rr_Gj4dzi07AFHJ2ktBw==/base.apk"],nativeLibraryDirectories=[/data/app/~~E9O3EMdjeJyX0xXdDgk_lg==/com.matthew.afprobe-X7rr_Gj4dzi07AFHJ2ktBw==/lib/arm64, /system/lib64, /system_ext/lib64]]
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at dalvik.system.BaseDexClassLoader.findClass(BaseDexClassLoader.java:248)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at java.lang.ClassLoader.loadClass(ClassLoader.java:644)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	at java.lang.ClassLoader.loadClass(ClassLoader.java:580)
+10-29 19:39:13.952 10488 10488 E AndroidRuntime: 	... 15 more
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 6078
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:48.389  6078  6078 E AndroidRuntime: 	... 13 more
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 7226
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:50.387  7226  7226 E AndroidRuntime: 	... 13 more
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 8026
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:53.177  8026  8026 E AndroidRuntime: 	... 13 more
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 8554
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:55.115  8554  8554 E AndroidRuntime: 	... 13 more
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 8616
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:57.009  8616  8616 E AndroidRuntime: 	... 13 more
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: FATAL EXCEPTION: main
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: Process: com.matthew.rawlens.materialcheck, PID: 8785
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.matthew.rawlens.materialcheck/com.matthew.rawlens.PanelSmokeActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4721)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4950)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:274)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:369)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10090)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1137)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'void android.widget.TextView.setVisibility(int)' on a null object reference
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at com.matthew.rawlens.PanelSmokeActivity.onCreate(PanelSmokeActivity.kt:32)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9433)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9376)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4703)
+10-31 10:29:59.473  8785  8785 E AndroidRuntime: 	... 13 more
+--------- beginning of main
+11-01 22:09:43.548 13887 13912 I EncodedVideo: stab sidecar encoded_video_mhc_single.stab.json frames=1756 gyro=24651
+11-01 22:09:43.646 13887 13912 I EncodedVideo: stop completed durationMs=694
+11-01 22:09:43.689 13887 13912 I EncodedVideo: SPIKE encoded_video [mhc-single] stopMs=737
+11-01 22:09:43.690 13887 13912 I EncodedVideo: SPIKE encoded_video fps=30 label=mhc-single rung=open-gate step=2 sensor=4080x3060 crop=3840x2160@(120,450) export=2560x1440 acq=1757 graded=1756 drop=0 miss=1 stale=1756 waitFree=1756 fallback=0 preview=0 shaded=1756 fused=1756 heat=false thermal=0 cpuChain=1.2ms chainMax=17.2ms over=0 copy=11.8ms copyMax=55.3ms p010=true starved=0 degraded=0 aChunks=1398 aFrames=2863104 aDrop=17 hasAudio=true aacBytes=955449 aOut=2798 outBufs=1757 bytes=329699166 file=330678684
+11-01 22:09:44.344 13887 13912 I EncodedVideo: SPIKE encoded_video [mhc-single] eyeball copy: /storage/emulated/0/Android/data/com.matthew.rawlens.mhccheck/files/encoded_video_mhc_single.mp4
+11-01 22:09:44.358 13887 13912 I EncodedVideo: SPIKE encoded_video-color std=1 transfer=3 range=2
+11-01 22:09:45.822 13887 13912 I EncodedVideo: SPIKE encoded_video [mhc-single] muxed video=1756 audio=2798 durationUs=58533300
+11-01 22:09:45.822 13887 13912 I EncodedVideo: SPIKE encoded_video [mhc-single] muxedFps=30.0
+11-01 22:09:45.831 13887 13912 I EncodedVideo: MHC cadence fullSecondCounts=[30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30] steadyGapUs=min=33333 p50=33333 p95=33334 max=33334
+11-01 22:09:45.832 13887 13912 I EncodedVideo: SPIKE encoded_video [mhc-single] videoPtsGap minUs=33333 maxUs=33334
+11-01 22:09:50.224 13887 13912 I EncodedVideo: MHC decoded frame: /storage/emulated/0/Android/data/com.matthew.rawlens.mhccheck/files/encoded_video_mhc_decoded.png
+11-01 22:09:51.373 13887 13912 I EncodedVideo: MHC published: content://media/external/downloads/57261 bytes=330678684
+11-01 22:11:12.593 17666 17690 I EncodedVideo: SPIKE thermal status=0 (0=none; hot runs grade ~4x slower — foreground-compile + cool down first)
+11-01 22:11:12.622 17666 17690 I EncodedVideo: SPIKE ladder rungs=open-gate=4080x3060
+11-01 22:11:12.639 17666 17690 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-01 22:11:12.639 17666 17690 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-01 22:11:12.653 17666 17690 I EncodedVideo: stab gyro on (f=6.06mm sensor=9.14x6.88mm)
+11-01 22:11:12.657 17666 17690 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-01 22:11:12.658 17666 17690 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-01 22:11:12.658 17666 17690 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-01 22:11:12.712 17666 17690 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-01 22:11:12.714 17666 17690 I EncodedVideo: demosaic path=fused-mhcyuv
+11-01 22:11:12.852 17666 17690 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-01 22:11:12.852 17666 17690 I EncodedVideo: output profile=ACES inputProfile=ACES lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+11-01 22:11:12.887 17666 17690 I EncodedVideo: preview 3840x2160 -> 960x540 box=4
+11-01 22:11:12.903 17666 17690 I EncodedVideo: ours P010 yStride=7680 uvStride=7680
+11-01 22:11:13.043 17666 17690 I EncodedVideo: audio AAC 2ch
+11-01 22:11:13.774 17666 17748 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:11:13.810 17666 17748 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-01 22:11:13.810 17666 17748 I EncodedVideo: RAW input app=2.0.79 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=plane-copy
+11-01 22:11:13.810 17666 17748 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:11:13.811 17666 17748 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=907173030222750 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=65,77,65,68,66,67,63,62,49,53,65,89,75,79,75,71,64,69,63,59,56,67,74,69,67,63,67,64,61,66,64,68,73,59,70,76,63,66,64,71,79,65,62,65,57,62,66,66,82,62,58,70,72,55,78,75,53,67,61,65,62,59,75,54,70,63,72,61,60,63,71,58,71,59,53,66,70,61,58,69,58,60,73,73,68,57,55,72,50,73,49,54,54,65,62,57,61,73,75,70,68,71,77,59,59,62,74,70,63,68,74,65,64,63,72,75,70,76,45,65,58,76,69,82,67,58,72,61
+11-01 22:11:13.856 17666 17748 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:11:13.856 17666 17748 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=907173071892750 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=68,60,62,66,54,57,66,48,75,63,87,72,65,63,71,63,57,65,67,76,68,63,63,52,60,51,63,68,56,53,73,70,71,54,56,61,60,58,77,66,69,62,81,74,76,69,61,74,62,67,63,63,70,78,69,72,56,62,68,57,58,57,54,47,63,66,78,66,64,62,69,66,68,61,71,66,57,56,64,69,62,68,61,65,90,53,74,74,56,61,56,51,73,58,60,65,60,66,60,68,67,67,67,61,57,50,64,77,76,55,63,80,71,66,59,71,71,71,48,78,58,54,77,62,61,62,64,56
+11-01 22:11:13.876 17666 17713 I EncodedVideo: EVdiag seq=0 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=24883200,1,24883200,33,1,16777219
+11-01 22:11:13.878 17666 17713 I EncodedVideo: EVdiag seq=0 stage=linear-p010 timestamp=907173030222750 size=3840x2160 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=74,562,519,64,513,515,64,491,549,137,557,580,69,535,506,64,524,601,83,507,536,64,516,533,110,480,488,99,530,565,118,518,515,64,525,514,140,492,514,97,490,551,64,518,514,64,548,507,104,529,530,87,505,556,96,536,501,92,504,510,64,511,528,98,516,496,64,523,519,67,527,511,78,599,521,102,567,542,64,501,556,77,549,543,80,522,531,105,549,498,74,537,584,87,496,550 sampleMs=1.93777
+11-01 22:11:13.879 17666 17713 I EncodedVideo: codec P010 yStride=7680(2Bpx) uStride=7680(4Bpx) vStride=7680(4Bpx) nplanes=3 uRem=8294398 vRem=8294398
+11-01 22:11:13.879 17666 17713 I EncodedVideo: codec input queue size=24883200 (capacity, not Y+U+V)
+11-01 22:11:13.886 17666 17713 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy image=3840x2160 format=54 crop=Rect(0, 0 - 3840, 2160) planes=0[row=7680 px=2 pos=0 limit=16588800 capacity=16588800] 1[row=7680 px=4 pos=0 limit=8294398 capacity=8294398] 2[row=7680 px=4 pos=0 limit=8294398 capacity=8294398]
+11-01 22:11:13.887 17666 17713 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy timestamp=907173030222750 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=74,562,519,64,513,515,64,491,549,137,557,580,69,535,506,64,524,601,83,507,536,64,516,533,110,480,488,99,530,565,118,518,515,64,525,514,140,492,514,97,490,551,64,518,514,64,548,507,104,529,530,87,505,556,96,536,501,92,504,510,64,511,528,98,516,496,64,523,519,67,527,511,78,599,521,102,567,542,64,501,556,77,549,543,80,522,531,105,549,498,74,537,584,87,496,550 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.480846
+11-01 22:11:13.904 17666 17714 I EncodedVideo: EVdiag seq=1 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=24883200,1,24883200,33,1,16777219
+11-01 22:11:13.905 17666 17714 I EncodedVideo: EVdiag seq=1 stage=linear-p010 timestamp=907173071892750 size=3840x2160 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=91,501,506,64,511,517,149,555,535,76,509,534,64,517,546,88,508,517,64,509,508,81,513,556,103,509,500,73,506,547,89,526,557,124,552,513,82,529,538,103,544,502,64,523,518,64,512,512,100,557,549,64,503,552,78,506,554,64,508,517,64,526,514,165,484,522,70,523,511,122,521,509,69,539,516,85,531,520,64,496,580,143,524,535,129,566,490,116,547,586,69,516,561,64,509,525 sampleMs=0.845539
+11-01 22:11:13.921 17666 17714 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy image=3840x2160 format=54 crop=Rect(0, 0 - 3840, 2160) planes=0[row=7680 px=2 pos=0 limit=16588800 capacity=16588800] 1[row=7680 px=4 pos=0 limit=8294398 capacity=8294398] 2[row=7680 px=4 pos=0 limit=8294398 capacity=8294398]
+11-01 22:11:13.921 17666 17714 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy timestamp=907173071892750 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=91,501,506,64,511,517,149,555,535,76,509,534,64,517,546,88,508,517,64,509,508,81,513,556,103,509,500,73,506,547,89,526,557,124,552,513,82,529,538,103,544,502,64,523,518,64,512,512,100,557,549,64,503,552,78,506,554,64,508,517,64,526,514,165,484,522,70,523,511,122,521,509,69,539,516,85,531,520,64,496,580,143,524,535,129,566,490,116,547,586,69,516,561,64,509,525 checked=96 mismatches=0 maxWordDelta=0 sampleMs=1.096923
+11-01 22:11:14.031 17666 17737 I EncodedVideo: muxer started: video/hevc 3840x2160 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-01 22:11:14.455 17666 17748 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=0.66D
+11-01 22:11:14.719 17666 17748 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:12:14.136 17666 17690 I EncodedVideo: stab sidecar encoded_video_mhc_single.stab.json frames=1353 gyro=24698
+11-01 22:12:14.265 17666 17690 I EncodedVideo: stop completed durationMs=874
+11-01 22:12:14.309 17666 17690 I EncodedVideo: SPIKE encoded_video [mhc-single] stopMs=918
+11-01 22:12:14.310 17666 17690 I EncodedVideo: SPIKE encoded_video fps=24 label=mhc-single rung=open-gate step=2 sensor=4080x3060 crop=3840x2160@(120,450) export=3840x2160 acq=1354 graded=1353 drop=0 miss=1 stale=1353 waitFree=1353 fallback=0 preview=0 shaded=1353 fused=1353 heat=false thermal=0 cpuChain=1.0ms chainMax=125.7ms over=19 copy=19.8ms copyMax=147.0ms p010=true starved=0 degraded=0 aChunks=1399 aFrames=2865152 aDrop=16 hasAudio=true aacBytes=956174 aOut=2800 outBufs=1354 bytes=528647875 file=529626514
+11-01 22:12:15.732 17666 17690 I EncodedVideo: SPIKE encoded_video [mhc-single] eyeball copy: /storage/emulated/0/Android/data/com.matthew.rawlens.mhccheck/files/encoded_video_mhc_single.mp4
+11-01 22:12:15.756 17666 17690 I EncodedVideo: SPIKE encoded_video-color std=1 transfer=3 range=2
+11-01 22:12:18.566 17666 17690 I EncodedVideo: SPIKE encoded_video [mhc-single] muxed video=1353 audio=2800 durationUs=56375000
+11-01 22:12:18.566 17666 17690 I EncodedVideo: SPIKE encoded_video [mhc-single] muxedFps=24.0
+11-01 22:12:18.573 17666 17690 I EncodedVideo: MHC cadence fullSecondCounts=[24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24] steadyGapUs=min=41666 p50=41667 p95=41667 max=41667
+11-01 22:19:22.046 26070 26094 I EncodedVideo: SPIKE thermal status=0 (0=none; hot runs grade ~4x slower — foreground-compile + cool down first)
+11-01 22:19:22.079 26070 26094 I EncodedVideo: SPIKE ladder rungs=open-gate=4080x3060
+11-01 22:19:22.164 26070 26094 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-01 22:19:22.165 26070 26094 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-01 22:19:22.176 26070 26094 I EncodedVideo: stab gyro on (f=6.06mm sensor=9.14x6.88mm)
+11-01 22:19:22.180 26070 26094 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-01 22:19:22.181 26070 26094 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-01 22:19:22.181 26070 26094 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-01 22:19:22.220 26070 26094 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-01 22:19:22.222 26070 26094 I EncodedVideo: demosaic path=fused-mhcyuv
+11-01 22:19:22.448 26070 26094 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-01 22:19:22.448 26070 26094 I EncodedVideo: output profile=ACES inputProfile=ACES lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+11-01 22:19:22.472 26070 26094 I EncodedVideo: preview 1920x1080 -> 480x270 box=4
+11-01 22:19:22.475 26070 26094 I EncodedVideo: ours P010 yStride=3840 uvStride=3840
+11-01 22:19:22.616 26070 26094 I EncodedVideo: audio AAC 2ch
+11-01 22:19:23.344 26070 26204 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:19:23.369 26070 26204 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-01 22:19:23.369 26070 26204 I EncodedVideo: RAW input app=2.0.79 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=plane-copy
+11-01 22:19:23.370 26070 26204 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:19:23.370 26070 26204 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=907662598697490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=55,62,74,51,67,61,66,72,54,65,69,65,57,62,66,77,68,64,77,64,59,80,73,65,70,51,73,65,58,66,67,46,59,65,53,58,53,52,58,60,63,69,69,70,59,70,62,63,67,67,76,66,64,61,67,77,67,55,64,65,55,56,65,52,55,60,62,61,54,69,71,52,67,64,65,67,64,67,53,64,65,72,64,64,50,65,56,58,69,66,54,58,61,66,65,58,60,64,63,64,56,66,66,61,53,60,52,75,58,69,69,62,55,69,52,73,70,64,47,63,61,69,52,61,66,58,67,51
+11-01 22:19:23.406 26070 26157 I EncodedVideo: EVdiag seq=0 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=6220800,1,6220800,33,1,16777219
+11-01 22:19:23.407 26070 26157 I EncodedVideo: EVdiag seq=0 stage=linear-p010 timestamp=907662598697490 size=1920x1080 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=98,562,518,71,504,530,108,556,532,71,539,524,106,526,511,91,536,527,85,505,526,165,570,503,64,515,512,64,512,512,64,534,529,64,527,516,120,534,537,93,540,524,64,511,510,64,512,514,64,520,518,67,560,518,97,534,506,84,516,534,119,522,517,86,551,506,81,572,509,88,522,523,64,529,521,72,547,514,108,530,491,123,558,507,88,527,539,84,518,528,81,516,531,65,522,511 sampleMs=0.835923
+11-01 22:19:23.407 26070 26204 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:19:23.407 26070 26157 I EncodedVideo: codec P010 yStride=3840(2Bpx) uStride=3840(4Bpx) vStride=3840(4Bpx) nplanes=3 uRem=2073598 vRem=2073598
+11-01 22:19:23.407 26070 26157 I EncodedVideo: codec input queue size=6220800 (capacity, not Y+U+V)
+11-01 22:19:23.407 26070 26204 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=907662632027490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=58,59,49,57,58,61,72,73,68,64,63,63,69,68,71,61,56,73,72,65,50,64,72,63,67,58,62,69,60,73,64,64,63,62,57,64,66,57,63,59,62,62,76,79,43,68,62,60,73,72,71,74,66,67,75,70,53,61,57,61,63,58,63,54,51,53,62,58,69,67,79,53,55,59,61,61,57,63,72,59,65,70,60,74,57,61,51,61,73,54,49,69,61,73,56,66,68,57,58,59,65,67,71,67,59,64,66,55,55,63,65,68,54,74,65,74,77,84,50,71,49,62,68,71,57,72,67,55
+11-01 22:19:23.414 26070 26157 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy image=1920x1080 format=54 crop=Rect(0, 0 - 1920, 1080) planes=0[row=3840 px=2 pos=0 limit=4147200 capacity=4147200] 1[row=3840 px=4 pos=0 limit=2073598 capacity=2073598] 2[row=3840 px=4 pos=0 limit=2073598 capacity=2073598]
+11-01 22:19:23.414 26070 26157 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy timestamp=907662598697490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=98,562,518,71,504,530,108,556,532,71,539,524,106,526,511,91,536,527,85,505,526,165,570,503,64,515,512,64,512,512,64,534,529,64,527,516,120,534,537,93,540,524,64,511,510,64,512,514,64,520,518,67,560,518,97,534,506,84,516,534,119,522,517,86,551,506,81,572,509,88,522,523,64,529,521,72,547,514,108,530,491,123,558,507,88,527,539,84,518,528,81,516,531,65,522,511 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.502461
+11-01 22:19:23.427 26070 26156 I EncodedVideo: EVdiag seq=1 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=6220800,1,6220800,33,1,16777219
+11-01 22:19:23.428 26070 26156 I EncodedVideo: EVdiag seq=1 stage=linear-p010 timestamp=907662632027490 size=1920x1080 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=73,562,541,87,538,553,64,519,515,80,520,528,84,545,507,82,515,531,97,512,514,64,516,510,64,535,498,78,521,524,71,517,524,64,543,523,64,544,506,85,520,541,90,537,500,64,527,508,86,527,519,102,516,520,99,560,500,121,532,547,116,571,502,101,550,522,80,521,524,64,547,497,97,519,536,107,531,536,117,552,503,64,546,512,64,514,497,68,601,492,90,515,537,83,549,520 sampleMs=0.440923
+11-01 22:19:23.434 26070 26156 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy image=1920x1080 format=54 crop=Rect(0, 0 - 1920, 1080) planes=0[row=3840 px=2 pos=0 limit=4147200 capacity=4147200] 1[row=3840 px=4 pos=0 limit=2073598 capacity=2073598] 2[row=3840 px=4 pos=0 limit=2073598 capacity=2073598]
+11-01 22:19:23.434 26070 26156 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy timestamp=907662632027490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=73,562,541,87,538,553,64,519,515,80,520,528,84,545,507,82,515,531,97,512,514,64,516,510,64,535,498,78,521,524,71,517,524,64,543,523,64,544,506,85,520,541,90,537,500,64,527,508,86,527,519,102,516,520,99,560,500,121,532,547,116,571,502,101,550,522,80,521,524,64,547,497,97,519,536,107,531,536,117,552,503,64,546,512,64,514,497,68,601,492,90,515,537,83,549,520 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.415616
+11-01 22:19:23.443 26070 26192 I EncodedVideo: muxer started: video/hevc 1920x1080 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-01 22:19:23.884 26070 26204 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=0.66D
+11-01 22:19:24.018 26070 26204 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:20:23.299 26070 26094 I EncodedVideo: stab sidecar encoded_video_mhc_single.stab.json frames=1784 gyro=24600
+11-01 22:20:23.390 26070 26094 I EncodedVideo: stop completed durationMs=565
+11-01 22:20:23.434 26070 26094 I EncodedVideo: SPIKE encoded_video [mhc-single] stopMs=609
+11-01 22:20:23.437 26070 26094 I EncodedVideo: SPIKE encoded_video fps=30 label=mhc-single rung=open-gate step=2 sensor=4080x3060 crop=3840x2160@(120,450) export=1920x1080 acq=1785 graded=1784 drop=0 miss=1 stale=1784 waitFree=1784 fallback=0 preview=0 shaded=1784 fused=1784 heat=false thermal=0 cpuChain=0.7ms chainMax=13.5ms over=0 copy=6.9ms copyMax=21.2ms p010=true starved=0 degraded=0 aChunks=1395 aFrames=2856960 aDrop=16 hasAudio=true aacBytes=953286 aOut=2792 outBufs=1785 bytes=223067304 file=224044759
+11-01 22:20:23.897 26070 26094 I EncodedVideo: SPIKE encoded_video [mhc-single] eyeball copy: /storage/emulated/0/Android/data/com.matthew.rawlens.mhccheck/files/encoded_video_mhc_single.mp4
+11-01 22:20:23.913 26070 26094 I EncodedVideo: SPIKE encoded_video-color std=1 transfer=3 range=2
+11-01 22:20:24.605 26070 26094 I EncodedVideo: SPIKE encoded_video [mhc-single] muxed video=1784 audio=2792 durationUs=59466700
+11-01 22:20:24.606 26070 26094 I EncodedVideo: SPIKE encoded_video [mhc-single] muxedFps=30.0
+11-01 22:20:24.613 26070 26094 I EncodedVideo: MHC cadence fullSecondCounts=[30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30] steadyGapUs=min=33333 p50=33333 p95=33334 max=33334
+11-01 22:20:24.613 26070 26094 I EncodedVideo: SPIKE encoded_video [mhc-single] videoPtsGap minUs=33333 maxUs=33334
+11-01 22:20:26.646 26070 26094 I EncodedVideo: MHC decoded frame: /storage/emulated/0/Android/data/com.matthew.rawlens.mhccheck/files/encoded_video_mhc_decoded.png
+11-01 22:20:27.400 26070 26094 I EncodedVideo: MHC published: content://media/external/downloads/57262 bytes=224044759
+11-01 22:20:34.596 29396 29420 I EncodedVideo: SPIKE thermal status=0 (0=none; hot runs grade ~4x slower — foreground-compile + cool down first)
+11-01 22:20:34.637 29396 29420 I EncodedVideo: SPIKE ladder rungs=open-gate=4080x3060
+11-01 22:20:34.664 29396 29420 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-01 22:20:34.665 29396 29420 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-01 22:20:34.676 29396 29420 I EncodedVideo: stab gyro on (f=6.06mm sensor=9.14x6.88mm)
+11-01 22:20:34.680 29396 29420 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-01 22:20:34.681 29396 29420 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-01 22:20:34.681 29396 29420 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-01 22:20:34.726 29396 29420 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-01 22:20:34.728 29396 29420 I EncodedVideo: demosaic path=fused-mhcyuv
+11-01 22:20:34.888 29396 29420 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-01 22:20:34.889 29396 29420 I EncodedVideo: output profile=ACES inputProfile=ACES lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+11-01 22:20:34.915 29396 29420 I EncodedVideo: preview 2560x1440 -> 640x360 box=4
+11-01 22:20:34.925 29396 29420 I EncodedVideo: ours P010 yStride=5120 uvStride=5120
+11-01 22:20:35.064 29396 29420 I EncodedVideo: audio AAC 2ch
+11-01 22:20:35.749 29396 29477 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:20:35.779 29396 29477 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-01 22:20:35.780 29396 29477 I EncodedVideo: RAW input app=2.0.79 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=plane-copy
+11-01 22:20:35.780 29396 29477 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:20:35.780 29396 29477 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=907735007391490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=69,57,67,56,63,65,81,63,58,60,65,61,74,58,72,66,68,61,68,61,53,73,68,58,71,49,71,61,64,68,63,67,59,68,52,70,70,65,76,61,58,57,74,66,46,76,78,63,64,69,58,67,70,65,61,70,62,73,60,57,66,70,63,58,64,72,60,66,68,71,74,73,71,63,56,67,68,67,66,71,67,57,76,59,69,63,58,67,63,62,71,56,72,72,55,50,69,55,72,69,65,71,58,63,52,61,74,53,63,70,53,61,70,60,56,64,66,64,58,56,54,71,71,70,69,60,51,56
+11-01 22:20:35.813 29396 29477 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:20:35.813 29396 29477 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=907735040721490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=63,79,67,67,66,61,60,60,65,61,64,67,56,70,69,77,64,57,63,59,61,67,75,70,90,66,55,60,61,60,60,52,58,60,53,66,52,71,55,53,60,64,74,61,65,75,67,58,63,68,67,58,52,61,73,73,61,65,60,67,49,77,66,54,62,65,61,62,66,67,64,66,59,51,71,68,61,70,59,64,64,60,62,69,71,63,63,65,56,75,68,55,63,54,55,56,60,67,62,61,65,62,75,76,64,62,58,67,62,66,61,71,63,58,64,63,57,56,65,50,69,79,64,62,69,60,58,71
+11-01 22:20:35.826 29396 29443 I EncodedVideo: EVdiag seq=0 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=11059200,1,11059200,33,1,16777219
+11-01 22:20:35.828 29396 29443 I EncodedVideo: EVdiag seq=0 stage=linear-p010 timestamp=907735007391490 size=2560x1440 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=110,539,509,87,533,531,72,533,538,120,508,565,72,514,538,84,545,566,136,549,531,64,522,511,75,519,507,158,595,509,93,535,541,126,537,523,66,517,512,69,506,528,64,518,511,82,521,523,149,568,497,64,525,532,126,497,527,83,536,545,79,531,526,64,524,505,81,513,532,64,525,502,155,526,498,64,533,516,116,514,542,64,539,507,67,528,500,79,523,519,66,547,520,64,507,507 sampleMs=2.262538
+11-01 22:20:35.829 29396 29443 I EncodedVideo: codec P010 yStride=5120(2Bpx) uStride=5120(4Bpx) vStride=5120(4Bpx) nplanes=3 uRem=3686398 vRem=3686398
+11-01 22:20:35.829 29396 29443 I EncodedVideo: codec input queue size=11059200 (capacity, not Y+U+V)
+11-01 22:20:35.837 29396 29443 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy image=2560x1440 format=54 crop=Rect(0, 0 - 2560, 1440) planes=0[row=5120 px=2 pos=0 limit=7372800 capacity=7372800] 1[row=5120 px=4 pos=0 limit=3686398 capacity=3686398] 2[row=5120 px=4 pos=0 limit=3686398 capacity=3686398]
+11-01 22:20:35.837 29396 29443 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy timestamp=907735007391490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=110,539,509,87,533,531,72,533,538,120,508,565,72,514,538,84,545,566,136,549,531,64,522,511,75,519,507,158,595,509,93,535,541,126,537,523,66,517,512,69,506,528,64,518,511,82,521,523,149,568,497,64,525,532,126,497,527,83,536,545,79,531,526,64,524,505,81,513,532,64,525,502,155,526,498,64,533,516,116,514,542,64,539,507,67,528,500,79,523,519,66,547,520,64,507,507 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.438846
+11-01 22:20:35.841 29396 29444 I EncodedVideo: EVdiag seq=1 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=11059200,1,11059200,33,1,16777219
+11-01 22:20:35.843 29396 29444 I EncodedVideo: EVdiag seq=1 stage=linear-p010 timestamp=907735040721490 size=2560x1440 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=75,535,530,64,509,499,77,504,537,64,544,516,159,551,535,71,505,594,152,498,489,64,527,517,64,538,502,64,574,494,64,506,538,65,532,522,64,521,529,66,528,544,98,530,500,91,516,551,141,508,505,64,532,523,78,519,541,64,511,518,115,556,512,98,527,519,92,520,531,71,511,516,64,524,525,64,527,519,64,503,502,82,516,509,128,550,512,64,524,518,100,559,491,64,509,503 sampleMs=1.613769
+11-01 22:20:35.847 29396 29444 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy image=2560x1440 format=54 crop=Rect(0, 0 - 2560, 1440) planes=0[row=5120 px=2 pos=0 limit=7372800 capacity=7372800] 1[row=5120 px=4 pos=0 limit=3686398 capacity=3686398] 2[row=5120 px=4 pos=0 limit=3686398 capacity=3686398]
+11-01 22:20:35.847 29396 29444 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy timestamp=907735040721490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=75,535,530,64,509,499,77,504,537,64,544,516,159,551,535,71,505,594,152,498,489,64,527,517,64,538,502,64,574,494,64,506,538,65,532,522,64,521,529,66,528,544,98,530,500,91,516,551,141,508,505,64,532,523,78,519,541,64,511,518,115,556,512,98,527,519,92,520,531,71,511,516,64,524,525,64,527,519,64,503,502,82,516,509,128,550,512,64,524,518,100,559,491,64,509,503 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.397
+11-01 22:20:35.896 29396 29467 I EncodedVideo: muxer started: video/hevc 2560x1440 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-01 22:20:36.302 29396 29477 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=0.66D
+11-01 22:20:36.429 29396 29477 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:21:35.774 29396 29420 I EncodedVideo: stab sidecar encoded_video_mhc_single.stab.json frames=1783 gyro=24586
+11-01 22:21:35.872 29396 29420 I EncodedVideo: stop completed durationMs=609
+11-01 22:21:35.915 29396 29420 I EncodedVideo: SPIKE encoded_video [mhc-single] stopMs=652
+11-01 22:21:35.917 29396 29420 I EncodedVideo: SPIKE encoded_video fps=30 label=mhc-single rung=open-gate step=2 sensor=4080x3060 crop=3840x2160@(120,450) export=2560x1440 acq=1784 graded=1783 drop=0 miss=1 stale=1783 waitFree=1783 fallback=0 preview=0 shaded=1783 fused=1783 heat=false thermal=0 cpuChain=0.8ms chainMax=13.7ms over=0 copy=10.6ms copyMax=30.8ms p010=true starved=0 degraded=0 aChunks=1396 aFrames=2859008 aDrop=15 hasAudio=true aacBytes=954021 aOut=2794 outBufs=1784 bytes=334472909 file=335451199
+11-01 22:21:36.600 29396 29420 I EncodedVideo: SPIKE encoded_video [mhc-single] eyeball copy: /storage/emulated/0/Android/data/com.matthew.rawlens.mhccheck/files/encoded_video_mhc_single.mp4
+11-01 22:21:36.610 29396 29420 I EncodedVideo: SPIKE encoded_video-color std=1 transfer=3 range=2
+11-01 22:21:38.026 29396 29420 I EncodedVideo: SPIKE encoded_video [mhc-single] muxed video=1783 audio=2794 durationUs=59433300
+11-01 22:21:38.026 29396 29420 I EncodedVideo: SPIKE encoded_video [mhc-single] muxedFps=30.0
+11-01 22:21:38.036 29396 29420 I EncodedVideo: MHC cadence fullSecondCounts=[30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30] steadyGapUs=min=33333 p50=33333 p95=33334 max=33334
+11-01 22:21:38.036 29396 29420 I EncodedVideo: SPIKE encoded_video [mhc-single] videoPtsGap minUs=33333 maxUs=33334
+11-01 22:21:42.804 29396 29420 I EncodedVideo: MHC decoded frame: /storage/emulated/0/Android/data/com.matthew.rawlens.mhccheck/files/encoded_video_mhc_decoded.png
+11-01 22:21:44.028 29396 29420 I EncodedVideo: MHC published: content://media/external/downloads/57263 bytes=335451199
+11-01 22:21:53.771 32734 32758 I EncodedVideo: SPIKE thermal status=0 (0=none; hot runs grade ~4x slower — foreground-compile + cool down first)
+11-01 22:21:53.819 32734 32758 I EncodedVideo: SPIKE ladder rungs=open-gate=4080x3060
+11-01 22:21:53.858 32734 32758 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-01 22:21:53.858 32734 32758 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-01 22:21:53.873 32734 32758 I EncodedVideo: stab gyro on (f=6.06mm sensor=9.14x6.88mm)
+11-01 22:21:53.878 32734 32758 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-01 22:21:53.879 32734 32758 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-01 22:21:53.879 32734 32758 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-01 22:21:53.935 32734 32758 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-01 22:21:53.937 32734 32758 I EncodedVideo: demosaic path=fused-mhcyuv
+11-01 22:21:54.110 32734 32758 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-01 22:21:54.110 32734 32758 I EncodedVideo: output profile=ACES inputProfile=ACES lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+11-01 22:21:54.145 32734 32758 I EncodedVideo: preview 3840x2160 -> 960x540 box=4
+11-01 22:21:54.163 32734 32758 I EncodedVideo: ours P010 yStride=7680 uvStride=7680
+11-01 22:21:54.296 32734 32758 I EncodedVideo: audio AAC 2ch
+11-01 22:21:55.006 32734   401 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:21:55.042 32734   401 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-01 22:21:55.042 32734   401 I EncodedVideo: RAW input app=2.0.79 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=plane-copy
+11-01 22:21:55.042 32734   401 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:21:55.043 32734   401 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=907814271681490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=125,75,87,103,129,94,111,119,142,93,163,208,203,103,163,208,215,93,176,205,191,122,177,206,142,84,115,161,74,59,77,75,153,94,99,110,130,72,133,136,201,107,205,177,95,83,74,84,141,72,189,167,172,82,156,150,152,99,140,207,73,72,72,95,129,95,115,101,155,86,122,129,166,106,160,166,125,78,181,132,131,93,181,140,104,72,134,110,113,60,128,110,105,86,78,94,59,62,58,67,77,58,100,103,71,55,83,71,79,73,85,94,117,78,102,147,129,73,140,125,115,76,135,109,92,67,81,109
+11-01 22:21:55.088 32734   401 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:21:55.088 32734   401 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=907814313351490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=117,67,87,118,111,91,118,125,150,88,190,157,185,116,187,196,222,107,207,189,202,103,206,223,151,76,117,113,77,69,72,70,123,71,86,111,163,94,129,117,216,113,181,182,81,92,100,117,167,89,132,157,188,78,154,147,147,79,118,188,73,61,87,81,126,94,127,116,147,79,119,147,156,66,204,141,146,83,165,136,182,76,146,154,152,77,122,107,130,65,109,110,105,65,87,114,82,61,63,66,69,71,82,85,49,55,81,98,83,67,119,97,91,72,141,118,145,94,125,158,109,72,124,96,65,76,85,91
+11-01 22:21:55.101 32734   367 I EncodedVideo: EVdiag seq=0 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=24883200,1,24883200,33,1,16777219
+11-01 22:21:55.106 32734   367 I EncodedVideo: EVdiag seq=0 stage=linear-p010 timestamp=907814271681490 size=3840x2160 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=284,477,549,280,471,575,285,369,639,375,390,581,389,361,596,378,434,607,291,375,570,138,495,612,338,502,519,264,411,629,375,423,622,178,504,523,265,384,630,329,389,618,326,462,615,120,610,460,302,508,631,322,453,583,319,468,546,236,422,636,254,455,653,200,429,602,230,429,621,238,488,541,64,510,502,117,462,622,96,490,580,141,504,551,231,452,582,264,404,636,237,421,638,198,433,537 sampleMs=4.41077
+11-01 22:21:55.107 32734   367 I EncodedVideo: codec P010 yStride=7680(2Bpx) uStride=7680(4Bpx) vStride=7680(4Bpx) nplanes=3 uRem=8294398 vRem=8294398
+11-01 22:21:55.107 32734   367 I EncodedVideo: codec input queue size=24883200 (capacity, not Y+U+V)
+11-01 22:21:55.119 32734   367 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy image=3840x2160 format=54 crop=Rect(0, 0 - 3840, 2160) planes=0[row=7680 px=2 pos=0 limit=16588800 capacity=16588800] 1[row=7680 px=4 pos=0 limit=8294398 capacity=8294398] 2[row=7680 px=4 pos=0 limit=8294398 capacity=8294398]
+11-01 22:21:55.120 32734   367 I EncodedVideo: EVdiag seq=0 stage=codec-after-copy timestamp=907814271681490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=284,477,549,280,471,575,285,369,639,375,390,581,389,361,596,378,434,607,291,375,570,138,495,612,338,502,519,264,411,629,375,423,622,178,504,523,265,384,630,329,389,618,326,462,615,120,610,460,302,508,631,322,453,583,319,468,546,236,422,636,254,455,653,200,429,602,230,429,621,238,488,541,64,510,502,117,462,622,96,490,580,141,504,551,231,452,582,264,404,636,237,421,638,198,433,537 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.638154
+11-01 22:21:55.129 32734   366 I EncodedVideo: EVdiag seq=1 stage=linear-p010 ahb[width,height,stride,format,layers,usage]=24883200,1,24883200,33,1,16777219
+11-01 22:21:55.136 32734   366 I EncodedVideo: EVdiag seq=1 stage=linear-p010 timestamp=907814313351490 size=3840x2160 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=246,410,470,251,525,540,328,497,572,363,511,539,426,494,565,405,447,582,331,457,535,167,568,516,244,439,460,332,494,553,407,516,526,145,550,534,307,426,547,349,407,582,273,385,513,124,480,577,307,555,537,304,473,514,296,431,553,286,485,608,326,403,542,310,492,533,267,440,531,226,454,496,145,495,498,109,555,514,87,478,715,169,504,558,171,500,638,309,514,525,237,443,572,97,549,630 sampleMs=6.922538
+11-01 22:21:55.149 32734   366 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy image=3840x2160 format=54 crop=Rect(0, 0 - 3840, 2160) planes=0[row=7680 px=2 pos=0 limit=16588800 capacity=16588800] 1[row=7680 px=4 pos=0 limit=8294398 capacity=8294398] 2[row=7680 px=4 pos=0 limit=8294398 capacity=8294398]
+11-01 22:21:55.150 32734   366 I EncodedVideo: EVdiag seq=1 stage=codec-after-copy timestamp=907814313351490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=246,410,470,251,525,540,328,497,572,363,511,539,426,494,565,405,447,582,331,457,535,167,568,516,244,439,460,332,494,553,407,516,526,145,550,534,307,426,547,349,407,582,273,385,513,124,480,577,307,555,537,304,473,514,296,431,553,286,485,608,326,403,542,310,492,533,267,440,531,226,454,496,145,495,498,109,555,514,87,478,715,169,504,558,171,500,638,309,514,525,237,443,572,97,549,630 checked=96 mismatches=0 maxWordDelta=0 sampleMs=0.437846
+11-01 22:21:55.202 32734   391 I EncodedVideo: muxer started: video/hevc 3840x2160 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-01 22:21:55.654 32734   401 I EncodedVideo: Encoded Video AF PASSIVE_FOCUSED mode=CONT_VIDEO fd=3.65D
+11-01 22:22:55.319 32734 32758 I EncodedVideo: stab sidecar encoded_video_mhc_single.stab.json frames=1366 gyro=24719
+11-01 22:22:55.419 32734 32758 I EncodedVideo: stop completed durationMs=712
+11-01 22:22:55.466 32734 32758 I EncodedVideo: SPIKE encoded_video [mhc-single] stopMs=759
+11-01 22:22:55.467 32734 32758 I EncodedVideo: SPIKE encoded_video fps=24 label=mhc-single rung=open-gate step=2 sensor=4080x3060 crop=3840x2160@(120,450) export=3840x2160 acq=1367 graded=1366 drop=0 miss=1 stale=1366 waitFree=1366 fallback=0 preview=0 shaded=1366 fused=1366 heat=false thermal=0 cpuChain=1.0ms chainMax=137.6ms over=24 copy=20.1ms copyMax=120.3ms p010=true starved=0 degraded=0 aChunks=1401 aFrames=2869248 aDrop=16 hasAudio=true aacBytes=957643 aOut=2804 outBufs=1367 bytes=534119666 file=535099890
+11-01 22:22:56.838 32734 32758 I EncodedVideo: SPIKE encoded_video [mhc-single] eyeball copy: /storage/emulated/0/Android/data/com.matthew.rawlens.mhccheck/files/encoded_video_mhc_single.mp4
+11-01 22:22:56.871 32734 32758 I EncodedVideo: SPIKE encoded_video-color std=1 transfer=3 range=2
+11-01 22:22:59.891 32734 32758 I EncodedVideo: SPIKE encoded_video [mhc-single] muxed video=1366 audio=2804 durationUs=56916700
+11-01 22:22:59.891 32734 32758 I EncodedVideo: SPIKE encoded_video [mhc-single] muxedFps=24.0
+11-01 22:22:59.898 32734 32758 I EncodedVideo: MHC cadence fullSecondCounts=[24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24] steadyGapUs=min=41666 p50=41667 p95=41667 max=41667
+11-01 22:39:15.362 21486 21519 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-01 22:39:15.362 21486 21519 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-01 22:39:15.366 21486 21519 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-01 22:39:15.367 21486 21519 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-01 22:39:15.367 21486 21519 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-01 22:39:15.517 21486 21519 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-01 22:39:16.695 21486 21519 I EncodedVideo: public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified
+11-01 22:39:16.695 21486 21519 I EncodedVideo: demosaic path=public-photo-rcd-validation
+11-01 22:39:16.965 21486 21519 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-01 22:39:16.965 21486 21519 I EncodedVideo: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+11-01 22:39:18.757 21486 21519 I EncodedVideo: Independent encoder content probe GPU writer=true 1920x1080
+11-01 22:39:18.757 21486 21519 I EncodedVideo: preview 1920x1080 -> 480x270 box=4
+11-01 22:39:18.758 21486 21519 I EncodedVideo: ours P010 yStride=3840 uvStride=3840
+11-01 22:39:18.929 21486 21519 I EncodedVideo: audio AAC 2ch
+11-01 22:39:19.725 21486 21601 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=1.98D
+11-01 22:39:19.753 21486 21601 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-01 22:39:19.753 21486 21601 I EncodedVideo: RAW input app=2.0.78 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=gpu-storage
+11-01 22:39:19.754 21486 21601 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:39:19.754 21486 21601 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=908858977253490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=56,66,66,63,61,67,65,66,68,59,61,69,67,61,58,61,64,68,65,66,61,60,71,66,78,63,63,68,55,74,64,59,61,72,53,63,67,53,66,53,67,69,54,67,67,63,59,65,69,63,62,78,65,63,68,64,62,67,81,62,74,69,70,60,61,72,64,59,66,64,72,65,57,55,66,61,54,77,64,61,59,62,68,64,64,58,68,61,61,67,63,72,70,70,49,62,72,67,67,60,68,71,70,58,56,62,65,62,62,64,56,65,60,70,69,70,65,67,59,59,64,59,61,65,62,60,64,68
+11-01 22:39:20.537 21486 21601 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:39:20.537 21486 21601 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=908859043912490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=67,57,60,64,65,60,73,49,62,71,64,59,65,56,76,63,59,58,72,60,69,64,59,46,49,58,74,67,60,57,72,57,71,62,71,66,59,62,63,65,66,62,67,67,54,59,62,74,61,69,57,58,60,63,70,77,62,56,57,55,65,52,57,55,61,70,74,54,60,60,58,70,73,64,67,61,61,71,60,67,62,65,71,58,56,69,70,73,72,65,54,54,54,72,64,58,68,57,52,58,59,64,70,66,65,64,60,67,71,81,58,78,62,64,65,58,67,63,46,69,68,75,74,76,62,52,59,54
+11-01 22:39:20.549 21486 21547 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=1920,1080,1920,54,1,16842803
+11-01 22:39:20.550 21486 21547 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output image=1920x1080 format=54 crop=Rect(0, 0 - 1920, 1080) planes=0[row=3840 px=2 pos=0 limit=4147200 capacity=4147200] 1[row=3840 px=4 pos=0 limit=2073600 capacity=2073600] 2[row=3840 px=4 pos=0 limit=2073600 capacity=2073600]
+11-01 22:39:20.554 21486 21547 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output timestamp=908858977253490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=95,536,545,75,513,542,76,505,528,73,511,529,77,511,519,93,507,566,108,498,537,73,545,504,85,576,508,78,511,521,72,519,516,70,511,523,87,505,520,77,510,551,64,515,540,90,539,548,93,573,510,64,513,545,64,517,527,69,529,540,72,524,517,65,514,519,89,524,529,110,509,513,135,543,495,92,552,518,104,530,526,76,504,504,77,526,542,86,523,510,83,520,531,120,522,491 comparison=not-available sampleMs=5.459692
+11-01 22:39:20.608 21486 21586 I EncodedVideo: muxer started: video/hevc 1920x1080 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-01 22:39:21.024 21486 21547 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=1920,1080,1920,54,1,16842803
+11-01 22:39:21.025 21486 21547 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output image=1920x1080 format=54 crop=Rect(0, 0 - 1920, 1080) planes=0[row=3840 px=2 pos=0 limit=4147200 capacity=4147200] 1[row=3840 px=4 pos=0 limit=2073600 capacity=2073600] 2[row=3840 px=4 pos=0 limit=2073600 capacity=2073600]
+11-01 22:39:21.026 21486 21547 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output timestamp=908859043912490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=74,493,547,106,504,616,85,511,546,103,540,556,90,508,514,87,536,554,106,505,578,98,534,525,125,504,591,66,531,505,92,524,536,64,512,533,80,519,537,72,507,516,69,517,516,125,540,506,95,564,519,78,517,519,78,517,533,87,523,540,91,512,557,75,532,524,69,533,526,85,513,533,128,512,540,91,510,551,93,554,505,100,558,502,103,514,531,88,515,519,100,552,538,116,554,490 comparison=not-available sampleMs=1.713539
+11-01 22:39:49.849 21486 21601 W EncodedVideo: frame failed
+11-01 22:39:49.849 21486 21601 W EncodedVideo: java.lang.IllegalStateException: Image is already closed
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at android.media.Image.throwISEIfImageIsInvalid(Image.java:79)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at android.media.ImageReader$SurfaceImage.getTimestamp(ImageReader.java:1272)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at com.matthew.rawlens.EncodedVideoRecorder.submitPhotoRcd(EncodedVideoRecorder.kt:2023)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at com.matthew.rawlens.EncodedVideoRecorder.processFrame(EncodedVideoRecorder.kt:1913)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at com.matthew.rawlens.EncodedVideoRecorder.processOne(EncodedVideoRecorder.kt:1753)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at com.matthew.rawlens.EncodedVideoRecorder.onFrame(EncodedVideoRecorder.kt:1712)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at com.matthew.rawlens.EncodedVideoRecorder.startStreams$lambda$3(EncodedVideoRecorder.kt:1160)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at com.matthew.rawlens.EncodedVideoRecorder$$ExternalSyntheticLambda5.onImageAvailable(D8$$SyntheticClass:0)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at android.media.ImageReader$1.run(ImageReader.java:967)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at android.os.Handler.handleCallback(Handler.java:1029)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at android.os.Handler.dispatchMessage(Handler.java:107)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at android.os.Looper.loopOnce(Looper.java:274)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at android.os.Looper.loop(Looper.java:369)
+11-01 22:39:49.849 21486 21601 W EncodedVideo: 	at android.os.HandlerThread.run(HandlerThread.java:85)
+11-01 22:39:49.850 21486 21601 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=1.98D
+11-01 22:39:49.850 21486 21601 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:39:50.018 21486 21519 I EncodedVideo: stop completed durationMs=616
+11-01 22:40:03.655 22841 22869 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-01 22:40:03.655 22841 22869 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-01 22:40:03.660 22841 22869 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-01 22:40:03.661 22841 22869 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-01 22:40:03.661 22841 22869 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-01 22:40:03.722 22841 22869 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-01 22:40:04.218 22841 22869 I EncodedVideo: public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified
+11-01 22:40:04.218 22841 22869 I EncodedVideo: demosaic path=public-photo-rcd-validation
+11-01 22:40:04.387 22841 22869 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-01 22:40:04.387 22841 22869 I EncodedVideo: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+11-01 22:40:06.319 22841 22869 I EncodedVideo: Independent encoder content probe GPU writer=true 2560x1440
+11-01 22:40:06.319 22841 22869 I EncodedVideo: preview 2560x1440 -> 640x360 box=4
+11-01 22:40:06.322 22841 22869 I EncodedVideo: ours P010 yStride=5120 uvStride=5120
+11-01 22:40:06.440 22841 22869 I EncodedVideo: audio AAC 2ch
+11-01 22:40:07.139 22841 22928 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.79D
+11-01 22:40:07.172 22841 22928 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-01 22:40:07.172 22841 22928 I EncodedVideo: RAW input app=2.0.78 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=gpu-storage
+11-01 22:40:07.173 22841 22928 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:40:07.175 22841 22928 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=908906394556490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=67,70,52,65,58,65,65,46,50,67,61,60,58,62,66,74,67,66,60,47,65,70,63,64,60,63,67,64,63,65,63,58,61,70,59,66,65,68,66,61,60,66,67,63,64,59,66,61,56,77,52,68,74,71,72,87,53,70,67,76,65,59,62,68,67,69,70,71,67,67,69,65,64,73,78,57,74,52,59,69,63,71,66,77,68,60,63,72,66,60,58,62,65,67,65,55,59,69,59,51,73,64,59,73,44,70,59,62,55,71,58,66,54,59,62,61,75,61,50,72,72,66,69,67,59,43,54,52
+11-01 22:40:07.827 22841 22928 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:40:07.828 22841 22928 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=908906461215490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=59,72,52,73,53,60,63,54,64,68,59,66,64,72,66,71,61,68,65,79,68,67,62,63,73,38,74,61,71,62,63,74,71,60,73,62,63,53,64,63,60,60,71,67,59,69,64,63,60,76,72,57,75,63,80,76,52,62,61,74,54,59,69,53,65,66,63,62,69,66,82,62,60,52,63,59,58,74,58,61,67,60,74,59,72,67,78,56,65,73,54,62,51,52,50,54,59,74,66,71,71,58,56,78,63,52,62,70,57,52,59,59,68,73,68,70,69,46,44,57,50,63,63,59,67,52,74,69
+11-01 22:40:07.838 22841 22892 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=2560,1440,2560,54,1,16842803
+11-01 22:40:07.839 22841 22892 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output image=2560x1440 format=54 crop=Rect(0, 0 - 2560, 1440) planes=0[row=5120 px=2 pos=0 limit=7372800 capacity=7372800] 1[row=5120 px=4 pos=0 limit=3686400 capacity=3686400] 2[row=5120 px=4 pos=0 limit=3686400 capacity=3686400]
+11-01 22:40:07.840 22841 22892 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output timestamp=908906394556490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=88,536,515,78,511,505,86,506,512,75,522,552,67,528,506,91,526,571,74,507,542,64,542,504,90,537,498,91,524,530,65,520,537,66,512,519,93,507,541,69,510,525,65,522,528,64,511,508,113,514,531,92,519,544,84,520,555,96,525,538,70,525,519,66,515,522,65,513,512,112,505,507,116,532,536,76,509,501,99,518,518,79,521,523,74,557,504,91,523,508,82,502,541,108,490,485 comparison=not-available sampleMs=2.131077
+11-01 22:40:07.914 22841 22918 I EncodedVideo: muxer started: video/hevc 2560x1440 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-01 22:40:08.289 22841 22892 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=2560,1440,2560,54,1,16842803
+11-01 22:40:08.290 22841 22892 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output image=2560x1440 format=54 crop=Rect(0, 0 - 2560, 1440) planes=0[row=5120 px=2 pos=0 limit=7372800 capacity=7372800] 1[row=5120 px=4 pos=0 limit=3686400 capacity=3686400] 2[row=5120 px=4 pos=0 limit=3686400 capacity=3686400]
+11-01 22:40:08.291 22841 22892 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output timestamp=908906461215490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=76,533,509,100,505,537,70,511,522,73,538,532,122,509,516,81,516,552,116,528,525,77,519,489,92,534,527,68,525,507,64,512,521,68,522,518,97,515,529,64,498,531,64,519,507,134,492,502,80,522,519,89,534,562,69,524,515,70,522,528,82,503,562,64,510,523,92,534,512,93,512,543,98,556,506,94,512,521,116,500,508,82,517,524,76,531,521,74,521,510,91,502,532,91,490,534 comparison=not-available sampleMs=1.205615
+11-01 22:40:36.792 22841 22928 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=0.79D
+11-01 22:40:36.792 22841 22928 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:40:37.278 22841 22869 I EncodedVideo: stop completed durationMs=588
+11-01 22:40:52.101 23783 23829 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-01 22:40:52.101 23783 23829 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-01 22:40:52.106 23783 23829 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-01 22:40:52.106 23783 23829 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-01 22:40:52.107 23783 23829 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-01 22:40:52.171 23783 23829 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-01 22:40:52.988 23783 23829 I EncodedVideo: public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified
+11-01 22:40:52.988 23783 23829 I EncodedVideo: demosaic path=public-photo-rcd-validation
+11-01 22:40:53.222 23783 23829 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-01 22:40:53.222 23783 23829 I EncodedVideo: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+11-01 22:40:56.139 23783 23829 I EncodedVideo: Independent encoder content probe GPU writer=true 3840x2160
+11-01 22:40:56.139 23783 23829 I EncodedVideo: preview 3840x2160 -> 960x540 box=4
+11-01 22:40:56.146 23783 23829 I EncodedVideo: ours P010 yStride=7680 uvStride=7680
+11-01 22:40:56.273 23783 23829 I EncodedVideo: audio AAC 2ch
+11-01 22:40:57.030 23783 24099 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.63D
+11-01 22:40:57.071 23783 24099 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-01 22:40:57.071 23783 24099 I EncodedVideo: RAW input app=2.0.78 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=gpu-storage
+11-01 22:40:57.073 23783 24099 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:40:57.074 23783 24099 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=908956291601490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=265,97,229,215,317,71,337,364,485,174,555,441,642,220,668,754,627,191,626,612,525,165,512,466,341,171,439,412,216,115,208,227,236,103,238,250,326,126,416,377,469,163,429,397,501,196,645,533,585,158,603,600,693,203,707,580,328,112,340,324,250,79,247,210,158,81,149,130,218,112,279,229,425,117,417,370,454,179,508,435,350,138,389,304,282,122,329,304,271,132,248,268,168,97,146,202,77,80,91,81,69,86,96,87,160,75,167,141,173,102,184,160,230,96,219,214,126,99,128,111,93,73,95,92,98,59,101,78
+11-01 22:40:57.669 23783 24099 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-01 22:40:57.670 23783 24099 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=908956374942490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=67,66,66,76,66,61,73,74,76,55,67,73,73,71,82,75,66,61,78,70,59,63,75,67,85,71,60,73,65,53,67,66,63,65,62,62,75,56,69,65,67,62,77,76,79,62,81,72,88,77,76,83,72,65,75,74,66,66,68,52,67,60,66,71,65,64,77,68,70,67,60,56,66,62,75,69,75,67,67,72,68,63,68,73,71,65,73,78,64,63,52,76,75,72,57,62,70,62,64,66,70,65,63,61,53,70,68,63,62,74,67,72,63,62,74,65,73,56,68,71,59,59,63,76,67,42,55,67
+11-01 22:40:57.682 23783 23854 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=3840,2160,3840,54,1,16842803
+11-01 22:40:57.683 23783 23854 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output image=3840x2160 format=54 crop=Rect(0, 0 - 3840, 2160) planes=0[row=7680 px=2 pos=0 limit=16588800 capacity=16588800] 1[row=7680 px=4 pos=0 limit=8294400 capacity=8294400] 2[row=7680 px=4 pos=0 limit=8294400 capacity=8294400]
+11-01 22:40:57.685 23783 23854 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output timestamp=908956291601490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=530,313,683,557,233,685,653,324,704,741,266,635,726,249,655,687,278,686,585,376,723,484,382,640,485,343,663,548,314,732,651,337,714,619,289,707,666,218,688,759,294,650,559,258,720,503,284,705,359,431,625,430,372,694,618,273,729,625,370,721,550,334,712,484,309,706,519,413,681,393,388,598,164,562,580,134,566,599,340,371,640,362,433,648,432,325,652,292,500,618,214,489,570,237,437,627 comparison=not-available sampleMs=5.142462
+11-01 22:40:57.817 23783 24066 I EncodedVideo: muxer started: video/hevc 3840x2160 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-01 22:40:58.182 23783 23854 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=3840,2160,3840,54,1,16842803
+11-01 22:40:58.185 23783 23854 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output image=3840x2160 format=54 crop=Rect(0, 0 - 3840, 2160) planes=0[row=7680 px=2 pos=0 limit=16588800 capacity=16588800] 1[row=7680 px=4 pos=0 limit=8294400 capacity=8294400] 2[row=7680 px=4 pos=0 limit=8294400 capacity=8294400]
+11-01 22:40:58.186 23783 23854 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output timestamp=908956374942490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=86,496,491,86,499,558,111,488,521,126,547,557,91,505,566,90,516,579,158,508,470,80,549,516,67,537,508,133,513,532,80,493,538,123,481,524,178,529,530,97,498,518,78,518,522,80,500,500,98,499,576,102,538,506,80,509,554,114,518,519,78,505,522,93,498,511,65,534,491,130,573,484,97,501,505,107,547,510,79,562,529,81,574,517,86,502,554,100,493,501,68,495,497,82,502,499 comparison=not-available sampleMs=3.680846
+11-01 22:41:26.643 23783 24099 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=4.31D
+11-01 22:41:26.644 23783 24099 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-01 22:41:27.074 23783 23829 I EncodedVideo: stop completed durationMs=512

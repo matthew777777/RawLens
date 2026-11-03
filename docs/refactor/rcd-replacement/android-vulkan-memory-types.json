@@ -1,0 +1,37 @@
+{
+  "source_command": "adb shell cmd gpu vkjson",
+  "device": "Mali-G615 MC2",
+  "memory": {
+    "memoryHeapCount": 2.0,
+    "memoryHeaps": [
+      {
+        "flags": 1.0,
+        "size": "0x00000001cc9c3000"
+      },
+      {
+        "flags": 1.0,
+        "size": "0x0000000006400000"
+      }
+    ],
+    "memoryTypeCount": 4.0,
+    "memoryTypes": [
+      {
+        "heapIndex": 0.0,
+        "propertyFlags": 7.0
+      },
+      {
+        "heapIndex": 0.0,
+        "propertyFlags": 11.0
+      },
+      {
+        "heapIndex": 0.0,
+        "propertyFlags": 17.0
+      },
+      {
+        "heapIndex": 1.0,
+        "propertyFlags": 33.0
+      }
+    ]
+  },
+  "scope": "Memory properties only; not evidence of performance advantage or spill behavior"
+}

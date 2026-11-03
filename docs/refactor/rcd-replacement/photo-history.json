@@ -1,0 +1,50 @@
+{
+  "app/src/main/java/com/matthew/rawlens/RcdReference.kt": {
+    "sha256": "e6362eba94315aac5b5db5eba4736d2b463c298537a0b9936179f8323852d9ca",
+    "history": [
+      "a244814c1fcbcbb0d3f9d268a1bca5a8a32cde86 matthew777777 <new.matthew7777@gmail.com> 2026-10-06T22:48:01+03:00 app: add VF demosaic backends, Direct-Log record and monitor scopes"
+    ]
+  },
+  "app/src/main/java/com/matthew/rawlens/VfRcd.kt": {
+    "sha256": "a3840e40e2b94481d4b5efa27d19b48ee1b1cb8a8d7d0ea7133d87db17d5066e",
+    "history": [
+      "b247c913876a1b7cc3a7f889f693440ea7dfb7c3 matthew777777 <new.matthew7777@gmail.com> 2026-11-01T10:15:28+02:00 refactor(app): wire photo, UI, metadata and encoded-video changes together",
+      "007a8614521c3b9929b4841e995a478a20922883 matthew777777 <new.matthew7777@gmail.com> 2026-10-18T17:32:28+03:00 vf: GPU viewfinder path (RCD f16/YUV, P010->RGB8, RGB8 convert)",
+      "a244814c1fcbcbb0d3f9d268a1bca5a8a32cde86 matthew777777 <new.matthew7777@gmail.com> 2026-10-06T22:48:01+03:00 app: add VF demosaic backends, Direct-Log record and monitor scopes"
+    ]
+  },
+  "app/src/main/cpp/vf_vulkan_vf_rcd.inc": {
+    "sha256": "959c8fe067264ba75c1e8eb385f9ced69fde3978c017387d60c6c16f8c3a8c33",
+    "history": [
+      "b247c913876a1b7cc3a7f889f693440ea7dfb7c3 matthew777777 <new.matthew7777@gmail.com> 2026-11-01T10:15:28+02:00 refactor(app): wire photo, UI, metadata and encoded-video changes together",
+      "b60c4723f90810f7507c23e7959ec54387fd27b6 matthew777777 <new.matthew7777@gmail.com> 2026-10-28T23:34:05+02:00 feat(direct-log): Sony-exact S-Gamut3.Cine/S-Log3 and recorded 3D LUT grade (I1, J1)",
+      "bf16f46c3d35d86e6cc0253c8a3e9fe1fd3b2243 matthew777777 <new.matthew7777@gmail.com> 2026-10-27T05:49:24+02:00 feat(2.0): Direct Log ACES profile and LOG crop",
+      "f29949af4da7729a2883feae7902b7836264cb1a matthew777777 <new.matthew7777@gmail.com> 2026-10-21T11:51:52+03:00 fix(vf-native): order RCD modes after the previous mode's writes (A8)",
+      "67d7f16127dd3768eb078902ab0563b909a326ff matthew777777 <new.matthew7777@gmail.com> 2026-10-21T11:40:57+03:00 fix(vf-native): gate per-slot GPU state on real completion; stop photo RCD leaks",
+      "118c6d92f7549dbde3a2c1ac0417b0a93dd77dea matthew777777 <new.matthew7777@gmail.com> 2026-10-21T10:31:51+03:00 refactor(vf-native): split vf_vulkan_vf.cpp into nine ordered parts"
+    ]
+  },
+  "app/src/main/assets/shaders/vf/vf_rcd.comp": {
+    "sha256": "5d9f70ca19011cbe0411df55dc596991513ec4585c501e3bd43d48aaf8a30585",
+    "history": [
+      "b247c913876a1b7cc3a7f889f693440ea7dfb7c3 matthew777777 <new.matthew7777@gmail.com> 2026-11-01T10:15:28+02:00 refactor(app): wire photo, UI, metadata and encoded-video changes together",
+      "bf16f46c3d35d86e6cc0253c8a3e9fe1fd3b2243 matthew777777 <new.matthew7777@gmail.com> 2026-10-27T05:49:24+02:00 feat(2.0): Direct Log ACES profile and LOG crop",
+      "a244814c1fcbcbb0d3f9d268a1bca5a8a32cde86 matthew777777 <new.matthew7777@gmail.com> 2026-10-06T22:48:01+03:00 app: add VF demosaic backends, Direct-Log record and monitor scopes"
+    ]
+  },
+  "app/src/main/assets/shaders/vf/vf_rcd_f16.comp": {
+    "sha256": "ed6f6f56c05e7ed602ff37b86d5794fe4dfc4066b23c3d558ab67d25cb96ed97",
+    "history": [
+      "bf16f46c3d35d86e6cc0253c8a3e9fe1fd3b2243 matthew777777 <new.matthew7777@gmail.com> 2026-10-27T05:49:24+02:00 feat(2.0): Direct Log ACES profile and LOG crop",
+      "007a8614521c3b9929b4841e995a478a20922883 matthew777777 <new.matthew7777@gmail.com> 2026-10-18T17:32:28+03:00 vf: GPU viewfinder path (RCD f16/YUV, P010->RGB8, RGB8 convert)"
+    ]
+  },
+  "app/src/main/assets/shaders/rcd/rcd_final.glsl": {
+    "sha256": "c2861b99ac3d5ab9b6442c6eb26b261302cd5a38e966f928f6e59f7eaf6cf350",
+    "history": [
+      "4f2c9331b6d9936718b22e9c61c1111cbd6a762b matthew777777 <new.matthew7777@gmail.com> 2026-10-27T05:49:23+02:00 feat(2.0): darktable inpaint-opposed highlight reconstruction (Vulkan + Kotlin)",
+      "886db3e017810ea54ee6410ad80a4db6e5e3f819 matthew777777 <new.matthew7777@gmail.com> 2026-10-12T13:28:43+03:00 denoise: wavelet pipeline wiring, ETTR residual cap, DNG zero-copy predicate",
+      "a244814c1fcbcbb0d3f9d268a1bca5a8a32cde86 matthew777777 <new.matthew7777@gmail.com> 2026-10-06T22:48:01+03:00 app: add VF demosaic backends, Direct-Log record and monitor scopes"
+    ]
+  }
+}

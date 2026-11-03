@@ -1,0 +1,21 @@
+{
+  "scope": "Frozen local build snapshot to isolate concurrent workspace build outputs; no history or publication changes",
+  "head": "28977494032f743742eafbbf77ff437317544554",
+  "branch": "refactor/2.0",
+  "root": "/tmp/rawlens-rcd-full-source-snapshot",
+  "sha256": {
+    "app/build.gradle.kts": "5b390b7e6f9c50bc0971d1cbac2536fd8e1217b9444084c55e74c9eadd5d966a",
+    "app/src/main/cpp/photo_rcd/photo_rcd_engine.cpp": "641c50964cd911554c9581cd7fce84df8bd8420a195049c0d40d63a9082efa10",
+    "app/src/main/cpp/photo_rcd/photo_rcd_jni.cpp": "7fbbe8758c3545fb4f831f37c84e73957ca8913d99587c925d6dcb82b2ab109d",
+    "app/src/main/cpp/vf_vulkan_vf_p010_preview.inc": "aa2b8b7c0fc59c70f80da2da7586f83a9c05f23234582cbaa4975a4b2936ce33",
+    "app/src/main/cpp/vf_egl_jni.cpp": "782bdcd2156319403153ceb0069490abd365c38ba6b252480d6b2dc5c9865fc1",
+    "app/src/main/assets/shaders/vf/vf_gradeyuv.comp": "0d60eecf6bde6a338b20c2f91f2388d682984b5eb9898707bcdfd0512b226435",
+    "app/src/main/assets/shaders/vf/vf_gradeyuv.spv": "86db945f5ca4a2e906fc17f49a5f9d939139cf5e90b10918e691543d56aa1552",
+    "app/src/main/assets/shaders/vf/vf_gradeyuv_cube.spv": "a97f763397c9c651bf04f3dd6002d8554640554433e749a5c9d550d20f392f96",
+    "app/src/main/java/com/matthew/rawlens/PhotoRcdRenderer.kt": "1a70d58b187147705320cdc2fc8f3f6fbe8436eedbbea1525f6fdbaff2a83f27",
+    "app/src/main/java/com/matthew/rawlens/PhotoRcdWriterProbe.kt": "84cdd1734dcf834c714d45cc096f83e03abeb4d987635a73d0f22f81d30c5000",
+    "app/src/main/java/com/matthew/rawlens/EncodedVideoRecorder.kt": "edb81b454a10132a752c85a91c38738af04ef155c1443ec5884e5eb96f77ae07",
+    "app/src/androidTest/java/com/matthew/rawlens/PhotoRcdCorrectnessDeviceTest.kt": "1096cd18f0341e0c2bd3c16df94239a1be2b1fcb5c235122696aa32c37a79a42",
+    "tools/photo-rcd/requirements_input_shaders.py": "72e959987605a7559c618245799d134b219fd909dade88e9daa3365d856cde55"
+  }
+}

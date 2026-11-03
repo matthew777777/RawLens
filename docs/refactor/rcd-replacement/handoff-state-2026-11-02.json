@@ -1,0 +1,93 @@
+{
+  "status": "Stopped at user request; handoff for Claude tomorrow. Do not resume without user instruction.",
+  "date": "2026-11-02",
+  "head": "28977494032f743742eafbbf77ff437317544554",
+  "branch": "refactor/2.0",
+  "workspace": "/Users/monikamalinowska/AndroidStudioProjects/RawLens",
+  "source_state": "Current main workspace differs from the last-built isolated snapshot. Tests pin historical APKs; do not assign their results to newer source.",
+  "source_sha256": {
+    "app/build.gradle.kts": "7782b31f101f642ea1e5366aec3a843a389866b468f959d3ca04c507f878ae00",
+    "app/src/main/cpp/CMakeLists.txt": "5ed95aaf906000d4b5c63daf5d0e61ff395d155a8d7c1da2cd27fc1be59717f8",
+    "app/src/main/cpp/photo_rcd/photo_rcd_engine.h": "8e9b48f69ea6ac09c0eab41cf7409a110082b342babed23492e78178537bb991",
+    "app/src/main/cpp/photo_rcd/photo_rcd_engine.cpp": "2e6323e4449ff7a4c8b393a391c891e52af6542004c5c0e9e9c77a599499b5ab",
+    "app/src/main/cpp/photo_rcd/photo_rcd_jni.cpp": "093cd7530d979eaa1654506d8154fd714ccbef3917cf05bc022a0daa70062708",
+    "app/src/main/java/com/matthew/rawlens/PhotoRcdRenderer.kt": "5d6d1045b3e3767a1a08b60fe6682f6638b521d78b0f9294d20ec33792e4282f",
+    "app/src/main/java/com/matthew/rawlens/PhotoRcdWriterProbe.kt": "84cdd1734dcf834c714d45cc096f83e03abeb4d987635a73d0f22f81d30c5000",
+    "app/src/main/java/com/matthew/rawlens/PhotoRcdCompletion.kt": "ff22de343794f9f1759a5559b9de979a37d7300ae1a848f8673fe1305e77d418",
+    "app/src/main/java/com/matthew/rawlens/EncodedVideoRecorder.kt": "81d3e240f62c89e63ef5b0ee47bb0ed83b7313e2ffe6014080793b112382e42a",
+    "app/src/androidTest/java/com/matthew/rawlens/PhotoRcdCorrectnessDeviceTest.kt": "8f54bff0fdba5e63ae39f73bac7ec3a81bd92a93cc0533f1ee87d24a02639b44",
+    "app/src/androidTest/java/com/matthew/rawlens/PhotoRcdRecordingDeviceTest.kt": "23e5af0ad4faea90b61d8909df251a38d3a4a008b3e3f6b1715390b95cdafad7",
+    "app/src/main/assets/shaders/vf/vf_gradeyuv.comp": "0d60eecf6bde6a338b20c2f91f2388d682984b5eb9898707bcdfd0512b226435",
+    "app/src/main/assets/shaders/vf/vf_gradeyuv.spv": "86db945f5ca4a2e906fc17f49a5f9d939139cf5e90b10918e691543d56aa1552",
+    "app/src/main/assets/shaders/vf/vf_gradeyuv_cube.spv": "a97f763397c9c651bf04f3dd6002d8554640554433e749a5c9d550d20f392f96",
+    "app/src/main/cpp/vf_vulkan_vf_p010_preview.inc": "aa2b8b7c0fc59c70f80da2da7586f83a9c05f23234582cbaa4975a4b2936ce33",
+    "app/src/main/cpp/vf_egl_jni.cpp": "782bdcd2156319403153ceb0069490abd365c38ba6b252480d6b2dc5c9865fc1",
+    "tools/photo-rcd/tile_local.py": "db193298b13d8b13618ce5ab3e214fe09e30858646d131cfb22c5b7d8495c7f8",
+    "tools/photo-rcd/requirements_input_shaders.py": "66dd11136f60072d2a517d6e3b97f39e78671e7148d58be50f367f7311af77ef",
+    "tools/photo-rcd/write_app_shaders.py": "e62e29de8e1ccba78a28740b0596029f4d5968cd3b27e9ec822e70cb85564daa",
+    "tools/photo-rcd/inspect_packages.py": "579edb6653cd829d5f0af5d818a5b501e4437cd3dcedc250a16faf468bae277d",
+    "tools/photo-rcd/raw_engine_compare.cc": "697b2a1000c330cfde528a68bd3d2b7940085c7bfbfb566af734baf354e1cb2d",
+    "tools/photo-rcd/validate_normalized_engine.py": "ee488c1a65cf9c1805561e43261710ae268b7d729ee900505d5a9c54aa4f0408",
+    "tools/photo-rcd/validate_tile_local_layout.py": "da0a01d46e58743d545993a3a34b74c1b8bdef9b68abb627825dc53bfdde223c",
+    "tools/photo-rcd/tile_local_benchmark.cc": "82aa8d242ac67b31f596a0354b26ed68e46b1ec75af54ebff218c4dfb00edd2d",
+    "tools/photo-rcd/benchmark_tile_local.py": "d60b65e4c8ae16a0d6c6502f4f9958c8bfd58d5b03a8b7b2b51a7d547cb8b867",
+    "tools/photo-rcd/probe_tile_image.cc": "8ea524604c7d83f7bb470115b0918b957080695182480f36769f739130f2ee8a",
+    "tools/photo-rcd/run_android_correctness.py": "32d505c408428f6a2c19995c7b34917896a14570b2b06bff84b69692a708048e",
+    "tools/photo-rcd/run_android_recordings.py": "236af42edf24bc316c473b6edafb615b8f92141be86e53d9c39769402bff4e64"
+  },
+  "reports": {
+    "tile-local-fused-product-validation.json": {
+      "exists": true,
+      "sha256": "354084c02ca9798f88b3f508f226e58884e7092f8a3e5876b021498fd40c7cee"
+    },
+    "tile-local-image-infra-regression.json": {
+      "exists": true,
+      "sha256": "43768d0ca827a751882684820642423e2f5a172c6b411ada43a65e3ccbf6baad"
+    },
+    "tile-local-legacy-regression.json": {
+      "exists": true,
+      "sha256": "f14a9b34fb9da731eea55610a0c42987ed2e4bfe0582c608e354e2ba1cac01bd"
+    },
+    "tile-local-layout-validation.json": {
+      "exists": true,
+      "sha256": "91d21fb31fe0264f4d3f5c741af79c6e5e00335946092bb6eb29985f8d616750"
+    },
+    "tile-local-shape-diagnostic.json": {
+      "exists": true,
+      "sha256": "bbcc1e1199fdb84dce9f2da573087c3bf9f9af47dcf7002ea742300c35ad360f"
+    },
+    "tile-local-bounded-vh-validation.json": {
+      "exists": true,
+      "sha256": "8abc471e60cc13e4df9819c422155172e25ea7523131a4759a3f45123d1b70eb"
+    },
+    "tile-local-bounded-vh-shape-diagnostic.json": {
+      "exists": true,
+      "sha256": "896bbe42c29aa18a4054c2348ed15cf5c261de07c8d85187fdce2a2717e04cd1"
+    },
+    "tile-local-16x8-validation.json": {
+      "exists": true,
+      "sha256": "9248ee55c0bcd2841dcf84e0a2ac00b9a9cb7ea4dfc9c5fa14db72d33a0d2f9c"
+    },
+    "android-tile-local/run.json": {
+      "exists": true,
+      "sha256": "95ee67409f989cf07cae3c86623a078255442db83faa1cc2712d54561b7b0c1e"
+    },
+    "android-tile-image/run.json": {
+      "exists": true,
+      "sha256": "21e24faffc167f451cb820db1d3b93acde52c7768d70ced61f835298336e5eea"
+    },
+    "recordings-tile-local-baseline/runs.json": {
+      "exists": true,
+      "sha256": "73daecdddfb7fc9d13c87859d8b685e26f87f07f9b3cfbec6632843c5697541c"
+    },
+    "recordings-tile-local-baseline/analysis-summary.json": {
+      "exists": true,
+      "sha256": "55b27c5e0d0ee46305233e740d7f5d92074197b547bc5c41a557389e81810b13"
+    }
+  },
+  "performance_acceptance": false,
+  "no_running_task_jobs_observed": true,
+  "isolated_tree": "/tmp/rawlens-rcd-full-source-snapshot",
+  "native_probe_result": "40x40 GPU RGBA16F image: zero pixel differences with queried allocation usage; not product pipeline/device FPS acceptance",
+  "blocking_engineering_gate": "Large-frame bounded-VH 8x8 native run produced non-finite product output after three iterations; unresolved despite small host fixture passes."
+}

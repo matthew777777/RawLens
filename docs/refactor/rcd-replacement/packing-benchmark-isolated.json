@@ -1,0 +1,3941 @@
+{
+  "scope": "Apple M1 host GPU timestamps, including packing; not mobile/camera/encoder/delivered fps",
+  "warmup_runs": 5,
+  "measured_runs": 10,
+  "variants": {
+    "scalar": {
+      "source_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309",
+      "spirv_sha256": "d4415f73e35626b717c085117b2f632dcb941d78d9a169d659f9698db542aace"
+    },
+    "packed": {
+      "source_sha256": "906f5cb7f7e3c786377117569d0eee7b30a10b34a7ee8df95a696b5e554f560e",
+      "spirv_sha256": "36a2b09430a4d588f08d6d5240504a7ae40e9620a8bcd0a59849c362d0b7cdcd"
+    },
+    "tiled": {
+      "source_sha256": "fee9085ada0d44b48b6293fc2d43431fc34b51f50be643f162ed342b7719b022",
+      "spirv_sha256": "ad1dae012dbbe9b752a9a30104dba43e30a8a08bad2e80dd2875a4f1559ae1ce"
+    },
+    "tiled-capture": {
+      "source_sha256": "30cd35027658289949b6d873d5e47bf72554c49c8c7bb18fdf6a71446264fd78",
+      "spirv_sha256": "5065cbdb4759ce91a72946eb2c47386d1cb96142a5c8dfc1b180e4b41e9e3a17"
+    },
+    "tiled-packed": {
+      "source_sha256": "a8dd31a1891046612274c1a68c122bfda51301ee2530ddbfb09dcecf4b281c05",
+      "spirv_sha256": "34dd3d6da5149db74fb834313b24ac019b3fa5b42e70236c627828fa7bed150e"
+    },
+    "tiled-packed-capture": {
+      "source_sha256": "4c0b04235db77ffe3d02a17c29a0654f27a783d3cd4d6434e212e1e500f41393",
+      "spirv_sha256": "8aa698b69f5631d37188c85423ca09c74da16bca8cdae840c8994e267407f5a9"
+    },
+    "cached": {
+      "source_sha256": "ff081c9253292238bd3793d45e2337b221ad953de420b4e15f9f93aaaefa0ca9",
+      "spirv_sha256": "e1efef0e252777e22ef1aea99b61f43fed774614185add8e8b607c9804641ba6"
+    },
+    "cached-packed": {
+      "source_sha256": "65821916875077831efc973b1fc61d8c15c8a0159492f02a91a59a046238f9b9",
+      "spirv_sha256": "98b73fc6277fac1803315331edc066c1813b7144c7d4694da40885301248f4f9"
+    },
+    "tiled-cached": {
+      "source_sha256": "fb132a792e7b317a58d8c16712c9b88b121831cd73935dbfd1017d0896fd5669",
+      "spirv_sha256": "829ab4d4b671dbb664c0abc66c808af3bee31c56a2df14ce769ecd5cff689e9a"
+    },
+    "tiled-cached-capture": {
+      "source_sha256": "59a2c7a2ad35132a6b2b707607798c070674566f76eb9f6d3bdd7d8f0d8b5fe7",
+      "spirv_sha256": "44a7c82afeb7a99e36cd5e9b00e58000facfcdaf2ed6fdb7ecab035dc2f83d07"
+    }
+  },
+  "results": [
+    {
+      "size": [
+        1920,
+        1080
+      ],
+      "variant": "scalar",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ffbcd74a2861bf02d6a3f44c0134a7bbed65ce2c984f8d48b2ec8695035237ad",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 89.12785,
+      "p95_total_gpu_ms": 90.6865,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "scalar",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 97.7778,
+            "wait_wall_ms": 102.462,
+            "stage_ms": [
+              55.8659,
+              11.0986,
+              7.62796,
+              22.8141,
+              0.215167
+            ]
+          },
+          {
+            "total_gpu_ms": 89.6284,
+            "wait_wall_ms": 90.5637,
+            "stage_ms": [
+              47.4368,
+              11.0338,
+              7.71725,
+              23.1077,
+              0.177375
+            ]
+          },
+          {
+            "total_gpu_ms": 89.1988,
+            "wait_wall_ms": 89.9858,
+            "stage_ms": [
+              47.4637,
+              10.886,
+              7.9115,
+              22.5768,
+              0.178084
+            ]
+          },
+          {
+            "total_gpu_ms": 88.6413,
+            "wait_wall_ms": 89.3279,
+            "stage_ms": [
+              46.7508,
+              11.1103,
+              7.70488,
+              22.7443,
+              0.17575
+            ]
+          },
+          {
+            "total_gpu_ms": 88.8401,
+            "wait_wall_ms": 89.7109,
+            "stage_ms": [
+              47.2175,
+              10.9695,
+              7.90663,
+              22.3781,
+              0.176166
+            ]
+          },
+          {
+            "total_gpu_ms": 88.1992,
+            "wait_wall_ms": 89.0345,
+            "stage_ms": [
+              46.3959,
+              11.2654,
+              7.62725,
+              22.5649,
+              0.180625
+            ]
+          },
+          {
+            "total_gpu_ms": 88.9464,
+            "wait_wall_ms": 90.2125,
+            "stage_ms": [
+              46.9876,
+              11.1149,
+              7.68925,
+              22.7227,
+              0.174625
+            ]
+          },
+          {
+            "total_gpu_ms": 90.6865,
+            "wait_wall_ms": 91.6505,
+            "stage_ms": [
+              47.6853,
+              10.9046,
+              7.89358,
+              23.8664,
+              0.155166
+            ]
+          },
+          {
+            "total_gpu_ms": 89.4239,
+            "wait_wall_ms": 90.3217,
+            "stage_ms": [
+              47.2238,
+              11.108,
+              7.71188,
+              23.0031,
+              0.177125
+            ]
+          },
+          {
+            "total_gpu_ms": 89.0718,
+            "wait_wall_ms": 90.289,
+            "stage_ms": [
+              47.0753,
+              10.9206,
+              7.98342,
+              22.718,
+              0.205125
+            ]
+          },
+          {
+            "total_gpu_ms": 89.1839,
+            "wait_wall_ms": 89.7736,
+            "stage_ms": [
+              47.0294,
+              11.098,
+              7.67175,
+              22.9923,
+              0.183875
+            ]
+          },
+          {
+            "total_gpu_ms": 89.9356,
+            "wait_wall_ms": 90.6276,
+            "stage_ms": [
+              47.6927,
+              10.9661,
+              8.12375,
+              22.7565,
+              0.244417
+            ]
+          },
+          {
+            "total_gpu_ms": 88.0275,
+            "wait_wall_ms": 88.7302,
+            "stage_ms": [
+              46.3852,
+              11.0114,
+              7.55929,
+              22.7253,
+              0.176709
+            ]
+          },
+          {
+            "total_gpu_ms": 89.8459,
+            "wait_wall_ms": 90.4789,
+            "stage_ms": [
+              47.6295,
+              11.1449,
+              7.5645,
+              23.1909,
+              0.175458
+            ]
+          },
+          {
+            "total_gpu_ms": 88.8596,
+            "wait_wall_ms": 89.6155,
+            "stage_ms": [
+              46.8905,
+              11.1101,
+              7.93912,
+              22.5149,
+              0.177042
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        1920,
+        1080
+      ],
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ffbcd74a2861bf02d6a3f44c0134a7bbed65ce2c984f8d48b2ec8695035237ad",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 96.72265,
+      "p95_total_gpu_ms": 97.4062,
+      "median_pack_gpu_ms": 0.3773125,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "packed",
+        "timestamp_period_ns": 1,
+        "stages": [
+          5,
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 99.848,
+            "wait_wall_ms": 102.854,
+            "stage_ms": [
+              0.763416,
+              54.3256,
+              11.7702,
+              7.952,
+              24.6178,
+              0.201459
+            ]
+          },
+          {
+            "total_gpu_ms": 95.5108,
+            "wait_wall_ms": 96.0779,
+            "stage_ms": [
+              0.360917,
+              49.817,
+              11.6974,
+              8.30263,
+              24.8414,
+              0.197667
+            ]
+          },
+          {
+            "total_gpu_ms": 96.3289,
+            "wait_wall_ms": 96.8795,
+            "stage_ms": [
+              0.380625,
+              50.8785,
+              11.5801,
+              8.27596,
+              24.717,
+              0.208667
+            ]
+          },
+          {
+            "total_gpu_ms": 96.3635,
+            "wait_wall_ms": 97.081,
+            "stage_ms": [
+              0.370125,
+              50.7492,
+              11.7475,
+              8.29317,
+              24.6615,
+              0.20425
+            ]
+          },
+          {
+            "total_gpu_ms": 96.1416,
+            "wait_wall_ms": 96.8776,
+            "stage_ms": [
+              0.477708,
+              50.0149,
+              11.7769,
+              8.19208,
+              25.1563,
+              0.209875
+            ]
+          },
+          {
+            "total_gpu_ms": 95.6025,
+            "wait_wall_ms": 96.4595,
+            "stage_ms": [
+              0.3705,
+              49.2828,
+              12.3224,
+              8.10871,
+              24.9819,
+              0.246542
+            ]
+          },
+          {
+            "total_gpu_ms": 95.404,
+            "wait_wall_ms": 96.502,
+            "stage_ms": [
+              0.384125,
+              50.0325,
+              11.9893,
+              7.96012,
+              24.6125,
+              0.205834
+            ]
+          },
+          {
+            "total_gpu_ms": 96.535,
+            "wait_wall_ms": 97.2131,
+            "stage_ms": [
+              0.384666,
+              50.9943,
+              11.4188,
+              8.37779,
+              24.8651,
+              0.200625
+            ]
+          },
+          {
+            "total_gpu_ms": 97.2671,
+            "wait_wall_ms": 97.9952,
+            "stage_ms": [
+              0.402084,
+              51.6158,
+              11.5519,
+              8.38183,
+              24.8086,
+              0.207416
+            ]
+          },
+          {
+            "total_gpu_ms": 97.2507,
+            "wait_wall_ms": 98.5581,
+            "stage_ms": [
+              0.359708,
+              51.5569,
+              11.616,
+              8.43562,
+              24.8079,
+              0.206958
+            ]
+          },
+          {
+            "total_gpu_ms": 96.9103,
+            "wait_wall_ms": 97.7224,
+            "stage_ms": [
+              0.416417,
+              50.841,
+              11.7527,
+              8.63762,
+              24.7766,
+              0.155708
+            ]
+          },
+          {
+            "total_gpu_ms": 97.2094,
+            "wait_wall_ms": 97.9167,
+            "stage_ms": [
+              0.3485,
+              51.1923,
+              12.1399,
+              8.48996,
+              24.5129,
+              0.207166
+            ]
+          },
+          {
+            "total_gpu_ms": 96.1217,
+            "wait_wall_ms": 96.7673,
+            "stage_ms": [
+              0.3585,
+              50.2556,
+              11.7651,
+              7.95733,
+              25.3965,
+              0.207375
+            ]
+          },
+          {
+            "total_gpu_ms": 96.035,
+            "wait_wall_ms": 96.7782,
+            "stage_ms": [
+              0.530875,
+              50.2288,
+              12.2568,
+              7.97033,
+              24.5668,
+              0.195709
+            ]
+          },
+          {
+            "total_gpu_ms": 97.4062,
+            "wait_wall_ms": 99.0749,
+            "stage_ms": [
+              0.349208,
+              50.7251,
+              11.8367,
+              8.31008,
+              25.7625,
+              0.211583
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        1920,
+        1080
+      ],
+      "variant": "tiled",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ffbcd74a2861bf02d6a3f44c0134a7bbed65ce2c984f8d48b2ec8695035237ad",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 173.168,
+      "p95_total_gpu_ms": 178.064,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "tiled",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 174.768,
+            "wait_wall_ms": 177.32,
+            "stage_ms": [
+              57.6086,
+              116.699,
+              0.219458
+            ]
+          },
+          {
+            "total_gpu_ms": 177.261,
+            "wait_wall_ms": 178.583,
+            "stage_ms": [
+              49.6535,
+              127.073,
+              0.242875
+            ]
+          },
+          {
+            "total_gpu_ms": 170.63,
+            "wait_wall_ms": 171.151,
+            "stage_ms": [
+              49.459,
+              120.677,
+              0.206375
+            ]
+          },
+          {
+            "total_gpu_ms": 173.168,
+            "wait_wall_ms": 173.683,
+            "stage_ms": [
+              49.2404,
+              123.4,
+              0.223958
+            ]
+          },
+          {
+            "total_gpu_ms": 172.164,
+            "wait_wall_ms": 172.757,
+            "stage_ms": [
+              49.3934,
+              122.271,
+              0.226334
+            ]
+          },
+          {
+            "total_gpu_ms": 173.603,
+            "wait_wall_ms": 174.299,
+            "stage_ms": [
+              49.9569,
+              123.275,
+              0.225625
+            ]
+          },
+          {
+            "total_gpu_ms": 172.733,
+            "wait_wall_ms": 173.412,
+            "stage_ms": [
+              49.301,
+              122.924,
+              0.225
+            ]
+          },
+          {
+            "total_gpu_ms": 178.064,
+            "wait_wall_ms": 179.562,
+            "stage_ms": [
+              49.9742,
+              127.559,
+              0.223125
+            ]
+          },
+          {
+            "total_gpu_ms": 172.071,
+            "wait_wall_ms": 172.844,
+            "stage_ms": [
+              50.1104,
+              121.466,
+              0.221542
+            ]
+          },
+          {
+            "total_gpu_ms": 176.229,
+            "wait_wall_ms": 177.003,
+            "stage_ms": [
+              49.5361,
+              126.109,
+              0.229834
+            ]
+          },
+          {
+            "total_gpu_ms": 172.707,
+            "wait_wall_ms": 173.244,
+            "stage_ms": [
+              49.669,
+              122.543,
+              0.218292
+            ]
+          },
+          {
+            "total_gpu_ms": 169.872,
+            "wait_wall_ms": 170.492,
+            "stage_ms": [
+              49.9375,
+              119.429,
+              0.224542
+            ]
+          },
+          {
+            "total_gpu_ms": 174.61,
+            "wait_wall_ms": 175.363,
+            "stage_ms": [
+              49.9415,
+              124.179,
+              0.218375
+            ]
+          },
+          {
+            "total_gpu_ms": 172.312,
+            "wait_wall_ms": 172.869,
+            "stage_ms": [
+              49.3074,
+              122.509,
+              0.217459
+            ]
+          },
+          {
+            "total_gpu_ms": 173.869,
+            "wait_wall_ms": 174.388,
+            "stage_ms": [
+              49.2365,
+              124.126,
+              0.226959
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        1920,
+        1080
+      ],
+      "variant": "tiled-packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ffbcd74a2861bf02d6a3f44c0134a7bbed65ce2c984f8d48b2ec8695035237ad",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 179.83800000000002,
+      "p95_total_gpu_ms": 186.33,
+      "median_pack_gpu_ms": 0.380104,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "tiled-packed",
+        "timestamp_period_ns": 1,
+        "stages": [
+          5,
+          0,
+          1,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 196.558,
+            "wait_wall_ms": 198.6,
+            "stage_ms": [
+              0.731708,
+              85.4295,
+              110.147,
+              0.160167
+            ]
+          },
+          {
+            "total_gpu_ms": 181.262,
+            "wait_wall_ms": 182.207,
+            "stage_ms": [
+              0.385,
+              53.6589,
+              126.575,
+              0.224209
+            ]
+          },
+          {
+            "total_gpu_ms": 182.848,
+            "wait_wall_ms": 183.784,
+            "stage_ms": [
+              0.411833,
+              55.2389,
+              126.648,
+              0.235083
+            ]
+          },
+          {
+            "total_gpu_ms": 179.734,
+            "wait_wall_ms": 180.375,
+            "stage_ms": [
+              0.362125,
+              53.9798,
+              124.731,
+              0.2515
+            ]
+          },
+          {
+            "total_gpu_ms": 178.719,
+            "wait_wall_ms": 179.482,
+            "stage_ms": [
+              0.346625,
+              54.1366,
+              123.582,
+              0.239042
+            ]
+          },
+          {
+            "total_gpu_ms": 179.776,
+            "wait_wall_ms": 180.87,
+            "stage_ms": [
+              0.3655,
+              53.5173,
+              125.148,
+              0.338917
+            ]
+          },
+          {
+            "total_gpu_ms": 180.717,
+            "wait_wall_ms": 181.472,
+            "stage_ms": [
+              0.406791,
+              55.5199,
+              124.214,
+              0.240083
+            ]
+          },
+          {
+            "total_gpu_ms": 180.603,
+            "wait_wall_ms": 181.443,
+            "stage_ms": [
+              0.400417,
+              53.8952,
+              125.686,
+              0.236791
+            ]
+          },
+          {
+            "total_gpu_ms": 182.506,
+            "wait_wall_ms": 183.069,
+            "stage_ms": [
+              0.378208,
+              54.016,
+              127.496,
+              0.235792
+            ]
+          },
+          {
+            "total_gpu_ms": 177.093,
+            "wait_wall_ms": 177.95,
+            "stage_ms": [
+              0.372458,
+              54.3893,
+              121.709,
+              0.237917
+            ]
+          },
+          {
+            "total_gpu_ms": 186.33,
+            "wait_wall_ms": 186.846,
+            "stage_ms": [
+              0.394667,
+              54.1122,
+              131.145,
+              0.233666
+            ]
+          },
+          {
+            "total_gpu_ms": 178.491,
+            "wait_wall_ms": 179.02,
+            "stage_ms": [
+              0.384584,
+              54.2683,
+              123.129,
+              0.251208
+            ]
+          },
+          {
+            "total_gpu_ms": 177.433,
+            "wait_wall_ms": 178.35,
+            "stage_ms": [
+              0.368334,
+              53.6272,
+              122.822,
+              0.23675
+            ]
+          },
+          {
+            "total_gpu_ms": 178.221,
+            "wait_wall_ms": 179.117,
+            "stage_ms": [
+              0.382,
+              54.3004,
+              122.896,
+              0.237292
+            ]
+          },
+          {
+            "total_gpu_ms": 179.9,
+            "wait_wall_ms": 180.405,
+            "stage_ms": [
+              0.362833,
+              53.8023,
+              125.092,
+              0.2405
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        1920,
+        1080
+      ],
+      "variant": "cached",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ffbcd74a2861bf02d6a3f44c0134a7bbed65ce2c984f8d48b2ec8695035237ad",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 112.375,
+      "p95_total_gpu_ms": 112.956,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "cached",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 121.602,
+            "wait_wall_ms": 126.389,
+            "stage_ms": [
+              49.282,
+              26.1571,
+              17.2225,
+              27.5432,
+              0.288709
+            ]
+          },
+          {
+            "total_gpu_ms": 112.47,
+            "wait_wall_ms": 112.999,
+            "stage_ms": [
+              40.5754,
+              27.1064,
+              17.2668,
+              27.0925,
+              0.195667
+            ]
+          },
+          {
+            "total_gpu_ms": 112.554,
+            "wait_wall_ms": 114.334,
+            "stage_ms": [
+              40.754,
+              26.4002,
+              17.4675,
+              27.4884,
+              0.204583
+            ]
+          },
+          {
+            "total_gpu_ms": 112.968,
+            "wait_wall_ms": 113.808,
+            "stage_ms": [
+              41.1759,
+              26.7226,
+              17.4563,
+              27.1577,
+              0.205958
+            ]
+          },
+          {
+            "total_gpu_ms": 112.265,
+            "wait_wall_ms": 114.387,
+            "stage_ms": [
+              41.1575,
+              26.52,
+              16.9825,
+              27.1762,
+              0.206667
+            ]
+          },
+          {
+            "total_gpu_ms": 112.233,
+            "wait_wall_ms": 118.901,
+            "stage_ms": [
+              40.2952,
+              26.5459,
+              17.1655,
+              27.7921,
+              0.194667
+            ]
+          },
+          {
+            "total_gpu_ms": 112.896,
+            "wait_wall_ms": 113.422,
+            "stage_ms": [
+              41.4768,
+              26.5757,
+              16.9479,
+              27.4517,
+              0.208042
+            ]
+          },
+          {
+            "total_gpu_ms": 112.034,
+            "wait_wall_ms": 113.675,
+            "stage_ms": [
+              40.1696,
+              27.0285,
+              16.9819,
+              27.3689,
+              0.193875
+            ]
+          },
+          {
+            "total_gpu_ms": 112.855,
+            "wait_wall_ms": 114.42,
+            "stage_ms": [
+              41.1954,
+              26.783,
+              17.1847,
+              27.2692,
+              0.188292
+            ]
+          },
+          {
+            "total_gpu_ms": 112.111,
+            "wait_wall_ms": 112.863,
+            "stage_ms": [
+              40.076,
+              26.7144,
+              17.5029,
+              27.4047,
+              0.185042
+            ]
+          },
+          {
+            "total_gpu_ms": 112.683,
+            "wait_wall_ms": 113.581,
+            "stage_ms": [
+              40.7137,
+              26.9036,
+              16.9447,
+              27.6869,
+              0.203042
+            ]
+          },
+          {
+            "total_gpu_ms": 112.343,
+            "wait_wall_ms": 113.206,
+            "stage_ms": [
+              40.5823,
+              26.8279,
+              17.0415,
+              27.4765,
+              0.193166
+            ]
+          },
+          {
+            "total_gpu_ms": 112.956,
+            "wait_wall_ms": 113.761,
+            "stage_ms": [
+              41.5007,
+              26.4081,
+              17.0731,
+              27.5307,
+              0.211375
+            ]
+          },
+          {
+            "total_gpu_ms": 111.888,
+            "wait_wall_ms": 113.763,
+            "stage_ms": [
+              40.5041,
+              26.7845,
+              16.9899,
+              27.1715,
+              0.213584
+            ]
+          },
+          {
+            "total_gpu_ms": 112.407,
+            "wait_wall_ms": 113.156,
+            "stage_ms": [
+              41.0345,
+              26.9002,
+              16.9817,
+              27.0715,
+              0.191291
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        1920,
+        1080
+      ],
+      "variant": "cached-packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ffbcd74a2861bf02d6a3f44c0134a7bbed65ce2c984f8d48b2ec8695035237ad",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 120.009,
+      "p95_total_gpu_ms": 121.92,
+      "median_pack_gpu_ms": 0.35202100000000003,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "cached-packed",
+        "timestamp_period_ns": 1,
+        "stages": [
+          5,
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 126.604,
+            "wait_wall_ms": 128.956,
+            "stage_ms": [
+              2.29375,
+              47.5407,
+              28.5676,
+              18.2762,
+              29.2943,
+              0.2285
+            ]
+          },
+          {
+            "total_gpu_ms": 119.713,
+            "wait_wall_ms": 120.343,
+            "stage_ms": [
+              0.34525,
+              41.5374,
+              29.3446,
+              18.3061,
+              29.609,
+              0.253375
+            ]
+          },
+          {
+            "total_gpu_ms": 119.781,
+            "wait_wall_ms": 121.17,
+            "stage_ms": [
+              0.355666,
+              42.2411,
+              29.1767,
+              18.361,
+              29.1711,
+              0.3135
+            ]
+          },
+          {
+            "total_gpu_ms": 119.192,
+            "wait_wall_ms": 119.925,
+            "stage_ms": [
+              0.344417,
+              41.289,
+              29.2891,
+              18.2317,
+              29.6202,
+              0.249834
+            ]
+          },
+          {
+            "total_gpu_ms": 120,
+            "wait_wall_ms": 121.016,
+            "stage_ms": [
+              0.342917,
+              41.9426,
+              29.238,
+              18.4167,
+              29.5787,
+              0.243708
+            ]
+          },
+          {
+            "total_gpu_ms": 120.008,
+            "wait_wall_ms": 120.788,
+            "stage_ms": [
+              0.330375,
+              42.3871,
+              29.0448,
+              18.6545,
+              29.1126,
+              0.224792
+            ]
+          },
+          {
+            "total_gpu_ms": 119.411,
+            "wait_wall_ms": 120.529,
+            "stage_ms": [
+              0.35,
+              41.817,
+              29.0343,
+              18.5151,
+              29.1277,
+              0.359667
+            ]
+          },
+          {
+            "total_gpu_ms": 119.188,
+            "wait_wall_ms": 119.886,
+            "stage_ms": [
+              0.342125,
+              41.478,
+              29.1614,
+              18.2844,
+              29.4372,
+              0.243125
+            ]
+          },
+          {
+            "total_gpu_ms": 119.421,
+            "wait_wall_ms": 120.498,
+            "stage_ms": [
+              0.357375,
+              42.0707,
+              28.819,
+              18.3711,
+              29.2237,
+              0.243584
+            ]
+          },
+          {
+            "total_gpu_ms": 120.019,
+            "wait_wall_ms": 121.142,
+            "stage_ms": [
+              0.431041,
+              41.8829,
+              28.9948,
+              18.2532,
+              29.9578,
+              0.260667
+            ]
+          },
+          {
+            "total_gpu_ms": 121.92,
+            "wait_wall_ms": 123.218,
+            "stage_ms": [
+              0.341416,
+              42.6728,
+              29.0846,
+              20.0966,
+              29.2428,
+              0.232208
+            ]
+          },
+          {
+            "total_gpu_ms": 121.169,
+            "wait_wall_ms": 121.855,
+            "stage_ms": [
+              0.354042,
+              42.375,
+              29.4447,
+              18.65,
+              29.8249,
+              0.254292
+            ]
+          },
+          {
+            "total_gpu_ms": 120.01,
+            "wait_wall_ms": 120.823,
+            "stage_ms": [
+              0.323583,
+              42.0936,
+              28.9763,
+              18.681,
+              29.398,
+              0.267958
+            ]
+          },
+          {
+            "total_gpu_ms": 119.939,
+            "wait_wall_ms": 120.622,
+            "stage_ms": [
+              0.366709,
+              42.5415,
+              28.8431,
+              18.436,
+              29.2503,
+              0.2415
+            ]
+          },
+          {
+            "total_gpu_ms": 121.112,
+            "wait_wall_ms": 122.699,
+            "stage_ms": [
+              0.521042,
+              42.0516,
+              29.5985,
+              18.527,
+              29.3608,
+              0.228542
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        1920,
+        1080
+      ],
+      "variant": "tiled-cached",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ffbcd74a2861bf02d6a3f44c0134a7bbed65ce2c984f8d48b2ec8695035237ad",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 167.89,
+      "p95_total_gpu_ms": 172.019,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "tiled-cached",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 176.885,
+            "wait_wall_ms": 178.499,
+            "stage_ms": [
+              51.4565,
+              124.907,
+              0.253875
+            ]
+          },
+          {
+            "total_gpu_ms": 166.825,
+            "wait_wall_ms": 167.411,
+            "stage_ms": [
+              43.4029,
+              122.902,
+              0.253
+            ]
+          },
+          {
+            "total_gpu_ms": 167.533,
+            "wait_wall_ms": 168.115,
+            "stage_ms": [
+              43.1252,
+              123.882,
+              0.24875
+            ]
+          },
+          {
+            "total_gpu_ms": 167.962,
+            "wait_wall_ms": 168.737,
+            "stage_ms": [
+              43.2705,
+              124.12,
+              0.257958
+            ]
+          },
+          {
+            "total_gpu_ms": 169.792,
+            "wait_wall_ms": 170.341,
+            "stage_ms": [
+              42.9777,
+              126.289,
+              0.253625
+            ]
+          },
+          {
+            "total_gpu_ms": 166.477,
+            "wait_wall_ms": 166.957,
+            "stage_ms": [
+              43.0252,
+              122.927,
+              0.254791
+            ]
+          },
+          {
+            "total_gpu_ms": 169.561,
+            "wait_wall_ms": 170.021,
+            "stage_ms": [
+              43.0287,
+              126.006,
+              0.25325
+            ]
+          },
+          {
+            "total_gpu_ms": 170.232,
+            "wait_wall_ms": 171.329,
+            "stage_ms": [
+              43.0943,
+              126.616,
+              0.254125
+            ]
+          },
+          {
+            "total_gpu_ms": 172.019,
+            "wait_wall_ms": 172.489,
+            "stage_ms": [
+              43.3672,
+              128.129,
+              0.252708
+            ]
+          },
+          {
+            "total_gpu_ms": 168.644,
+            "wait_wall_ms": 169.152,
+            "stage_ms": [
+              43.7963,
+              124.325,
+              0.255208
+            ]
+          },
+          {
+            "total_gpu_ms": 167.796,
+            "wait_wall_ms": 168.467,
+            "stage_ms": [
+              42.943,
+              124.33,
+              0.2545
+            ]
+          },
+          {
+            "total_gpu_ms": 167.984,
+            "wait_wall_ms": 168.741,
+            "stage_ms": [
+              43.3737,
+              124.083,
+              0.257209
+            ]
+          },
+          {
+            "total_gpu_ms": 167.747,
+            "wait_wall_ms": 169.127,
+            "stage_ms": [
+              43.2365,
+              123.982,
+              0.256875
+            ]
+          },
+          {
+            "total_gpu_ms": 167.162,
+            "wait_wall_ms": 168.045,
+            "stage_ms": [
+              42.9495,
+              123.685,
+              0.256458
+            ]
+          },
+          {
+            "total_gpu_ms": 167.332,
+            "wait_wall_ms": 167.933,
+            "stage_ms": [
+              42.7589,
+              124.049,
+              0.215416
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        2560,
+        1440
+      ],
+      "variant": "scalar",
+      "exact_rgba_match": true,
+      "rgba_sha256": "0ab9bc19165ed3a211bb67e7dbb1c4181f79ed15e778ab719da57fef7c6a4c36",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 157.3545,
+      "p95_total_gpu_ms": 158.666,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "scalar",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 170.835,
+            "wait_wall_ms": 178.405,
+            "stage_ms": [
+              96.2915,
+              18.2146,
+              13.9611,
+              40.6583,
+              0.260166
+            ]
+          },
+          {
+            "total_gpu_ms": 156.438,
+            "wait_wall_ms": 157.277,
+            "stage_ms": [
+              82.409,
+              19.6873,
+              13.6595,
+              40.2522,
+              0.258667
+            ]
+          },
+          {
+            "total_gpu_ms": 156.974,
+            "wait_wall_ms": 157.945,
+            "stage_ms": [
+              83.3751,
+              19.4018,
+              13.8514,
+              39.9111,
+              0.268458
+            ]
+          },
+          {
+            "total_gpu_ms": 157.474,
+            "wait_wall_ms": 158.407,
+            "stage_ms": [
+              83.4402,
+              19.7809,
+              13.4669,
+              40.3514,
+              0.269583
+            ]
+          },
+          {
+            "total_gpu_ms": 157.268,
+            "wait_wall_ms": 158.196,
+            "stage_ms": [
+              83.6515,
+              19.4018,
+              13.8038,
+              39.9783,
+              0.243208
+            ]
+          },
+          {
+            "total_gpu_ms": 157.209,
+            "wait_wall_ms": 158.162,
+            "stage_ms": [
+              83.349,
+              19.7404,
+              13.4464,
+              40.2396,
+              0.259375
+            ]
+          },
+          {
+            "total_gpu_ms": 156.777,
+            "wait_wall_ms": 157.784,
+            "stage_ms": [
+              83.0168,
+              19.442,
+              13.8223,
+              40.0491,
+              0.250417
+            ]
+          },
+          {
+            "total_gpu_ms": 157.866,
+            "wait_wall_ms": 158.766,
+            "stage_ms": [
+              83.8675,
+              19.7627,
+              13.475,
+              40.338,
+              0.258875
+            ]
+          },
+          {
+            "total_gpu_ms": 157.024,
+            "wait_wall_ms": 157.599,
+            "stage_ms": [
+              83.4974,
+              19.3821,
+              13.8115,
+              39.9049,
+              0.251084
+            ]
+          },
+          {
+            "total_gpu_ms": 158.569,
+            "wait_wall_ms": 159.065,
+            "stage_ms": [
+              84.8071,
+              19.2465,
+              13.8007,
+              40.256,
+              0.260792
+            ]
+          },
+          {
+            "total_gpu_ms": 157.5,
+            "wait_wall_ms": 158.204,
+            "stage_ms": [
+              83.9344,
+              19.4226,
+              13.781,
+              39.926,
+              0.24925
+            ]
+          },
+          {
+            "total_gpu_ms": 158.666,
+            "wait_wall_ms": 159.457,
+            "stage_ms": [
+              84.707,
+              19.7548,
+              13.4742,
+              40.3047,
+              0.251958
+            ]
+          },
+          {
+            "total_gpu_ms": 156.858,
+            "wait_wall_ms": 157.731,
+            "stage_ms": [
+              83.2429,
+              19.4533,
+              13.7559,
+              39.9642,
+              0.247375
+            ]
+          },
+          {
+            "total_gpu_ms": 158.577,
+            "wait_wall_ms": 159.5,
+            "stage_ms": [
+              84.6978,
+              19.7248,
+              13.4496,
+              40.2616,
+              0.250625
+            ]
+          },
+          {
+            "total_gpu_ms": 156.006,
+            "wait_wall_ms": 156.872,
+            "stage_ms": [
+              82.473,
+              19.4137,
+              13.7963,
+              39.8942,
+              0.2465
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        2560,
+        1440
+      ],
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "0ab9bc19165ed3a211bb67e7dbb1c4181f79ed15e778ab719da57fef7c6a4c36",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 172.2535,
+      "p95_total_gpu_ms": 173.165,
+      "median_pack_gpu_ms": 0.6203335,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "packed",
+        "timestamp_period_ns": 1,
+        "stages": [
+          5,
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 184.498,
+            "wait_wall_ms": 192.978,
+            "stage_ms": [
+              1.06067,
+              103.647,
+              20.6898,
+              14.518,
+              43.893,
+              0.301333
+            ]
+          },
+          {
+            "total_gpu_ms": 173.596,
+            "wait_wall_ms": 175.454,
+            "stage_ms": [
+              0.578208,
+              91.3935,
+              20.7252,
+              14.5947,
+              44.6584,
+              0.321917
+            ]
+          },
+          {
+            "total_gpu_ms": 172.075,
+            "wait_wall_ms": 173.168,
+            "stage_ms": [
+              0.574541,
+              90.669,
+              21.1508,
+              14.7636,
+              44.2606,
+              0.318459
+            ]
+          },
+          {
+            "total_gpu_ms": 171.759,
+            "wait_wall_ms": 172.747,
+            "stage_ms": [
+              0.635833,
+              90.8909,
+              20.73,
+              14.662,
+              44.2843,
+              0.308083
+            ]
+          },
+          {
+            "total_gpu_ms": 171.936,
+            "wait_wall_ms": 173.035,
+            "stage_ms": [
+              0.634125,
+              90.1324,
+              21.5759,
+              14.1983,
+              44.8069,
+              0.321792
+            ]
+          },
+          {
+            "total_gpu_ms": 171.762,
+            "wait_wall_ms": 172.409,
+            "stage_ms": [
+              0.562959,
+              90.3765,
+              21.0063,
+              14.7402,
+              44.4387,
+              0.316625
+            ]
+          },
+          {
+            "total_gpu_ms": 171.56,
+            "wait_wall_ms": 172.922,
+            "stage_ms": [
+              0.579625,
+              90.0378,
+              20.8942,
+              14.5215,
+              44.9419,
+              0.262125
+            ]
+          },
+          {
+            "total_gpu_ms": 172.679,
+            "wait_wall_ms": 173.86,
+            "stage_ms": [
+              0.561584,
+              91.5866,
+              21.1752,
+              14.6998,
+              44.0318,
+              0.31825
+            ]
+          },
+          {
+            "total_gpu_ms": 172.347,
+            "wait_wall_ms": 173.357,
+            "stage_ms": [
+              0.640959,
+              90.6892,
+              20.8896,
+              14.7605,
+              44.8473,
+              0.310375
+            ]
+          },
+          {
+            "total_gpu_ms": 171.982,
+            "wait_wall_ms": 173.059,
+            "stage_ms": [
+              0.641,
+              90.8954,
+              20.8884,
+              14.6563,
+              44.2694,
+              0.323125
+            ]
+          },
+          {
+            "total_gpu_ms": 173.165,
+            "wait_wall_ms": 174.666,
+            "stage_ms": [
+              0.577291,
+              90.6458,
+              20.8147,
+              14.7,
+              44.4146,
+              0.315417
+            ]
+          },
+          {
+            "total_gpu_ms": 171.069,
+            "wait_wall_ms": 172.081,
+            "stage_ms": [
+              0.614459,
+              89.8975,
+              20.8966,
+              14.6954,
+              44.361,
+              0.309875
+            ]
+          },
+          {
+            "total_gpu_ms": 172.972,
+            "wait_wall_ms": 174.058,
+            "stage_ms": [
+              0.651292,
+              91.7452,
+              21.2019,
+              14.6843,
+              44.0788,
+              0.312
+            ]
+          },
+          {
+            "total_gpu_ms": 172.709,
+            "wait_wall_ms": 173.65,
+            "stage_ms": [
+              0.643417,
+              91.1599,
+              20.9779,
+              14.7982,
+              44.5339,
+              0.308959
+            ]
+          },
+          {
+            "total_gpu_ms": 172.16,
+            "wait_wall_ms": 173.531,
+            "stage_ms": [
+              0.626208,
+              90.5203,
+              20.8438,
+              14.5285,
+              45.083,
+              0.307792
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        2560,
+        1440
+      ],
+      "variant": "tiled",
+      "exact_rgba_match": true,
+      "rgba_sha256": "0ab9bc19165ed3a211bb67e7dbb1c4181f79ed15e778ab719da57fef7c6a4c36",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 313.863,
+      "p95_total_gpu_ms": 321.933,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "tiled",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 309.193,
+            "wait_wall_ms": 312.679,
+            "stage_ms": [
+              100.418,
+              208.176,
+              0.325458
+            ]
+          },
+          {
+            "total_gpu_ms": 313.941,
+            "wait_wall_ms": 314.782,
+            "stage_ms": [
+              89.5058,
+              223.793,
+              0.3185
+            ]
+          },
+          {
+            "total_gpu_ms": 310.292,
+            "wait_wall_ms": 310.712,
+            "stage_ms": [
+              90.315,
+              219.38,
+              0.324417
+            ]
+          },
+          {
+            "total_gpu_ms": 313.497,
+            "wait_wall_ms": 314.085,
+            "stage_ms": [
+              90.5055,
+              222.373,
+              0.343209
+            ]
+          },
+          {
+            "total_gpu_ms": 308.177,
+            "wait_wall_ms": 309.044,
+            "stage_ms": [
+              89.8219,
+              217.714,
+              0.344125
+            ]
+          },
+          {
+            "total_gpu_ms": 307.579,
+            "wait_wall_ms": 308.189,
+            "stage_ms": [
+              91.6342,
+              215.317,
+              0.342708
+            ]
+          },
+          {
+            "total_gpu_ms": 309.079,
+            "wait_wall_ms": 310.066,
+            "stage_ms": [
+              91.2643,
+              217.19,
+              0.344583
+            ]
+          },
+          {
+            "total_gpu_ms": 320.781,
+            "wait_wall_ms": 322.264,
+            "stage_ms": [
+              90.8838,
+              228.242,
+              1.35133
+            ]
+          },
+          {
+            "total_gpu_ms": 311.677,
+            "wait_wall_ms": 327.125,
+            "stage_ms": [
+              93.9778,
+              217.037,
+              0.359875
+            ]
+          },
+          {
+            "total_gpu_ms": 314.069,
+            "wait_wall_ms": 317.508,
+            "stage_ms": [
+              89.7148,
+              223.668,
+              0.378833
+            ]
+          },
+          {
+            "total_gpu_ms": 321.933,
+            "wait_wall_ms": 323.125,
+            "stage_ms": [
+              92.669,
+              228.646,
+              0.335625
+            ]
+          },
+          {
+            "total_gpu_ms": 317.311,
+            "wait_wall_ms": 317.913,
+            "stage_ms": [
+              94.2126,
+              222.464,
+              0.342
+            ]
+          },
+          {
+            "total_gpu_ms": 313.657,
+            "wait_wall_ms": 314.945,
+            "stage_ms": [
+              90.3107,
+              222.717,
+              0.327458
+            ]
+          },
+          {
+            "total_gpu_ms": 319.916,
+            "wait_wall_ms": 321.213,
+            "stage_ms": [
+              92.5765,
+              226.695,
+              0.345209
+            ]
+          },
+          {
+            "total_gpu_ms": 309.638,
+            "wait_wall_ms": 310.32,
+            "stage_ms": [
+              90.4781,
+              218.209,
+              0.655417
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        2560,
+        1440
+      ],
+      "variant": "tiled-packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "0ab9bc19165ed3a211bb67e7dbb1c4181f79ed15e778ab719da57fef7c6a4c36",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 320.077,
+      "p95_total_gpu_ms": 327.202,
+      "median_pack_gpu_ms": 0.704083,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "tiled-packed",
+        "timestamp_period_ns": 1,
+        "stages": [
+          5,
+          0,
+          1,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 336.763,
+            "wait_wall_ms": 344.118,
+            "stage_ms": [
+              1.96958,
+              106.691,
+              227.396,
+              0.377167
+            ]
+          },
+          {
+            "total_gpu_ms": 324.408,
+            "wait_wall_ms": 326.577,
+            "stage_ms": [
+              0.664125,
+              95.5215,
+              225.352,
+              0.375292
+            ]
+          },
+          {
+            "total_gpu_ms": 329.974,
+            "wait_wall_ms": 331.64,
+            "stage_ms": [
+              0.755208,
+              101.725,
+              226.74,
+              0.367
+            ]
+          },
+          {
+            "total_gpu_ms": 320.941,
+            "wait_wall_ms": 321.491,
+            "stage_ms": [
+              0.708333,
+              97.8206,
+              221.701,
+              0.370375
+            ]
+          },
+          {
+            "total_gpu_ms": 325.73,
+            "wait_wall_ms": 326.398,
+            "stage_ms": [
+              0.640084,
+              99.0703,
+              225.267,
+              0.366458
+            ]
+          },
+          {
+            "total_gpu_ms": 322.727,
+            "wait_wall_ms": 323.343,
+            "stage_ms": [
+              0.64425,
+              97.8173,
+              223.51,
+              0.386875
+            ]
+          },
+          {
+            "total_gpu_ms": 320.222,
+            "wait_wall_ms": 321.621,
+            "stage_ms": [
+              0.679625,
+              97.5968,
+              221.124,
+              0.420084
+            ]
+          },
+          {
+            "total_gpu_ms": 317.858,
+            "wait_wall_ms": 319.286,
+            "stage_ms": [
+              0.647542,
+              97.5185,
+              218.888,
+              0.399834
+            ]
+          },
+          {
+            "total_gpu_ms": 322.589,
+            "wait_wall_ms": 323.557,
+            "stage_ms": [
+              0.73175,
+              98.5396,
+              222.538,
+              0.365417
+            ]
+          },
+          {
+            "total_gpu_ms": 319.932,
+            "wait_wall_ms": 322.274,
+            "stage_ms": [
+              0.6955,
+              98.0456,
+              220.404,
+              0.389709
+            ]
+          },
+          {
+            "total_gpu_ms": 321.262,
+            "wait_wall_ms": 324.907,
+            "stage_ms": [
+              0.753459,
+              97.5658,
+              222.169,
+              0.373292
+            ]
+          },
+          {
+            "total_gpu_ms": 319.417,
+            "wait_wall_ms": 320.387,
+            "stage_ms": [
+              0.713625,
+              97.7505,
+              220.153,
+              0.394833
+            ]
+          },
+          {
+            "total_gpu_ms": 319.343,
+            "wait_wall_ms": 320.189,
+            "stage_ms": [
+              0.656875,
+              97.5313,
+              220.426,
+              0.397
+            ]
+          },
+          {
+            "total_gpu_ms": 327.202,
+            "wait_wall_ms": 328.074,
+            "stage_ms": [
+              0.712666,
+              97.8683,
+              227.815,
+              0.377292
+            ]
+          },
+          {
+            "total_gpu_ms": 319.243,
+            "wait_wall_ms": 320.452,
+            "stage_ms": [
+              0.808375,
+              97.8849,
+              219.781,
+              0.367625
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        2560,
+        1440
+      ],
+      "variant": "cached",
+      "exact_rgba_match": true,
+      "rgba_sha256": "0ab9bc19165ed3a211bb67e7dbb1c4181f79ed15e778ab719da57fef7c6a4c36",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 202.10899999999998,
+      "p95_total_gpu_ms": 203.307,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "cached",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 215,
+            "wait_wall_ms": 226.848,
+            "stage_ms": [
+              85.9835,
+              47.645,
+              31.0678,
+              49.7866,
+              0.332792
+            ]
+          },
+          {
+            "total_gpu_ms": 201.868,
+            "wait_wall_ms": 203.162,
+            "stage_ms": [
+              73.5941,
+              47.0617,
+              30.921,
+              49.7586,
+              0.303875
+            ]
+          },
+          {
+            "total_gpu_ms": 200.568,
+            "wait_wall_ms": 201.406,
+            "stage_ms": [
+              73.092,
+              47.4353,
+              30.3032,
+              49.13,
+              0.301833
+            ]
+          },
+          {
+            "total_gpu_ms": 203.323,
+            "wait_wall_ms": 204.14,
+            "stage_ms": [
+              73.8526,
+              48.0185,
+              30.1816,
+              50.7633,
+              0.302375
+            ]
+          },
+          {
+            "total_gpu_ms": 203.097,
+            "wait_wall_ms": 203.941,
+            "stage_ms": [
+              73.9427,
+              48.3367,
+              31.0176,
+              49.2995,
+              0.31475
+            ]
+          },
+          {
+            "total_gpu_ms": 202.17,
+            "wait_wall_ms": 203.032,
+            "stage_ms": [
+              73.1538,
+              48.7105,
+              30.5295,
+              49.195,
+              0.291917
+            ]
+          },
+          {
+            "total_gpu_ms": 201.658,
+            "wait_wall_ms": 202.396,
+            "stage_ms": [
+              72.7535,
+              47.8876,
+              30.7525,
+              49.7363,
+              0.317042
+            ]
+          },
+          {
+            "total_gpu_ms": 202.048,
+            "wait_wall_ms": 202.985,
+            "stage_ms": [
+              73.3928,
+              47.7769,
+              30.7568,
+              49.5263,
+              0.343875
+            ]
+          },
+          {
+            "total_gpu_ms": 203.307,
+            "wait_wall_ms": 204.158,
+            "stage_ms": [
+              74.3085,
+              48.4404,
+              30.8078,
+              49.0145,
+              0.537084
+            ]
+          },
+          {
+            "total_gpu_ms": 202.537,
+            "wait_wall_ms": 203.415,
+            "stage_ms": [
+              73.1107,
+              48.6607,
+              30.4745,
+              49.754,
+              0.316375
+            ]
+          },
+          {
+            "total_gpu_ms": 202.464,
+            "wait_wall_ms": 203.241,
+            "stage_ms": [
+              72.9735,
+              48.9474,
+              30.4322,
+              49.6243,
+              0.316875
+            ]
+          },
+          {
+            "total_gpu_ms": 201.675,
+            "wait_wall_ms": 202.426,
+            "stage_ms": [
+              73.1852,
+              48.0288,
+              30.6575,
+              49.2765,
+              0.313584
+            ]
+          },
+          {
+            "total_gpu_ms": 201.546,
+            "wait_wall_ms": 202.22,
+            "stage_ms": [
+              73.6345,
+              47.8754,
+              30.4857,
+              49.008,
+              0.315
+            ]
+          },
+          {
+            "total_gpu_ms": 200.986,
+            "wait_wall_ms": 201.776,
+            "stage_ms": [
+              73.4297,
+              47.811,
+              30.4406,
+              48.7401,
+              0.314292
+            ]
+          },
+          {
+            "total_gpu_ms": 202.863,
+            "wait_wall_ms": 203.653,
+            "stage_ms": [
+              74.8081,
+              47.6515,
+              30.5975,
+              48.9409,
+              0.63975
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        2560,
+        1440
+      ],
+      "variant": "cached-packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "0ab9bc19165ed3a211bb67e7dbb1c4181f79ed15e778ab719da57fef7c6a4c36",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 215.8885,
+      "p95_total_gpu_ms": 223.021,
+      "median_pack_gpu_ms": 0.705542,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "cached-packed",
+        "timestamp_period_ns": 1,
+        "stages": [
+          5,
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 223.381,
+            "wait_wall_ms": 232.397,
+            "stage_ms": [
+              1.41413,
+              83.51,
+              52.782,
+              32.468,
+              52.5823,
+              0.376333
+            ]
+          },
+          {
+            "total_gpu_ms": 217.44,
+            "wait_wall_ms": 219.026,
+            "stage_ms": [
+              0.7065,
+              78.7299,
+              51.4368,
+              33.551,
+              52.2458,
+              0.435542
+            ]
+          },
+          {
+            "total_gpu_ms": 217.44,
+            "wait_wall_ms": 218.305,
+            "stage_ms": [
+              0.740291,
+              77.2127,
+              52.8095,
+              33.0794,
+              52.9279,
+              0.398958
+            ]
+          },
+          {
+            "total_gpu_ms": 215.257,
+            "wait_wall_ms": 216.626,
+            "stage_ms": [
+              0.707208,
+              76.4149,
+              51.5796,
+              32.9681,
+              52.9217,
+              0.400458
+            ]
+          },
+          {
+            "total_gpu_ms": 216.765,
+            "wait_wall_ms": 217.618,
+            "stage_ms": [
+              0.724042,
+              76.1172,
+              52.305,
+              32.7814,
+              54.0101,
+              0.493917
+            ]
+          },
+          {
+            "total_gpu_ms": 214.624,
+            "wait_wall_ms": 215.8,
+            "stage_ms": [
+              0.738959,
+              75.7752,
+              51.7747,
+              33.3884,
+              52.303,
+              0.380292
+            ]
+          },
+          {
+            "total_gpu_ms": 215.258,
+            "wait_wall_ms": 216.095,
+            "stage_ms": [
+              0.686958,
+              75.7694,
+              52.1231,
+              33.0796,
+              52.9293,
+              0.408416
+            ]
+          },
+          {
+            "total_gpu_ms": 215.036,
+            "wait_wall_ms": 215.777,
+            "stage_ms": [
+              0.716417,
+              76.0024,
+              52.1447,
+              33.2374,
+              52.2794,
+              0.394916
+            ]
+          },
+          {
+            "total_gpu_ms": 216.423,
+            "wait_wall_ms": 217.204,
+            "stage_ms": [
+              0.684625,
+              76.5453,
+              52.5739,
+              32.9176,
+              53.0504,
+              0.375917
+            ]
+          },
+          {
+            "total_gpu_ms": 215.826,
+            "wait_wall_ms": 217.313,
+            "stage_ms": [
+              0.751458,
+              76.401,
+              52.0268,
+              33.2443,
+              52.8111,
+              0.381792
+            ]
+          },
+          {
+            "total_gpu_ms": 216.488,
+            "wait_wall_ms": 217.27,
+            "stage_ms": [
+              0.694667,
+              76.4421,
+              52.6795,
+              32.7367,
+              53.305,
+              0.368042
+            ]
+          },
+          {
+            "total_gpu_ms": 215.172,
+            "wait_wall_ms": 216.238,
+            "stage_ms": [
+              0.752709,
+              76.0722,
+              51.7401,
+              33.2543,
+              52.5767,
+              0.49975
+            ]
+          },
+          {
+            "total_gpu_ms": 223.021,
+            "wait_wall_ms": 223.677,
+            "stage_ms": [
+              0.742083,
+              77.1962,
+              56.3359,
+              34.4761,
+              53.5981,
+              0.372875
+            ]
+          },
+          {
+            "total_gpu_ms": 216.143,
+            "wait_wall_ms": 216.824,
+            "stage_ms": [
+              0.646333,
+              75.9828,
+              52.7133,
+              32.9392,
+              53.2673,
+              0.382542
+            ]
+          },
+          {
+            "total_gpu_ms": 215.951,
+            "wait_wall_ms": 216.607,
+            "stage_ms": [
+              0.681583,
+              76.1414,
+              52.8003,
+              32.5217,
+              52.921,
+              0.647375
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        2560,
+        1440
+      ],
+      "variant": "tiled-cached",
+      "exact_rgba_match": true,
+      "rgba_sha256": "0ab9bc19165ed3a211bb67e7dbb1c4181f79ed15e778ab719da57fef7c6a4c36",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 301.951,
+      "p95_total_gpu_ms": 304.234,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "tiled-cached",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 312.943,
+            "wait_wall_ms": 317.84,
+            "stage_ms": [
+              83.2024,
+              228.817,
+              0.63375
+            ]
+          },
+          {
+            "total_gpu_ms": 302.336,
+            "wait_wall_ms": 303.077,
+            "stage_ms": [
+              78.297,
+              223.359,
+              0.40375
+            ]
+          },
+          {
+            "total_gpu_ms": 298.227,
+            "wait_wall_ms": 298.912,
+            "stage_ms": [
+              77.306,
+              220.245,
+              0.399375
+            ]
+          },
+          {
+            "total_gpu_ms": 307.306,
+            "wait_wall_ms": 307.969,
+            "stage_ms": [
+              77.4925,
+              229.133,
+              0.404042
+            ]
+          },
+          {
+            "total_gpu_ms": 300.239,
+            "wait_wall_ms": 300.894,
+            "stage_ms": [
+              77.3655,
+              222.202,
+              0.39825
+            ]
+          },
+          {
+            "total_gpu_ms": 302.289,
+            "wait_wall_ms": 302.937,
+            "stage_ms": [
+              76.7728,
+              224.84,
+              0.4035
+            ]
+          },
+          {
+            "total_gpu_ms": 297.685,
+            "wait_wall_ms": 298.339,
+            "stage_ms": [
+              77.712,
+              219.301,
+              0.401167
+            ]
+          },
+          {
+            "total_gpu_ms": 304.234,
+            "wait_wall_ms": 304.862,
+            "stage_ms": [
+              77.1642,
+              226.339,
+              0.455709
+            ]
+          },
+          {
+            "total_gpu_ms": 302.107,
+            "wait_wall_ms": 302.724,
+            "stage_ms": [
+              77.4232,
+              224.002,
+              0.40075
+            ]
+          },
+          {
+            "total_gpu_ms": 302.396,
+            "wait_wall_ms": 303.097,
+            "stage_ms": [
+              77.3216,
+              224.388,
+              0.407459
+            ]
+          },
+          {
+            "total_gpu_ms": 302.251,
+            "wait_wall_ms": 302.945,
+            "stage_ms": [
+              77.4437,
+              224.128,
+              0.404083
+            ]
+          },
+          {
+            "total_gpu_ms": 301.252,
+            "wait_wall_ms": 301.927,
+            "stage_ms": [
+              77.2776,
+              223.293,
+              0.402208
+            ]
+          },
+          {
+            "total_gpu_ms": 301.56,
+            "wait_wall_ms": 302.234,
+            "stage_ms": [
+              77.5554,
+              223.332,
+              0.403791
+            ]
+          },
+          {
+            "total_gpu_ms": 301.795,
+            "wait_wall_ms": 302.471,
+            "stage_ms": [
+              77.2686,
+              223.748,
+              0.506709
+            ]
+          },
+          {
+            "total_gpu_ms": 299.624,
+            "wait_wall_ms": 301.189,
+            "stage_ms": [
+              78.0795,
+              220.853,
+              0.410125
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        3840,
+        2160
+      ],
+      "variant": "scalar",
+      "exact_rgba_match": true,
+      "rgba_sha256": "61d92af0df268d3fc946af4d49d394e169a8ebadd69c47324ae96b35e8b6cfd0",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 361.20799999999997,
+      "p95_total_gpu_ms": 363.212,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "scalar",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 378.239,
+            "wait_wall_ms": 426.463,
+            "stage_ms": [
+              212.835,
+              43.3969,
+              30.927,
+              90.279,
+              0.490375
+            ]
+          },
+          {
+            "total_gpu_ms": 361.634,
+            "wait_wall_ms": 368.207,
+            "stage_ms": [
+              193.102,
+              44.0237,
+              31.5676,
+              92.2932,
+              0.483625
+            ]
+          },
+          {
+            "total_gpu_ms": 362.863,
+            "wait_wall_ms": 363.586,
+            "stage_ms": [
+              194.09,
+              44.0811,
+              31.4682,
+              92.551,
+              0.480125
+            ]
+          },
+          {
+            "total_gpu_ms": 362.532,
+            "wait_wall_ms": 363.603,
+            "stage_ms": [
+              194.229,
+              44.2426,
+              31.2567,
+              92.1425,
+              0.482417
+            ]
+          },
+          {
+            "total_gpu_ms": 361.082,
+            "wait_wall_ms": 363.036,
+            "stage_ms": [
+              192.805,
+              44.3405,
+              31.0345,
+              92.2104,
+              0.498041
+            ]
+          },
+          {
+            "total_gpu_ms": 360.784,
+            "wait_wall_ms": 361.828,
+            "stage_ms": [
+              192.881,
+              44.282,
+              31.1933,
+              91.72,
+              0.503333
+            ]
+          },
+          {
+            "total_gpu_ms": 363.212,
+            "wait_wall_ms": 363.91,
+            "stage_ms": [
+              192.577,
+              44.3091,
+              31.5779,
+              94.0926,
+              0.484541
+            ]
+          },
+          {
+            "total_gpu_ms": 362.222,
+            "wait_wall_ms": 362.92,
+            "stage_ms": [
+              193.214,
+              44.0036,
+              30.851,
+              93.4985,
+              0.48275
+            ]
+          },
+          {
+            "total_gpu_ms": 360.78,
+            "wait_wall_ms": 361.471,
+            "stage_ms": [
+              192.891,
+              44.4974,
+              31.0312,
+              91.6125,
+              0.549542
+            ]
+          },
+          {
+            "total_gpu_ms": 358.727,
+            "wait_wall_ms": 359.458,
+            "stage_ms": [
+              191.298,
+              44.0071,
+              31.297,
+              91.5064,
+              0.482291
+            ]
+          },
+          {
+            "total_gpu_ms": 360.318,
+            "wait_wall_ms": 361.02,
+            "stage_ms": [
+              192.191,
+              43.9856,
+              31.517,
+              91.9871,
+              0.48975
+            ]
+          },
+          {
+            "total_gpu_ms": 359.498,
+            "wait_wall_ms": 360.243,
+            "stage_ms": [
+              192.341,
+              44.1972,
+              31.1544,
+              91.1834,
+              0.4885
+            ]
+          },
+          {
+            "total_gpu_ms": 363.117,
+            "wait_wall_ms": 363.781,
+            "stage_ms": [
+              195.009,
+              44.41,
+              31.0888,
+              91.9737,
+              0.492334
+            ]
+          },
+          {
+            "total_gpu_ms": 361.918,
+            "wait_wall_ms": 362.769,
+            "stage_ms": [
+              191.241,
+              44.3942,
+              31.4855,
+              94.1471,
+              0.495416
+            ]
+          },
+          {
+            "total_gpu_ms": 361.632,
+            "wait_wall_ms": 362.43,
+            "stage_ms": [
+              192.02,
+              44.6067,
+              31.6216,
+              92.73,
+              0.488125
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        3840,
+        2160
+      ],
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "61d92af0df268d3fc946af4d49d394e169a8ebadd69c47324ae96b35e8b6cfd0",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 387.065,
+      "p95_total_gpu_ms": 395.703,
+      "median_pack_gpu_ms": 1.492045,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "packed",
+        "timestamp_period_ns": 1,
+        "stages": [
+          5,
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 406.603,
+            "wait_wall_ms": 475.385,
+            "stage_ms": [
+              2.34304,
+              229.736,
+              44.1608,
+              29.6426,
+              99.8292,
+              0.58925
+            ]
+          },
+          {
+            "total_gpu_ms": 389.954,
+            "wait_wall_ms": 391.644,
+            "stage_ms": [
+              1.64675,
+              207.122,
+              46.8685,
+              32.8646,
+              100.475,
+              0.6765
+            ]
+          },
+          {
+            "total_gpu_ms": 386.485,
+            "wait_wall_ms": 387.425,
+            "stage_ms": [
+              1.49054,
+              204.8,
+              47.2268,
+              32.7183,
+              99.2588,
+              0.66825
+            ]
+          },
+          {
+            "total_gpu_ms": 387.335,
+            "wait_wall_ms": 388.132,
+            "stage_ms": [
+              1.68588,
+              206.246,
+              46.8,
+              32.4361,
+              99.3009,
+              0.5905
+            ]
+          },
+          {
+            "total_gpu_ms": 385.517,
+            "wait_wall_ms": 386.257,
+            "stage_ms": [
+              1.50733,
+              204.134,
+              46.6015,
+              32.572,
+              99.8801,
+              0.575
+            ]
+          },
+          {
+            "total_gpu_ms": 388.676,
+            "wait_wall_ms": 389.389,
+            "stage_ms": [
+              1.65567,
+              207.571,
+              46.7179,
+              32.5206,
+              99.3257,
+              0.58575
+            ]
+          },
+          {
+            "total_gpu_ms": 388.065,
+            "wait_wall_ms": 388.913,
+            "stage_ms": [
+              1.50117,
+              206.914,
+              46.7073,
+              33.0586,
+              98.9,
+              0.675791
+            ]
+          },
+          {
+            "total_gpu_ms": 384.67,
+            "wait_wall_ms": 385.439,
+            "stage_ms": [
+              1.45162,
+              203.341,
+              46.8489,
+              32.8347,
+              99.3037,
+              0.643417
+            ]
+          },
+          {
+            "total_gpu_ms": 387.13,
+            "wait_wall_ms": 387.887,
+            "stage_ms": [
+              1.56071,
+              206.802,
+              46.7941,
+              32.0968,
+              98.9887,
+              0.579125
+            ]
+          },
+          {
+            "total_gpu_ms": 385.922,
+            "wait_wall_ms": 387.089,
+            "stage_ms": [
+              2.03571,
+              203.608,
+              46.7787,
+              32.6987,
+              99.5992,
+              0.908084
+            ]
+          },
+          {
+            "total_gpu_ms": 387.456,
+            "wait_wall_ms": 388.258,
+            "stage_ms": [
+              1.38808,
+              205.766,
+              47.0847,
+              32.4338,
+              99.9027,
+              0.579958
+            ]
+          },
+          {
+            "total_gpu_ms": 387,
+            "wait_wall_ms": 387.762,
+            "stage_ms": [
+              1.39654,
+              204.654,
+              46.9147,
+              32.5627,
+              100.604,
+              0.58925
+            ]
+          },
+          {
+            "total_gpu_ms": 385.412,
+            "wait_wall_ms": 386.202,
+            "stage_ms": [
+              1.48292,
+              204.061,
+              46.5706,
+              32.9228,
+              99.4835,
+              0.5915
+            ]
+          },
+          {
+            "total_gpu_ms": 386.325,
+            "wait_wall_ms": 387.042,
+            "stage_ms": [
+              1.36983,
+              205.329,
+              46.796,
+              32.7394,
+              98.9513,
+              0.83725
+            ]
+          },
+          {
+            "total_gpu_ms": 395.703,
+            "wait_wall_ms": 396.73,
+            "stage_ms": [
+              1.50808,
+              207.802,
+              49.5988,
+              34.8324,
+              101.083,
+              0.58625
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        3840,
+        2160
+      ],
+      "variant": "tiled",
+      "exact_rgba_match": true,
+      "rgba_sha256": "61d92af0df268d3fc946af4d49d394e169a8ebadd69c47324ae96b35e8b6cfd0",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 713.3615,
+      "p95_total_gpu_ms": 774.431,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "tiled",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 770.534,
+            "wait_wall_ms": 786.968,
+            "stage_ms": [
+              239.737,
+              529.999,
+              0.684
+            ]
+          },
+          {
+            "total_gpu_ms": 735.933,
+            "wait_wall_ms": 736.682,
+            "stage_ms": [
+              214.513,
+              520.338,
+              0.662125
+            ]
+          },
+          {
+            "total_gpu_ms": 751.395,
+            "wait_wall_ms": 752.131,
+            "stage_ms": [
+              224.642,
+              525.811,
+              0.6535
+            ]
+          },
+          {
+            "total_gpu_ms": 712.311,
+            "wait_wall_ms": 712.964,
+            "stage_ms": [
+              221.248,
+              488.262,
+              2.38825
+            ]
+          },
+          {
+            "total_gpu_ms": 762.697,
+            "wait_wall_ms": 763.499,
+            "stage_ms": [
+              220.178,
+              541.548,
+              0.682958
+            ]
+          },
+          {
+            "total_gpu_ms": 753.253,
+            "wait_wall_ms": 755.811,
+            "stage_ms": [
+              214.481,
+              537.681,
+              0.660167
+            ]
+          },
+          {
+            "total_gpu_ms": 737.23,
+            "wait_wall_ms": 738.163,
+            "stage_ms": [
+              233.887,
+              502.587,
+              0.671
+            ]
+          },
+          {
+            "total_gpu_ms": 688.565,
+            "wait_wall_ms": 689.551,
+            "stage_ms": [
+              209.975,
+              477.654,
+              0.659458
+            ]
+          },
+          {
+            "total_gpu_ms": 743.615,
+            "wait_wall_ms": 753.364,
+            "stage_ms": [
+              207.609,
+              534.306,
+              1.33221
+            ]
+          },
+          {
+            "total_gpu_ms": 731.001,
+            "wait_wall_ms": 733.378,
+            "stage_ms": [
+              228.384,
+              501.485,
+              0.662417
+            ]
+          },
+          {
+            "total_gpu_ms": 774.431,
+            "wait_wall_ms": 775.955,
+            "stage_ms": [
+              218.58,
+              554.841,
+              0.689458
+            ]
+          },
+          {
+            "total_gpu_ms": 694.744,
+            "wait_wall_ms": 696.101,
+            "stage_ms": [
+              214.724,
+              479.051,
+              0.562292
+            ]
+          },
+          {
+            "total_gpu_ms": 686.712,
+            "wait_wall_ms": 692.186,
+            "stage_ms": [
+              207.447,
+              478.283,
+              0.684125
+            ]
+          },
+          {
+            "total_gpu_ms": 695.722,
+            "wait_wall_ms": 706.635,
+            "stage_ms": [
+              209.331,
+              485.487,
+              0.661042
+            ]
+          },
+          {
+            "total_gpu_ms": 690.852,
+            "wait_wall_ms": 692.052,
+            "stage_ms": [
+              211.714,
+              477.734,
+              1.10729
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        3840,
+        2160
+      ],
+      "variant": "tiled-packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "61d92af0df268d3fc946af4d49d394e169a8ebadd69c47324ae96b35e8b6cfd0",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 727.435,
+      "p95_total_gpu_ms": 738.958,
+      "median_pack_gpu_ms": 1.4736250000000002,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "tiled-packed",
+        "timestamp_period_ns": 1,
+        "stages": [
+          5,
+          0,
+          1,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 748.069,
+            "wait_wall_ms": 805.628,
+            "stage_ms": [
+              2.34858,
+              237.433,
+              507.002,
+              0.723708
+            ]
+          },
+          {
+            "total_gpu_ms": 733.176,
+            "wait_wall_ms": 737.358,
+            "stage_ms": [
+              1.71417,
+              225.232,
+              505.17,
+              0.72275
+            ]
+          },
+          {
+            "total_gpu_ms": 728.416,
+            "wait_wall_ms": 730.391,
+            "stage_ms": [
+              1.66458,
+              226.306,
+              499.334,
+              0.7135
+            ]
+          },
+          {
+            "total_gpu_ms": 728.016,
+            "wait_wall_ms": 728.71,
+            "stage_ms": [
+              1.38796,
+              225.792,
+              499.707,
+              0.735583
+            ]
+          },
+          {
+            "total_gpu_ms": 724.33,
+            "wait_wall_ms": 725.04,
+            "stage_ms": [
+              1.30433,
+              227.868,
+              494.06,
+              0.71175
+            ]
+          },
+          {
+            "total_gpu_ms": 727.166,
+            "wait_wall_ms": 727.911,
+            "stage_ms": [
+              1.40162,
+              224.527,
+              499.165,
+              1.57075
+            ]
+          },
+          {
+            "total_gpu_ms": 738.958,
+            "wait_wall_ms": 739.651,
+            "stage_ms": [
+              1.44992,
+              231.06,
+              505.303,
+              0.716458
+            ]
+          },
+          {
+            "total_gpu_ms": 727.704,
+            "wait_wall_ms": 728.389,
+            "stage_ms": [
+              1.36754,
+              225.914,
+              498.683,
+              1.16596
+            ]
+          },
+          {
+            "total_gpu_ms": 729.513,
+            "wait_wall_ms": 730.488,
+            "stage_ms": [
+              1.34346,
+              226.591,
+              500.116,
+              1.06054
+            ]
+          },
+          {
+            "total_gpu_ms": 725.601,
+            "wait_wall_ms": 727.435,
+            "stage_ms": [
+              1.58904,
+              227.411,
+              495.456,
+              0.7785
+            ]
+          },
+          {
+            "total_gpu_ms": 722.926,
+            "wait_wall_ms": 724.568,
+            "stage_ms": [
+              1.58675,
+              226.218,
+              493.991,
+              0.731583
+            ]
+          },
+          {
+            "total_gpu_ms": 734.373,
+            "wait_wall_ms": 738.758,
+            "stage_ms": [
+              1.61629,
+              228.722,
+              503.009,
+              0.720459
+            ]
+          },
+          {
+            "total_gpu_ms": 725.447,
+            "wait_wall_ms": 726.463,
+            "stage_ms": [
+              1.49733,
+              226.48,
+              496.359,
+              0.714875
+            ]
+          },
+          {
+            "total_gpu_ms": 730.471,
+            "wait_wall_ms": 732.607,
+            "stage_ms": [
+              1.62229,
+              227.326,
+              500.238,
+              0.889667
+            ]
+          },
+          {
+            "total_gpu_ms": 725.415,
+            "wait_wall_ms": 727.819,
+            "stage_ms": [
+              1.41613,
+              226.695,
+              496.196,
+              0.722
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        3840,
+        2160
+      ],
+      "variant": "cached",
+      "exact_rgba_match": true,
+      "rgba_sha256": "61d92af0df268d3fc946af4d49d394e169a8ebadd69c47324ae96b35e8b6cfd0",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 473.023,
+      "p95_total_gpu_ms": 476.313,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "cached",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 489,
+            "wait_wall_ms": 575.37,
+            "stage_ms": [
+              192.197,
+              107.846,
+              73.1782,
+              114.999,
+              0.6115
+            ]
+          },
+          {
+            "total_gpu_ms": 475.111,
+            "wait_wall_ms": 476.574,
+            "stage_ms": [
+              176.495,
+              114.686,
+              70.7802,
+              112.194,
+              0.698584
+            ]
+          },
+          {
+            "total_gpu_ms": 475.646,
+            "wait_wall_ms": 478.429,
+            "stage_ms": [
+              175.555,
+              114.489,
+              70.6476,
+              114.089,
+              0.624542
+            ]
+          },
+          {
+            "total_gpu_ms": 470.676,
+            "wait_wall_ms": 471.548,
+            "stage_ms": [
+              174.966,
+              108.92,
+              71.9825,
+              113.795,
+              0.77
+            ]
+          },
+          {
+            "total_gpu_ms": 468.617,
+            "wait_wall_ms": 470.235,
+            "stage_ms": [
+              173.428,
+              109.639,
+              70.134,
+              114.593,
+              0.613334
+            ]
+          },
+          {
+            "total_gpu_ms": 474.37,
+            "wait_wall_ms": 475.414,
+            "stage_ms": [
+              173.218,
+              112.961,
+              70.7689,
+              116.582,
+              0.633167
+            ]
+          },
+          {
+            "total_gpu_ms": 473.811,
+            "wait_wall_ms": 474.556,
+            "stage_ms": [
+              173.154,
+              114.213,
+              71.3446,
+              114.283,
+              0.609917
+            ]
+          },
+          {
+            "total_gpu_ms": 476.313,
+            "wait_wall_ms": 477.727,
+            "stage_ms": [
+              176.838,
+              111.9,
+              72.9598,
+              113.752,
+              0.630709
+            ]
+          },
+          {
+            "total_gpu_ms": 472.944,
+            "wait_wall_ms": 474.236,
+            "stage_ms": [
+              174.656,
+              109.771,
+              71.8515,
+              115.848,
+              0.60925
+            ]
+          },
+          {
+            "total_gpu_ms": 469.324,
+            "wait_wall_ms": 471.137,
+            "stage_ms": [
+              174.89,
+              108.906,
+              69.8044,
+              114.883,
+              0.623708
+            ]
+          },
+          {
+            "total_gpu_ms": 470.794,
+            "wait_wall_ms": 472.103,
+            "stage_ms": [
+              172.375,
+              114.227,
+              69.9002,
+              113.525,
+              0.610666
+            ]
+          },
+          {
+            "total_gpu_ms": 473.542,
+            "wait_wall_ms": 475.048,
+            "stage_ms": [
+              175.478,
+              112.911,
+              70.1964,
+              114.174,
+              0.614583
+            ]
+          },
+          {
+            "total_gpu_ms": 469.76,
+            "wait_wall_ms": 470.581,
+            "stage_ms": [
+              173.908,
+              109.9,
+              71.056,
+              114.134,
+              0.611375
+            ]
+          },
+          {
+            "total_gpu_ms": 470.065,
+            "wait_wall_ms": 471.141,
+            "stage_ms": [
+              175.344,
+              109.127,
+              70.0636,
+              114.633,
+              0.669333
+            ]
+          },
+          {
+            "total_gpu_ms": 473.102,
+            "wait_wall_ms": 474.89,
+            "stage_ms": [
+              175.806,
+              109.495,
+              70.1582,
+              116.874,
+              0.609708
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        3840,
+        2160
+      ],
+      "variant": "cached-packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "61d92af0df268d3fc946af4d49d394e169a8ebadd69c47324ae96b35e8b6cfd0",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 490.5,
+      "p95_total_gpu_ms": 492.265,
+      "median_pack_gpu_ms": 1.4614600000000002,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "cached-packed",
+        "timestamp_period_ns": 1,
+        "stages": [
+          5,
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 511.908,
+            "wait_wall_ms": 586.396,
+            "stage_ms": [
+              6.54967,
+              185.141,
+              119.556,
+              75.4486,
+              122.989,
+              1.1595
+            ]
+          },
+          {
+            "total_gpu_ms": 490.664,
+            "wait_wall_ms": 491.652,
+            "stage_ms": [
+              1.45567,
+              173.221,
+              116.957,
+              76.6932,
+              119.82,
+              0.736958
+            ]
+          },
+          {
+            "total_gpu_ms": 496.524,
+            "wait_wall_ms": 497.52,
+            "stage_ms": [
+              1.60383,
+              179.702,
+              118.118,
+              77.3437,
+              118.762,
+              0.741041
+            ]
+          },
+          {
+            "total_gpu_ms": 488.858,
+            "wait_wall_ms": 489.669,
+            "stage_ms": [
+              1.51896,
+              174.413,
+              116.66,
+              74.528,
+              120.745,
+              0.73875
+            ]
+          },
+          {
+            "total_gpu_ms": 492.692,
+            "wait_wall_ms": 493.526,
+            "stage_ms": [
+              1.39425,
+              175.871,
+              117.84,
+              74.6215,
+              121.984,
+              0.732625
+            ]
+          },
+          {
+            "total_gpu_ms": 490.564,
+            "wait_wall_ms": 491.3,
+            "stage_ms": [
+              1.43525,
+              173.924,
+              119.136,
+              73.5807,
+              121.491,
+              0.730375
+            ]
+          },
+          {
+            "total_gpu_ms": 490.534,
+            "wait_wall_ms": 491.285,
+            "stage_ms": [
+              1.33267,
+              173.645,
+              120.803,
+              74.906,
+              118.918,
+              0.725916
+            ]
+          },
+          {
+            "total_gpu_ms": 489.764,
+            "wait_wall_ms": 490.714,
+            "stage_ms": [
+              1.463,
+              175.751,
+              118.207,
+              74.5499,
+              118.741,
+              0.734125
+            ]
+          },
+          {
+            "total_gpu_ms": 489.563,
+            "wait_wall_ms": 490.256,
+            "stage_ms": [
+              1.74692,
+              174.092,
+              117.205,
+              75.71,
+              119.829,
+              0.727375
+            ]
+          },
+          {
+            "total_gpu_ms": 487.483,
+            "wait_wall_ms": 488.618,
+            "stage_ms": [
+              1.33179,
+              173.431,
+              116.524,
+              74.8363,
+              120.335,
+              0.718958
+            ]
+          },
+          {
+            "total_gpu_ms": 490.019,
+            "wait_wall_ms": 491.361,
+            "stage_ms": [
+              1.38075,
+              174.514,
+              118.255,
+              74.1333,
+              120.814,
+              0.728042
+            ]
+          },
+          {
+            "total_gpu_ms": 490.466,
+            "wait_wall_ms": 492.705,
+            "stage_ms": [
+              1.53221,
+              173.433,
+              119.178,
+              74.0298,
+              121.308,
+              0.725917
+            ]
+          },
+          {
+            "total_gpu_ms": 491.024,
+            "wait_wall_ms": 496.738,
+            "stage_ms": [
+              1.45992,
+              174.842,
+              118.965,
+              73.8349,
+              120.872,
+              0.729083
+            ]
+          },
+          {
+            "total_gpu_ms": 491.699,
+            "wait_wall_ms": 493.3,
+            "stage_ms": [
+              1.51533,
+              174.624,
+              119.501,
+              74.9822,
+              119.864,
+              0.944084
+            ]
+          },
+          {
+            "total_gpu_ms": 492.265,
+            "wait_wall_ms": 493.604,
+            "stage_ms": [
+              1.50971,
+              175.153,
+              117.57,
+              77.142,
+              119.86,
+              0.762584
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "size": [
+        3840,
+        2160
+      ],
+      "variant": "tiled-cached",
+      "exact_rgba_match": true,
+      "rgba_sha256": "61d92af0df268d3fc946af4d49d394e169a8ebadd69c47324ae96b35e8b6cfd0",
+      "warm_runs": 10,
+      "median_total_gpu_ms": 695.1510000000001,
+      "p95_total_gpu_ms": 699.598,
+      "median_pack_gpu_ms": 0,
+      "raw_timing": {
+        "device": "Apple M1",
+        "variant": "tiled-cached",
+        "timestamp_period_ns": 1,
+        "stages": [
+          0,
+          1,
+          4
+        ],
+        "runs": [
+          {
+            "total_gpu_ms": 699.015,
+            "wait_wall_ms": 711.821,
+            "stage_ms": [
+              194.803,
+              503.187,
+              0.787167
+            ]
+          },
+          {
+            "total_gpu_ms": 691.398,
+            "wait_wall_ms": 692.272,
+            "stage_ms": [
+              182.561,
+              507.711,
+              0.834833
+            ]
+          },
+          {
+            "total_gpu_ms": 692.836,
+            "wait_wall_ms": 693.242,
+            "stage_ms": [
+              180.769,
+              510.179,
+              1.60667
+            ]
+          },
+          {
+            "total_gpu_ms": 692.982,
+            "wait_wall_ms": 693.379,
+            "stage_ms": [
+              180.854,
+              510.998,
+              0.834083
+            ]
+          },
+          {
+            "total_gpu_ms": 692.41,
+            "wait_wall_ms": 692.794,
+            "stage_ms": [
+              182.069,
+              509.133,
+              0.905583
+            ]
+          },
+          {
+            "total_gpu_ms": 696.408,
+            "wait_wall_ms": 696.847,
+            "stage_ms": [
+              181.553,
+              513.789,
+              0.790125
+            ]
+          },
+          {
+            "total_gpu_ms": 696.206,
+            "wait_wall_ms": 696.665,
+            "stage_ms": [
+              181.653,
+              513.499,
+              0.77975
+            ]
+          },
+          {
+            "total_gpu_ms": 696.468,
+            "wait_wall_ms": 697.204,
+            "stage_ms": [
+              181.467,
+              513.946,
+              0.779875
+            ]
+          },
+          {
+            "total_gpu_ms": 699.598,
+            "wait_wall_ms": 700.137,
+            "stage_ms": [
+              181.038,
+              517.478,
+              0.789334
+            ]
+          },
+          {
+            "total_gpu_ms": 693.169,
+            "wait_wall_ms": 696.38,
+            "stage_ms": [
+              181.893,
+              510.208,
+              0.7875
+            ]
+          },
+          {
+            "total_gpu_ms": 696.914,
+            "wait_wall_ms": 697.752,
+            "stage_ms": [
+              184.229,
+              511.609,
+              0.792084
+            ]
+          },
+          {
+            "total_gpu_ms": 692.256,
+            "wait_wall_ms": 693.308,
+            "stage_ms": [
+              182.034,
+              509.149,
+              0.798042
+            ]
+          },
+          {
+            "total_gpu_ms": 694.096,
+            "wait_wall_ms": 695.093,
+            "stage_ms": [
+              185.074,
+              507.934,
+              0.736958
+            ]
+          },
+          {
+            "total_gpu_ms": 674.653,
+            "wait_wall_ms": 675.3,
+            "stage_ms": [
+              179.601,
+              494.035,
+              0.781584
+            ]
+          },
+          {
+            "total_gpu_ms": 688.478,
+            "wait_wall_ms": 689.64,
+            "stage_ms": [
+              178.998,
+              508.382,
+              0.792167
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "driver_environment": {
+    "VK_ICD_FILENAMES": "/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json",
+    "MVK_CONFIG_FAST_MATH_ENABLED": "0"
+  }
+}

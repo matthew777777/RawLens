@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/3840x2160-24-requirements-input.mp4: 1 file pulled, 0 skipped. 35.9 MB/s (12192888 bytes in 0.324s)

@@ -1,0 +1,75 @@
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest:
+INSTRUMENTATION_STATUS: test=canonicalBaselineAndOptimizedMatchPinnedOracle
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=canonicalBaselineAndOptimizedMatchPinnedOracle
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=rawAdapterCorrectionsAndGradeOwnership
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=rawAdapterCorrectionsAndGradeOwnership
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=recordedLutThroughSeparateVulkanGrade
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stack=java.lang.IllegalArgumentException: 3D LUT size must be 16–65
+	at com.matthew.rawlens.CubeLut$Companion.parse$lambda$0(CubeLut.kt:102)
+	at com.matthew.rawlens.CubeLut$Companion$$ExternalSyntheticLambda0.invoke(D8$$SyntheticClass:0)
+	at kotlin.io.TextStreamsKt.forEachLine(ReadWrite.kt:169)
+	at com.matthew.rawlens.CubeLut$Companion.parse(CubeLut.kt:68)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.recordedLutThroughSeparateVulkanGrade(PhotoRcdCorrectnessDeviceTest.kt:87)
+
+INSTRUMENTATION_STATUS: stream=
+Error in recordedLutThroughSeparateVulkanGrade(com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest):
+java.lang.IllegalArgumentException: 3D LUT size must be 16–65
+	at com.matthew.rawlens.CubeLut$Companion.parse$lambda$0(CubeLut.kt:102)
+	at com.matthew.rawlens.CubeLut$Companion$$ExternalSyntheticLambda0.invoke(D8$$SyntheticClass:0)
+	at kotlin.io.TextStreamsKt.forEachLine(ReadWrite.kt:169)
+	at com.matthew.rawlens.CubeLut$Companion.parse(CubeLut.kt:68)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.recordedLutThroughSeparateVulkanGrade(PhotoRcdCorrectnessDeviceTest.kt:87)
+
+INSTRUMENTATION_STATUS: test=recordedLutThroughSeparateVulkanGrade
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 8.155
+There was 1 failure:
+1) recordedLutThroughSeparateVulkanGrade(com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest)
+java.lang.IllegalArgumentException: 3D LUT size must be 16–65
+	at com.matthew.rawlens.CubeLut$Companion.parse$lambda$0(CubeLut.kt:102)
+	at com.matthew.rawlens.CubeLut$Companion$$ExternalSyntheticLambda0.invoke(D8$$SyntheticClass:0)
+	at kotlin.io.TextStreamsKt.forEachLine(ReadWrite.kt:169)
+	at com.matthew.rawlens.CubeLut$Companion.parse(CubeLut.kt:68)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.recordedLutThroughSeparateVulkanGrade(PhotoRcdCorrectnessDeviceTest.kt:87)
+
+FAILURES!!!
+Tests run: 3,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

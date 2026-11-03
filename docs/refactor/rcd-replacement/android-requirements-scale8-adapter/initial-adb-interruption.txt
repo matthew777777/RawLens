@@ -1,0 +1,24 @@
+Performing Streamed Install
+Success
+
+Performing Streamed Install
+Success
+
+Traceback (most recent call last):
+  File "/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/photo-rcd/run_android_correctness.py", line 56, in <module>
+    p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--recording-candidate',action='store_true');p.add_argument('--images',action='store_true');p.add_argument('--baked',action='store_true');p.add_argument('--packed',action='store_true');p.add_argument('--direct-raw',action='store_true');p.add_argument('--requirements-input',action='store_true');p.add_argument('--cached',action='store_true');a=p.parse_args();raise SystemExit(0 if run(a.serial,a.out.resolve(),a.recording_candidate,a.images,a.cached,a.baked,a.packed,a.direct_raw,a.requirements_input) else 1)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/photo-rcd/run_android_correctness.py", line 40, in run
+    result=adb(*command,timeout=300)
+  File "/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/photo-rcd/run_android_correctness.py", line 19, in adb
+    if r.returncode:raise RuntimeError(r.stdout+r.stderr)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest:
+INSTRUMENTATION_STATUS: test=recordingCandidateOracleDiagnostic
+INSTRUMENTATION_STATUS_CODE: 1
+

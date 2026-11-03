@@ -1,0 +1,49 @@
+{
+  "scope": "Historical user-provided session: narrative timing/integration evidence only; no historical shader bodies, archives, derived numerical fixtures or disassembly used",
+  "session": "codex-session-01a17924-46f0-77c2-acb2-beac869c424.md",
+  "session_sha256": "e25c3c788bba3d2801fdcadebfe8941b90a0947c0323aba342ba9e9eddc24d8b",
+  "measurements": [
+    {
+      "line": 18867,
+      "finding": "Initial real recording 16.3 fps despite much faster isolated GPU processing"
+    },
+    {
+      "line": 20932,
+      "finding": "User observed 16\u201317 fps at different encoded resolutions"
+    },
+    {
+      "line": 23876,
+      "finding": "Asynchronous submission reportedly improved recording to21.0 fps; submission0.3ms"
+    },
+    {
+      "line": 27162,
+      "finding": "Near33.3ms processing still only22.7fps; P010 copy roughly25ms and overlapping GPU work"
+    },
+    {
+      "line": 27755,
+      "finding": "Encoder-owned output reportedly removed CPU copy and reached25.4fps"
+    },
+    {
+      "line": 34101,
+      "finding": "Later narrative reports1080p/1440p stable30fps; historical claim not current replacement qualification"
+    }
+  ],
+  "current_verified_source_findings": [
+    {
+      "file": "app/src/main/java/com/matthew/rawlens/EncodedVideoRecorder.kt",
+      "symbol": "startEncoder",
+      "finding": "requestGpuWriter is explicitly false, with retirement comment; gpuWriterMode is unconditionally false"
+    },
+    {
+      "file": "app/src/main/cpp/photo_rcd/photo_rcd_engine.cpp",
+      "symbol": "renderRawHalf",
+      "finding": "Replacement reconstruction awaits GPU completion and reads half output back to host"
+    },
+    {
+      "file": "app/src/main/cpp/photo_rcd/photo_rcd_jni.cpp",
+      "symbol": "renderNative",
+      "finding": "CPU copies reconstructed half data into HardwareBuffer before separate grade submission"
+    }
+  ],
+  "conclusion": "Recover independently audited application scheduling/encoder/fence work; shader33.3ms never proves delivered30fps. Do not restore excluded demosaic code or treat historical results as replacement acceptance."
+}

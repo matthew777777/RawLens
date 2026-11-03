@@ -1,0 +1,29 @@
+{
+  "scope": "Headless correctness only; no activity/camera/recording/performance run",
+  "serial": "fe79feha9lmb6hhi",
+  "device": {
+    "ro.product.model": "25080RABDG",
+    "ro.build.fingerprint": "Redmi/lapis_eea/lapis:16/BP2A.250605.031.A3/OS3.0.303.0.WPPEUXM:user/release-keys",
+    "ro.build.version.sdk": "36"
+  },
+  "artifacts": {
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/github/deviceTest/RawLens-2.0.74-deviceTest-arm64-v8a.apk": "96ec9bbcd8319ed71dd191e3ed54297714922f33327dd457507656557274b360",
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/androidTest/github/deviceTest/app-github-deviceTest-androidTest.apk": "f9939af23425edf8cec340973d8f53fa2c6ac1dfb03e5e79fead8436c6953e08"
+  },
+  "command": [
+    "shell",
+    "am",
+    "instrument",
+    "-w",
+    "-r",
+    "-e",
+    "class",
+    "com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest",
+    "-e",
+    "requirementsInput",
+    "true",
+    "com.matthew.rawlens.rcdcheck.test/androidx.test.runner.AndroidJUnitRunner"
+  ],
+  "passed": true,
+  "canonical_report_pulled": true
+}

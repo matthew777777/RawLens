@@ -1,0 +1,28 @@
+{
+  "scope": "Standalone GPU input/compact RCD implementation evidence; no video acceptance or current APK change",
+  "head": "28977494032f743742eafbbf77ff437317544554",
+  "files": {
+    "docs/refactor/rcd-replacement/android-raw-pack-diagnostic/run.json": "7cc2e25ec51d9d1a3cb6b2862876b6441ef7fd0eccce470ffdca48c80abc3a60",
+    "docs/refactor/rcd-replacement/android-requirements-input-compact/run.json": "14dddf7ce15b7fdd6118cbbd2b0e6b3572b140d111d40f4cce308f96a338b293",
+    "docs/refactor/rcd-replacement/android-requirements-input/run.json": "9a648eb928b59c2dba988ba253fcbb35d9ed66db06e8d4e2a89318a85c28d999",
+    "docs/refactor/rcd-replacement/completion.md": "5704f02e43e4c24f10e0972208666b14630000c476bd657b283c5e25e7f0fcab",
+    "docs/refactor/rcd-replacement/correctness.md": "fbcfc5669a28968b42807b307c93281700c108e19f70173d549bebf835234efb",
+    "docs/refactor/rcd-replacement/design.md": "0702ff4c75cbfb9968ca23d80ae7d5e66bd89342b2bc02af4246b67236d666f1",
+    "docs/refactor/rcd-replacement/execution-log.md": "f1efbe2b8372103df8b8c6af76f50408e946f5df7f2b21ef3f6c7f32aa7e72cf",
+    "docs/refactor/rcd-replacement/gpu-input-implementation.md": "b590c3132658503a0970ee18a572f8d38cc86e340f203803e9107d3530710975",
+    "docs/refactor/rcd-replacement/performance.md": "55759392fc82abee0da1b58a139caa6c53bdef86261fc0580d81ea42af872a8e",
+    "docs/refactor/rcd-replacement/raw-cell-pack-gpu-validation.json": "27d183e607b7ff1ff7c47b9ae0b3fee01469b3a4a23c653acd7735f04db3e31e",
+    "docs/refactor/rcd-replacement/requirements-derived-design.md": "50eecf3526ab17ac1045d9081f490549d39847509d6330b21bfb292997c03d00",
+    "docs/refactor/rcd-replacement/requirements-gpu-input-initial-validation.json": "99690050a9e764eb9976f4fd551c4d986cd759c4cd51ab4ca0dd40fda08c761a",
+    "docs/refactor/rcd-replacement/requirements-gpu-input-validation.json": "0ab1c29d21465a960ac3e6fbfd6a0b9a1bcf728671fde61691ddeab821a15b75",
+    "tools/photo-rcd/README.md": "32b1d309e3725a778006df36e0c6d7ecc8c23f4a50305b0486285c9480d2ebff",
+    "tools/photo-rcd/benchmark_android_raw_pack.py": "bcc25b68d49473c10fdf1c19614525a7de4d8dd38e3d3a6f2c2d4a1ab2777449",
+    "tools/photo-rcd/raw_cell_pack.comp": "17c8fbc31199108f4d6155ddda690f31c7e8edd4a90df7f5e1370c4309da80e4",
+    "tools/photo-rcd/raw_cell_pack_host.cc": "85788049d52cf13bb5b0f58a96a78331131c08191de9da645cda3c22d297a7ca",
+    "tools/photo-rcd/requirements_input_host.cc": "b0ed12dd41071bd442f4901fd424e746e9c79ae08ab3033b24d99f22c7bdc098",
+    "tools/photo-rcd/requirements_input_shaders.py": "09d770dfe6a4de75975125a9c6dd7da7876056b06fb132c5db91df88626ede34",
+    "tools/photo-rcd/run_android_requirements_input.py": "5155b502b9658c37b04ac99d9c7e1ebd509c2f2aa223ab8a41896d4dcd5547a4",
+    "tools/photo-rcd/validate_raw_cell_pack.py": "87b763a11556ff2ee64923d24feba17bcd613b49d53fdb20fac5ac8b77c9c02f",
+    "tools/photo-rcd/validate_requirements_input.py": "6e21504c10cff3b6cca8a7b3758566ead5c601dcf9dafcdabfd0ffeb61d0adfa"
+  }
+}

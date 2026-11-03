@@ -1,0 +1,81 @@
+{
+  "scope": "Host oracle self-check on licensed real CFA crops",
+  "cases": [
+    {
+      "fixture": {
+        "file": "ricoh-gr-iii-0.f32",
+        "size": [
+          97,
+          95
+        ],
+        "sensor_origin": [
+          68,
+          40
+        ],
+        "cfa": "RGGB",
+        "sha256": "dbce05dc047758ab155148e192e94159411e22ea384cbc0be5eccf1c152cc899"
+      },
+      "rgb_sha256": "5cdb23ce15422dda89a23957a0efff8545b40af6ff1aa69ced14cb19b2807cba",
+      "stages": {
+        "lpf.bin": "e3481ab12f477f308819956eb2e9d50d006f5f12f9a0c3281a26da4caa52f83e",
+        "opposite_r.bin": "fb7ba26f2b574a5f22ad1f72e015a911f009172e385fc930a1bcc81f88e47a62",
+        "pq.bin": "f6f8b94b0ba224d83ee9caeecc1afdfa63261ed09edd1d0e72c82c5fb9a737ab",
+        "vh.bin": "bd7dc55267176625651888771facdfc488ed074cc3aa5c04187a9360e5149396",
+        "green.bin": "11a97d6b2cb984d6e90c2163510866798a5972c870b250a385ff72ebf89dd0b6",
+        "final_r.bin": "b57026ea92e9b4785c1f6a6bf0e84fea1e8b91605b9197d6f2a1467caca5edbe"
+      },
+      "O0_O2_ASan_UBSan_exact": true
+    },
+    {
+      "fixture": {
+        "file": "ricoh-gr-iii-1.f32",
+        "size": [
+          97,
+          95
+        ],
+        "sensor_origin": [
+          1769,
+          1081
+        ],
+        "cfa": "BGGR",
+        "sha256": "f36f58e9ef69e8c8684a3ee9f9effacd6fcdab4abd18121c7d4fcad955e16c6f"
+      },
+      "rgb_sha256": "733091ee4d453c71cfdca62e143cfc5f2531590bb2e8b10563324667411d1f9d",
+      "stages": {
+        "lpf.bin": "cc45ce5dc0714c03ae385e4eb33b7af0a76be238bfd48132d2ee29ec9c2092a3",
+        "opposite_r.bin": "950db7dbf3dc3ee40ffa21621895f10b03885f3f936a418453341ad3363d40bd",
+        "pq.bin": "193a184ffa90fbcafc47d54d03b1a7c270058a896a859662b20817d43b08f597",
+        "vh.bin": "f988be9c88f9a604d8c2de22c4bddc5e4a94f78d9e447fb7dca4dec5d83eff20",
+        "green.bin": "87832ef5bc34e34688ee59c7ad35ec9bb8c95913a383ecffdbaa58961912c271",
+        "final_r.bin": "b1ae55bb3e0269e081a8aa9be93fd99ecee6e62e66c0a8122edc236255c29973"
+      },
+      "O0_O2_ASan_UBSan_exact": true
+    },
+    {
+      "fixture": {
+        "file": "ricoh-gr-iii-2.f32",
+        "size": [
+          97,
+          95
+        ],
+        "sensor_origin": [
+          3500,
+          2501
+        ],
+        "cfa": "GBRG",
+        "sha256": "72096632a72106a685f332b14a249078a1faaeb62e50446ba91be386bf3f9da9"
+      },
+      "rgb_sha256": "4e9fe39217d82ee4cee0e184077311d40d2e226df9cbeb8b0378d25a5c818887",
+      "stages": {
+        "lpf.bin": "6649606dee809a4dd2083ff4539a4f43d4d37c0aac06d9067a8662e73b6507ef",
+        "opposite_r.bin": "b831b1fb3e77d0aff2a90bd9ec6bd1629f3e3d8661bf7c057132cfcdec72818b",
+        "pq.bin": "2b57bb6624d61815407dd8955a1603d5ca0a945ab6a612b9442377931c05138b",
+        "vh.bin": "91a93beb5e3297d078c964a6f41e97667ca401e0fe9b3b8b1cf73d6fa9f5818b",
+        "green.bin": "8408292999c60f2e41a5557ef224176f8b3967e5211ed4d30942fd296c60d723",
+        "final_r.bin": "0aae4e8fd3e414d2e689b51757dac88b745998aa656ecbd2de1fac4b9f5196c6"
+      },
+      "O0_O2_ASan_UBSan_exact": true
+    }
+  ],
+  "fixture_manifest_sha256": "dbd8096beca825746a4e5d55887aa05148c640e2b06f9f9c6a772b662dac5505"
+}

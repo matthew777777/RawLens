@@ -1,0 +1,69 @@
+--- upstream/RawTherapee/rcd_demosaic.cc
++++ generated/rcd_oracle.cc
+@@ -1,3 +1,4 @@
++#include "oracle_shim.h"
+ /*
+  *  This file is part of RawTherapee.
+  *
+@@ -16,12 +17,7 @@
+  *  You should have received a copy of the GNU General Public License
+  *  along with RawTherapee.  If not, see <https://www.gnu.org/licenses/>.
+  */
+-#include <cmath>
+-
+-#include "rawimagesource.h"
+-#include "rt_math.h"
+-#include "rtgui/multilangmgr.h"
+-#include "StopWatch.h"
++
+ 
+ using namespace std;
+ 
+@@ -164,6 +160,7 @@
+                 std::swap(V0, V1);
+             }
+ 
++            capture("vh", VH_Dir, tileSize, false, rowStart, rowEnd, colStart, colEnd);
+             // Step 2: Low pass filter incorporating green, red and blue local samples from the raw data
+             for (int row = 2; row < tileRows - 2; ++row) {
+                 for (int col = 2 + (fc(cfarray, row, 0) & 1), indx = row * tileSize + col, lpindx = indx / 2; col < tilecols - 2; col += 2, indx += 2, ++lpindx) {
+@@ -173,6 +170,7 @@
+                 }
+             }
+ 
++            capture("lpf", lpf, tileSize, true, rowStart, rowEnd, colStart, colEnd);
+             // Step 3: Populate the green channel at blue and red CFA positions
+             for (int row = 4; row < tileRows - 4; ++row) {
+                 for (int col = 4 + (fc(cfarray, row, 0) & 1), indx = row * tileSize + col, lpindx = indx / 2; col < tilecols - 4; col += 2, indx += 2, ++lpindx) {
+@@ -204,6 +202,7 @@
+                 }
+             }
+ 
++            capture("green", rgb[1], tileSize, false, rowStart, rowEnd, colStart, colEnd);
+             /**
+             * STEP 4: Populate the red and blue channels
+             */
+@@ -225,6 +224,7 @@
+                 }
+             }
+ 
++            capture("pq", PQ_Dir, tileSize, true, rowStart, rowEnd, colStart, colEnd);
+             // Step 4.2: Populate the red and blue channels at blue and red CFA positions
+             for (int row = 4; row < tileRows - 4; ++row) {
+                 for (int col = 4 + (fc(cfarray, row, 0) & 1), indx = row * tileSize + col, c = 2 - fc(cfarray, row, col), pqindx = indx / 2, pqindx2 = (indx - w1 - 1) / 2, pqindx3 = (indx + w1 - 1) / 2; col < tilecols - 4; col += 2, indx += 2, ++pqindx, ++pqindx2, ++pqindx3) {
+@@ -256,6 +256,7 @@
+                 }
+             }
+ 
++            capture("opposite_r", rgb[0], tileSize, false, rowStart, rowEnd, colStart, colEnd);
+             // Step 4.3: Populate the red and blue channels at green CFA positions
+             for (int row = 4; row < tileRows - 4; ++row) {
+                 for (int col = 4 + (fc(cfarray, row, 1) & 1), indx = row * tileSize + col; col < tilecols - 4; col += 2, indx += 2) {
+@@ -300,6 +301,7 @@
+                 }
+             }
+ 
++            capture("final_r", rgb[0], tileSize, false, rowStart, rowEnd, colStart, colEnd);
+             // For the outermost tiles in all directions we can use a smaller border margin
+             const int firstVertical = rowStart + ((tr == 0) ? rcdBorder : tileBorder);
+             const int lastVertical = rowEnd - ((tr == numTh - 1) ? rcdBorder : tileBorder);

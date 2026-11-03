@@ -1,0 +1,17 @@
+/private/tmp/rcd-tile-shapes-bounded-vh/normalize.comp
+/private/tmp/rcd-tile-shapes-bounded-vh/tile8x8.comp
+/private/tmp/rcd-tile-shapes-bounded-vh/tile16x8.comp
+/private/tmp/rcd-tile-shapes-bounded-vh/tile8x16.comp
+/private/tmp/rcd-tile-shapes-bounded-vh/tile16x16.comp
+/private/tmp/rcd-tile-shapes-bounded-vh/tile32x8.comp
+Traceback (most recent call last):
+  File "/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/photo-rcd/benchmark_tile_local.py", line 35, in <module>
+    p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--work',type=Path,required=True);p.add_argument('--report',type=Path,required=True);a=p.parse_args();run(a.serial,a.work.resolve(),a.report.resolve())
+                                                                                                                                                                                              ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/photo-rcd/benchmark_tile_local.py", line 29, in run
+    text=command('shell',remote+'/bench',remote+f'/tile{x}x{y}.spv',remote+'/normalize.spv',str(x),str(y),'6')
+  File "/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/photo-rcd/benchmark_tile_local.py", line 20, in command
+    if r.returncode:raise RuntimeError(r.stdout+r.stderr)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: {"core":[8,8],"samples":[{"wall_ms":2227.75,"gpu_stage_ms":[-1,-1,-1,2133.96,-1,2.07169,-1,16.9083]},{"wall_ms":2161.77,"gpu_stage_ms":[-1,-1,-1,2125.73,-1,2.07292,-1,13.0472]},{"wall_ms":2157.49,"gpu_stage_ms":[-1,-1,-1,2128.19,-1,2.06523,-1,8.34]}GPU product output outside finite FP16 domain
+

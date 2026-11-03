@@ -1,0 +1,13 @@
+[
+  {
+    "mode": "1920x1080-30-candidate-baked",
+    "passed": false,
+    "fps": 0,
+    "render_ms": {
+      "median": 514.472846,
+      "p95": 1225.557847,
+      "max": 1225.557847
+    },
+    "error": null
+  }
+]

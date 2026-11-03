@@ -1,0 +1,165 @@
+{
+  "scope": "Fresh local verification APKs; no publication or signing-clearance claim",
+  "packages": [
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/github/release/RawLens-2.0.74-release.apk",
+      "flavor": "github",
+      "sha256": "cc2ebd94e6f6424909b850266223f4206ce83a55c11f0a54b6c303fac123708f",
+      "size_bytes": 94098349,
+      "filters": [],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "268fcf03beda416212f028fe363ed17ced2a0c0fb2a7cbeaab94472d5c66dd68",
+            "spirv_sha256": "3229cb20d06ea65d14f47b17fb3137b602af4b0608bcf58f80f032994a4bddf0",
+            "compiler_optimization": "-O0",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "25cb577c548850d6fa1f2f2dbdeedf331e173ad518dd5e1d3c2d271bbd2393ba",
+            "spirv_sha256": "78157f73e5ceed9085e0a4a72ea776062c7fe50b8f4f87b77708c86f293c84bd",
+            "compiler_optimization": "-O0",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "responsecache": {
+            "source_sha256": "512f1653af3946cc65ec5e83309f7b78984987c2905dbd70d7c928d0d7530801",
+            "spirv_sha256": "8f50e0ccbc3e4e4aacc010aaf3eb333a1fe9fbb18f3d2404c5cce6676e16e25c",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "tiled": {
+            "source_sha256": "ebd151fa7da9ea4cc1252dc6e7e0d147c48b64b4c8d754bb1d04eafd7716a004",
+            "spirv_sha256": "894c9a60f4d5d442d8d337310946f7319966b55430df22386cf77a595b18b8d0",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "images": {
+            "source_sha256": "bec06e137248dc71dd0d164b82bd7d97171cd08411a6088596a2413c95db70b6",
+            "spirv_sha256": "242d6b92faf1f6bc6d6d4db8a224fbfbc100aa21b673643dc54f331aead6eb64",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "recording_candidate": {
+            "source_sha256": "6f66a6ee8c46d6ac1109aa3378206597d98a968a1f29d9b882f0b5d37dfb1741",
+            "spirv_sha256": "d522cebc9f041d104e3f44cd4dff62b8e9cfb16ab50d1f509a17e1b020111df7",
+            "precision": "FP32 arithmetic/storage",
+            "compiler_optimization": "-O",
+            "status": "compatibility diagnostic; not primary oracle or default"
+          },
+          "recording_candidate_images": {
+            "source_sha256": "542ef391ac9ee7f4e73a8a6c95414f2d7994480952983649aaa8bf8ae18021c9",
+            "spirv_sha256": "f302bd3947eab851fc3a078231ff37881ec99d207f30dbb2281d916075c7ca82",
+            "precision": "FP32 arithmetic/RGBA32F images",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "d87ef7a866c6b0f2b58b61f66977609250a772d70f074eba837d56d4565a426b",
+      "native_libraries": [
+        {
+          "entry": "lib/arm64-v8a/librawLensPhotoRcd.so",
+          "sha256": "b8cb9fa1f5a52e81a0ec18fea01696556bb8c1349f9cd872360a1d349ba48079",
+          "required_jni_exports_present": true
+        },
+        {
+          "entry": "lib/armeabi-v7a/librawLensPhotoRcd.so",
+          "sha256": "f60cc4de640c7b6144651243ecc403c029fd4bd634d0e3bf3612db10c6ded966",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    },
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/fdroid/release/RawLens-2.0.74-release.apk",
+      "flavor": "fdroid",
+      "sha256": "2170f1edeb42a0df2be349130a9bc737c90751f2b6c176e7158123fd3012258e",
+      "size_bytes": 90607559,
+      "filters": [],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "268fcf03beda416212f028fe363ed17ced2a0c0fb2a7cbeaab94472d5c66dd68",
+            "spirv_sha256": "3229cb20d06ea65d14f47b17fb3137b602af4b0608bcf58f80f032994a4bddf0",
+            "compiler_optimization": "-O0",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "25cb577c548850d6fa1f2f2dbdeedf331e173ad518dd5e1d3c2d271bbd2393ba",
+            "spirv_sha256": "78157f73e5ceed9085e0a4a72ea776062c7fe50b8f4f87b77708c86f293c84bd",
+            "compiler_optimization": "-O0",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "responsecache": {
+            "source_sha256": "512f1653af3946cc65ec5e83309f7b78984987c2905dbd70d7c928d0d7530801",
+            "spirv_sha256": "8f50e0ccbc3e4e4aacc010aaf3eb333a1fe9fbb18f3d2404c5cce6676e16e25c",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "tiled": {
+            "source_sha256": "ebd151fa7da9ea4cc1252dc6e7e0d147c48b64b4c8d754bb1d04eafd7716a004",
+            "spirv_sha256": "894c9a60f4d5d442d8d337310946f7319966b55430df22386cf77a595b18b8d0",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "images": {
+            "source_sha256": "bec06e137248dc71dd0d164b82bd7d97171cd08411a6088596a2413c95db70b6",
+            "spirv_sha256": "242d6b92faf1f6bc6d6d4db8a224fbfbc100aa21b673643dc54f331aead6eb64",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "recording_candidate": {
+            "source_sha256": "6f66a6ee8c46d6ac1109aa3378206597d98a968a1f29d9b882f0b5d37dfb1741",
+            "spirv_sha256": "d522cebc9f041d104e3f44cd4dff62b8e9cfb16ab50d1f509a17e1b020111df7",
+            "precision": "FP32 arithmetic/storage",
+            "compiler_optimization": "-O",
+            "status": "compatibility diagnostic; not primary oracle or default"
+          },
+          "recording_candidate_images": {
+            "source_sha256": "542ef391ac9ee7f4e73a8a6c95414f2d7994480952983649aaa8bf8ae18021c9",
+            "spirv_sha256": "f302bd3947eab851fc3a078231ff37881ec99d207f30dbb2281d916075c7ca82",
+            "precision": "FP32 arithmetic/RGBA32F images",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "d87ef7a866c6b0f2b58b61f66977609250a772d70f074eba837d56d4565a426b",
+      "native_libraries": [
+        {
+          "entry": "lib/arm64-v8a/librawLensPhotoRcd.so",
+          "sha256": "bb04183a28e2902af6a6d190e09bd737bdca101f946f8842aa804c0cc4198651",
+          "required_jni_exports_present": true
+        },
+        {
+          "entry": "lib/armeabi-v7a/librawLensPhotoRcd.so",
+          "sha256": "6da7c9bac6c51ca4da1aeb5339cf277aee59e81063c5aa529b8cb7a96125eea5",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    }
+  ],
+  "all_checks_passed": true,
+  "source_baseline_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309"
+}

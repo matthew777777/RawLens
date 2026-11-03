@@ -1,0 +1,16 @@
+{
+  "scope": "APK rebuild after Kotlin ownership fix; native engine and shader bytes unchanged from packaged-engine-validation.json",
+  "build_log": "/tmp/rawlens-photo-rcd-ownership-release.log",
+  "build_successful": true,
+  "all_six_packages_inspected": true,
+  "apk_sha256": [
+    "0b9c082e1a11920802df1206653e6f814931d751a52a1f7f6ac94657bc1e8f9d",
+    "635d1859e40cfb09001cdac58d820289c9b68d004b3160f0ad475a0ac9ebeb95",
+    "71166c1fa2ef1865b1e16b1d92cf4161d8d79d04511bb4d638ce469ba7aaeeb1",
+    "b5ab3c270a8b8b562c850e3f2c9f45761ae3a8d5acae86b0fe40f25777c87826",
+    "d72f6b9f77111bef93b5db3ba227e8cee5c50bb05bb5d377267d3ad71918bcb2",
+    "52497dc228c452611dc3b14b91d7cf3896b3620ec002fd43e970de4372319285"
+  ],
+  "shader_hashes_match_prior_executed_artifacts": true,
+  "prior_executed_apk_sha256": "a28dde4d7588fb7d95c50f31b726dd79c112164c1d88c20c43afa8872fae2443"
+}

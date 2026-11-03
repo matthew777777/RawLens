@@ -1,0 +1,414 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// RawLens recording RCD compatibility candidate, adapted 2026-11-01.
+// Preserved photo-port source SHA256: 79c7896d38d2d91d3034b7c94731475a27692d4f03d7ddc10b72153c20b015d8
+// Public mathematical attribution: Luis Sanz Rodriguez / Ingo Weyrich,
+// RawTherapee RCD 2.3, GPL-3.0-or-later; RawLens adaptation: matthew777777.
+// Separate pass inputs/outputs, FP32 arithmetic and image storage.
+// Full-grid dispatch: ceil(width/8), ceil(height/8), for every stage.
+// Binding 3 must never alias binding 1. See recording-candidate.md.
+// This adaptation is unvalidated and is not an application default.
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Byte-exact sensor view (same convention as vf_superpixel): each uint
+// holds 2 LE pixels, stride is the Image plane pitch in pixels.
+
+layout(binding=0,std430) readonly buffer Cfa { float cfa[]; };
+layout(binding=1,std430) buffer Directions { vec4 directions[]; };
+layout(binding=2,std430) buffer Responses { vec4 responses[]; };
+layout(binding=4,std430) buffer Green { float greenChannel[]; };
+layout(binding=5,std430) buffer Opposite { vec2 oppositeChannels[]; };
+layout(binding=6,std430) buffer Final { vec4 outputRgb[]; };
+layout(push_constant) uniform Params { int width; int height; int phase; int stage; } p;
+layout(constant_id=9) const int RCD_STAGE=-1;
+int stageIndex() { return RCD_STAGE>=0 ? RCD_STAGE : p.stage; }
+const precise float RCD_EPS = 1e-5;
+const precise float RCD_EPSSQ = 1e-10;
+
+// Phase-preserving edge mirror (single reflection covers our +-4
+// stencil on any dims >= 8; the CPU parity reference mirrors too).
+int mir(int i, int n) {
+    if (n <= 1) return 0;
+    int period = 2 * (n - 1);
+    int t = ((i % period) + period) % period;
+    return t < n ? t : period - t;
+}
+ivec2 mirror(ivec2 s) {
+    return ivec2(mir(s.x, ivec2(p.width,p.height).x), mir(s.y, ivec2(p.width,p.height).y));
+}
+
+// Quad offset (0..3) of crop pixel s in sensor phase.
+
+const float eps=1e-5;
+const float epssq=1e-10;
+const ivec2 N=ivec2(0,-1), S=ivec2(0,1), W=ivec2(-1,0), E=ivec2(1,0);
+const ivec2 NW=ivec2(-1,-1), NE=ivec2(1,-1), SW=ivec2(-1,1), SE=ivec2(1,1);
+const int tileSize=194, tileStep=176;
+ivec2 tileOrigin() { int nx=(p.width+tileStep-1)/tileStep; int t=int(gl_GlobalInvocationID.z);return ivec2(t%nx,t/nx)*tileStep; }
+ivec2 tileExtent() { return min(ivec2(tileSize),ivec2(p.width,p.height)-tileOrigin()); }
+ivec2 readOrigin;
+int reflection(int x,int n) { int period=2*n-2; int r=((x%period)+period)%period; return r<n?r:period-r; }
+int indexOf(ivec2 s) { return int(gl_GlobalInvocationID.z)*tileSize*tileSize+s.y*tileSize+s.x; }
+bool domain(ivec2 s,int margin) { return all(greaterThanEqual(s,ivec2(margin))) && all(lessThan(s,tileExtent()-ivec2(margin))); }
+int color(ivec2 s) { return (p.phase >> (2*((s.y&1)*2+(s.x&1))))&3; }
+precise float raw(ivec2 s) { s+=readOrigin;return cfa[reflection(s.y,p.height)*p.width+reflection(s.x,p.width)]; }
+
+precise float rcdInterpolate(float a,float b,float c) { return a*(b-c)+c; }
+precise float response(ivec2 s,ivec2 d) {
+    precise float v=(raw(s-3*d)-raw(s-d)-raw(s+d)+raw(s+3*d))-3.0*(raw(s-2*d)+raw(s+2*d))+6.0*raw(s);
+    return v*v;
+}
+precise float direction(ivec2 s,ivec2 a,ivec2 b) {
+    precise float va=max(epssq,response(s-a,a)+response(s,a)+response(s+a,a));
+    precise float vb=max(epssq,response(s-b,b)+response(s,b)+response(s+b,b));
+    return va/(va+vb);
+}
+precise float upstreamVh(ivec2 s) {
+    // Upstream's scalar calloc scratch persists across tiles. Short tail tiles
+    // retain prior VH entries outside their written domain. Recompute the most
+    // recent written value from immutable CFA, avoiding inter-tile GPU races.
+    if(any(lessThan(s,ivec2(4))) || any(greaterThanEqual(s,ivec2(tileSize-4)))) return 0.0;
+    int nx=(p.width+tileStep-1)/tileStep;
+    for(int t=int(gl_GlobalInvocationID.z);t>=0;--t) {
+        ivec2 origin=ivec2(t%nx,t/nx)*tileStep;
+        ivec2 extent=min(ivec2(tileSize),ivec2(p.width,p.height)-origin);
+        // Upstream skips an exactly 18-pixel tail before touching scratch.
+        if(extent.x==18 || extent.y==18) continue;
+        if(all(lessThan(s,extent-ivec2(4)))) {
+            readOrigin=origin;
+            precise float v=direction(s,S,E);
+            readOrigin=tileOrigin();return v;
+        }
+    }
+    return 0.0;
+}
+
+int colorAt(ivec2 s) { return (p.phase >> (((s.y&1)*2+(s.x&1))*2)) & 3; }
+float normCode(ivec2 s) { return raw(s); }
+// Workgroup CFA tile (normalized); loaded once per dispatch, then every
+// stencil tap is a shared read. Reads mirror first (folding back into
+// the tile, so the index is always in range).
+
+ivec2 groupBase() { return ivec2(gl_WorkGroupID.xy) * ivec2(stageIndex()>=1 && stageIndex()<=3 ? 16 : 8,8); }
+shared float tile[16][24];
+
+void loadTile() {
+    ivec2 base = groupBase();
+    uint lane = gl_LocalInvocationIndex;
+    uint tw = 24u;
+    for (uint lin = lane; lin < tw * 16u; lin += 64u) {
+        ivec2 t = ivec2(int(lin % tw), int(lin / tw));
+        tile[t.y][t.x] = normCode(base + t - ivec2(4));
+    }
+    barrier();
+}
+
+float fetchN(ivec2 s) {
+    ivec2 base = groupBase();
+    // loadTile already mirrored every halo sample; address that copy
+    // directly instead of reflecting every stencil tap a second time.
+    return tile[s.y - base.y + 4][s.x - base.x + 4];
+}
+
+
+int linearIndex(ivec2 s) { return indexOf(s); }
+vec4 previousAt(ivec2 s) { int i=linearIndex(s); if(stageIndex()==2 || colorAt(s)==1) return vec4(colorAt(s)==0?fetchN(s):0.0,greenChannel[i],colorAt(s)==2?fetchN(s):0.0,1.0); return vec4(oppositeChannels[i].r,greenChannel[i],oppositeChannels[i].g,1.0); }
+void storeRgb(ivec2 s,vec4 v) {
+    int i=linearIndex(s);
+    if(stageIndex()==1) { greenChannel[i]=v.g;ivec2 mate=ivec2(s.x^1,s.y); if(mate.x<tileExtent().x) greenChannel[indexOf(mate)]=fetchN(mate); }
+    else if(stageIndex()==2) { oppositeChannels[i]=v.rb; if(domain(s,9)) { ivec2 site=s+tileOrigin();outputRgb[site.y*p.width+site.x]=vec4(max(v.rgb,vec3(0.0)),1.0); } }
+    else if(domain(s,9)) { ivec2 site=s+tileOrigin(); outputRgb[site.y*p.width+site.x]=vec4(max(v.rgb,vec3(0.0)),1.0); }
+}
+
+// Prior-mode rgb read (imageLoad neither clamps nor mirrors).
+vec4 rgbAt(ivec2 s) {
+    return previousAt(s);
+}
+
+// Scratch direction read (mode 0 output, mirrored like rgb).
+vec4 dirAt(ivec2 s) {
+    return directions[linearIndex(s)];
+}
+
+float intp(float d, float h, float v) { return d * (h - v) + v; }
+float sqr(float x) { return x * x; }
+
+// RT step 1.1 vertical / horizontal color-difference high-pass, squared.
+float uncachedHpfV(ivec2 s) {
+    precise float v = (fetchN(s + ivec2(0, -3)) - fetchN(s + ivec2(0, -1))
+             - fetchN(s + ivec2(0, 1)) + fetchN(s + ivec2(0, 3)))
+            - 3.0 * (fetchN(s + ivec2(0, -2)) + fetchN(s + ivec2(0, 2)))
+            + 6.0 * fetchN(s);
+    return sqr(v);
+}
+float uncachedHpfH(ivec2 s) {
+    precise float v = (fetchN(s + ivec2(-3, 0)) - fetchN(s + ivec2(-1, 0))
+             - fetchN(s + ivec2(1, 0)) + fetchN(s + ivec2(3, 0)))
+            - 3.0 * (fetchN(s + ivec2(-2, 0)) + fetchN(s + ivec2(2, 0)))
+            + 6.0 * fetchN(s);
+    return sqr(v);
+}
+
+
+float hpfV(ivec2 s) { return responses[indexOf(s)].x; }
+float hpfH(ivec2 s) { return responses[indexOf(s)].y; }
+float hpfP(ivec2 s) { return responses[indexOf(ivec2(s.x|1,s.y))].z; }
+float hpfQ(ivec2 s) { return responses[indexOf(ivec2(s.x|1,s.y))].w; }
+
+// RT step 1.2: vertical discrimination VH_Dir = V/(V+H) at s.
+float vhDir(ivec2 s) {
+    precise float vStat = max(RCD_EPSSQ, hpfV(s + ivec2(0, -1)) + hpfV(s) + hpfV(s + ivec2(0, 1)));
+    precise float hStat = max(RCD_EPSSQ, hpfH(s + ivec2(-1, 0)) + hpfH(s) + hpfH(s + ivec2(1, 0)));
+    return vStat / (vStat + hStat);
+}
+
+// RT step 2 low-pass (unnormalized x4) at s.
+float lpf(ivec2 s) {
+    return fetchN(s)
+        + 0.5 * (fetchN(s + ivec2(0, -1)) + fetchN(s + ivec2(0, 1))
+               + fetchN(s + ivec2(-1, 0)) + fetchN(s + ivec2(1, 0)))
+        + 0.25 * (fetchN(s + ivec2(-1, -1)) + fetchN(s + ivec2(1, -1))
+                + fetchN(s + ivec2(-1, 1)) + fetchN(s + ivec2(1, 1)));
+}
+
+// RT step 4.0 P/Q diagonal high-pass, squared (P=NW-SE, Q=NE-SW).
+float uncachedHpfP(ivec2 s) {
+    s.x=s.x|1;
+    if(!domain(s,3)) return 0.0;
+    precise float v = (fetchN(s + ivec2(-3, -3)) - fetchN(s + ivec2(-1, -1))
+             - fetchN(s + ivec2(1, 1)) + fetchN(s + ivec2(3, 3)))
+            - 3.0 * (fetchN(s + ivec2(-2, -2)) + fetchN(s + ivec2(2, 2)))
+            + 6.0 * fetchN(s);
+    return sqr(v);
+}
+float uncachedHpfQ(ivec2 s) {
+    s.x=s.x|1;
+    if(!domain(s,3)) return 0.0;
+    precise float v = (fetchN(s + ivec2(3, -3)) - fetchN(s + ivec2(1, -1))
+             - fetchN(s + ivec2(-1, 1)) + fetchN(s + ivec2(-3, 3)))
+            - 3.0 * (fetchN(s + ivec2(2, -2)) + fetchN(s + ivec2(-2, 2)))
+            + 6.0 * fetchN(s);
+    return sqr(v);
+}
+
+// RT step 4.1: diagonal discrimination PQ_Dir = P/(P+Q) at R/B site s.
+float pqDir(ivec2 s) {
+    precise float pStat = max(RCD_EPSSQ, hpfP(s + ivec2(-1, -1)) + hpfP(s) + hpfP(s + ivec2(1, 1)));
+    precise float qStat = max(RCD_EPSSQ, hpfQ(s + ivec2(1, -1)) + hpfQ(s) + hpfQ(s + ivec2(-1, 1)));
+    return pStat / (pStat + qStat);
+}
+
+// Refined discrimination from scratch values: central vs 4-diagonal
+// neighbourhood, the more decisive (farther from 0.5) wins.
+float refineFrom(float central, float d0, float d1, float d2, float d3) {
+    precise float nb = stageIndex()==2 ? 0.25*(d0+d1+d2+d3) : 0.25*((d0+d1)+(d2+d3));
+    return (abs(0.5 - central) < abs(0.5 - nb)) ? nb : central;
+}
+
+// Compile a separate stage so register allocation is not dominated by the
+// largest branch of the four-stage shader. -1 keeps old callers compatible.
+
+
+
+layout(binding=7,std430) buffer ProductConfig { uint config[]; };
+layout(binding=8,std430) writeonly buffer HalfOutput { uvec2 halfOutput[]; };
+float parameter(int n) { return uintBitsToFloat(config[n]); }
+precise vec4 mapValue(int x,int y) {
+    int base=16+(y*int(config[6])+x)*4;
+    return vec4(parameter(base),parameter(base+1),parameter(base+2),parameter(base+3));
+}
+void productOutput() {
+    ivec2 site=ivec2(gl_GlobalInvocationID.xy);
+    if(site.x>=p.width || site.y>=p.height) return;
+    int index=site.y*p.width+site.x;
+    precise vec3 rgb=outputRgb[index].rgb;
+    precise vec3 wb=vec3(parameter(2),parameter(3),parameter(4));
+    precise float minimum=min(wb.r,min(wb.g,wb.b));
+    precise vec3 t=clamp((rgb-vec3(0.70))/vec3(0.99-0.70),0.0,1.0);
+    precise vec3 white=t*t*(vec3(3.0)-2.0*t);
+    precise float blend=max(white.r,max(white.g,white.b));
+    rgb=rgb+(vec3(minimum)/wb-rgb)*blend;
+    if(config[11]!=0u) {
+        precise float nx=clamp(float(site.x+int(config[0])-int(config[7]))/float(int(config[9])-int(config[7])),0.0,1.0)*float(config[6]-1u);
+        precise float ny=clamp(float(site.y+int(config[1])-int(config[8]))/float(int(config[10])-int(config[8])),0.0,1.0)*float(config[5]-1u);
+        int x=int(nx),y=int(ny),x1=min(x+1,int(config[6])-1),y1=min(y+1,int(config[5])-1);
+        precise vec4 a=mapValue(x,y)+(mapValue(x1,y)-mapValue(x,y))*(nx-float(x));
+        precise vec4 b=mapValue(x,y1)+(mapValue(x1,y1)-mapValue(x,y1))*(nx-float(x));
+        precise vec4 gains=a+(b-a)*(ny-float(y));
+        rgb*=vec3(gains.x,0.5*(gains.y+gains.z),gains.w);
+    }
+    if(any(isnan(rgb)) || any(isinf(rgb)) || any(lessThan(rgb,vec3(0.0))) || any(greaterThan(rgb,vec3(65504.0)))) atomicOr(config[12],1u);
+    halfOutput[index]=uvec2(packHalf2x16(rgb.rg),packHalf2x16(vec2(rgb.b,1.0)));
+}
+
+void main() {
+    if(stageIndex()==6) { productOutput();return; }
+    ivec2 s=ivec2(gl_GlobalInvocationID.xy);
+    if(stageIndex()==4) {
+        if(s.x>=p.width || s.y>=p.height) return;
+        if(s.x>=9 && s.y>=9 && s.x<p.width-9 && s.y<p.height-9) return;
+        precise vec3 total=vec3(0.0); ivec3 count=ivec3(0);
+        for(int y=-1;y<=1;++y) for(int x=-1;x<=1;++x) {
+            ivec2 n=s+ivec2(x,y);
+            if(n.x<0 || n.y<0 || n.x>=p.width || n.y>=p.height) continue;
+            int nc=color(n); total[nc]+=cfa[n.y*p.width+n.x]; count[nc]++;
+        }
+        precise vec3 result=total/vec3(count); result[color(s)]=cfa[s.y*p.width+s.x];
+        outputRgb[s.y*p.width+s.x]=vec4(result,1.0);return;
+    }
+    if(tileExtent().x==18 || tileExtent().y==18) return;
+    readOrigin=tileOrigin();
+    if (any(greaterThanEqual(groupBase(), tileExtent()))) return;
+    int stage = stageIndex();
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if(stageIndex()>=1 && stageIndex()<=3) { int rb=colorAt(ivec2(0,ij.y))==1?1:0; ij.x=ij.x*2+(stageIndex()==3?1-rb:rb); }
+    // The tile load covers threads past the edge too (mirrored), so no
+    // early-out before the barrier: every invocation must participate.
+    loadTile();
+    if(stageIndex()==1 && (tileExtent().x&1)!=0 && ij.x==tileExtent().x && ij.y<tileExtent().y) { ivec2 mate=ivec2(ij.x^1,ij.y);greenChannel[indexOf(mate)]=fetchN(mate); }
+    if (any(greaterThanEqual(ij, tileExtent()))) return;
+    if(stageIndex()==3 && !domain(ij,9)) return;
+    if(stageIndex()==7) { responses[indexOf(ij)]=vec4(uncachedHpfV(ij),uncachedHpfH(ij),(ij.x&1)!=0?uncachedHpfP(ij):0.0,(ij.x&1)!=0?uncachedHpfQ(ij):0.0);return; }
+    int c = colorAt(ij);
+
+    if (stageIndex() == 0) {
+        // Directions + low-pass to scratch (VH everywhere; lpf/PQ at
+        // R/B sites, zero elsewhere and never read there).
+        precise float vh = domain(ij,4)?vhDir(ij):upstreamVh(ij);
+        precise float lp = 0.0;
+        precise float pq = 0.0;
+        if (c != 1) {
+            lp = domain(ij,2)?lpf(ij):0.0;
+            pq = domain(ij,4)?pqDir(ij):0.0;
+        }
+        directions[linearIndex(ij)]=vec4(vh,lp,pq,0.0);
+        return;
+    }
+    if (stageIndex() == 1) {
+        // Green full-res + R/B mosaic init (overwrites every texel).
+        float g;
+        if (c == 1 || !domain(ij,4)) {
+            g = fetchN(ij);
+        } else {
+            precise float cfai = fetchN(ij);
+            precise float nsAbs = abs(fetchN(ij + ivec2(0, -1)) - fetchN(ij + ivec2(0, 1)));
+            precise float ewAbs = abs(fetchN(ij + ivec2(-1, 0)) - fetchN(ij + ivec2(1, 0)));
+            precise float nGrad = RCD_EPS + (nsAbs + abs(cfai - fetchN(ij + ivec2(0, -2))))
+                + (abs(fetchN(ij + ivec2(0, -1)) - fetchN(ij + ivec2(0, -3))) + abs(fetchN(ij + ivec2(0, -2)) - fetchN(ij + ivec2(0, -4))));
+            precise float sGrad = RCD_EPS + (nsAbs + abs(cfai - fetchN(ij + ivec2(0, 2))))
+                + (abs(fetchN(ij + ivec2(0, 1)) - fetchN(ij + ivec2(0, 3))) + abs(fetchN(ij + ivec2(0, 2)) - fetchN(ij + ivec2(0, 4))));
+            precise float wGrad = RCD_EPS + (ewAbs + abs(cfai - fetchN(ij + ivec2(-2, 0))))
+                + (abs(fetchN(ij + ivec2(-1, 0)) - fetchN(ij + ivec2(-3, 0))) + abs(fetchN(ij + ivec2(-2, 0)) - fetchN(ij + ivec2(-4, 0))));
+            precise float eGrad = RCD_EPS + (ewAbs + abs(cfai - fetchN(ij + ivec2(2, 0))))
+                + (abs(fetchN(ij + ivec2(1, 0)) - fetchN(ij + ivec2(3, 0))) + abs(fetchN(ij + ivec2(2, 0)) - fetchN(ij + ivec2(4, 0))));
+            // Ratio-corrected estimates (same-phase lpf two away, per RT).
+            vec4 d = dirAt(ij);
+            precise float lpfi = d.g;
+            precise float nEst = fetchN(ij + ivec2(0, -1)) * (lpfi + lpfi) / (RCD_EPS + lpfi + dirAt(ij + ivec2(0, -2)).g);
+            precise float sEst = fetchN(ij + ivec2(0, 1)) * (lpfi + lpfi) / (RCD_EPS + lpfi + dirAt(ij + ivec2(0, 2)).g);
+            precise float wEst = fetchN(ij + ivec2(-1, 0)) * (lpfi + lpfi) / (RCD_EPS + lpfi + dirAt(ij + ivec2(-2, 0)).g);
+            precise float eEst = fetchN(ij + ivec2(1, 0)) * (lpfi + lpfi) / (RCD_EPS + lpfi + dirAt(ij + ivec2(2, 0)).g);
+            precise float vEst = (sGrad * nEst + nGrad * sEst) / (nGrad + sGrad);
+            precise float hEst = (wGrad * eEst + eGrad * wEst) / (eGrad + wGrad);
+            precise float disc = refineFrom(d.r,
+                dirAt(ij + ivec2(-1, -1)).r, dirAt(ij + ivec2(1, -1)).r,
+                dirAt(ij + ivec2(-1, 1)).r, dirAt(ij + ivec2(1, 1)).r);
+            g = intp(disc, hEst, vEst);
+        }
+        precise float r = (c == 0) ? fetchN(ij) : 0.0;
+        precise float b = (c == 2) ? fetchN(ij) : 0.0;
+        storeRgb(ij, vec4(r, g, b, 1.0));
+        return;
+    }
+    if (stageIndex() == 2) {
+        // RT 4.2: R/B at opposite-color sites (green sites untouched).
+        if (c == 1) { storeRgb(ij, previousAt(ij)); return; }
+        if(!domain(ij,4)) { storeRgb(ij,vec4(fetchN(ij),fetchN(ij),fetchN(ij),1.0));return; }
+        int opp = 2 - c;
+        precise float gHere = previousAt(ij).g;
+        vec4 d = dirAt(ij);
+        precise float pqDisc = refineFrom(d.b,
+            dirAt(ij + ivec2(-1, -1)).b, dirAt(ij + ivec2(1, -1)).b,
+            dirAt(ij + ivec2(-1, 1)).b, dirAt(ij + ivec2(1, 1)).b);
+        // Diagonal gradients over mosaic (tile) + interpolated green.
+        precise float nw = RCD_EPS + abs(fetchN(ij + ivec2(-1, -1)) - fetchN(ij + ivec2(1, 1)))
+            + abs(fetchN(ij + ivec2(-1, -1)) - fetchN(ij + ivec2(-3, -3)))
+            + abs(gHere - rgbAt(ij + ivec2(-2, -2)).g);
+        precise float ne = RCD_EPS + abs(fetchN(ij + ivec2(1, -1)) - fetchN(ij + ivec2(-1, 1)))
+            + abs(fetchN(ij + ivec2(1, -1)) - fetchN(ij + ivec2(3, -3)))
+            + abs(gHere - rgbAt(ij + ivec2(2, -2)).g);
+        precise float sw = RCD_EPS + abs(fetchN(ij + ivec2(1, -1)) - fetchN(ij + ivec2(-1, 1)))
+            + abs(fetchN(ij + ivec2(-1, 1)) - fetchN(ij + ivec2(-3, 3)))
+            + abs(gHere - rgbAt(ij + ivec2(-2, 2)).g);
+        precise float se = RCD_EPS + abs(fetchN(ij + ivec2(-1, -1)) - fetchN(ij + ivec2(1, 1)))
+            + abs(fetchN(ij + ivec2(1, 1)) - fetchN(ij + ivec2(3, 3)))
+            + abs(gHere - rgbAt(ij + ivec2(2, 2)).g);
+        // Diagonal color differences (opp mosaic minus green).
+        precise float nwE = fetchN(ij + ivec2(-1, -1)) - rgbAt(ij + ivec2(-1, -1)).g;
+        precise float neE = fetchN(ij + ivec2(1, -1)) - rgbAt(ij + ivec2(1, -1)).g;
+        precise float swE = fetchN(ij + ivec2(-1, 1)) - rgbAt(ij + ivec2(-1, 1)).g;
+        precise float seE = fetchN(ij + ivec2(1, 1)) - rgbAt(ij + ivec2(1, 1)).g;
+        precise float pEst = (nw * seE + se * nwE) / (nw + se);
+        precise float qEst = (ne * swE + sw * neE) / (ne + sw);
+        vec4 px = previousAt(ij);
+        px[opp] = gHere + intp(pqDisc, qEst, pEst);
+        storeRgb(ij, px);
+        return;
+    }
+    // RT 4.3: R/B at green sites, red then blue (sequential keeps live
+    // state small; one fused block spilled registers to DRAM).
+    if (c != 1) return;
+    vec4 d = dirAt(ij);
+    precise float vhDisc = refineFrom(d.r,
+        dirAt(ij + ivec2(-1, -1)).r, dirAt(ij + ivec2(1, -1)).r,
+        dirAt(ij + ivec2(-1, 1)).r, dirAt(ij + ivec2(1, 1)).r);
+    precise float rgb1 = previousAt(ij).g;
+    precise float n1 = RCD_EPS + abs(rgb1 - rgbAt(ij + ivec2(0, -2)).g);
+    precise float s1 = RCD_EPS + abs(rgb1 - rgbAt(ij + ivec2(0, 2)).g);
+    precise float w1 = RCD_EPS + abs(rgb1 - rgbAt(ij + ivec2(-2, 0)).g);
+    precise float e1 = RCD_EPS + abs(rgb1 - rgbAt(ij + ivec2(2, 0)).g);
+    precise float gN = rgbAt(ij + ivec2(0, -1)).g;
+    precise float gS = rgbAt(ij + ivec2(0, 1)).g;
+    precise float gW = rgbAt(ij + ivec2(-1, 0)).g;
+    precise float gE = rgbAt(ij + ivec2(1, 0)).g;
+    vec4 px = previousAt(ij);
+    // c = 0 (red): cardinals +-1 are mosaic (tile), +-3 mode-2 (image).
+    {
+        precise float cN = (colorAt(ij + ivec2(0, -1)) == 0) ? fetchN(ij + ivec2(0, -1)) : rgbAt(ij + ivec2(0, -1)).r;
+        precise float cS = (colorAt(ij + ivec2(0, 1)) == 0) ? fetchN(ij + ivec2(0, 1)) : rgbAt(ij + ivec2(0, 1)).r;
+        precise float cW = (colorAt(ij + ivec2(-1, 0)) == 0) ? fetchN(ij + ivec2(-1, 0)) : rgbAt(ij + ivec2(-1, 0)).r;
+        precise float cE = (colorAt(ij + ivec2(1, 0)) == 0) ? fetchN(ij + ivec2(1, 0)) : rgbAt(ij + ivec2(1, 0)).r;
+        precise float cN3 = (colorAt(ij + ivec2(0, -3)) == 0) ? fetchN(ij + ivec2(0, -3)) : rgbAt(ij + ivec2(0, -3)).r;
+        precise float cS3 = (colorAt(ij + ivec2(0, 3)) == 0) ? fetchN(ij + ivec2(0, 3)) : rgbAt(ij + ivec2(0, 3)).r;
+        precise float cW3 = (colorAt(ij + ivec2(-3, 0)) == 0) ? fetchN(ij + ivec2(-3, 0)) : rgbAt(ij + ivec2(-3, 0)).r;
+        precise float cE3 = (colorAt(ij + ivec2(3, 0)) == 0) ? fetchN(ij + ivec2(3, 0)) : rgbAt(ij + ivec2(3, 0)).r;
+        precise float sn = abs(cN - cS), ew = abs(cW - cE);
+        precise float nG = n1 + sn + abs(cN - cN3);
+        precise float sG = s1 + sn + abs(cS - cS3);
+        precise float wG = w1 + ew + abs(cW - cW3);
+        precise float eG = e1 + ew + abs(cE - cE3);
+        precise float vEst = (nG * (cS - gS) + sG * (cN - gN)) / (nG + sG);
+        precise float hEst = (eG * (cW - gW) + wG * (cE - gE)) / (eG + wG);
+        px.r = rgb1 + intp(vhDisc, hEst, vEst);
+    }
+    // c = 2 (blue): same with mosaic/blue selection.
+    {
+        precise float cN = (colorAt(ij + ivec2(0, -1)) == 2) ? fetchN(ij + ivec2(0, -1)) : rgbAt(ij + ivec2(0, -1)).b;
+        precise float cS = (colorAt(ij + ivec2(0, 1)) == 2) ? fetchN(ij + ivec2(0, 1)) : rgbAt(ij + ivec2(0, 1)).b;
+        precise float cW = (colorAt(ij + ivec2(-1, 0)) == 2) ? fetchN(ij + ivec2(-1, 0)) : rgbAt(ij + ivec2(-1, 0)).b;
+        precise float cE = (colorAt(ij + ivec2(1, 0)) == 2) ? fetchN(ij + ivec2(1, 0)) : rgbAt(ij + ivec2(1, 0)).b;
+        precise float cN3 = (colorAt(ij + ivec2(0, -3)) == 2) ? fetchN(ij + ivec2(0, -3)) : rgbAt(ij + ivec2(0, -3)).b;
+        precise float cS3 = (colorAt(ij + ivec2(0, 3)) == 2) ? fetchN(ij + ivec2(0, 3)) : rgbAt(ij + ivec2(0, 3)).b;
+        precise float cW3 = (colorAt(ij + ivec2(-3, 0)) == 2) ? fetchN(ij + ivec2(-3, 0)) : rgbAt(ij + ivec2(-3, 0)).b;
+        precise float cE3 = (colorAt(ij + ivec2(3, 0)) == 2) ? fetchN(ij + ivec2(3, 0)) : rgbAt(ij + ivec2(3, 0)).b;
+        precise float sn = abs(cN - cS), ew = abs(cW - cE);
+        precise float nG = n1 + sn + abs(cN - cN3);
+        precise float sG = s1 + sn + abs(cS - cS3);
+        precise float wG = w1 + ew + abs(cW - cW3);
+        precise float eG = e1 + ew + abs(cE - cE3);
+        precise float vEst = (nG * (cS - gS) + sG * (cN - gN)) / (nG + sG);
+        precise float hEst = (eG * (cW - gW) + wG * (cE - gE)) / (eG + wG);
+        px.b = rgb1 + intp(vhDisc, hEst, vEst);
+    }
+    storeRgb(ij, px);
+}

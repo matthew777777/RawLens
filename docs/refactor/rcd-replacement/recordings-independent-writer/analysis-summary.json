@@ -1,0 +1,13 @@
+[
+  {
+    "mode": "1920x1080-30-writer-probe",
+    "passed": false,
+    "fps": 9.317822463652385,
+    "render_ms": {
+      "median": 104.4866155,
+      "p95": 111.936847,
+      "max": 145.030462
+    },
+    "error": null
+  }
+]

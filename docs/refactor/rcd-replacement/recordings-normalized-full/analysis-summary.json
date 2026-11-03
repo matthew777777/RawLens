@@ -1,0 +1,13 @@
+[
+  {
+    "mode": "1920x1080-30-normalized-full",
+    "passed": false,
+    "fps": 2.30055168195565,
+    "render_ms": {
+      "median": 416.854923,
+      "p95": 476.028615,
+      "max": 1254.073769
+    },
+    "error": null
+  }
+]

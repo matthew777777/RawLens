@@ -1,0 +1,1 @@
+PASS: 63488 finite-half round trips, adjacent-half midpoint rounding, odd RAW16 crops/padded pixel and row strides, per-site black levels, seven invalid inputs, correction order and invalid shading

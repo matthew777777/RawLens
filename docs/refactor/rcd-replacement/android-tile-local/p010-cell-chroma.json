@@ -1,0 +1,326 @@
+{
+  "passed": true,
+  "cases": [
+    {
+      "profile": "BT709",
+      "full_rgb": 0,
+      "row_phase": 0,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "BT709",
+      "full_rgb": 0,
+      "row_phase": 0,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "BT709",
+      "full_rgb": 1,
+      "row_phase": 0,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "BT709",
+      "full_rgb": 1,
+      "row_phase": 0,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "SLOG3",
+      "full_rgb": 0,
+      "row_phase": 0,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "SLOG3",
+      "full_rgb": 0,
+      "row_phase": 0,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "SLOG3",
+      "full_rgb": 1,
+      "row_phase": 0,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "SLOG3",
+      "full_rgb": 1,
+      "row_phase": 0,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "HLG",
+      "full_rgb": 0,
+      "row_phase": 0,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "HLG",
+      "full_rgb": 0,
+      "row_phase": 0,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "HLG",
+      "full_rgb": 1,
+      "row_phase": 0,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "HLG",
+      "full_rgb": 1,
+      "row_phase": 0,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "ACES",
+      "full_rgb": 0,
+      "row_phase": 0,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "ACES",
+      "full_rgb": 0,
+      "row_phase": 0,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "ACES",
+      "full_rgb": 1,
+      "row_phase": 0,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "ACES",
+      "full_rgb": 1,
+      "row_phase": 0,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "BT709",
+      "full_rgb": 0,
+      "row_phase": 1,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "BT709",
+      "full_rgb": 0,
+      "row_phase": 1,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "BT709",
+      "full_rgb": 1,
+      "row_phase": 1,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "BT709",
+      "full_rgb": 1,
+      "row_phase": 1,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "SLOG3",
+      "full_rgb": 0,
+      "row_phase": 1,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "SLOG3",
+      "full_rgb": 0,
+      "row_phase": 1,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "SLOG3",
+      "full_rgb": 1,
+      "row_phase": 1,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "SLOG3",
+      "full_rgb": 1,
+      "row_phase": 1,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "HLG",
+      "full_rgb": 0,
+      "row_phase": 1,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "HLG",
+      "full_rgb": 0,
+      "row_phase": 1,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "HLG",
+      "full_rgb": 1,
+      "row_phase": 1,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "HLG",
+      "full_rgb": 1,
+      "row_phase": 1,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "ACES",
+      "full_rgb": 0,
+      "row_phase": 1,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "ACES",
+      "full_rgb": 0,
+      "row_phase": 1,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "ACES",
+      "full_rgb": 1,
+      "row_phase": 1,
+      "output": [
+        34,
+        26
+      ],
+      "max_code_error": 0
+    },
+    {
+      "profile": "ACES",
+      "full_rgb": 1,
+      "row_phase": 1,
+      "output": [
+        22,
+        18
+      ],
+      "max_code_error": 0
+    }
+  ],
+  "scope": "32 alternating-row cases; both luma rows and four-pixel chroma; profiles, scaling and fullRGB\/superpixel"
+}

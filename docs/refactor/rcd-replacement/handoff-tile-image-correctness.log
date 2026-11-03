@@ -1,0 +1,156 @@
+Performing Streamed Install
+Success
+
+Performing Streamed Install
+Success
+
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest:
+INSTRUMENTATION_STATUS: test=recordingCandidateOracleDiagnostic
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=recordingCandidateOracleDiagnostic
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=chromaUsesBothRowsOfEachOutputCell
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=chromaUsesBothRowsOfEachOutputCell
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=canonicalBaselineAndOptimizedMatchPinnedOracle
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=canonicalBaselineAndOptimizedMatchPinnedOracle
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=packedIntegerInputMatchesValidatedAdapter
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stack=java.lang.IllegalStateException: Unsupported external storage image usage/import
+	at com.matthew.rawlens.PhotoRcdRenderer.renderNative(Native Method)
+	at com.matthew.rawlens.PhotoRcdRenderer.renderRawBuffer$app(PhotoRcdRenderer.kt:57)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.packedIntegerInputMatchesValidatedAdapter(PhotoRcdCorrectnessDeviceTest.kt:162)
+
+INSTRUMENTATION_STATUS: stream=
+Error in packedIntegerInputMatchesValidatedAdapter(com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest):
+java.lang.IllegalStateException: Unsupported external storage image usage/import
+	at com.matthew.rawlens.PhotoRcdRenderer.renderNative(Native Method)
+	at com.matthew.rawlens.PhotoRcdRenderer.renderRawBuffer$app(PhotoRcdRenderer.kt:57)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.packedIntegerInputMatchesValidatedAdapter(PhotoRcdCorrectnessDeviceTest.kt:162)
+
+INSTRUMENTATION_STATUS: test=packedIntegerInputMatchesValidatedAdapter
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=rawAdapterCorrectionsAndGradeOwnership
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stack=java.lang.IllegalStateException: Unsupported external storage image usage/import
+	at com.matthew.rawlens.PhotoRcdRenderer.renderNative(Native Method)
+	at com.matthew.rawlens.PhotoRcdRenderer.renderRawBuffer$app(PhotoRcdRenderer.kt:57)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.adapterCheck(PhotoRcdCorrectnessDeviceTest.kt:290)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.rawAdapterCorrectionsAndGradeOwnership(PhotoRcdCorrectnessDeviceTest.kt:121)
+
+INSTRUMENTATION_STATUS: stream=
+Error in rawAdapterCorrectionsAndGradeOwnership(com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest):
+java.lang.IllegalStateException: Unsupported external storage image usage/import
+	at com.matthew.rawlens.PhotoRcdRenderer.renderNative(Native Method)
+	at com.matthew.rawlens.PhotoRcdRenderer.renderRawBuffer$app(PhotoRcdRenderer.kt:57)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.adapterCheck(PhotoRcdCorrectnessDeviceTest.kt:290)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.rawAdapterCorrectionsAndGradeOwnership(PhotoRcdCorrectnessDeviceTest.kt:121)
+
+INSTRUMENTATION_STATUS: test=rawAdapterCorrectionsAndGradeOwnership
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=6
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=recordedLutThroughSeparateVulkanGrade
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest
+INSTRUMENTATION_STATUS: current=6
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=6
+INSTRUMENTATION_STATUS: stack=java.lang.IllegalStateException: Unsupported external storage image usage/import
+	at com.matthew.rawlens.PhotoRcdRenderer.renderNative(Native Method)
+	at com.matthew.rawlens.PhotoRcdRenderer.renderRawBuffer$app(PhotoRcdRenderer.kt:57)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.adapterCheck(PhotoRcdCorrectnessDeviceTest.kt:290)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.recordedLutThroughSeparateVulkanGrade(PhotoRcdCorrectnessDeviceTest.kt:128)
+
+INSTRUMENTATION_STATUS: stream=
+Error in recordedLutThroughSeparateVulkanGrade(com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest):
+java.lang.IllegalStateException: Unsupported external storage image usage/import
+	at com.matthew.rawlens.PhotoRcdRenderer.renderNative(Native Method)
+	at com.matthew.rawlens.PhotoRcdRenderer.renderRawBuffer$app(PhotoRcdRenderer.kt:57)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.adapterCheck(PhotoRcdCorrectnessDeviceTest.kt:290)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.recordedLutThroughSeparateVulkanGrade(PhotoRcdCorrectnessDeviceTest.kt:128)
+
+INSTRUMENTATION_STATUS: test=recordedLutThroughSeparateVulkanGrade
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 24.066
+There were 3 failures:
+1) packedIntegerInputMatchesValidatedAdapter(com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest)
+java.lang.IllegalStateException: Unsupported external storage image usage/import
+	at com.matthew.rawlens.PhotoRcdRenderer.renderNative(Native Method)
+	at com.matthew.rawlens.PhotoRcdRenderer.renderRawBuffer$app(PhotoRcdRenderer.kt:57)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.packedIntegerInputMatchesValidatedAdapter(PhotoRcdCorrectnessDeviceTest.kt:162)
+2) rawAdapterCorrectionsAndGradeOwnership(com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest)
+java.lang.IllegalStateException: Unsupported external storage image usage/import
+	at com.matthew.rawlens.PhotoRcdRenderer.renderNative(Native Method)
+	at com.matthew.rawlens.PhotoRcdRenderer.renderRawBuffer$app(PhotoRcdRenderer.kt:57)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.adapterCheck(PhotoRcdCorrectnessDeviceTest.kt:290)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.rawAdapterCorrectionsAndGradeOwnership(PhotoRcdCorrectnessDeviceTest.kt:121)
+3) recordedLutThroughSeparateVulkanGrade(com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest)
+java.lang.IllegalStateException: Unsupported external storage image usage/import
+	at com.matthew.rawlens.PhotoRcdRenderer.renderNative(Native Method)
+	at com.matthew.rawlens.PhotoRcdRenderer.renderRawBuffer$app(PhotoRcdRenderer.kt:57)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.adapterCheck(PhotoRcdCorrectnessDeviceTest.kt:290)
+	at com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest.recordedLutThroughSeparateVulkanGrade(PhotoRcdCorrectnessDeviceTest.kt:128)
+
+FAILURES!!!
+Tests run: 6,  Failures: 3
+
+
+INSTRUMENTATION_CODE: -1
+

@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/1920x1080-30-approximate-scale4.mp4: 1 file pulled, 0 skipped. 34.8 MB/s (67701081 bytes in 1.857s)

@@ -1,0 +1,13 @@
+[
+  {
+    "mode": "3840x2160-24-writer-fence",
+    "passed": false,
+    "fps": 9.442425167101069,
+    "render_ms": {
+      "median": 102.644692,
+      "p95": 110.77023,
+      "max": 136.38
+    },
+    "error": null
+  }
+]

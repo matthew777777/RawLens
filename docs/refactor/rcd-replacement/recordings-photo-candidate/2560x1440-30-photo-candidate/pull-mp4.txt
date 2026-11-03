@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/2560x1440-30-photo-candidate.mp4: 1 file pulled, 0 skipped. 32.4 MB/s (9679932 bytes in 0.285s)

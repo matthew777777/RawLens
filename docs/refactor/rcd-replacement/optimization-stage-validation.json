@@ -1,0 +1,1111 @@
+{
+  "scope": "Exact layout/scheduling equivalence on host GPU; no Android fps claim",
+  "baseline_report_sha256": "97bb346d7ab3ff2955c8afed36335ef3d3c3fe58d27fb5bfa7f9f2b0d52a6310",
+  "variants": {
+    "scalar": {
+      "source_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309",
+      "spirv_sha256": "d4415f73e35626b717c085117b2f632dcb941d78d9a169d659f9698db542aace"
+    },
+    "packed": {
+      "source_sha256": "906f5cb7f7e3c786377117569d0eee7b30a10b34a7ee8df95a696b5e554f560e",
+      "spirv_sha256": "36a2b09430a4d588f08d6d5240504a7ae40e9620a8bcd0a59849c362d0b7cdcd"
+    },
+    "tiled": {
+      "source_sha256": "fee9085ada0d44b48b6293fc2d43431fc34b51f50be643f162ed342b7719b022",
+      "spirv_sha256": "ad1dae012dbbe9b752a9a30104dba43e30a8a08bad2e80dd2875a4f1559ae1ce"
+    },
+    "tiled-capture": {
+      "source_sha256": "30cd35027658289949b6d873d5e47bf72554c49c8c7bb18fdf6a71446264fd78",
+      "spirv_sha256": "5065cbdb4759ce91a72946eb2c47386d1cb96142a5c8dfc1b180e4b41e9e3a17"
+    },
+    "tiled-packed": {
+      "source_sha256": "a8dd31a1891046612274c1a68c122bfda51301ee2530ddbfb09dcecf4b281c05",
+      "spirv_sha256": "34dd3d6da5149db74fb834313b24ac019b3fa5b42e70236c627828fa7bed150e"
+    },
+    "tiled-packed-capture": {
+      "source_sha256": "4c0b04235db77ffe3d02a17c29a0654f27a783d3cd4d6434e212e1e500f41393",
+      "spirv_sha256": "8aa698b69f5631d37188c85423ca09c74da16bca8cdae840c8994e267407f5a9"
+    },
+    "cached": {
+      "source_sha256": "ff081c9253292238bd3793d45e2337b221ad953de420b4e15f9f93aaaefa0ca9",
+      "spirv_sha256": "e1efef0e252777e22ef1aea99b61f43fed774614185add8e8b607c9804641ba6"
+    },
+    "cached-packed": {
+      "source_sha256": "65821916875077831efc973b1fc61d8c15c8a0159492f02a91a59a046238f9b9",
+      "spirv_sha256": "98b73fc6277fac1803315331edc066c1813b7144c7d4694da40885301248f4f9"
+    },
+    "tiled-cached": {
+      "source_sha256": "fb132a792e7b317a58d8c16712c9b88b121831cd73935dbfd1017d0896fd5669",
+      "spirv_sha256": "829ab4d4b671dbb664c0abc66c808af3bee31c56a2df14ce769ecd5cff689e9a"
+    },
+    "tiled-cached-capture": {
+      "source_sha256": "59a2c7a2ad35132a6b2b707607798c070674566f76eb9f6d3bdd7d8f0d8b5fe7",
+      "spirv_sha256": "44a7c82afeb7a99e36cd5e9b00e58000facfcdaf2ed6fdb7ecab035dc2f83d07"
+    },
+    "direct": {
+      "source_sha256": "e42514d4789af75ac99bb93a565162349de0e5bafef8b4d6e16c683fc74aaefd",
+      "spirv_sha256": "21b00aebba949f86f9e544b8dd72805ada20c828a8901d6c4c18ed70262e5f68"
+    },
+    "direct-packed": {
+      "source_sha256": "99e4dcffcaf9d6375c06bb717ed9d1248b7fa2cf9c4caa07202fdd8f9526ed17",
+      "spirv_sha256": "7ea0739a22aad8ee44086a376194522edb716c501a9a19841f9120b598c1b89d"
+    },
+    "direct-specialized": {
+      "source_sha256": "82308bff71cb48c0cb63c7cfdb6ef5a7e850595138e4d2dc2bf2afbe4a2bc3d5",
+      "spirv_sha256": "76ab01c0c41f538d0085b92b60d3f456630762edce6345b71147df0750ca689a"
+    },
+    "direct-packed-specialized": {
+      "source_sha256": "1cf5f0628c28100435708282615e319dfd6703aa031924c3ddfeb2d96da9bda7",
+      "spirv_sha256": "14b730a20f5d6b22275be749b2dbfbed6e4097130ab7d11bcffbaf646da44169"
+    }
+  },
+  "case_count": 55,
+  "all_exact": true,
+  "cases": [
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ae796e0fc56ed0e520d5772b377a40579364d32ae083e7d87db688f6dd07db9c",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ae796e0fc56ed0e520d5772b377a40579364d32ae083e7d87db688f6dd07db9c",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ae796e0fc56ed0e520d5772b377a40579364d32ae083e7d87db688f6dd07db9c",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ae796e0fc56ed0e520d5772b377a40579364d32ae083e7d87db688f6dd07db9c",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ae796e0fc56ed0e520d5772b377a40579364d32ae083e7d87db688f6dd07db9c",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6f8058417a66d682e84b07bc13ca85ce0915e3ff3076569c32b345220609f7f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6f8058417a66d682e84b07bc13ca85ce0915e3ff3076569c32b345220609f7f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6f8058417a66d682e84b07bc13ca85ce0915e3ff3076569c32b345220609f7f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6f8058417a66d682e84b07bc13ca85ce0915e3ff3076569c32b345220609f7f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6f8058417a66d682e84b07bc13ca85ce0915e3ff3076569c32b345220609f7f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "7b81628adc0aa676b9522afdbb68b65e424a6b8fb0e71de73243516599e61fc9",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "7b81628adc0aa676b9522afdbb68b65e424a6b8fb0e71de73243516599e61fc9",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "7b81628adc0aa676b9522afdbb68b65e424a6b8fb0e71de73243516599e61fc9",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "7b81628adc0aa676b9522afdbb68b65e424a6b8fb0e71de73243516599e61fc9",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "7b81628adc0aa676b9522afdbb68b65e424a6b8fb0e71de73243516599e61fc9",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6e97e71fc535d1a2903e81c2be079d953d886f4d747c5185aa32ad3b8fe4788a",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6e97e71fc535d1a2903e81c2be079d953d886f4d747c5185aa32ad3b8fe4788a",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6e97e71fc535d1a2903e81c2be079d953d886f4d747c5185aa32ad3b8fe4788a",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6e97e71fc535d1a2903e81c2be079d953d886f4d747c5185aa32ad3b8fe4788a",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "6e97e71fc535d1a2903e81c2be079d953d886f4d747c5185aa32ad3b8fe4788a",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "a45ba1479b3978743ba4f33005d323abbe07c1c8c9eabfdc135b8f864d4d19b8",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "a45ba1479b3978743ba4f33005d323abbe07c1c8c9eabfdc135b8f864d4d19b8",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "a45ba1479b3978743ba4f33005d323abbe07c1c8c9eabfdc135b8f864d4d19b8",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "a45ba1479b3978743ba4f33005d323abbe07c1c8c9eabfdc135b8f864d4d19b8",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "a45ba1479b3978743ba4f33005d323abbe07c1c8c9eabfdc135b8f864d4d19b8",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ebd542b62c63003b481004b6af4383a0b5434825001fdf1ac09e812147664609",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ebd542b62c63003b481004b6af4383a0b5434825001fdf1ac09e812147664609",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ebd542b62c63003b481004b6af4383a0b5434825001fdf1ac09e812147664609",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ebd542b62c63003b481004b6af4383a0b5434825001fdf1ac09e812147664609",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "ebd542b62c63003b481004b6af4383a0b5434825001fdf1ac09e812147664609",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "bd180aac6d8c39b6e56f24f722464c794f482050b751b057fcf58f2e3602deff",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "bd180aac6d8c39b6e56f24f722464c794f482050b751b057fcf58f2e3602deff",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "bd180aac6d8c39b6e56f24f722464c794f482050b751b057fcf58f2e3602deff",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "bd180aac6d8c39b6e56f24f722464c794f482050b751b057fcf58f2e3602deff",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "bd180aac6d8c39b6e56f24f722464c794f482050b751b057fcf58f2e3602deff",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "8f692155da03d05816a2ebd3d0cf8ba336233e0f28bae1ef4b04ce649b54dfa7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "8f692155da03d05816a2ebd3d0cf8ba336233e0f28bae1ef4b04ce649b54dfa7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "8f692155da03d05816a2ebd3d0cf8ba336233e0f28bae1ef4b04ce649b54dfa7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "8f692155da03d05816a2ebd3d0cf8ba336233e0f28bae1ef4b04ce649b54dfa7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        194,
+        195
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "8f692155da03d05816a2ebd3d0cf8ba336233e0f28bae1ef4b04ce649b54dfa7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "RGGB",
+      "fixture": "ricoh-gr-iii-0.f32",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "45d24ef9b2784146c4c74b9604900ef6901ad6b5aeb7953985a463a3dfac5af7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "RGGB",
+      "fixture": "ricoh-gr-iii-0.f32",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "45d24ef9b2784146c4c74b9604900ef6901ad6b5aeb7953985a463a3dfac5af7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "RGGB",
+      "fixture": "ricoh-gr-iii-0.f32",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "45d24ef9b2784146c4c74b9604900ef6901ad6b5aeb7953985a463a3dfac5af7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "RGGB",
+      "fixture": "ricoh-gr-iii-0.f32",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "45d24ef9b2784146c4c74b9604900ef6901ad6b5aeb7953985a463a3dfac5af7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "RGGB",
+      "fixture": "ricoh-gr-iii-0.f32",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "45d24ef9b2784146c4c74b9604900ef6901ad6b5aeb7953985a463a3dfac5af7",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "BGGR",
+      "fixture": "ricoh-gr-iii-1.f32",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "5485f0c4da2457d20801c5fde7196e4002e2b6d95269dd63f1dc55d0c49940f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "BGGR",
+      "fixture": "ricoh-gr-iii-1.f32",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "5485f0c4da2457d20801c5fde7196e4002e2b6d95269dd63f1dc55d0c49940f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "BGGR",
+      "fixture": "ricoh-gr-iii-1.f32",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "5485f0c4da2457d20801c5fde7196e4002e2b6d95269dd63f1dc55d0c49940f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "BGGR",
+      "fixture": "ricoh-gr-iii-1.f32",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "5485f0c4da2457d20801c5fde7196e4002e2b6d95269dd63f1dc55d0c49940f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "BGGR",
+      "fixture": "ricoh-gr-iii-1.f32",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "5485f0c4da2457d20801c5fde7196e4002e2b6d95269dd63f1dc55d0c49940f1",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "GBRG",
+      "fixture": "ricoh-gr-iii-2.f32",
+      "variant": "packed",
+      "exact_rgba_match": true,
+      "rgba_sha256": "e399f0201c448b7d60a058a052350d08d3e52b910840bbac497b62247eecd70b",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "GBRG",
+      "fixture": "ricoh-gr-iii-2.f32",
+      "variant": "tiled-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "e399f0201c448b7d60a058a052350d08d3e52b910840bbac497b62247eecd70b",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "GBRG",
+      "fixture": "ricoh-gr-iii-2.f32",
+      "variant": "tiled-packed-capture",
+      "exact_rgba_match": true,
+      "rgba_sha256": "e399f0201c448b7d60a058a052350d08d3e52b910840bbac497b62247eecd70b",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "GBRG",
+      "fixture": "ricoh-gr-iii-2.f32",
+      "variant": "direct-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "e399f0201c448b7d60a058a052350d08d3e52b910840bbac497b62247eecd70b",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    },
+    {
+      "size": [
+        97,
+        95
+      ],
+      "cfa": "GBRG",
+      "fixture": "ricoh-gr-iii-2.f32",
+      "variant": "direct-packed-specialized",
+      "exact_rgba_match": true,
+      "rgba_sha256": "e399f0201c448b7d60a058a052350d08d3e52b910840bbac497b62247eecd70b",
+      "device": "host device: Apple M1 driver 10402",
+      "stage_bytes_exact": {
+        "vh": true,
+        "lpf": true,
+        "pq": true,
+        "green": true,
+        "opposite_r": true
+      }
+    }
+  ]
+}

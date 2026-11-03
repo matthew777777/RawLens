@@ -1,0 +1,1184 @@
+{
+  "scope": "Authorized headless phone diagnostics under uncontrolled workload; no 10-minute soak or qualified performance/approximate-quality acceptance",
+  "device": "Xiaomi 25080RABDG",
+  "serial": "fe79feha9lmb6hhi",
+  "reference": "Pinned RawTherapee public-source baseline; approximate modes explicitly reduce source detail while covering the full crop",
+  "mandatory_targets": [
+    "1920x1080@30",
+    "2560x1440@30",
+    "3840x2160@24"
+  ],
+  "targets_accepted": false,
+  "runs": [
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-requirements-input/1920x1080-30-requirements-input/analysis.json",
+      "requested": [
+        1920,
+        1080,
+        30
+      ],
+      "scale": 1,
+      "encoder_owned_output_requested": false,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "FULL rung, existing 16:9 crop/FOV, full-source RCD; no detail reduction",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": null,
+      "delivered_sensor_fps": 0.606129162942445,
+      "render_wall_ms": {
+        "median": 1448.953538,
+        "p95": 1560.661154,
+        "max": 1842.560847
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 476992,
+        "audioChunks": 697,
+        "audioDropped": 20,
+        "audioFrames": 1427456,
+        "audioOutBufs": 1396,
+        "copyMsAvg": 6.4803553,
+        "copyMsMax": 13.168615,
+        "cpuChainMsAvg": 1513.2418,
+        "cpuChainMsMax": 1875.7231,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 1881.9507,
+        "cycleOverBudget": 20,
+        "degradedFrames": 0,
+        "exportSize": "1920x1080",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 9.209867,
+        "fenceWaitMsMax": 14.352077,
+        "fileBytes": 6864977,
+        "frameErrors": 0,
+        "framesAcquired": 21,
+        "framesDropped": 4,
+        "framesGraded": 20,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 21,
+        "outputBytes": 6377172,
+        "overBudgetFrames": 20,
+        "previewFrames": 0,
+        "previewSkipped": 20,
+        "profile": "BT709",
+        "rcdFrames": 20,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 20,
+        "stabGyroSamples": 0,
+        "staleResults": 20,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 20
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.002385,
+          "p95_ms": 0.005538
+        },
+        "RCD-engine-ns": {
+          "median_ms": 1422.372885,
+          "p95_ms": 1488.762154
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 20.701999999999998,
+          "p95_ms": 33.636615
+        },
+        "GPU-guides-ns": {
+          "median_ms": 610.3267965,
+          "p95_ms": 625.622567
+        },
+        "GPU-green-ns": {
+          "median_ms": 137.134352,
+          "p95_ms": 137.804929
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 92.4308495,
+          "p95_ms": 92.44985
+        },
+        "GPU-final-ns": {
+          "median_ms": 483.19705999999996,
+          "p95_ms": 494.636945
+        },
+        "GPU-border-ns": {
+          "median_ms": 1.765384,
+          "p95_ms": 1.78023
+        },
+        "GPU-product-ns": {
+          "median_ms": 24.757808500000003,
+          "p95_ms": 28.052001
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 4.7827304999999996,
+          "p95_ms": 9.169769
+        }
+      },
+      "recording_sha256": "a4bb91604be4417cfe32cb66f71bacbbc5274514f721ca0cfa4171656a41d791",
+      "recording_bytes": 6864977,
+      "source_report_sha256": "09743584c4f9b314479f53e6831d4c623533040946c5143cede9719ad31eca85"
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-requirements-input/2560x1440-30-requirements-input/analysis.json",
+      "requested": [
+        2560,
+        1440,
+        30
+      ],
+      "scale": 1,
+      "encoder_owned_output_requested": false,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "FULL rung, existing 16:9 crop/FOV, full-source RCD; no detail reduction",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": null,
+      "delivered_sensor_fps": 0.6917204947703769,
+      "render_wall_ms": {
+        "median": 1637.7266155000002,
+        "p95": 1937.554154,
+        "max": 1937.554154
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 476955,
+        "audioChunks": 697,
+        "audioDropped": 16,
+        "audioFrames": 1427456,
+        "audioOutBufs": 1396,
+        "copyMsAvg": 11.302752,
+        "copyMsMax": 17.438768,
+        "cpuChainMsAvg": 1689.479,
+        "cpuChainMsMax": 1958.5643,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 1963.9064,
+        "cycleOverBudget": 18,
+        "degradedFrames": 0,
+        "exportSize": "2560x1440",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 13.995365,
+        "fenceWaitMsMax": 27.348925,
+        "fileBytes": 8842859,
+        "frameErrors": 0,
+        "framesAcquired": 19,
+        "framesDropped": 3,
+        "framesGraded": 18,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 19,
+        "outputBytes": 8355143,
+        "overBudgetFrames": 18,
+        "previewFrames": 0,
+        "previewSkipped": 18,
+        "profile": "BT709",
+        "rcdFrames": 18,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 18,
+        "stabGyroSamples": 0,
+        "staleResults": 18,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 18
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.003077,
+          "p95_ms": 0.004923
+        },
+        "RCD-engine-ns": {
+          "median_ms": 1590.66773,
+          "p95_ms": 1801.138539
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 24.654654,
+          "p95_ms": 49.755769
+        },
+        "GPU-guides-ns": {
+          "median_ms": 662.122799,
+          "p95_ms": 771.039419
+        },
+        "GPU-green-ns": {
+          "median_ms": 139.82892900000002,
+          "p95_ms": 174.107161
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 92.743965,
+          "p95_ms": 117.332005
+        },
+        "GPU-final-ns": {
+          "median_ms": 531.4023315,
+          "p95_ms": 666.913799
+        },
+        "GPU-border-ns": {
+          "median_ms": 1.798384,
+          "p95_ms": 4.205615
+        },
+        "GPU-product-ns": {
+          "median_ms": 27.516193,
+          "p95_ms": 64.467695
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 7.0507305,
+          "p95_ms": 13.068
+        }
+      },
+      "recording_sha256": "5b7ec3300e4f8a8beb843cc5dc09abbeb1e2197560963b5806487159195d5272",
+      "recording_bytes": 8842859,
+      "source_report_sha256": "70ea5bea5bdff243bffc9edd7acf5d313d6ecd987523bbb292f902e166da0e02"
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-requirements-input/3840x2160-24-requirements-input/analysis.json",
+      "requested": [
+        3840,
+        2160,
+        24
+      ],
+      "scale": 1,
+      "encoder_owned_output_requested": false,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "FULL rung, existing 16:9 crop/FOV, full-source RCD; no detail reduction",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": null,
+      "delivered_sensor_fps": 0.5537984760573537,
+      "render_wall_ms": {
+        "median": 1806.4459615,
+        "p95": 1976.046769,
+        "max": 1976.046769
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 485775,
+        "audioChunks": 710,
+        "audioDropped": 16,
+        "audioFrames": 1454080,
+        "audioOutBufs": 1422,
+        "copyMsAvg": 14.393115,
+        "copyMsMax": 20.41254,
+        "cpuChainMsAvg": 1844.1194,
+        "cpuChainMsMax": 1988.7853,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 2002.4988,
+        "cycleOverBudget": 17,
+        "degradedFrames": 0,
+        "exportSize": "3840x2160",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 19.317871,
+        "fenceWaitMsMax": 24.239,
+        "fileBytes": 12192888,
+        "frameErrors": 1,
+        "framesAcquired": 18,
+        "framesDropped": 4,
+        "framesGraded": 16,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 17,
+        "outputBytes": 11696292,
+        "overBudgetFrames": 16,
+        "previewFrames": 0,
+        "previewSkipped": 16,
+        "profile": "BT709",
+        "rcdFrames": 16,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 16,
+        "stabGyroSamples": 0,
+        "staleResults": 17,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 16
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.003154,
+          "p95_ms": 0.005538
+        },
+        "RCD-engine-ns": {
+          "median_ms": 1774.7561540000002,
+          "p95_ms": 1873.841231
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 19.996807500000003,
+          "p95_ms": 31.905538
+        },
+        "GPU-guides-ns": {
+          "median_ms": 768.4822655,
+          "p95_ms": 809.156575
+        },
+        "GPU-green-ns": {
+          "median_ms": 173.91808450000002,
+          "p95_ms": 176.253546
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 117.3073895,
+          "p95_ms": 118.649005
+        },
+        "GPU-final-ns": {
+          "median_ms": 613.275451,
+          "p95_ms": 636.048336
+        },
+        "GPU-border-ns": {
+          "median_ms": 2.237538,
+          "p95_ms": 3.280615
+        },
+        "GPU-product-ns": {
+          "median_ms": 24.372654500000003,
+          "p95_ms": 28.374385
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 4.845845499999999,
+          "p95_ms": 9.760923
+        }
+      },
+      "recording_sha256": "afd4c7e0489d2b5a90c1a10bf370e71b78829723de2c1f1c7614ebb65cce909b",
+      "recording_bytes": 12192888,
+      "source_report_sha256": "3e1b31a775c6493cb5fda4222d72fac66e0d561bc5bab42f41f9cdf5a7eccd9a"
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-approximate-scale4/1920x1080-30-approximate-scale4/analysis.json",
+      "requested": [
+        1920,
+        1080,
+        30
+      ],
+      "scale": 4,
+      "encoder_owned_output_requested": false,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "Approximate RCD: full crop/FOV, Bayer-cell area reduction before reconstruction; reduced fine detail",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": false,
+      "delivered_sensor_fps": 7.73791529182751,
+      "render_wall_ms": {
+        "median": 126.2928845,
+        "p95": 136.325616,
+        "max": 190.165154
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 474781,
+        "audioChunks": 694,
+        "audioDropped": 19,
+        "audioFrames": 1421312,
+        "audioOutBufs": 1390,
+        "copyMsAvg": 6.94485,
+        "copyMsMax": 16.395462,
+        "cpuChainMsAvg": 127.3805,
+        "cpuChainMsMax": 195.8643,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 202.47177,
+        "cycleOverBudget": 228,
+        "degradedFrames": 0,
+        "exportSize": "1920x1080",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 6.3477283,
+        "fenceWaitMsMax": 15.121538,
+        "fileBytes": 67701081,
+        "frameErrors": 0,
+        "framesAcquired": 229,
+        "framesDropped": 37,
+        "framesGraded": 228,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 229,
+        "outputBytes": 67212827,
+        "overBudgetFrames": 228,
+        "previewFrames": 0,
+        "previewSkipped": 228,
+        "profile": "BT709",
+        "rcdFrames": 228,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 228,
+        "stabGyroSamples": 0,
+        "staleResults": 228,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 228
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.002154,
+          "p95_ms": 0.003308
+        },
+        "RCD-engine-ns": {
+          "median_ms": 123.8051155,
+          "p95_ms": 133.398692
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 1.567769,
+          "p95_ms": 2.286846
+        },
+        "GPU-guides-ns": {
+          "median_ms": 47.2959635,
+          "p95_ms": 50.66031
+        },
+        "GPU-green-ns": {
+          "median_ms": 10.921730499999999,
+          "p95_ms": 10.979462
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 7.34,
+          "p95_ms": 7.357154
+        },
+        "GPU-final-ns": {
+          "median_ms": 37.399309,
+          "p95_ms": 38.119694
+        },
+        "GPU-border-ns": {
+          "median_ms": 0.413692,
+          "p95_ms": 0.425846
+        },
+        "GPU-product-ns": {
+          "median_ms": 1.887192,
+          "p95_ms": 2.601538
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 4.0300765,
+          "p95_ms": 5.584615
+        }
+      },
+      "recording_sha256": "5d8b871b7c4308d33d59e98053f143ebe776202d8063cc6392a1b1ae7ca0d74f",
+      "recording_bytes": 67701081,
+      "source_report_sha256": "f7a3ac1f2af9b49c9e02d862d3a31189fd5b0bd42398e1c006a3a8d2ead4f0fb"
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-approximate-scale4/2560x1440-30-approximate-scale4/analysis.json",
+      "requested": [
+        2560,
+        1440,
+        30
+      ],
+      "scale": 4,
+      "encoder_owned_output_requested": false,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "Approximate RCD: full crop/FOV, Bayer-cell area reduction before reconstruction; reduced fine detail",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": false,
+      "delivered_sensor_fps": 7.955442551230114,
+      "render_wall_ms": {
+        "median": 123.5619615,
+        "p95": 133.843384,
+        "max": 180.218385
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 476188,
+        "audioChunks": 696,
+        "audioDropped": 15,
+        "audioFrames": 1425408,
+        "audioOutBufs": 1394,
+        "copyMsAvg": 9.008677,
+        "copyMsMax": 19.491615,
+        "cpuChainMsAvg": 125.369514,
+        "cpuChainMsMax": 180.65631,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 181.09915,
+        "cycleOverBudget": 234,
+        "degradedFrames": 0,
+        "exportSize": "2560x1440",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 9.699866,
+        "fenceWaitMsMax": 18.642076,
+        "fileBytes": 94991161,
+        "frameErrors": 0,
+        "framesAcquired": 235,
+        "framesDropped": 39,
+        "framesGraded": 234,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 235,
+        "outputBytes": 94501432,
+        "overBudgetFrames": 234,
+        "previewFrames": 0,
+        "previewSkipped": 234,
+        "profile": "BT709",
+        "rcdFrames": 234,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 234,
+        "stabGyroSamples": 0,
+        "staleResults": 234,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 234
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.002423,
+          "p95_ms": 0.003692
+        },
+        "RCD-engine-ns": {
+          "median_ms": 121.310923,
+          "p95_ms": 131.500539
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 1.468462,
+          "p95_ms": 2.164846
+        },
+        "GPU-guides-ns": {
+          "median_ms": 44.438771,
+          "p95_ms": 49.56554
+        },
+        "GPU-green-ns": {
+          "median_ms": 10.919269499999999,
+          "p95_ms": 11.000077
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 7.3398845,
+          "p95_ms": 7.597231
+        },
+        "GPU-final-ns": {
+          "median_ms": 37.4094245,
+          "p95_ms": 39.142386
+        },
+        "GPU-border-ns": {
+          "median_ms": 0.414923,
+          "p95_ms": 0.446846
+        },
+        "GPU-product-ns": {
+          "median_ms": 1.838692,
+          "p95_ms": 2.589538
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 3.4519615000000003,
+          "p95_ms": 4.335384
+        }
+      },
+      "recording_sha256": "6a3fab9534b5cfe22cab2fddd64ee8b63425f44f7e215f9195312b3e07d037a9",
+      "recording_bytes": 94991161,
+      "source_report_sha256": "877dbe33557c2b3bddf852d3dd0fffcda408f10ee3e2f7e537d3f12294ff2175"
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-approximate-scale4/3840x2160-24-approximate-scale4/analysis.json",
+      "requested": [
+        3840,
+        2160,
+        24
+      ],
+      "scale": 4,
+      "encoder_owned_output_requested": false,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "Approximate RCD: full crop/FOV, Bayer-cell area reduction before reconstruction; reduced fine detail",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": false,
+      "delivered_sensor_fps": 6.5072752842249955,
+      "render_wall_ms": {
+        "median": 127.429,
+        "p95": 135.580307,
+        "max": 181.860616
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 475668,
+        "audioChunks": 695,
+        "audioDropped": 16,
+        "audioFrames": 1423360,
+        "audioOutBufs": 1392,
+        "copyMsAvg": 12.526997,
+        "copyMsMax": 26.172232,
+        "cpuChainMsAvg": 126.940636,
+        "cpuChainMsMax": 182.25069,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 185.224,
+        "cycleOverBudget": 227,
+        "degradedFrames": 0,
+        "exportSize": "3840x2160",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 23.729563,
+        "fenceWaitMsMax": 83.281235,
+        "fileBytes": 144224819,
+        "frameErrors": 31,
+        "framesAcquired": 228,
+        "framesDropped": 69,
+        "framesGraded": 227,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 197,
+        "outputBytes": 143736198,
+        "overBudgetFrames": 227,
+        "previewFrames": 0,
+        "previewSkipped": 227,
+        "profile": "BT709",
+        "rcdFrames": 227,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 227,
+        "stabGyroSamples": 0,
+        "staleResults": 227,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 227
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.002461,
+          "p95_ms": 0.003692
+        },
+        "RCD-engine-ns": {
+          "median_ms": 124.766077,
+          "p95_ms": 133.493845
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 1.652923,
+          "p95_ms": 2.481846
+        },
+        "GPU-guides-ns": {
+          "median_ms": 43.483771,
+          "p95_ms": 46.656386
+        },
+        "GPU-green-ns": {
+          "median_ms": 10.919923,
+          "p95_ms": 11.031692
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 7.338384,
+          "p95_ms": 7.372384
+        },
+        "GPU-final-ns": {
+          "median_ms": 37.448309,
+          "p95_ms": 43.306463
+        },
+        "GPU-border-ns": {
+          "median_ms": 0.414692,
+          "p95_ms": 0.44123
+        },
+        "GPU-product-ns": {
+          "median_ms": 1.909615,
+          "p95_ms": 2.632307
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 3.079077,
+          "p95_ms": 3.933461
+        }
+      },
+      "recording_sha256": "f2e812eee758b0dd7859dc0733b54d94ff5e3a89f2138878def7bb9faa6ac6ee",
+      "recording_bytes": 144224819,
+      "source_report_sha256": "6ee451f2ae5a0706a2007147885576c6e39644fe78da55fe8ee1b32613f923c0"
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-independent-writer/1920x1080-30-writer-probe/analysis.json",
+      "requested": [
+        1920,
+        1080,
+        30
+      ],
+      "scale": 4,
+      "encoder_owned_output_requested": true,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "Approximate RCD: full crop/FOV, Bayer-cell area reduction before reconstruction; reduced fine detail",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": false,
+      "delivered_sensor_fps": 9.317822463652385,
+      "render_wall_ms": {
+        "median": 104.4866155,
+        "p95": 111.936847,
+        "max": 145.030462
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 476175,
+        "audioChunks": 696,
+        "audioDropped": 23,
+        "audioFrames": 1425408,
+        "audioOutBufs": 1394,
+        "copyMsAvg": 0,
+        "copyMsMax": 0,
+        "cpuChainMsAvg": 104.683075,
+        "cpuChainMsMax": 145.54701,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 151.53693,
+        "cycleOverBudget": 276,
+        "degradedFrames": 0,
+        "exportSize": "1920x1080",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 6.5342474,
+        "fenceWaitMsMax": 18.182692,
+        "fileBytes": 109286494,
+        "frameErrors": 0,
+        "framesAcquired": 277,
+        "framesDropped": 46,
+        "framesGraded": 276,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 277,
+        "outputBytes": 108796446,
+        "overBudgetFrames": 276,
+        "previewFrames": 0,
+        "previewSkipped": 276,
+        "profile": "BT709",
+        "rcdFrames": 276,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 276,
+        "stabGyroSamples": 0,
+        "staleResults": 276,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 276
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.0024615,
+          "p95_ms": 0.003923
+        },
+        "RCD-engine-ns": {
+          "median_ms": 101.949731,
+          "p95_ms": 109.369846
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 1.471385,
+          "p95_ms": 2.210769
+        },
+        "GPU-guides-ns": {
+          "median_ms": 38.501309000000006,
+          "p95_ms": 41.463463
+        },
+        "GPU-green-ns": {
+          "median_ms": 8.603538,
+          "p95_ms": 9.044
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 5.783692,
+          "p95_ms": 6.136615
+        },
+        "GPU-final-ns": {
+          "median_ms": 29.474000500000002,
+          "p95_ms": 30.101155
+        },
+        "GPU-border-ns": {
+          "median_ms": 0.3263455,
+          "p95_ms": 0.361461
+        },
+        "GPU-product-ns": {
+          "median_ms": 1.6078454999999998,
+          "p95_ms": 2.390769
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 3.0653075000000003,
+          "p95_ms": 3.905846
+        }
+      },
+      "recording_sha256": "b369d1e1df64ffc5c618848727abdc192ab1eead1c678deb84c5c851ed768c48",
+      "recording_bytes": 109286494,
+      "source_report_sha256": "d38ec8be7905afbb1f1120e19e3109dd9f1dd26631f27c4e992062dd7490fd3e"
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-independent-writer-final/1920x1080-30-writer-final/analysis.json",
+      "requested": [
+        1920,
+        1080,
+        30
+      ],
+      "scale": 4,
+      "encoder_owned_output_requested": true,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "Approximate RCD: full crop/FOV, Bayer-cell area reduction before reconstruction; reduced fine detail",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": false,
+      "delivered_sensor_fps": 9.32180825719737,
+      "render_wall_ms": {
+        "median": 104.49088499999999,
+        "p95": 113.413154,
+        "max": 148.826847
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 474895,
+        "audioChunks": 694,
+        "audioDropped": 15,
+        "audioFrames": 1421312,
+        "audioOutBufs": 1390,
+        "copyMsAvg": 0,
+        "copyMsMax": 0,
+        "cpuChainMsAvg": 107.38155,
+        "cpuChainMsMax": 149.4246,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 151.17299,
+        "cycleOverBudget": 274,
+        "degradedFrames": 0,
+        "exportSize": "1920x1080",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 5.7602906,
+        "fenceWaitMsMax": 12.408308,
+        "fileBytes": 121839519,
+        "frameErrors": 0,
+        "framesAcquired": 275,
+        "framesDropped": 45,
+        "framesGraded": 274,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 275,
+        "outputBytes": 121350431,
+        "overBudgetFrames": 274,
+        "previewFrames": 0,
+        "previewSkipped": 274,
+        "profile": "BT709",
+        "rcdFrames": 274,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 274,
+        "stabGyroSamples": 0,
+        "staleResults": 274,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 274
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.002154,
+          "p95_ms": 0.003077
+        },
+        "RCD-engine-ns": {
+          "median_ms": 102.134962,
+          "p95_ms": 110.071616
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 1.477077,
+          "p95_ms": 2.112
+        },
+        "GPU-guides-ns": {
+          "median_ms": 38.803694,
+          "p95_ms": 41.808309
+        },
+        "GPU-green-ns": {
+          "median_ms": 8.604653500000001,
+          "p95_ms": 9.003692
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 5.7838075,
+          "p95_ms": 6.085769
+        },
+        "GPU-final-ns": {
+          "median_ms": 29.470924,
+          "p95_ms": 30.331462
+        },
+        "GPU-border-ns": {
+          "median_ms": 0.3258845,
+          "p95_ms": 0.366461
+        },
+        "GPU-product-ns": {
+          "median_ms": 1.586115,
+          "p95_ms": 2.167307
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 3.025038,
+          "p95_ms": 3.966461
+        }
+      },
+      "recording_sha256": "fe97b9896a2c2a9080109a09e4884d8a5e56206801bdbea2155591a790b9f70e",
+      "recording_bytes": 121839519,
+      "source_report_sha256": "bd70ac49cbd63d1db96a5f73c1fb7b90f2525a7f83ba24881c6e90be430d2c03"
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-independent-writer-final/2560x1440-30-writer-final/analysis.json",
+      "requested": [
+        2560,
+        1440,
+        30
+      ],
+      "scale": 4,
+      "encoder_owned_output_requested": true,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "Approximate RCD: full crop/FOV, Bayer-cell area reduction before reconstruction; reduced fine detail",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": false,
+      "delivered_sensor_fps": 9.34102994345613,
+      "render_wall_ms": {
+        "median": 104.552269,
+        "p95": 111.871692,
+        "max": 174.008
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 475482,
+        "audioChunks": 695,
+        "audioDropped": 15,
+        "audioFrames": 1423360,
+        "audioOutBufs": 1392,
+        "copyMsAvg": 0,
+        "copyMsMax": 0,
+        "cpuChainMsAvg": 105.254326,
+        "cpuChainMsMax": 174.51477,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 177.76622,
+        "cycleOverBudget": 276,
+        "degradedFrames": 0,
+        "exportSize": "2560x1440",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 8.358956,
+        "fenceWaitMsMax": 92.175,
+        "fileBytes": 77257954,
+        "frameErrors": 0,
+        "framesAcquired": 277,
+        "framesDropped": 46,
+        "framesGraded": 276,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 277,
+        "outputBytes": 76768695,
+        "overBudgetFrames": 276,
+        "previewFrames": 0,
+        "previewSkipped": 276,
+        "profile": "BT709",
+        "rcdFrames": 276,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 276,
+        "stabGyroSamples": 0,
+        "staleResults": 276,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 276
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.002077,
+          "p95_ms": 0.003385
+        },
+        "RCD-engine-ns": {
+          "median_ms": 102.0784235,
+          "p95_ms": 108.445307
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 1.551,
+          "p95_ms": 2.388692
+        },
+        "GPU-guides-ns": {
+          "median_ms": 38.8266935,
+          "p95_ms": 41.617463
+        },
+        "GPU-green-ns": {
+          "median_ms": 8.603769,
+          "p95_ms": 8.936923
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 5.783,
+          "p95_ms": 6.014154
+        },
+        "GPU-final-ns": {
+          "median_ms": 29.4738855,
+          "p95_ms": 30.221232
+        },
+        "GPU-border-ns": {
+          "median_ms": 0.32680750000000003,
+          "p95_ms": 0.357923
+        },
+        "GPU-product-ns": {
+          "median_ms": 1.602884,
+          "p95_ms": 2.412384
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 3.1637305,
+          "p95_ms": 3.909461
+        }
+      },
+      "recording_sha256": "854afb2ce3178b4dc16caa275be1c6dfec22981a890b0af4063b25fa6b7412dc",
+      "recording_bytes": 77257954,
+      "source_report_sha256": "e5b30cbb911a1f3f070a6fb0c04f826c8b758ac914f9fa4a4f6b187fb103d157"
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-independent-writer-final/3840x2160-24-writer-final/analysis.json",
+      "requested": [
+        3840,
+        2160,
+        24
+      ],
+      "scale": 4,
+      "encoder_owned_output_requested": true,
+      "crop": "3840x2160@(120,450)",
+      "source_policy": "Approximate RCD: full crop/FOV, Bayer-cell area reduction before reconstruction; reduced fine detail",
+      "cadence_contract_passed": false,
+      "accepted": false,
+      "quality_accepted": false,
+      "delivered_sensor_fps": 9.127532628636041,
+      "render_wall_ms": {
+        "median": 101.2523075,
+        "p95": 108.729307,
+        "max": 130.096923
+      },
+      "complete_decode_ok": true,
+      "stats": {
+        "aacBytes": 475457,
+        "audioChunks": 695,
+        "audioDropped": 16,
+        "audioFrames": 1423360,
+        "audioOutBufs": 1392,
+        "copyMsAvg": 0,
+        "copyMsMax": 0,
+        "cpuChainMsAvg": 102.745926,
+        "cpuChainMsMax": 132.6397,
+        "cropRect": "3840x2160@(120,450)",
+        "cycleMsMax": 142.80022,
+        "cycleOverBudget": 282,
+        "degradedFrames": 0,
+        "exportSize": "3840x2160",
+        "fallbackWaits": 0,
+        "fenceWaitMsAvg": 51.9479,
+        "fenceWaitMsMax": 104.42885,
+        "fileBytes": 254783465,
+        "frameErrors": 11,
+        "framesAcquired": 283,
+        "framesDropped": 57,
+        "framesGraded": 282,
+        "fusedFrames": 0,
+        "hasAudio": true,
+        "hasStabGyro": false,
+        "headDroppedFrames": 1,
+        "heatDegraded": false,
+        "inputStarved": 0,
+        "maxBacklogDepth": 7,
+        "outputBuffers": 272,
+        "outputBytes": 254293815,
+        "overBudgetFrames": 282,
+        "previewFrames": 0,
+        "previewSkipped": 282,
+        "profile": "BT709",
+        "rcdFrames": 282,
+        "resultMiss": 1,
+        "sensorSize": "4080x3060",
+        "shadedFrames": 282,
+        "stabGyroSamples": 0,
+        "staleResults": 282,
+        "thermalStatus": 0,
+        "true10Bit": true,
+        "waitFreeFrames": 282
+      },
+      "gpu_and_adapter_costs": {
+        "RAW-input-validation-or-normalize-ns": {
+          "median_ms": 0.002231,
+          "p95_ms": 0.003461
+        },
+        "RCD-engine-ns": {
+          "median_ms": 98.800423,
+          "p95_ms": 106.278154
+        },
+        "product-corrections-ns": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "half-output-upload-ns": {
+          "median_ms": 1.561577,
+          "p95_ms": 2.296308
+        },
+        "GPU-guides-ns": {
+          "median_ms": 34.317077999999995,
+          "p95_ms": 36.233847
+        },
+        "GPU-green-ns": {
+          "median_ms": 8.6044615,
+          "p95_ms": 8.932385
+        },
+        "GPU-opposite-ns": {
+          "median_ms": 5.782615,
+          "p95_ms": 5.816231
+        },
+        "GPU-final-ns": {
+          "median_ms": 29.459539499999998,
+          "p95_ms": 30.116616
+        },
+        "GPU-border-ns": {
+          "median_ms": 0.325846,
+          "p95_ms": 0.332615
+        },
+        "GPU-product-ns": {
+          "median_ms": 1.531115,
+          "p95_ms": 2.083692
+        },
+        "GPU-responses-or-RAW-pack-ns": {
+          "median_ms": 2.8479995000000002,
+          "p95_ms": 4.026154
+        }
+      },
+      "recording_sha256": "e336acfbe442efbbdd9ee7b6b9cdb1ea86c19c2a755d8e2393d53dfb018b5754",
+      "recording_bytes": 254783465,
+      "source_report_sha256": "54698628a42b308a5c37541439d1b804f9642dbfc548a5645510fa198ac7644c"
+    }
+  ]
+}

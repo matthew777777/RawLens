@@ -1,0 +1,23 @@
+{
+  "scope": "Host production engine comparison at explicit half output boundary, 67 source cases plus four reuse cases; FP32 arithmetic, full-source geometry. No mobile FPS claim",
+  "tile_local": true,
+  "core": [
+    16,
+    16
+  ],
+  "shared_final": false,
+  "response_cache": false,
+  "case_count": 71,
+  "passed": true,
+  "stdout": "Apple M1\nframes=71 max_half_error=0 max_fp32_error=0 largest_mean_fp32_error=0\n",
+  "fixed_half_budget": 0.001,
+  "fp32_max_budget": 2e-05,
+  "fp32_mean_budget": 2e-06,
+  "changing_product_parameters": "Alternating unity and nonuniform 2x3 LSC with WB [1.7,1,1.3]",
+  "shader_sha256": {
+    "rcd": "c423dbfdaf2a5f85471d22d2e3b24ba52f306cb6b146c56e19fbf7071615174d",
+    "normalize": "ed281628e2e0070187181018103a3aec18eca00680cac5cf6360d6e945488e1d",
+    "baseline": "0dd0fae30a5b1514b686a2a45827496e85045fafbcfe4ab11938b0b454b5eaec"
+  },
+  "engine_sha256": "74236703d74e1e74dd9971b74aec6a8a8aea7dbe4a27367559f8cb79845e09a7"
+}

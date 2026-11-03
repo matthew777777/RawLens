@@ -1,0 +1,83 @@
+{
+  "app/src/main/assets/shaders/vf/vf_gradeyuv.comp": {
+    "sha256": "754c30f8cab3b14434ec5ad9af215c738423780274ed39924d5efba302996037",
+    "history": [
+      "b247c913876a1b7cc3a7f889f693440ea7dfb7c3 2026-11-01T10:15:28+02:00 matthew777777 <new.matthew7777@gmail.com> refactor(app): wire photo, UI, metadata and encoded-video changes together",
+      "b60c4723f90810f7507c23e7959ec54387fd27b6 2026-10-28T23:34:05+02:00 matthew777777 <new.matthew7777@gmail.com> feat(direct-log): Sony-exact S-Gamut3.Cine/S-Log3 and recorded 3D LUT grade (I1, J1)",
+      "32fcc86a14f0066c6dedbcf7c1b23e935d4aaec3 2026-10-27T21:28:30+02:00 matthew777777 <new.matthew7777@gmail.com> fix(direct-log): keep signed CCM output into the ACES fit (BakingLab parity)",
+      "bf16f46c3d35d86e6cc0253c8a3e9fe1fd3b2243 2026-10-27T05:49:24+02:00 matthew777777 <new.matthew7777@gmail.com> feat(2.0): Direct Log ACES profile and LOG crop",
+      "8b05ac24f5f32d3a5a142e05f870d353961ee7bb 2026-10-21T21:08:24+03:00 matthew777777 <new.matthew7777@gmail.com> fix(direct-log): centre-aligned binning, block-mean step 4, 4:2:0 chroma cell",
+      "a244814c1fcbcbb0d3f9d268a1bca5a8a32cde86 2026-10-06T22:48:01+03:00 matthew777777 <new.matthew7777@gmail.com> app: add VF demosaic backends, Direct-Log record and monitor scopes"
+    ]
+  },
+  "app/src/main/assets/shaders/record_cube.glsl": {
+    "sha256": "4bd932d5852c38c13ab1dd308a90402e62e5104feed5a40a901e3f37f615fdc9",
+    "history": [
+      "b60c4723f90810f7507c23e7959ec54387fd27b6 2026-10-28T23:34:05+02:00 matthew777777 <new.matthew7777@gmail.com> feat(direct-log): Sony-exact S-Gamut3.Cine/S-Log3 and recorded 3D LUT grade (I1, J1)"
+    ]
+  },
+  "app/src/main/java/com/matthew/rawlens/VfVideoGrade.kt": {
+    "sha256": "d826e5cb362d7f89c0827abbd1cb59d5d07486c30b0b1a7f085aa02142559dc4",
+    "history": [
+      "74f11f65ab76255538157adb036fd4add6c12887 2026-11-01T10:15:27+02:00 matthew777777 <new.matthew7777@gmail.com> refactor(video): rename Direct Log code to Encoded Video and preserve compatibility",
+      "b60c4723f90810f7507c23e7959ec54387fd27b6 2026-10-28T23:34:05+02:00 matthew777777 <new.matthew7777@gmail.com> feat(direct-log): Sony-exact S-Gamut3.Cine/S-Log3 and recorded 3D LUT grade (I1, J1)",
+      "32fcc86a14f0066c6dedbcf7c1b23e935d4aaec3 2026-10-27T21:28:30+02:00 matthew777777 <new.matthew7777@gmail.com> fix(direct-log): keep signed CCM output into the ACES fit (BakingLab parity)",
+      "bf16f46c3d35d86e6cc0253c8a3e9fe1fd3b2243 2026-10-27T05:49:24+02:00 matthew777777 <new.matthew7777@gmail.com> feat(2.0): Direct Log ACES profile and LOG crop",
+      "65b2c706f2f9056d23d0b03ab643916722695d8c 2026-10-12T13:28:33+03:00 matthew777777 <new.matthew7777@gmail.com> vf: LUT normalization, BGU color hold and AE compensation, routed record VF",
+      "1d05e2dd53a37e2b0c7ea4bb6e8815b1e34e0093 2026-10-09T09:14:59+03:00 matthew777777 <new.matthew7777@gmail.com> app: wire BGU/meters/levels/HDR/SR features + develop and doc updates",
+      "a244814c1fcbcbb0d3f9d268a1bca5a8a32cde86 2026-10-06T22:48:01+03:00 matthew777777 <new.matthew7777@gmail.com> app: add VF demosaic backends, Direct-Log record and monitor scopes"
+    ]
+  },
+  "app/src/main/cpp/vf_vulkan_vf_grade_twins.inc": {
+    "sha256": "9b5959ae7320b9683de1d3cc2f1ce1780e45d8971899122ede3d79d456821b5a",
+    "history": [
+      "b247c913876a1b7cc3a7f889f693440ea7dfb7c3 2026-11-01T10:15:28+02:00 matthew777777 <new.matthew7777@gmail.com> refactor(app): wire photo, UI, metadata and encoded-video changes together",
+      "b60c4723f90810f7507c23e7959ec54387fd27b6 2026-10-28T23:34:05+02:00 matthew777777 <new.matthew7777@gmail.com> feat(direct-log): Sony-exact S-Gamut3.Cine/S-Log3 and recorded 3D LUT grade (I1, J1)",
+      "67d7f16127dd3768eb078902ab0563b909a326ff 2026-10-21T11:40:57+03:00 matthew777777 <new.matthew7777@gmail.com> fix(vf-native): gate per-slot GPU state on real completion; stop photo RCD leaks",
+      "118c6d92f7549dbde3a2c1ac0417b0a93dd77dea 2026-10-21T10:31:51+03:00 matthew777777 <new.matthew7777@gmail.com> refactor(vf-native): split vf_vulkan_vf.cpp into nine ordered parts"
+    ]
+  },
+  "app/src/main/cpp/vf_egl_jni.cpp": {
+    "sha256": "adca2b7ca5c8e839ddafefc4c801aea39086bcb39f40fea61d3f83eaf6164e20",
+    "history": [
+      "b247c913876a1b7cc3a7f889f693440ea7dfb7c3 2026-11-01T10:15:28+02:00 matthew777777 <new.matthew7777@gmail.com> refactor(app): wire photo, UI, metadata and encoded-video changes together",
+      "a602debd20b90d430cea03759e759e83323642f0 2026-10-30T11:10:31+02:00 matthew777777 <new.matthew7777@gmail.com> feat(preview): add AgX looks and harden RAW colour and GPU presentation",
+      "785ffd7e51c4f4137f2518c5841bcb473f21458e 2026-10-29T09:12:39+02:00 matthew777777 <new.matthew7777@gmail.com> perf(direct-log): wait on GPU fences without polling sleeps",
+      "4f2c9331b6d9936718b22e9c61c1111cbd6a762b 2026-10-27T05:49:23+02:00 matthew777777 <new.matthew7777@gmail.com> feat(2.0): darktable inpaint-opposed highlight reconstruction (Vulkan + Kotlin)",
+      "d2902d1b0370e0c328ce395e82aa2499a2da28b0 2026-10-21T11:01:19+03:00 matthew777777 <new.matthew7777@gmail.com> fix(rcd-photo): stop releasing an unowned AHardwareBuffer in blitBytesToBlob (D4)",
+      "1d05e2dd53a37e2b0c7ea4bb6e8815b1e34e0093 2026-10-09T09:14:59+03:00 matthew777777 <new.matthew7777@gmail.com> app: wire BGU/meters/levels/HDR/SR features + develop and doc updates",
+      "cc817b217c468c3a6cd3f73f6e341c5a6d0d45a8 2026-10-06T22:47:10+03:00 matthew777777 <new.matthew7777@gmail.com> app: grow native viewfinder runtime; sync crs/tinydng vendors",
+      "104c45b3dc2356322938af3699388330aea7f707 2026-09-21T07:42:16+03:00 matthew777777 <new.matthew7777@gmail.com> feat(native): EGL import JNI for zero-copy viewfinder upload"
+    ]
+  },
+  "app/src/main/java/com/matthew/rawlens/EncodedVideoRecorder.kt": {
+    "sha256": "f0fbe23e95f9a90d8027a80fe238efb58e4f1f0dff609a6d2bf1220f5c6726ab",
+    "history": [
+      "c7ae9a747d83a1d7574c320ea160b7dc16ef3b2d 2026-11-01T10:26:27+02:00 matthew777777 <new.matthew7777@gmail.com> fix(video): remove disputed packed RCD backend and migrate video choices to MHC",
+      "74f11f65ab76255538157adb036fd4add6c12887 2026-11-01T10:15:27+02:00 matthew777777 <new.matthew7777@gmail.com> refactor(video): rename Direct Log code to Encoded Video and preserve compatibility",
+      "2d12b70659dc4525fefb5c6fa8b571ec04679d64 2026-10-30T11:10:36+02:00 matthew777777 <new.matthew7777@gmail.com> feat(recording): write RAW and Direct Log takes directly to their destination",
+      "a91b5ed903ea48c83e94c7eee38c2a498d855c1f 2026-10-29T14:37:06+02:00 matthew777777 <new.matthew7777@gmail.com> feat(diagnostics): in-process log fallback and complete focus tracing",
+      "785ffd7e51c4f4137f2518c5841bcb473f21458e 2026-10-29T09:12:39+02:00 matthew777777 <new.matthew7777@gmail.com> perf(direct-log): wait on GPU fences without polling sleeps",
+      "e96153ae3d03ab865e3b49376351a179efe4b9d0 2026-10-29T09:06:58+02:00 matthew777777 <new.matthew7777@gmail.com> feat(direct-log): default video demosaic to RCD",
+      "b60c4723f90810f7507c23e7959ec54387fd27b6 2026-10-28T23:34:05+02:00 matthew777777 <new.matthew7777@gmail.com> feat(direct-log): Sony-exact S-Gamut3.Cine/S-Log3 and recorded 3D LUT grade (I1, J1)",
+      "20eb4b59632948ee5b1e7de9601dfa5178bef956 2026-10-28T12:26:31+02:00 matthew777777 <new.matthew7777@gmail.com> fix(rawvideo): gyro in Android axes like accel; record rolling-shutter skew",
+      "0b8fefdc922462c3066a4e0af27e76fa38f29a11 2026-10-27T21:28:47+02:00 matthew777777 <new.matthew7777@gmail.com> perf(video): retain recording infrastructure after disputed RCD removal",
+      "e0de16bccb8c62af970357667dc3b1f9b22d601d 2026-10-27T06:34:56+02:00 matthew777777 <new.matthew7777@gmail.com> feat(2.0): 32-bit float RAW video audio with stereo dBFS meters",
+      "fb84cc207c37097bd3f89a99100dab1bc2795944 2026-10-27T06:13:24+02:00 matthew777777 <new.matthew7777@gmail.com> feat(2.0): replace CRS with .CRAW for RAW video and burst takes",
+      "bf16f46c3d35d86e6cc0253c8a3e9fe1fd3b2243 2026-10-27T05:49:24+02:00 matthew777777 <new.matthew7777@gmail.com> feat(2.0): Direct Log ACES profile and LOG crop",
+      "db1c608d17ecd56a7ae6beb1485787a606f58f53 2026-10-22T20:51:57+03:00 matthew777777 <new.matthew7777@gmail.com> feat(ui): gallery access + orientation, video quick panel with torch, quick panel auto-hide",
+      "caad35cd444eab8499e65e9e60de33ce5ff4893a 2026-10-21T20:59:20+03:00 matthew777777 <new.matthew7777@gmail.com> perf(direct-log): record with the fp32 fused shader; MHC study on a real frame",
+      "bf3589f73c0d26758dcd3e515f6636c951fce793 2026-10-21T09:09:31+03:00 matthew777777 <new.matthew7777@gmail.com> refactor(video): shared manual controls (V8), split processFrame/teardown; RAW storage guard (V4)",
+      "c700ce9c97c740cfed4ebcfec59a38fb4595e99b 2026-10-21T00:50:30+03:00 matthew777777 <new.matthew7777@gmail.com> refactor(directlog): split start() into six stages",
+      "b2658d887de59ba565845fcef66a8037d7586b03 2026-10-21T00:21:50+03:00 matthew777777 <new.matthew7777@gmail.com> fix(directlog): clean up copy workers, codec and muxer when start fails (V1)",
+      "6c4581242a18db5aa1211bd4752f509147ff69e3 2026-10-18T17:32:37+03:00 matthew777777 <new.matthew7777@gmail.com> directlog: recorder/stabilizer/probe updates + test plan",
+      "b7f89495b6c3ecbb7f4e545e68b98971e5eedba2 2026-10-16T09:37:05+03:00 matthew777777 <new.matthew7777@gmail.com> Rewire app for the SR-less pipeline and retheme",
+      "d118c0f81b70eee233d790868303671bedecf609 2026-10-14T21:07:09+03:00 matthew777777 <new.matthew7777@gmail.com> Release 1.0.184 (versionCode 185) for F-Droid submission",
+      "55caffc7c380a850bac00a2c7bbac5ed4da103ff 2026-10-13T14:31:46+03:00 matthew777777 <new.matthew7777@gmail.com> diagnostics: leak-attribution counters, native/Vulkan accounting, module probes",
+      "1d05e2dd53a37e2b0c7ea4bb6e8815b1e34e0093 2026-10-09T09:14:59+03:00 matthew777777 <new.matthew7777@gmail.com> app: wire BGU/meters/levels/HDR/SR features + develop and doc updates",
+      "6f2381be45b3f6abd040264b3c18e3a637a51c60 2026-10-07T23:36:00+03:00 matthew777777 <new.matthew7777@gmail.com> app: GPU-gated RAW lease, self-describing log truncation, wakelock bound",
+      "ed65359958d01a3375dc6a361af280b170158ce0 2026-10-07T13:55:41+03:00 matthew777777 <new.matthew7777@gmail.com> app: anchor Direct-Log output FPS at first muxed sample",
+      "a244814c1fcbcbb0d3f9d268a1bca5a8a32cde86 2026-10-06T22:48:01+03:00 matthew777777 <new.matthew7777@gmail.com> app: add VF demosaic backends, Direct-Log record and monitor scopes"
+    ]
+  }
+}

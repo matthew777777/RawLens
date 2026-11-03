@@ -1,0 +1,194 @@
+{
+  "cause": "After correcting PQ indexing, global full-frame intermediates still differ from pinned upstream near its tile computation limits. Preserve actual per-tile valid domains and initial CFA-valued green halo in the baseline; do not loosen tolerances.",
+  "failed_cases": 14,
+  "case_count": 135,
+  "max_abs": 0.0045185089111328125,
+  "examples": [
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "input_sha256": "73ca2e9d16460ab117c439e7848aa30fb7b3397a669db02b10d2d6c429ae6a5c",
+      "device": "host device: Apple M1 driver 10402",
+      "final": {
+        "max_abs": 0.00020487606525421143,
+        "mean_abs": 1.7188620149043567e-07,
+        "max_relative_above_1e-5": 0.0009297720810725549,
+        "max_ulp_same_sign_above_1e-5": 13749,
+        "samples": 1197
+      },
+      "channels": {
+        "R": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 3.734626865625979e-10,
+          "max_relative_above_1e-5": 1.5272281877452157e-07,
+          "max_ulp_same_sign_above_1e-5": 2,
+          "samples": 399
+        },
+        "G": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 1.8112940298285997e-09,
+          "max_relative_above_1e-5": 1.1714761032346915e-07,
+          "max_ulp_same_sign_above_1e-5": 1,
+          "samples": 399
+        },
+        "B": {
+          "max_abs": 0.00020487606525421143,
+          "mean_abs": 5.134738477549158e-07,
+          "max_relative_above_1e-5": 0.0009297720810725549,
+          "max_ulp_same_sign_above_1e-5": 13749,
+          "samples": 399
+        }
+      },
+      "interior": {
+        "max_abs": 0.00020487606525421143,
+        "mean_abs": 2.279049820370144e-05,
+        "max_relative_above_1e-5": 0.0009297720810725549,
+        "max_ulp_same_sign_above_1e-5": 13749,
+        "samples": 9
+      },
+      "border": {
+        "max_abs": 5.960464477539063e-08,
+        "mean_abs": 5.330802615644153e-10,
+        "max_relative_above_1e-5": 1.1714761032346915e-07,
+        "max_ulp_same_sign_above_1e-5": 1,
+        "samples": 1188
+      },
+      "stages": {
+        "vh": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 3.9736429850260414e-08,
+          "max_relative_above_1e-5": 9.296279972717278e-08,
+          "max_ulp_same_sign_above_1e-5": 1,
+          "samples": 3
+        },
+        "lpf": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 2
+        },
+        "pq": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 2.9802322387695312e-08,
+          "max_relative_above_1e-5": 1.1352678448779099e-07,
+          "max_ulp_same_sign_above_1e-5": 1,
+          "samples": 2
+        },
+        "green": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 2.9802322387695312e-08,
+          "max_relative_above_1e-5": 8.382182597968645e-08,
+          "max_ulp_same_sign_above_1e-5": 1,
+          "samples": 3
+        },
+        "opposite_r": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 5.960464477539063e-08,
+          "max_relative_above_1e-5": 1.5272281877452157e-07,
+          "max_ulp_same_sign_above_1e-5": 2,
+          "samples": 2
+        }
+      },
+      "native_sample_max_abs": 0.0,
+      "initial_diagnostic_budget_pass": false
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "input_sha256": "73ca2e9d16460ab117c439e7848aa30fb7b3397a669db02b10d2d6c429ae6a5c",
+      "device": "host device: Apple M1 driver 10402",
+      "final": {
+        "max_abs": 0.0006914138793945312,
+        "mean_abs": 8.287634965072797e-07,
+        "max_relative_above_1e-5": 0.0010598878675184024,
+        "max_ulp_same_sign_above_1e-5": 11600,
+        "samples": 1197
+      },
+      "channels": {
+        "R": {
+          "max_abs": 0.0006914138793945312,
+          "mean_abs": 2.4692605910145847e-06,
+          "max_relative_above_1e-5": 0.0010598878675184024,
+          "max_ulp_same_sign_above_1e-5": 11600,
+          "samples": 399
+        },
+        "G": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 1.568543283562911e-09,
+          "max_relative_above_1e-5": 1.1523077786421367e-07,
+          "max_ulp_same_sign_above_1e-5": 1,
+          "samples": 399
+        },
+        "B": {
+          "max_abs": 6.139278411865234e-06,
+          "mean_abs": 1.5461355223691554e-08,
+          "max_relative_above_1e-5": 7.921920322709808e-06,
+          "max_ulp_same_sign_above_1e-5": 103,
+          "samples": 399
+        }
+      },
+      "interior": {
+        "max_abs": 0.0006914138793945312,
+        "mean_abs": 0.00011015600628323025,
+        "max_relative_above_1e-5": 0.0010598878675184024,
+        "max_ulp_same_sign_above_1e-5": 11600,
+        "samples": 9
+      },
+      "border": {
+        "max_abs": 5.960464477539063e-08,
+        "mean_abs": 5.268087290754222e-10,
+        "max_relative_above_1e-5": 1.1523077786421367e-07,
+        "max_ulp_same_sign_above_1e-5": 1,
+        "samples": 1188
+      },
+      "stages": {
+        "vh": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 3.9736429850260414e-08,
+          "max_relative_above_1e-5": 9.296279972717278e-08,
+          "max_ulp_same_sign_above_1e-5": 1,
+          "samples": 3
+        },
+        "lpf": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1
+        },
+        "pq": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1
+        },
+        "green": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 3
+        },
+        "opposite_r": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1
+        }
+      },
+      "native_sample_max_abs": 0.0,
+      "initial_diagnostic_budget_pass": false
+    }
+  ]
+}

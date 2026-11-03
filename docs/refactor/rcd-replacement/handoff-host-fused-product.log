@@ -1,0 +1,6 @@
+/private/tmp/rcd-tile-local-fused-product/rcd.comp
+/private/tmp/rcd-tile-local-fused-product/normalize.comp
+/private/tmp/rcd-tile-local-fused-product/baseline.comp
+Apple M1
+frames=71 max_half_error=0 max_fp32_error=0 largest_mean_fp32_error=0
+

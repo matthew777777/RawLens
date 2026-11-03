@@ -1,0 +1,1356 @@
+{
+  "scope": "Standalone Android Vulkan pack\u2192public RCD correctness only; no camera/UI/app installation/recording/performance test",
+  "serial": "fe79feha9lmb6hhi",
+  "fingerprint": "Redmi/lapis_eea/lapis:16/BP2A.250605.031.A3/OS3.0.303.0.WPPEUXM:user/release-keys",
+  "compile_command": [
+    "/Users/monikamalinowska/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android30-clang++",
+    "-std=c++17",
+    "-O2",
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/photo-rcd/requirements_input_host.cc",
+    "-lvulkan",
+    "-static-libstdc++",
+    "-o",
+    "/private/tmp/rcd-requirements-direct-phone/rcd-requirements-input"
+  ],
+  "remote_directory": "/data/local/tmp/rawlens-rcd-requirements-a88ee4adead3",
+  "artifacts": {
+    "rcd-requirements-input": "a88ee4adead368d6985d06dced002ccd002aa2e4f56f5e2127ea146d28f207c3",
+    "pack.spv": "e33a5331fb7cce87d6ecb3cb567c8b4b7315e3159fce4a99257b088c0c5cc2f5",
+    "rcd.spv": "db735a03a045df0542a7c20abdcdabee172f203572d807b84982ccfc1844574c"
+  },
+  "cases": [
+    {
+      "host_case_index": 0,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "RGGB",
+        "crop_cfa": "RGGB",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 2,
+        "row_stride": 49,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "a388e76f07f7c78dd65a1b6a74b641bb9229fa33e27fcd56eef70dca34c00632",
+        "output_sha256": "f2d6f3d56756c51dbe21c886e921d47cbed6bf2ccb0d9f1cacffdef95f09988f"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 1.2557877347483272e-08,
+        "max_relative_above_1e-5": 6.876937433852458e-07,
+        "max_ulp_same_sign_above_1e-5": 6,
+        "samples": 1197
+      },
+      "rgba_sha256": "bf003196a17020ef1c51abfc511bd927ebaa692100f4dc4ab5ee1f7ecf5e564a"
+    },
+    {
+      "host_case_index": 1,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "GRBG",
+        "crop_cfa": "GRBG",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 3,
+        "row_stride": 69,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "6cfe0922fab09d2073c39daa9075128424b7fd97bebf11fbcadaa9a89055628d",
+        "output_sha256": "b9e48235619dab7d5c0a31548d7cf949607d2cbba92e021f586f13f138f16a52"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 7.114658690833408e-09,
+        "max_relative_above_1e-5": 1.4046065664233295e-06,
+        "max_ulp_same_sign_above_1e-5": 15,
+        "samples": 1197
+      },
+      "rgba_sha256": "7c5c1c6a5368826914c2faeeadbde91b58e97de858ba0a4cba08e2668a4c3d45"
+    },
+    {
+      "host_case_index": 2,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "GBRG",
+        "crop_cfa": "GBRG",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 4,
+        "row_stride": 89,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "0680bd522bb23d77deba288068954b86ffa35bde2b58c20a93902818cde12a37",
+        "output_sha256": "ef05c722a02d98aeb6d5606a194bfdcf829aefa23e010776a80b85b1e43f1fc3"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 7.114658690833408e-09,
+        "max_relative_above_1e-5": 1.4046065664233295e-06,
+        "max_ulp_same_sign_above_1e-5": 15,
+        "samples": 1197
+      },
+      "rgba_sha256": "51b905dfdb6199d0f65fc4bacb2e0e1c50bbb1b6ae09bf7730312414cb277346"
+    },
+    {
+      "host_case_index": 3,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "BGGR",
+        "crop_cfa": "BGGR",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 2,
+        "row_stride": 49,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "a388e76f07f7c78dd65a1b6a74b641bb9229fa33e27fcd56eef70dca34c00632",
+        "output_sha256": "363da0baa1b0a002587227538f9e34b9ef2a7ba1644df0bda1598bee93c75051"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 1.2557877347483272e-08,
+        "max_relative_above_1e-5": 6.876937433852458e-07,
+        "max_ulp_same_sign_above_1e-5": 6,
+        "samples": 1197
+      },
+      "rgba_sha256": "547a341962dff54772099d7f4b8d8c797c413f98ead6fb3d5cafa3dc9eeb259d"
+    },
+    {
+      "host_case_index": 4,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "RGGB",
+        "crop_cfa": "GRBG",
+        "origin": [
+          1,
+          0
+        ],
+        "pixel_stride": 3,
+        "row_stride": 72,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "ec611c480980d58328571653ab97ac2d61c27d0745b23cf2ec84643342ae3864",
+        "output_sha256": "c87dc55977c310b8fbb07c93b3dd89cfe1f78fa81c7d19368abed78aac1f4cdb"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 1.2282448616143357e-08,
+        "max_relative_above_1e-5": 8.706499336455919e-07,
+        "max_ulp_same_sign_above_1e-5": 8,
+        "samples": 1197
+      },
+      "rgba_sha256": "30ee13cc56cc52930e69ce383a389435acb2dcb8866ebd974a68f040ba1ac880"
+    },
+    {
+      "host_case_index": 5,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "GRBG",
+        "crop_cfa": "RGGB",
+        "origin": [
+          1,
+          0
+        ],
+        "pixel_stride": 4,
+        "row_stride": 93,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "8014712fb6b61d5b7630e65ac2fd757804b338827ba3b9a8baee9309413d5d55",
+        "output_sha256": "8e667a90a872a5db11212f77d2ea9bc0824dd6198b3d12849c6df1892a23c687"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 6.626045009247343e-09,
+        "max_relative_above_1e-5": 5.977236293300594e-07,
+        "max_ulp_same_sign_above_1e-5": 8,
+        "samples": 1197
+      },
+      "rgba_sha256": "b171a7b1783fa67f68f55d75264c993d0635790b130957cc1fac841aa96c02cc"
+    },
+    {
+      "host_case_index": 6,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "GBRG",
+        "crop_cfa": "BGGR",
+        "origin": [
+          1,
+          0
+        ],
+        "pixel_stride": 2,
+        "row_stride": 51,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "373a8c59e2d39c0e87d824c4fea9284a17101fed591c85cc235cc0d1eda04128",
+        "output_sha256": "ebc0953651d4d27d169b9c720c70bef45c7bf1a312fca09a62527ac5f575467c"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 6.626045009247343e-09,
+        "max_relative_above_1e-5": 5.977236293300594e-07,
+        "max_ulp_same_sign_above_1e-5": 8,
+        "samples": 1197
+      },
+      "rgba_sha256": "425c64c91d947397b7875cce8dd3d30af31832d00ba2eb0f5dfb0e3854724f34"
+    },
+    {
+      "host_case_index": 7,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "BGGR",
+        "crop_cfa": "GBRG",
+        "origin": [
+          1,
+          0
+        ],
+        "pixel_stride": 3,
+        "row_stride": 72,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "ec611c480980d58328571653ab97ac2d61c27d0745b23cf2ec84643342ae3864",
+        "output_sha256": "530a3dee772a6ecee8bf00b164e3f71536f627446c7e786217ca80e8b9621a05"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 1.2282448616143357e-08,
+        "max_relative_above_1e-5": 8.706499336455919e-07,
+        "max_ulp_same_sign_above_1e-5": 8,
+        "samples": 1197
+      },
+      "rgba_sha256": "146604959acc7fb9856cfa61a4b18df70edb6a045535c13f38cafa90ad843978"
+    },
+    {
+      "host_case_index": 8,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "RGGB",
+        "crop_cfa": "GBRG",
+        "origin": [
+          0,
+          1
+        ],
+        "pixel_stride": 4,
+        "row_stride": 89,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "ff7eed07ebe357d344765b4c58d9375528812377cf86bf6c8046b89e3d7bbf8a",
+        "output_sha256": "cb03302648813dea703cf5e55a21bb4a25e420278da841fbc3716af36621f756"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 1.2948457073846656e-08,
+        "max_relative_above_1e-5": 2.0483064397525483e-07,
+        "max_ulp_same_sign_above_1e-5": 2,
+        "samples": 1197
+      },
+      "rgba_sha256": "31b0597301f68a9f53abd5282ff1df7a1ab1a4cee8f0e93b0876440044d21e03"
+    },
+    {
+      "host_case_index": 9,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "GRBG",
+        "crop_cfa": "BGGR",
+        "origin": [
+          0,
+          1
+        ],
+        "pixel_stride": 2,
+        "row_stride": 49,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "b78213f1b44373ac2cb8866cc69f2a718a170189c9f01458755a0c1f3c70f176",
+        "output_sha256": "7f05845347ecbeed99184df48e377bc3795c567b99aa861f7cad836b02d30d0f"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 7.320063168442837e-09,
+        "max_relative_above_1e-5": 1.9442641679502052e-07,
+        "max_ulp_same_sign_above_1e-5": 2,
+        "samples": 1197
+      },
+      "rgba_sha256": "aa6acb1f06608cadc7ef500359ff54638abba33d5703be3b3011ec59dc6ebde6"
+    },
+    {
+      "host_case_index": 10,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "GBRG",
+        "crop_cfa": "RGGB",
+        "origin": [
+          0,
+          1
+        ],
+        "pixel_stride": 3,
+        "row_stride": 69,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "84baa422f72418103eacc55ed9f8084c10cc94437b3b5e9a0c607cdf84b4c24c",
+        "output_sha256": "ed118b141f686e4b63e6bb8a58c2e0921d1bb7588ab4e2eedfffddd7f4cfda71"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 7.320063168442837e-09,
+        "max_relative_above_1e-5": 1.9442641679502052e-07,
+        "max_ulp_same_sign_above_1e-5": 2,
+        "samples": 1197
+      },
+      "rgba_sha256": "d635ffa7fb5dbcf2d81d6ccef18897666aa66b4235ed595e1d0047641079c6af"
+    },
+    {
+      "host_case_index": 11,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "BGGR",
+        "crop_cfa": "GRBG",
+        "origin": [
+          0,
+          1
+        ],
+        "pixel_stride": 4,
+        "row_stride": 89,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "ff7eed07ebe357d344765b4c58d9375528812377cf86bf6c8046b89e3d7bbf8a",
+        "output_sha256": "c4e92453f1f166639f17ba4d0d168229bc5001b1da981946ec4852b0d43e53f2"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 1.2948457073846656e-08,
+        "max_relative_above_1e-5": 2.0483064397525483e-07,
+        "max_ulp_same_sign_above_1e-5": 2,
+        "samples": 1197
+      },
+      "rgba_sha256": "2ecd1fbe0c0bac0d8ede82154974b8901d61ff14daf656e7d08cb00f8e446f00"
+    },
+    {
+      "host_case_index": 12,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "RGGB",
+        "crop_cfa": "BGGR",
+        "origin": [
+          1,
+          1
+        ],
+        "pixel_stride": 2,
+        "row_stride": 51,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "d6441516ab297108398d76c7334f723707a2ec67ebdefd22e7a106beffeec729",
+        "output_sha256": "7072dc99c760766188501affe3b002cfebebfa53f70841aa01b152b53b5f816b"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 1.2537648118627798e-08,
+        "max_relative_above_1e-5": 2.0483064397525483e-07,
+        "max_ulp_same_sign_above_1e-5": 2,
+        "samples": 1197
+      },
+      "rgba_sha256": "aa778d14fbd5e7e3c9afb48be31a354f0e5066523f1a25a00c77e8b2af1f989d"
+    },
+    {
+      "host_case_index": 13,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "GRBG",
+        "crop_cfa": "GBRG",
+        "origin": [
+          1,
+          1
+        ],
+        "pixel_stride": 3,
+        "row_stride": 72,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "68a19658e05647d5e733bca48d8d622c742a03dee3c6dbdf709bafc13e9fbc33",
+        "output_sha256": "c5364d70716e47a6322d0059e5bba98dc72a66dd8ea8506e5c9b1f87ef59596a"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 7.1022099346146544e-09,
+        "max_relative_above_1e-5": 1.876330670257213e-07,
+        "max_ulp_same_sign_above_1e-5": 3,
+        "samples": 1197
+      },
+      "rgba_sha256": "52412690621f718b83b744214528f2d6754cde57c6c47a62dd973cde46bfe3ca"
+    },
+    {
+      "host_case_index": 14,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "GBRG",
+        "crop_cfa": "GRBG",
+        "origin": [
+          1,
+          1
+        ],
+        "pixel_stride": 4,
+        "row_stride": 93,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "2bfbc05c008c5155ceb980c104b70dcdccc1c09a65f3103996644c99a19fe823",
+        "output_sha256": "241c43af34c3bb00ed0b8d3fad6841bb6bfa7b51e3891b895576bec17680877c"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 7.1022099346146544e-09,
+        "max_relative_above_1e-5": 1.876330670257213e-07,
+        "max_ulp_same_sign_above_1e-5": 3,
+        "samples": 1197
+      },
+      "rgba_sha256": "4511f8b8b8d2fcaf533989a8abe691edda7e4359648c7c91a187c1ccb00aba17"
+    },
+    {
+      "host_case_index": 15,
+      "fixture": {
+        "size": [
+          19,
+          21
+        ],
+        "sensor_cfa": "BGGR",
+        "crop_cfa": "RGGB",
+        "origin": [
+          1,
+          1
+        ],
+        "pixel_stride": 2,
+        "row_stride": 51,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 1197
+        },
+        "input_sha256": "d6441516ab297108398d76c7334f723707a2ec67ebdefd22e7a106beffeec729",
+        "output_sha256": "2df7ccb2ef8ceaa67677c5390893711861a9819c200950bb7ceca1b8d9e59edf"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 1.1920928955078125e-07,
+        "mean_abs": 1.2537648118627798e-08,
+        "max_relative_above_1e-5": 2.0483064397525483e-07,
+        "max_ulp_same_sign_above_1e-5": 2,
+        "samples": 1197
+      },
+      "rgba_sha256": "a9d81cb44336e90d1f11ddcd1799d7ae1165c295ce21edaab3999e9139838706"
+    },
+    {
+      "host_case_index": 32,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "RGGB",
+        "crop_cfa": "RGGB",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 4,
+        "row_stride": 789,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "60c0cfece77ac00ebb66050c6b80769d2f9b8e9c3084a0506d6ebf6ae190f747",
+        "output_sha256": "72e7175c8fa9715c905b3b82d51858328909cac55b7710174b791f0cfd51deeb"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 3.5762786865234375e-07,
+        "mean_abs": 2.554791437328047e-08,
+        "max_relative_above_1e-5": 3.78947567867141e-05,
+        "max_ulp_same_sign_above_1e-5": 512,
+        "samples": 113490
+      },
+      "rgba_sha256": "8acae6972c3e6f7bd8f6da9df71c7c92331f8471569028f5b58ebc359cc70390"
+    },
+    {
+      "host_case_index": 33,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "GRBG",
+        "crop_cfa": "GRBG",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 2,
+        "row_stride": 399,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "c8609c954423d7f08d6e11a340fc6e81d61fafd8968f151a2555360f751fd6ab",
+        "output_sha256": "96fe50a5ea06bbc68b64ed5a81023e6f068babd3e9942be03f755d4bd69ea833"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 4.172325134277344e-07,
+        "mean_abs": 2.494479909773756e-08,
+        "max_relative_above_1e-5": 0.00040093015796648226,
+        "max_ulp_same_sign_above_1e-5": 5120,
+        "samples": 113490
+      },
+      "rgba_sha256": "a374d84f79e8a13fba9fa62b2c64213bfa48c6e5fe37c0a4a271df5f8bc78da0"
+    },
+    {
+      "host_case_index": 34,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "GBRG",
+        "crop_cfa": "GBRG",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 3,
+        "row_stride": 594,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "315ca8da3bf52e39993a4cbe71f2b385f9528a60265b08a46766d224489446d2",
+        "output_sha256": "eb8d83519b4a9d7095387c771e10b9d2de23d81df1944e3197e6a9d792b4c5da"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 4.172325134277344e-07,
+        "mean_abs": 2.494479909773756e-08,
+        "max_relative_above_1e-5": 0.00040093015796648226,
+        "max_ulp_same_sign_above_1e-5": 5120,
+        "samples": 113490
+      },
+      "rgba_sha256": "cb6852e829ebcaf0c6a2e2140c40ab63bae8c7d71b0223abe2582513a1227865"
+    },
+    {
+      "host_case_index": 35,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "BGGR",
+        "crop_cfa": "BGGR",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 4,
+        "row_stride": 789,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "60c0cfece77ac00ebb66050c6b80769d2f9b8e9c3084a0506d6ebf6ae190f747",
+        "output_sha256": "1e8e900b6f6c93a9697369c20386e7950477c67d560fad8fd0b5def2d2ee100e"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 3.5762786865234375e-07,
+        "mean_abs": 2.554791437328047e-08,
+        "max_relative_above_1e-5": 3.78947567867141e-05,
+        "max_ulp_same_sign_above_1e-5": 512,
+        "samples": 113490
+      },
+      "rgba_sha256": "549eb229afef12f62c33dbd05061f1a7e580ac9c7898effb8f060b5927982be2"
+    },
+    {
+      "host_case_index": 36,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "RGGB",
+        "crop_cfa": "GRBG",
+        "origin": [
+          1,
+          0
+        ],
+        "pixel_stride": 2,
+        "row_stride": 401,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "608ce2405ea9e608c9eb9ad04febecfe16963c536efa836b955cc5342958795b",
+        "output_sha256": "4230dae4e056831a88a03f43f06c9a8c48a8d96311271eea56a27eed2a89bea4"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 3.5762786865234375e-07,
+        "mean_abs": 2.546504410746111e-08,
+        "max_relative_above_1e-5": 4.261504879423087e-05,
+        "max_ulp_same_sign_above_1e-5": 576,
+        "samples": 113490
+      },
+      "rgba_sha256": "5e4bf855c7240486e66b02ba9e7f19bd3a8ab2c9977e94fcb9508329868cc7c8"
+    },
+    {
+      "host_case_index": 37,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "GRBG",
+        "crop_cfa": "RGGB",
+        "origin": [
+          1,
+          0
+        ],
+        "pixel_stride": 3,
+        "row_stride": 597,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "1e8f4678ea0f1116843a89cdc8dbb95d23b9ec81df4e458976000c0bd6af633d",
+        "output_sha256": "6dee73e748329213d5461b67a21c575540d709f7da85c3df5e1f9842b894bb75"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 4.172325134277344e-07,
+        "mean_abs": 2.4878956714042855e-08,
+        "max_relative_above_1e-5": 0.00035964035964035964,
+        "max_ulp_same_sign_above_1e-5": 4608,
+        "samples": 113490
+      },
+      "rgba_sha256": "c9a6bf0a31596d2854d76c00d3bad39931d07d225b5d26e609f135bf9b4956ea"
+    },
+    {
+      "host_case_index": 38,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "GBRG",
+        "crop_cfa": "BGGR",
+        "origin": [
+          1,
+          0
+        ],
+        "pixel_stride": 4,
+        "row_stride": 793,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "9b38c85932c0499ba8900d184993e6d399caaa43cc899627199781d1b8f815c2",
+        "output_sha256": "cce4ea6731790e4f832054ecf4bb2b0c64539fcdb6453c829a88bcbcea66e122"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 4.172325134277344e-07,
+        "mean_abs": 2.4878956714042855e-08,
+        "max_relative_above_1e-5": 0.00035964035964035964,
+        "max_ulp_same_sign_above_1e-5": 4608,
+        "samples": 113490
+      },
+      "rgba_sha256": "4080c8b78abd1a14c98e2c70810ce72ff79e4b442e66994304a6bd2f75e972ad"
+    },
+    {
+      "host_case_index": 39,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "BGGR",
+        "crop_cfa": "GBRG",
+        "origin": [
+          1,
+          0
+        ],
+        "pixel_stride": 2,
+        "row_stride": 401,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "608ce2405ea9e608c9eb9ad04febecfe16963c536efa836b955cc5342958795b",
+        "output_sha256": "4665367fc6ddc99aab018afca2db7011232f8ad38b8efbfe3f440b3e4a259272"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 3.5762786865234375e-07,
+        "mean_abs": 2.546504410746111e-08,
+        "max_relative_above_1e-5": 4.261504879423087e-05,
+        "max_ulp_same_sign_above_1e-5": 576,
+        "samples": 113490
+      },
+      "rgba_sha256": "f6f8b411aca7782073d95fae8cc0a283c56bf337b2d3112bb2ee87525967230c"
+    },
+    {
+      "host_case_index": 40,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "RGGB",
+        "crop_cfa": "GBRG",
+        "origin": [
+          0,
+          1
+        ],
+        "pixel_stride": 3,
+        "row_stride": 594,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "2e555919851116e7eacf0b581487c309720c9592d6703e717ac611ef5cec69dc",
+        "output_sha256": "561be8cebf730eb5207e2939293998fc1c61e90445aa86f003e601ef23d896cc"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 3.5762786865234375e-07,
+        "mean_abs": 2.555953026106237e-08,
+        "max_relative_above_1e-5": 3.78947567867141e-05,
+        "max_ulp_same_sign_above_1e-5": 512,
+        "samples": 113490
+      },
+      "rgba_sha256": "318e63396047152e9361c626a662ae46cc09b8765b07095cf51087f8f6a25f9f"
+    },
+    {
+      "host_case_index": 41,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "GRBG",
+        "crop_cfa": "BGGR",
+        "origin": [
+          0,
+          1
+        ],
+        "pixel_stride": 4,
+        "row_stride": 789,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "32e72ec7722086434f62c6f9611fec4a824cc3316105c92bfd0babed092d0193",
+        "output_sha256": "f363258311ad46a89f9e03ccb87e95cd30e8e48850215c1c031d0c366e2e80ec"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 4.172325134277344e-07,
+        "mean_abs": 2.4932067165633272e-08,
+        "max_relative_above_1e-5": 0.00040093015796648226,
+        "max_ulp_same_sign_above_1e-5": 5120,
+        "samples": 113490
+      },
+      "rgba_sha256": "3859c13141e9a8455f49435447d96abece6a46411cb675b93b5f954080eaf972"
+    },
+    {
+      "host_case_index": 42,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "GBRG",
+        "crop_cfa": "RGGB",
+        "origin": [
+          0,
+          1
+        ],
+        "pixel_stride": 2,
+        "row_stride": 399,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "974b59a3975e38bc5aad3b76b2db3898a3b73aef64ba9dc6604d9d553eb466c1",
+        "output_sha256": "44b4da68844d1b035c8da8dcdf70f7d46a8fcfd5aed7b25ec1877c1ff202c8ae"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 4.172325134277344e-07,
+        "mean_abs": 2.4932067165633272e-08,
+        "max_relative_above_1e-5": 0.00040093015796648226,
+        "max_ulp_same_sign_above_1e-5": 5120,
+        "samples": 113490
+      },
+      "rgba_sha256": "72ad6a90b353df04ba93e53d0354d44aad279d3d8437d3e1a6ee71bfb6278f3f"
+    },
+    {
+      "host_case_index": 43,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "BGGR",
+        "crop_cfa": "GRBG",
+        "origin": [
+          0,
+          1
+        ],
+        "pixel_stride": 3,
+        "row_stride": 594,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "2e555919851116e7eacf0b581487c309720c9592d6703e717ac611ef5cec69dc",
+        "output_sha256": "b93f469df5cc594f50e8b9bbd2c04d63b3501685aa2cd5dab9942a51ff4b2870"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 3.5762786865234375e-07,
+        "mean_abs": 2.555953026106237e-08,
+        "max_relative_above_1e-5": 3.78947567867141e-05,
+        "max_ulp_same_sign_above_1e-5": 512,
+        "samples": 113490
+      },
+      "rgba_sha256": "3698dda756ecca82edd4af794bec96a574195b2d5c58ed4e47f3cfdd57709c68"
+    },
+    {
+      "host_case_index": 44,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "RGGB",
+        "crop_cfa": "BGGR",
+        "origin": [
+          1,
+          1
+        ],
+        "pixel_stride": 4,
+        "row_stride": 793,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "fa0a3f7672551f7714c5e4b330d90cf29a5053514a4f36d296f8b1f289acc8fe",
+        "output_sha256": "c6ddee0ffdcbcba78ab247e1c7a39419cb53d683e478f3835cc4878be606ed53"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 3.5762786865234375e-07,
+        "mean_abs": 2.5489350896306038e-08,
+        "max_relative_above_1e-5": 4.261504879423087e-05,
+        "max_ulp_same_sign_above_1e-5": 576,
+        "samples": 113490
+      },
+      "rgba_sha256": "b5d35a0dd2ffb20f3177159511063c20c555b38db2b3358dbb2bf03a281542a5"
+    },
+    {
+      "host_case_index": 45,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "GRBG",
+        "crop_cfa": "GBRG",
+        "origin": [
+          1,
+          1
+        ],
+        "pixel_stride": 2,
+        "row_stride": 401,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "32200f4e87cd7cb79f923d4b09bd7c55e8a890f02d6ea61af6721f04fd865062",
+        "output_sha256": "46b523b5948fd418920437225d68304b17e642e67dc172783404826454dd7fab"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 4.172325134277344e-07,
+        "mean_abs": 2.486821889054401e-08,
+        "max_relative_above_1e-5": 0.00035964035964035964,
+        "max_ulp_same_sign_above_1e-5": 4608,
+        "samples": 113490
+      },
+      "rgba_sha256": "289b1c27ce5da1c61fdf7ef67ee40668429e16a24c116e78755c3374660db910"
+    },
+    {
+      "host_case_index": 46,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "GBRG",
+        "crop_cfa": "GRBG",
+        "origin": [
+          1,
+          1
+        ],
+        "pixel_stride": 3,
+        "row_stride": 597,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "9da5948a0c6de100b78eb657ef2c56b33adf3a4835f97b7be8c4ce60546abeb4",
+        "output_sha256": "16c42019d721a49ed147bb6dbd79b1af8f3aac36ee9a28ff20b2ec10a2d786b6"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 4.172325134277344e-07,
+        "mean_abs": 2.486821889054401e-08,
+        "max_relative_above_1e-5": 0.00035964035964035964,
+        "max_ulp_same_sign_above_1e-5": 4608,
+        "samples": 113490
+      },
+      "rgba_sha256": "b64db4674de458bc12cc1e59f2b429ce85b248625c31449046fe81914d7b3030"
+    },
+    {
+      "host_case_index": 47,
+      "fixture": {
+        "size": [
+          194,
+          195
+        ],
+        "sensor_cfa": "BGGR",
+        "crop_cfa": "RGGB",
+        "origin": [
+          1,
+          1
+        ],
+        "pixel_stride": 4,
+        "row_stride": 793,
+        "fixture": "synthetic",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 113490
+        },
+        "input_sha256": "fa0a3f7672551f7714c5e4b330d90cf29a5053514a4f36d296f8b1f289acc8fe",
+        "output_sha256": "1a8b91308476d62c0fdbb6fdc35a08ae46eecc678657f1df0604ffcb7ae4dc58"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 3.5762786865234375e-07,
+        "mean_abs": 2.5489350896306038e-08,
+        "max_relative_above_1e-5": 4.261504879423087e-05,
+        "max_ulp_same_sign_above_1e-5": 576,
+        "samples": 113490
+      },
+      "rgba_sha256": "12e0930b2ce1df0500f315a9e47a8c9038e538942e8db85aa55534329f21592d"
+    },
+    {
+      "host_case_index": 64,
+      "fixture": {
+        "size": [
+          97,
+          95
+        ],
+        "sensor_cfa": "RGGB",
+        "crop_cfa": "RGGB",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 2,
+        "row_stride": 200,
+        "fixture": "ricoh-gr-iii-0.f32",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 27645
+        },
+        "input_sha256": "000dbebf3a13cb7f38ef664e6dcf05804b926a36a8d0d57191e6130d8a365d27",
+        "output_sha256": "45d24ef9b2784146c4c74b9604900ef6901ad6b5aeb7953985a463a3dfac5af7"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 6.705522537231445e-08,
+        "mean_abs": 5.93620865356644e-09,
+        "max_relative_above_1e-5": 1.691243607363421e-06,
+        "max_ulp_same_sign_above_1e-5": 20,
+        "samples": 27645
+      },
+      "rgba_sha256": "b34db0cccfd5234d2c3faa12771269880d06664655b7466846b6798d72af0483"
+    },
+    {
+      "host_case_index": 65,
+      "fixture": {
+        "size": [
+          97,
+          95
+        ],
+        "sensor_cfa": "BGGR",
+        "crop_cfa": "BGGR",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 2,
+        "row_stride": 200,
+        "fixture": "ricoh-gr-iii-1.f32",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 27645
+        },
+        "input_sha256": "5a8ca076a2bdf07077251de18372fd06542e15a9abdb218c3152336c4ed9b6d5",
+        "output_sha256": "5485f0c4da2457d20801c5fde7196e4002e2b6d95269dd63f1dc55d0c49940f1"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 8.940696716308594e-08,
+        "mean_abs": 8.732231384721667e-09,
+        "max_relative_above_1e-5": 1.1192064557619098e-06,
+        "max_ulp_same_sign_above_1e-5": 12,
+        "samples": 27645
+      },
+      "rgba_sha256": "aa3fc67f53966755a117d86d3be2255ffecb9527f0bca42f1b9e63f602dae3e0"
+    },
+    {
+      "host_case_index": 66,
+      "fixture": {
+        "size": [
+          97,
+          95
+        ],
+        "sensor_cfa": "GBRG",
+        "crop_cfa": "GBRG",
+        "origin": [
+          0,
+          0
+        ],
+        "pixel_stride": 2,
+        "row_stride": 200,
+        "fixture": "ricoh-gr-iii-2.f32",
+        "integer_packing_exact": true,
+        "error": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 27645
+        },
+        "input_sha256": "48fa1baeb4ab61ca4cf99c43da50f5112c573dd6c47f87603d03ea88b4659502",
+        "output_sha256": "e399f0201c448b7d60a058a052350d08d3e52b910840bbac497b62247eecd70b"
+      },
+      "device": "host device: Mali-G615 MC2 driver 184553472",
+      "integer_packing_exact": true,
+      "error": {
+        "max_abs": 8.195638656616211e-08,
+        "mean_abs": 5.6454756523390365e-09,
+        "max_relative_above_1e-5": 1.5686608063822882e-06,
+        "max_ulp_same_sign_above_1e-5": 20,
+        "samples": 27645
+      },
+      "rgba_sha256": "5a9691302b23947ba282e2776b0cf222e143047492a10545a3835b91f3b45aed"
+    }
+  ],
+  "passed": true,
+  "case_count": 35,
+  "max_abs": 4.172325134277344e-07
+}

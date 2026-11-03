@@ -1,0 +1,35 @@
+[
+  {
+    "mode": "1920x1080-30-approximate-scale4",
+    "passed": false,
+    "fps": 7.73791529182751,
+    "render_ms": {
+      "median": 126.2928845,
+      "p95": 136.325616,
+      "max": 190.165154
+    },
+    "error": null
+  },
+  {
+    "mode": "2560x1440-30-approximate-scale4",
+    "passed": false,
+    "fps": 7.955442551230114,
+    "render_ms": {
+      "median": 123.5619615,
+      "p95": 133.843384,
+      "max": 180.218385
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-approximate-scale4",
+    "passed": false,
+    "fps": 6.5072752842249955,
+    "render_ms": {
+      "median": 127.429,
+      "p95": 135.580307,
+      "max": 181.860616
+    },
+    "error": null
+  }
+]

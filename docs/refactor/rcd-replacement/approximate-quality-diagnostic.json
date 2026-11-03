@@ -1,0 +1,153 @@
+{
+  "scope": "CPU oracle diagnostic of geometry-induced detail loss on three CC0 crops reencoded as RAW16; bilinear enlargement, not app grade/encoder output or perceptual acceptance",
+  "oracle": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+  "quality_accepted": false,
+  "threshold": "No new perceptual acceptance threshold established; old reference-mode tolerances are unchanged",
+  "cases": [
+    {
+      "fixture": "ricoh-gr-iii-0.f32",
+      "fixture_sha256": "dbce05dc047758ab155148e192e94159411e22ea384cbc0be5eccf1c152cc899",
+      "source_size": [
+        97,
+        95
+      ],
+      "scale": 2,
+      "reconstruction_size": [
+        50,
+        48
+      ],
+      "max_abs_linear_rgb": 0.1424870248883962,
+      "mean_abs_linear_rgb": 0.0035200071419419924,
+      "psnr_linear_rgb_db": 37.23877056066264
+    },
+    {
+      "fixture": "ricoh-gr-iii-0.f32",
+      "fixture_sha256": "dbce05dc047758ab155148e192e94159411e22ea384cbc0be5eccf1c152cc899",
+      "source_size": [
+        97,
+        95
+      ],
+      "scale": 3,
+      "reconstruction_size": [
+        34,
+        32
+      ],
+      "max_abs_linear_rgb": 0.14411411793216272,
+      "mean_abs_linear_rgb": 0.004482240983826197,
+      "psnr_linear_rgb_db": 35.516159108849365
+    },
+    {
+      "fixture": "ricoh-gr-iii-0.f32",
+      "fixture_sha256": "dbce05dc047758ab155148e192e94159411e22ea384cbc0be5eccf1c152cc899",
+      "source_size": [
+        97,
+        95
+      ],
+      "scale": 4,
+      "reconstruction_size": [
+        26,
+        24
+      ],
+      "max_abs_linear_rgb": 0.14310337279580138,
+      "mean_abs_linear_rgb": 0.005358692714521871,
+      "psnr_linear_rgb_db": 34.422711681679914
+    },
+    {
+      "fixture": "ricoh-gr-iii-1.f32",
+      "fixture_sha256": "f36f58e9ef69e8c8684a3ee9f9effacd6fcdab4abd18121c7d4fcad955e16c6f",
+      "source_size": [
+        97,
+        95
+      ],
+      "scale": 2,
+      "reconstruction_size": [
+        50,
+        48
+      ],
+      "max_abs_linear_rgb": 0.25200950632754116,
+      "mean_abs_linear_rgb": 0.0042446910988494955,
+      "psnr_linear_rgb_db": 35.30691547006431
+    },
+    {
+      "fixture": "ricoh-gr-iii-1.f32",
+      "fixture_sha256": "f36f58e9ef69e8c8684a3ee9f9effacd6fcdab4abd18121c7d4fcad955e16c6f",
+      "source_size": [
+        97,
+        95
+      ],
+      "scale": 3,
+      "reconstruction_size": [
+        34,
+        32
+      ],
+      "max_abs_linear_rgb": 0.2454785549719083,
+      "mean_abs_linear_rgb": 0.0056618703931373675,
+      "psnr_linear_rgb_db": 33.519209385208136
+    },
+    {
+      "fixture": "ricoh-gr-iii-1.f32",
+      "fixture_sha256": "f36f58e9ef69e8c8684a3ee9f9effacd6fcdab4abd18121c7d4fcad955e16c6f",
+      "source_size": [
+        97,
+        95
+      ],
+      "scale": 4,
+      "reconstruction_size": [
+        26,
+        24
+      ],
+      "max_abs_linear_rgb": 0.2508864785103422,
+      "mean_abs_linear_rgb": 0.007027085181092766,
+      "psnr_linear_rgb_db": 32.40926193160965
+    },
+    {
+      "fixture": "ricoh-gr-iii-2.f32",
+      "fixture_sha256": "72096632a72106a685f332b14a249078a1faaeb62e50446ba91be386bf3f9da9",
+      "source_size": [
+        97,
+        95
+      ],
+      "scale": 2,
+      "reconstruction_size": [
+        50,
+        48
+      ],
+      "max_abs_linear_rgb": 0.19633641578257074,
+      "mean_abs_linear_rgb": 0.01610336203393303,
+      "psnr_linear_rgb_db": 32.379412111477485
+    },
+    {
+      "fixture": "ricoh-gr-iii-2.f32",
+      "fixture_sha256": "72096632a72106a685f332b14a249078a1faaeb62e50446ba91be386bf3f9da9",
+      "source_size": [
+        97,
+        95
+      ],
+      "scale": 3,
+      "reconstruction_size": [
+        34,
+        32
+      ],
+      "max_abs_linear_rgb": 0.19966281836117664,
+      "mean_abs_linear_rgb": 0.018544150571545532,
+      "psnr_linear_rgb_db": 31.224679973490726
+    },
+    {
+      "fixture": "ricoh-gr-iii-2.f32",
+      "fixture_sha256": "72096632a72106a685f332b14a249078a1faaeb62e50446ba91be386bf3f9da9",
+      "source_size": [
+        97,
+        95
+      ],
+      "scale": 4,
+      "reconstruction_size": [
+        26,
+        24
+      ],
+      "max_abs_linear_rgb": 0.2548070199983684,
+      "mean_abs_linear_rgb": 0.0201479522856665,
+      "psnr_linear_rgb_db": 30.584710110882508
+    }
+  ],
+  "source_sha256": "172c18b7e64cc0f3a881b893b2ece561274fe54811891b44689e723d4c798d74"
+}

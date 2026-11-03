@@ -1,0 +1,347 @@
+{
+  "scope": "Fresh local verification APKs; no publication or signing-clearance claim",
+  "packages": [
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/github/release/RawLens-2.0.74-release.apk",
+      "flavor": "github",
+      "sha256": "db7580a958c317e54fe0edc90f2948df925d7208f2ffdaf923409fd1a1f9df3e",
+      "size_bytes": 94506383,
+      "filters": [],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "268fcf03beda416212f028fe363ed17ced2a0c0fb2a7cbeaab94472d5c66dd68",
+            "spirv_sha256": "3229cb20d06ea65d14f47b17fb3137b602af4b0608bcf58f80f032994a4bddf0",
+            "compiler_optimization": "-O0",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "25cb577c548850d6fa1f2f2dbdeedf331e173ad518dd5e1d3c2d271bbd2393ba",
+            "spirv_sha256": "78157f73e5ceed9085e0a4a72ea776062c7fe50b8f4f87b77708c86f293c84bd",
+            "compiler_optimization": "-O0",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "responsecache": {
+            "source_sha256": "512f1653af3946cc65ec5e83309f7b78984987c2905dbd70d7c928d0d7530801",
+            "spirv_sha256": "8f50e0ccbc3e4e4aacc010aaf3eb333a1fe9fbb18f3d2404c5cce6676e16e25c",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "tiled": {
+            "source_sha256": "ebd151fa7da9ea4cc1252dc6e7e0d147c48b64b4c8d754bb1d04eafd7716a004",
+            "spirv_sha256": "894c9a60f4d5d442d8d337310946f7319966b55430df22386cf77a595b18b8d0",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "images": {
+            "source_sha256": "bec06e137248dc71dd0d164b82bd7d97171cd08411a6088596a2413c95db70b6",
+            "spirv_sha256": "242d6b92faf1f6bc6d6d4db8a224fbfbc100aa21b673643dc54f331aead6eb64",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "recording_candidate": {
+            "source_sha256": "6f66a6ee8c46d6ac1109aa3378206597d98a968a1f29d9b882f0b5d37dfb1741",
+            "spirv_sha256": "d522cebc9f041d104e3f44cd4dff62b8e9cfb16ab50d1f509a17e1b020111df7",
+            "precision": "FP32 arithmetic/storage",
+            "compiler_optimization": "-O",
+            "status": "compatibility diagnostic; not primary oracle or default"
+          },
+          "recording_candidate_images": {
+            "source_sha256": "542ef391ac9ee7f4e73a8a6c95414f2d7994480952983649aaa8bf8ae18021c9",
+            "spirv_sha256": "f302bd3947eab851fc3a078231ff37881ec99d207f30dbb2281d916075c7ca82",
+            "precision": "FP32 arithmetic/RGBA32F images",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_cached": {
+            "source_sha256": "2f175ef7c2cd5337a64a7d3e3636491b6858d25c4898cee4a68b23fc87bd0be1",
+            "spirv_sha256": "dde298526b0037f261ef1e6cc07eb65d6d305312b8f2f0323af475bad97fd26a",
+            "precision": "FP32 compact stage storage and cached responses",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage0": {
+            "source_sha256": "4ab3715c5c4d5ea0e7ad5b34db22d3ed4291811216bb80513295b344c8074dfe",
+            "spirv_sha256": "b0560e3d72748728df5695c7f44692e84820dcb404f38bbcb6cba99adf78f89f",
+            "stage": 0,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage1": {
+            "source_sha256": "7824ca4dbb34e3ac0d4182ae050a61dd3212bf28213626d6f0d5e17925b53bf0",
+            "spirv_sha256": "5e3d24fd582dcf02ce2b5bc6cf9f8d3fb85d93236b31bf8226ec0e3c8bfbb354",
+            "stage": 1,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage2": {
+            "source_sha256": "feefc2c8aba61b62b70a1675eca23182abf269e0d3dc8a275e7a1a0f102f8676",
+            "spirv_sha256": "6de103c8e5cf25a6e3275d582f259ccd6fbda2702b1cf9de0f8773fb02c92a23",
+            "stage": 2,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage3": {
+            "source_sha256": "d75414ed63923061ab292ea3867928c3f3ca2acf5ca01239aacc63590a584b95",
+            "spirv_sha256": "4f0cd5e5e9c9d32b7e7b8d4341a651c49d680c603084a6e89e33483cc7fac4dc",
+            "stage": 3,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage4": {
+            "source_sha256": "c5848d09bbce4b82223d36090092d99b22f49311a2a8b78a5b1062a1bb9c22c0",
+            "spirv_sha256": "056d6ae87223c21420fcf596386e60f6a7f376627d3ec964cc26e008265d18e2",
+            "stage": 4,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage6": {
+            "source_sha256": "ab12056d61f1fe4e98963b58da2f927ef6d20f3540ff2aa1865d1bbcf783e14b",
+            "spirv_sha256": "8051fa3b4c933a8564b3c3ad7933634ab4ce6de636ee8b8068c5ed65e8ec612f",
+            "stage": 6,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage7": {
+            "source_sha256": "3dcf1dbd1d70d5b859ef4b9bc4f339132a275f995ba4a6ec02da697fd2fe0ebe",
+            "spirv_sha256": "49f951beca94cc99c28f558d53e31545d1444fbd79d015bed6370739840434e3",
+            "stage": 7,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_packed": {
+            "source_sha256": "693f6ac563fae8c00aaaba83ea7e33b8e75a13330734d459fb3bf1da737b05b3",
+            "spirv_sha256": "606042e0863c37b095c60c67f746c3129c49ee58f54a877740157437a3a024aa",
+            "precision": "FP32 scalar cell guides, green and opposite storage",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_direct_raw": {
+            "source_sha256": "67a391e804a6d27e139c7c30d96b86bd37d2083e3a3d5f0065bc97bf5749eba6",
+            "spirv_sha256": "19267a9821821d1c0e0be790434fba3362e40cbc2f35c863c0a3005a84a91d8d",
+            "precision": "FP32 packed stages, read-only CFA",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "requirements_pack": {
+            "source_sha256": "4a1a76267e339823c21ba029dd9ee1a22555a1d8901b50f006bf8055ecb99e37",
+            "spirv_sha256": "72a2bcb99301bd4978f9ea36e27ed7048f057eff1c4ee3e20d87ecc4a3706a93",
+            "precision": "RAW16 cells, FP32 reconstruction; final half adapter only",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "requirements_rcd": {
+            "source_sha256": "0ed91c305b5142ff6b91822ae35c8a1088f30744d8bb3aa30ab63446200d3475",
+            "spirv_sha256": "63cfc46419c45673eb96bb3064fa6fb4b319693a87a99ff9008dfac29d166c5a",
+            "precision": "RAW16 cells, FP32 reconstruction; final half adapter only",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "d87ef7a866c6b0f2b58b61f66977609250a772d70f074eba837d56d4565a426b",
+      "native_libraries": [
+        {
+          "entry": "lib/arm64-v8a/librawLensPhotoRcd.so",
+          "sha256": "0739a4e1fdd7ddac0b6d86df2a21161ffaa71cde66ef6f493b9bc1782e97f544",
+          "required_jni_exports_present": true
+        },
+        {
+          "entry": "lib/armeabi-v7a/librawLensPhotoRcd.so",
+          "sha256": "985dd5f21be6d9e5c97c7bae71b987a36b4f783d1b6371453a26a8d3d65cb204",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    },
+    {
+      "path": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/fdroid/release/RawLens-2.0.74-release.apk",
+      "flavor": "fdroid",
+      "sha256": "b2221e14943cb4506420dc4d8307932aa6da6789533177112c004aef272c23d2",
+      "size_bytes": 91015593,
+      "filters": [],
+      "shaders": {
+        "mathematical_source": "RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+        "compiler": "shaderc v2022.3 ndk-r27-rc1\nspirv-tools v2022.4 ndk-r27-rc1\nglslang ndk-r27-rc1\n\nTarget: SPIR-V 1.0\n",
+        "shaders": {
+          "baseline": {
+            "source_sha256": "268fcf03beda416212f028fe363ed17ced2a0c0fb2a7cbeaab94472d5c66dd68",
+            "spirv_sha256": "3229cb20d06ea65d14f47b17fb3137b602af4b0608bcf58f80f032994a4bddf0",
+            "compiler_optimization": "-O0",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "optimized": {
+            "source_sha256": "25cb577c548850d6fa1f2f2dbdeedf331e173ad518dd5e1d3c2d271bbd2393ba",
+            "spirv_sha256": "78157f73e5ceed9085e0a4a72ea776062c7fe50b8f4f87b77708c86f293c84bd",
+            "compiler_optimization": "-O0",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "responsecache": {
+            "source_sha256": "512f1653af3946cc65ec5e83309f7b78984987c2905dbd70d7c928d0d7530801",
+            "spirv_sha256": "8f50e0ccbc3e4e4aacc010aaf3eb333a1fe9fbb18f3d2404c5cce6676e16e25c",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "tiled": {
+            "source_sha256": "ebd151fa7da9ea4cc1252dc6e7e0d147c48b64b4c8d754bb1d04eafd7716a004",
+            "spirv_sha256": "894c9a60f4d5d442d8d337310946f7319966b55430df22386cf77a595b18b8d0",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "images": {
+            "source_sha256": "bec06e137248dc71dd0d164b82bd7d97171cd08411a6088596a2413c95db70b6",
+            "spirv_sha256": "242d6b92faf1f6bc6d6d4db8a224fbfbc100aa21b673643dc54f331aead6eb64",
+            "compiler_optimization": "-O",
+            "precision": "FP32 arithmetic and stage storage; explicit final RGBA16F adapter only"
+          },
+          "recording_candidate": {
+            "source_sha256": "6f66a6ee8c46d6ac1109aa3378206597d98a968a1f29d9b882f0b5d37dfb1741",
+            "spirv_sha256": "d522cebc9f041d104e3f44cd4dff62b8e9cfb16ab50d1f509a17e1b020111df7",
+            "precision": "FP32 arithmetic/storage",
+            "compiler_optimization": "-O",
+            "status": "compatibility diagnostic; not primary oracle or default"
+          },
+          "recording_candidate_images": {
+            "source_sha256": "542ef391ac9ee7f4e73a8a6c95414f2d7994480952983649aaa8bf8ae18021c9",
+            "spirv_sha256": "f302bd3947eab851fc3a078231ff37881ec99d207f30dbb2281d916075c7ca82",
+            "precision": "FP32 arithmetic/RGBA32F images",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_cached": {
+            "source_sha256": "2f175ef7c2cd5337a64a7d3e3636491b6858d25c4898cee4a68b23fc87bd0be1",
+            "spirv_sha256": "dde298526b0037f261ef1e6cc07eb65d6d305312b8f2f0323af475bad97fd26a",
+            "precision": "FP32 compact stage storage and cached responses",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage0": {
+            "source_sha256": "4ab3715c5c4d5ea0e7ad5b34db22d3ed4291811216bb80513295b344c8074dfe",
+            "spirv_sha256": "b0560e3d72748728df5695c7f44692e84820dcb404f38bbcb6cba99adf78f89f",
+            "stage": 0,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage1": {
+            "source_sha256": "7824ca4dbb34e3ac0d4182ae050a61dd3212bf28213626d6f0d5e17925b53bf0",
+            "spirv_sha256": "5e3d24fd582dcf02ce2b5bc6cf9f8d3fb85d93236b31bf8226ec0e3c8bfbb354",
+            "stage": 1,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage2": {
+            "source_sha256": "feefc2c8aba61b62b70a1675eca23182abf269e0d3dc8a275e7a1a0f102f8676",
+            "spirv_sha256": "6de103c8e5cf25a6e3275d582f259ccd6fbda2702b1cf9de0f8773fb02c92a23",
+            "stage": 2,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage3": {
+            "source_sha256": "d75414ed63923061ab292ea3867928c3f3ca2acf5ca01239aacc63590a584b95",
+            "spirv_sha256": "4f0cd5e5e9c9d32b7e7b8d4341a651c49d680c603084a6e89e33483cc7fac4dc",
+            "stage": 3,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage4": {
+            "source_sha256": "c5848d09bbce4b82223d36090092d99b22f49311a2a8b78a5b1062a1bb9c22c0",
+            "spirv_sha256": "056d6ae87223c21420fcf596386e60f6a7f376627d3ec964cc26e008265d18e2",
+            "stage": 4,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage6": {
+            "source_sha256": "ab12056d61f1fe4e98963b58da2f927ef6d20f3540ff2aa1865d1bbcf783e14b",
+            "spirv_sha256": "8051fa3b4c933a8564b3c3ad7933634ab4ce6de636ee8b8068c5ed65e8ec612f",
+            "stage": 6,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_stage7": {
+            "source_sha256": "3dcf1dbd1d70d5b859ef4b9bc4f339132a275f995ba4a6ec02da697fd2fe0ebe",
+            "spirv_sha256": "49f951beca94cc99c28f558d53e31545d1444fbd79d015bed6370739840434e3",
+            "stage": 7,
+            "precision": "FP32; literal stage before optimization",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_packed": {
+            "source_sha256": "693f6ac563fae8c00aaaba83ea7e33b8e75a13330734d459fb3bf1da737b05b3",
+            "spirv_sha256": "606042e0863c37b095c60c67f746c3129c49ee58f54a877740157437a3a024aa",
+            "precision": "FP32 scalar cell guides, green and opposite storage",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "recording_candidate_direct_raw": {
+            "source_sha256": "67a391e804a6d27e139c7c30d96b86bd37d2083e3a3d5f0065bc97bf5749eba6",
+            "spirv_sha256": "19267a9821821d1c0e0be790434fba3362e40cbc2f35c863c0a3005a84a91d8d",
+            "precision": "FP32 packed stages, read-only CFA",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "requirements_pack": {
+            "source_sha256": "4a1a76267e339823c21ba029dd9ee1a22555a1d8901b50f006bf8055ecb99e37",
+            "spirv_sha256": "72a2bcb99301bd4978f9ea36e27ed7048f057eff1c4ee3e20d87ecc4a3706a93",
+            "precision": "RAW16 cells, FP32 reconstruction; final half adapter only",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          },
+          "requirements_rcd": {
+            "source_sha256": "0ed91c305b5142ff6b91822ae35c8a1088f30744d8bb3aa30ab63446200d3475",
+            "spirv_sha256": "63cfc46419c45673eb96bb3064fa6fb4b319693a87a99ff9008dfac29d166c5a",
+            "precision": "RAW16 cells, FP32 reconstruction; final half adapter only",
+            "compiler_optimization": "-O",
+            "status": "internal diagnostic"
+          }
+        }
+      },
+      "license_sha256": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+      "notice_sha256": "d87ef7a866c6b0f2b58b61f66977609250a772d70f074eba837d56d4565a426b",
+      "native_libraries": [
+        {
+          "entry": "lib/arm64-v8a/librawLensPhotoRcd.so",
+          "sha256": "ba76372ef580a0f44bd66715d29b77fd80b9ab36377a96d70694a6b532ee0e5f",
+          "required_jni_exports_present": true
+        },
+        {
+          "entry": "lib/armeabi-v7a/librawLensPhotoRcd.so",
+          "sha256": "80c818626ae30fc2d6b8760df0764abcae68af9d189b39073617e766f29b7774",
+          "required_jni_exports_present": true
+        }
+      ],
+      "retired_identifier_scan": "passed",
+      "signer": [
+        "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+        "Signer #1 certificate SHA-256 digest: 315bb832f143929bd0c89bc79c3b9a1eff76af4d66477f2133ec08dfb1f84e33",
+        "Signer #1 certificate SHA-1 digest: 3070f2c224294a07da7821b28aa359d33c2a17ef",
+        "Signer #1 certificate MD5 digest: 564cb45e05d88d6371cb004bc26ea0f2"
+      ],
+      "public_release_approved": false
+    }
+  ],
+  "all_checks_passed": true,
+  "source_baseline_sha256": "b933492d5b453bcc2a3327368545538a022a62fd2358d2539a9d887fc667e309"
+}

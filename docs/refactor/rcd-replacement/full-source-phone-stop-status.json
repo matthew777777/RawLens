@@ -1,0 +1,69 @@
+{
+  "status": "Stopped at user request; no new work authorized by this status record",
+  "head": "28977494032f743742eafbbf77ff437317544554",
+  "branch": "refactor/2.0",
+  "phone_correctness": "6 tests passed; 32 chroma cases exact CPU code values; 36 full-resolution adapter comparisons max half error 0.00048828125",
+  "isolated_build": "Headless APKs and Lint passed, 9m11s; release validation interrupted/incomplete",
+  "runs": [
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-full-source-shared/1920x1080-30-full-source-shared/recording.json",
+      "requested": [
+        1920,
+        1080,
+        30
+      ],
+      "reconstruction_scale": 1,
+      "crop": "3840x2160@(120,450)",
+      "rcd_frames": 65,
+      "mhc_frames": 0,
+      "frame_errors": 1,
+      "copy_ms": 0,
+      "median_render_ms": 444.455154,
+      "analysis_available": true,
+      "delivered_sensor_fps": 2.280434919182057,
+      "complete_decode_ok": true,
+      "accepted": false
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-full-source-shared/2560x1440-30-full-source-shared/recording.json",
+      "requested": [
+        2560,
+        1440,
+        30
+      ],
+      "reconstruction_scale": 1,
+      "crop": "3840x2160@(120,450)",
+      "rcd_frames": 64,
+      "mhc_frames": 0,
+      "frame_errors": 0,
+      "copy_ms": 0,
+      "median_render_ms": 456.23411550000003,
+      "analysis_available": true,
+      "delivered_sensor_fps": 2.180477608326564,
+      "complete_decode_ok": true,
+      "accepted": false
+    },
+    {
+      "report": "docs/refactor/rcd-replacement/recordings-full-source-shared/3840x2160-24-full-source-shared/recording.json",
+      "requested": [
+        3840,
+        2160,
+        24
+      ],
+      "reconstruction_scale": 1,
+      "crop": "3840x2160@(120,450)",
+      "rcd_frames": 64,
+      "mhc_frames": 0,
+      "frame_errors": 0,
+      "copy_ms": 0,
+      "median_render_ms": 447.518962,
+      "analysis_available": true,
+      "delivered_sensor_fps": 2.158543130675619,
+      "complete_decode_ok": true,
+      "accepted": false
+    }
+  ],
+  "unmeasured_change": "GPU-only scratch allocation passed 267 exact host baseline frames and 71 exact normalized/shared half comparisons; not integrated into the tested APK or phone-validated",
+  "mandatory_acceptance": "1080p30,1440p30,4K24 remain unmet; no long thermal/cadence soak",
+  "next_direction": "Architectural full-resolution video RCD: tile-local FP32 stages, fewer full-frame intermediates, GPU RGB handoff into grade/encoder. Potential simpler directional equations require explicit quality comparison; do not lower source detail or FOV. No 33.3ms promise."
+}

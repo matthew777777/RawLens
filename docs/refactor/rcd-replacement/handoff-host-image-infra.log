@@ -1,0 +1,6 @@
+/private/tmp/rcd-tile-local-image-infra-regression/rcd.comp
+/private/tmp/rcd-tile-local-image-infra-regression/normalize.comp
+/private/tmp/rcd-tile-local-image-infra-regression/baseline.comp
+Apple M1
+frames=71 max_half_error=0 max_fp32_error=0 largest_mean_fp32_error=0
+

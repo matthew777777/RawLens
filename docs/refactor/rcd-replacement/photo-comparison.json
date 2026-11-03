@@ -1,0 +1,292 @@
+{
+  "scope": "Compatibility comparison, not a pass gate; current Kotlin photo equations/edges differ from pinned RawTherapee",
+  "reference_sha256": "e6362eba94315aac5b5db5eba4736d2b463c298537a0b9936179f8323852d9ca",
+  "compile_command": [
+    "java",
+    "-cp",
+    "/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/2.2.21/b13aed5cf8412f9ee9d1e4db21bdcfebcc24f606/kotlin-compiler-embeddable-2.2.21.jar:/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.2.21/fa374a986e128314c3db00a20aae55f72a258511/kotlin-stdlib-2.2.21.jar:/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-script-runtime/2.2.21/e9b021c4e335e4ed7a7e3b32285249ae6bb3a6c8/kotlin-script-runtime-2.2.21.jar:/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-reflect/1.6.10/1cbe9c92c12a94eea200d23c2bbaedaf3daf5132/kotlin-reflect-1.6.10.jar:/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/1.8.1/bb0e192bd7c2b6b8217440d36e9758e377e450/kotlinx-coroutines-core-jvm-1.8.1.jar:/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains/annotations/13.0/919f0dfe192fb4e063e7dacadee7f8bb9a2672a9/annotations-13.0.jar",
+    "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler",
+    "-no-stdlib",
+    "-no-reflect",
+    "-classpath",
+    "/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.2.21/fa374a986e128314c3db00a20aae55f72a258511/kotlin-stdlib-2.2.21.jar",
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/RcdReference.kt",
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/photo-rcd/PhotoComparison.kt",
+    "-d",
+    "/private/tmp/rawlens-photo-rcd-m1/photo-comparison/photo.jar"
+  ],
+  "compiler_dependencies": {
+    "/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/2.2.21/b13aed5cf8412f9ee9d1e4db21bdcfebcc24f606/kotlin-compiler-embeddable-2.2.21.jar": "9588fa696ac5507af764fd5660df6894185e12704ec1bc3f5cb772af4987f295",
+    "/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.2.21/fa374a986e128314c3db00a20aae55f72a258511/kotlin-stdlib-2.2.21.jar": "6558a3d233da56a20934b32159f9db5f86ed5816ef098f78a2c223dc6abb79dd",
+    "/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-script-runtime/2.2.21/e9b021c4e335e4ed7a7e3b32285249ae6bb3a6c8/kotlin-script-runtime-2.2.21.jar": "2b1519b427b514d1536c1b425674b03fe914af637924028e9959c6625442df51",
+    "/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-reflect/1.6.10/1cbe9c92c12a94eea200d23c2bbaedaf3daf5132/kotlin-reflect-1.6.10.jar": "3277ac102ae17aad10a55abec75ff5696c8d109790396434b496e75087854203",
+    "/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/1.8.1/bb0e192bd7c2b6b8217440d36e9758e377e450/kotlinx-coroutines-core-jvm-1.8.1.jar": "f3d4f5de1c391bbcc20f3b3435ccbac013521e76b6902d7d59635ec15c1f797e",
+    "/Users/monikamalinowska/.gradle/caches/modules-2/files-2.1/org.jetbrains/annotations/13.0/919f0dfe192fb4e063e7dacadee7f8bb9a2672a9/annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478"
+  },
+  "cases": [
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "RGGB",
+      "fixture": "flat",
+      "whole_image": {
+        "max_abs": 1.2516975402832031e-06,
+        "mean_abs": 4.410667199072391e-07,
+        "max_relative_above_1e-5": 5.0067901611328125e-06,
+        "max_ulp_same_sign_above_1e-5": 84,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "max_relative_above_1e-5": 0.0,
+        "max_ulp_same_sign_above_1e-5": 0,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "whole_image": {
+        "max_abs": 0.7969305515289307,
+        "mean_abs": 0.07953667362046436,
+        "max_relative_above_1e-5": 48.17718585958005,
+        "max_ulp_same_sign_above_1e-5": 48605424,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.30379006266593933,
+        "mean_abs": 0.016003163853361282,
+        "max_relative_above_1e-5": 7.331551428353953,
+        "max_ulp_same_sign_above_1e-5": 17637996,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "RGGB",
+      "fixture": "chroma",
+      "whole_image": {
+        "max_abs": 0.3154841661453247,
+        "mean_abs": 0.029049202744005378,
+        "max_relative_above_1e-5": 2.5238733291625977,
+        "max_ulp_same_sign_above_1e-5": 14780196,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.30062316358089447,
+        "mean_abs": 0.01142387470555684,
+        "max_relative_above_1e-5": 0.7022830445076559,
+        "max_ulp_same_sign_above_1e-5": 13448980,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "GRBG",
+      "fixture": "flat",
+      "whole_image": {
+        "max_abs": 1.2516975402832031e-06,
+        "mean_abs": 4.410667199072391e-07,
+        "max_relative_above_1e-5": 5.0067901611328125e-06,
+        "max_ulp_same_sign_above_1e-5": 84,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "max_relative_above_1e-5": 0.0,
+        "max_ulp_same_sign_above_1e-5": 0,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "GRBG",
+      "fixture": "noise",
+      "whole_image": {
+        "max_abs": 0.7695050239562988,
+        "mean_abs": 0.07947543869731541,
+        "max_relative_above_1e-5": 40.702049026946106,
+        "max_ulp_same_sign_above_1e-5": 62781440,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.4638618230819702,
+        "mean_abs": 0.01707016791313939,
+        "max_relative_above_1e-5": 5.577112528985611,
+        "max_ulp_same_sign_above_1e-5": 22503024,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "GRBG",
+      "fixture": "chroma",
+      "whole_image": {
+        "max_abs": 0.3183104395866394,
+        "mean_abs": 0.028902053898363783,
+        "max_relative_above_1e-5": 1.862011194229126,
+        "max_ulp_same_sign_above_1e-5": 13448980,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.3006231486797333,
+        "mean_abs": 0.013296667952911774,
+        "max_relative_above_1e-5": 0.7022830445076559,
+        "max_ulp_same_sign_above_1e-5": 13448980,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "GBRG",
+      "fixture": "flat",
+      "whole_image": {
+        "max_abs": 1.2516975402832031e-06,
+        "mean_abs": 4.410667199072391e-07,
+        "max_relative_above_1e-5": 5.0067901611328125e-06,
+        "max_ulp_same_sign_above_1e-5": 84,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "max_relative_above_1e-5": 0.0,
+        "max_ulp_same_sign_above_1e-5": 0,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "GBRG",
+      "fixture": "noise",
+      "whole_image": {
+        "max_abs": 0.7695050239562988,
+        "mean_abs": 0.07947543869731541,
+        "max_relative_above_1e-5": 40.702049026946106,
+        "max_ulp_same_sign_above_1e-5": 62781440,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.4638618230819702,
+        "mean_abs": 0.01707016791313939,
+        "max_relative_above_1e-5": 5.577112528985611,
+        "max_ulp_same_sign_above_1e-5": 22503024,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "GBRG",
+      "fixture": "chroma",
+      "whole_image": {
+        "max_abs": 0.318162739276886,
+        "mean_abs": 0.028898121187344646,
+        "max_relative_above_1e-5": 2.545301914215088,
+        "max_ulp_same_sign_above_1e-5": 14870074,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.3006231486797333,
+        "mean_abs": 0.01330614553820309,
+        "max_relative_above_1e-5": 0.7022830445076559,
+        "max_ulp_same_sign_above_1e-5": 13448980,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "BGGR",
+      "fixture": "flat",
+      "whole_image": {
+        "max_abs": 1.2516975402832031e-06,
+        "mean_abs": 4.410667199072391e-07,
+        "max_relative_above_1e-5": 5.0067901611328125e-06,
+        "max_ulp_same_sign_above_1e-5": 84,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "max_relative_above_1e-5": 0.0,
+        "max_ulp_same_sign_above_1e-5": 0,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "BGGR",
+      "fixture": "noise",
+      "whole_image": {
+        "max_abs": 0.7969305515289307,
+        "mean_abs": 0.07953667362046436,
+        "max_relative_above_1e-5": 48.17718585958005,
+        "max_ulp_same_sign_above_1e-5": 48605424,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.30379006266593933,
+        "mean_abs": 0.016003163853361282,
+        "max_relative_above_1e-5": 7.331551428353953,
+        "max_ulp_same_sign_above_1e-5": 17637996,
+        "samples": 1134
+      }
+    },
+    {
+      "size": [
+        41,
+        38
+      ],
+      "cfa": "BGGR",
+      "fixture": "chroma",
+      "whole_image": {
+        "max_abs": 0.3147830069065094,
+        "mean_abs": 0.02903909798732261,
+        "max_relative_above_1e-5": 1.862011194229126,
+        "max_ulp_same_sign_above_1e-5": 13780895,
+        "samples": 4674
+      },
+      "interior_excluding_10": {
+        "max_abs": 0.30062316358089447,
+        "mean_abs": 0.011427445964628215,
+        "max_relative_above_1e-5": 0.7022830445076559,
+        "max_ulp_same_sign_above_1e-5": 13448980,
+        "samples": 1134
+      }
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "scope": "Headless Vulkan correctness on one Mali device; no camera/UI/recording/performance tests",
+  "passed": true,
+  "test_methods": 3,
+  "canonical_cases": 123,
+  "canonical_max_abs": 2.9802322e-07,
+  "canonical_largest_mean_abs": 1.1616454010272785e-08,
+  "canonical_border_max_abs": 5.9604645e-08,
+  "baseline_optimized_same_device_exact": true,
+  "profiles": [
+    "BT709",
+    "SLOG3",
+    "HLG",
+    "ACES"
+  ],
+  "recorded_lut": "independently generated 16^3 affine color LUT, CPU trilinear expectation, SLOG3 recorded-LUT path",
+  "p010_tolerance_codes": 2,
+  "invalid_cases": [
+    "CFA phase",
+    "NaN",
+    "infinite",
+    "negative",
+    "above-white",
+    "RAW row stride"
+  ],
+  "adreno": "not connected/not tested",
+  "real_camera_ahb_import": "not tested",
+  "recording_performance": "deferred by user",
+  "device": {
+    "ro.product.model": "25080RABDG",
+    "ro.build.fingerprint": "Redmi/lapis_eea/lapis:16/BP2A.250605.031.A3/OS3.0.303.0.WPPEUXM:user/release-keys",
+    "ro.build.version.sdk": "36"
+  },
+  "artifacts": {
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/github/deviceTest/RawLens-2.0.73-deviceTest-arm64-v8a.apk": "5e9e517dd12c6abf227bf6667775c44d89a2012403fc098f81ccd7950dbdb8f2",
+    "/Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/outputs/apk/androidTest/github/deviceTest/app-github-deviceTest-androidTest.apk": "8a03c7423c421c1a7191af44c999fa8792f62905d62e7533914f9ce6e7500242"
+  },
+  "fixture_manifest_sha256": "f575cdb7d4f57a311f8918b44679ed6927308308ce6188f6923549dcc1eaa904",
+  "reports": [
+    "android-mali-headless-final/instrumentation.txt",
+    "android-mali-headless-final/canonical.json",
+    "android-mali-headless-final/logcat.txt",
+    "android-mali-vulkan-device.json"
+  ],
+  "earlier_failure": "Expanded test used unsupported 2-point LUT fixture; rejected before GPU work. Corrected fixture to 16 points; preserved initial failure evidence."
+}

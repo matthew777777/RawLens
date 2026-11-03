@@ -1,0 +1,287 @@
+{
+  "cause": "Initial direct full-resolution PQ translation failed to preserve pinned upstream step 4.0 odd-column HPF storage and indx/2 lookup semantics. Fixed equations in baseline.comp, no threshold changed. Real fixture normalization in this exploratory run also preceded direct DNG WhiteLevel verification; do not use these hashes as final fixture evidence.",
+  "failed_cases": 51,
+  "case_count": 135,
+  "worst_final_max_abs": 0.5708892941474915,
+  "examples": [
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "RGGB",
+      "fixture": "chroma",
+      "input_sha256": "1920b98bf2d701ae4a73381cf83693b70b444ef4588205d1eff5918146838019",
+      "device": "host device: Apple M1 driver 10402",
+      "final": {
+        "max_abs": 0.0077974796295166016,
+        "mean_abs": 8.893042877503207e-06,
+        "max_relative_above_1e-5": 0.017566140237471873,
+        "max_ulp_same_sign_above_1e-5": 261640,
+        "samples": 1197
+      },
+      "channels": {
+        "R": {
+          "max_abs": 0.0077974796295166016,
+          "mean_abs": 2.494103328924729e-05,
+          "max_relative_above_1e-5": 0.017566140237471873,
+          "max_ulp_same_sign_above_1e-5": 261640,
+          "samples": 399
+        },
+        "G": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 399
+        },
+        "B": {
+          "max_abs": 0.0006935000419616699,
+          "mean_abs": 1.7380953432623306e-06,
+          "max_relative_above_1e-5": 0.0010435685146006311,
+          "max_ulp_same_sign_above_1e-5": 11635,
+          "samples": 399
+        }
+      },
+      "interior": {
+        "max_abs": 0.0077974796295166016,
+        "mean_abs": 0.0011827747027079265,
+        "max_relative_above_1e-5": 0.017566140237471873,
+        "max_ulp_same_sign_above_1e-5": 261640,
+        "samples": 9
+      },
+      "border": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "max_relative_above_1e-5": 0.0,
+        "max_ulp_same_sign_above_1e-5": 0,
+        "samples": 1188
+      },
+      "stages": {
+        "vh": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 3
+        },
+        "lpf": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 2
+        },
+        "pq": {
+          "max_abs": 0.3999999761581421,
+          "mean_abs": 0.19999998807907104,
+          "max_relative_above_1e-5": 0.3999999761581421,
+          "max_ulp_same_sign_above_1e-5": 6710886,
+          "samples": 2
+        },
+        "green": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 3
+        },
+        "opposite_r": {
+          "max_abs": 0.0077974796295166016,
+          "mean_abs": 0.0038987398147583008,
+          "max_relative_above_1e-5": 0.017566140237471873,
+          "max_ulp_same_sign_above_1e-5": 261640,
+          "samples": 2
+        }
+      },
+      "native_sample_max_abs": 0.0,
+      "initial_diagnostic_budget_pass": false
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "RGGB",
+      "fixture": "impulse",
+      "input_sha256": "57ca4a7e7001706e0de378cf8b781048abb0a6a6377e9c292ef15a0aaee7d0a9",
+      "device": "host device: Apple M1 driver 10402",
+      "final": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "max_relative_above_1e-5": 0.0,
+        "max_ulp_same_sign_above_1e-5": 0,
+        "samples": 1197
+      },
+      "channels": {
+        "R": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 399
+        },
+        "G": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 399
+        },
+        "B": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 399
+        }
+      },
+      "interior": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "max_relative_above_1e-5": 0.0,
+        "max_ulp_same_sign_above_1e-5": 0,
+        "samples": 9
+      },
+      "border": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "max_relative_above_1e-5": 0.0,
+        "max_ulp_same_sign_above_1e-5": 0,
+        "samples": 1188
+      },
+      "stages": {
+        "vh": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 3
+        },
+        "lpf": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 2
+        },
+        "pq": {
+          "max_abs": 0.5,
+          "mean_abs": 0.4999999999988889,
+          "max_relative_above_1e-5": 0.5,
+          "max_ulp_same_sign_above_1e-5": 8388608,
+          "samples": 2
+        },
+        "green": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 3
+        },
+        "opposite_r": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 2
+        }
+      },
+      "native_sample_max_abs": 0.0,
+      "initial_diagnostic_budget_pass": false
+    },
+    {
+      "size": [
+        19,
+        21
+      ],
+      "cfa": "RGGB",
+      "fixture": "noise",
+      "input_sha256": "73ca2e9d16460ab117c439e7848aa30fb7b3397a669db02b10d2d6c429ae6a5c",
+      "device": "host device: Apple M1 driver 10402",
+      "final": {
+        "max_abs": 0.147147536277771,
+        "mean_abs": 0.00018107502059131836,
+        "max_relative_above_1e-5": 0.2103439714384404,
+        "max_ulp_same_sign_above_1e-5": 2477657,
+        "samples": 1197
+      },
+      "channels": {
+        "R": {
+          "max_abs": 0.147147536277771,
+          "mean_abs": 0.0004324694175768018,
+          "max_relative_above_1e-5": 0.2103439714384404,
+          "max_ulp_same_sign_above_1e-5": 2468726,
+          "samples": 399
+        },
+        "G": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 1.8112940298285997e-09,
+          "max_relative_above_1e-5": 1.1714761032346915e-07,
+          "max_ulp_same_sign_above_1e-5": 1,
+          "samples": 399
+        },
+        "B": {
+          "max_abs": 0.04419077932834625,
+          "mean_abs": 0.00011075383290312344,
+          "max_relative_above_1e-5": 0.2005473543693506,
+          "max_ulp_same_sign_above_1e-5": 2477657,
+          "samples": 399
+        }
+      },
+      "interior": {
+        "max_abs": 0.147147536277771,
+        "mean_abs": 0.024082907372050814,
+        "max_relative_above_1e-5": 0.2103439714384404,
+        "max_ulp_same_sign_above_1e-5": 2477657,
+        "samples": 9
+      },
+      "border": {
+        "max_abs": 5.960464477539063e-08,
+        "mean_abs": 5.330802615644153e-10,
+        "max_relative_above_1e-5": 1.1714761032346915e-07,
+        "max_ulp_same_sign_above_1e-5": 1,
+        "samples": 1188
+      },
+      "stages": {
+        "vh": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 3.9736429850260414e-08,
+          "max_relative_above_1e-5": 9.296279972717278e-08,
+          "max_ulp_same_sign_above_1e-5": 1,
+          "samples": 3
+        },
+        "lpf": {
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "max_relative_above_1e-5": 0.0,
+          "max_ulp_same_sign_above_1e-5": 0,
+          "samples": 2
+        },
+        "pq": {
+          "max_abs": 0.48607340455055237,
+          "mean_abs": 0.34119588136672974,
+          "max_relative_above_1e-5": 2.5004284170919795,
+          "max_ulp_same_sign_above_1e-5": 15147901,
+          "samples": 2
+        },
+        "green": {
+          "max_abs": 5.960464477539063e-08,
+          "mean_abs": 2.9802322387695312e-08,
+          "max_relative_above_1e-5": 8.382182597968645e-08,
+          "max_ulp_same_sign_above_1e-5": 1,
+          "samples": 3
+        },
+        "opposite_r": {
+          "max_abs": 0.147147536277771,
+          "mean_abs": 0.07452985644340515,
+          "max_relative_above_1e-5": 0.2103439714384404,
+          "max_ulp_same_sign_above_1e-5": 2468726,
+          "samples": 2
+        }
+      },
+      "native_sample_max_abs": 0.0,
+      "initial_diagnostic_budget_pass": false
+    }
+  ]
+}

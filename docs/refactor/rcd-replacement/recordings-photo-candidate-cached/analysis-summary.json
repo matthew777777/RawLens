@@ -1,0 +1,13 @@
+[
+  {
+    "mode": "1920x1080-30-candidate-cached",
+    "passed": false,
+    "fps": 0,
+    "render_ms": {
+      "median": 659.703,
+      "p95": 1221.366231,
+      "max": 1221.366231
+    },
+    "error": null
+  }
+]

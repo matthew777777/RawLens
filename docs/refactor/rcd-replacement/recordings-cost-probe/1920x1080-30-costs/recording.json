@@ -1,0 +1,511 @@
+{
+  "requested": [
+    1920,
+    1080,
+    30
+  ],
+  "cameraId": "0",
+  "profile": "BT709",
+  "preview": false,
+  "sourcePolicy": "FULL rung, existing 16:9 crop\/FOV, full-source RCD; no detail reduction",
+  "intervals": [
+    {
+      "second": 1,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=1602, framesAcquired=2, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=72)"
+    },
+    {
+      "second": 2,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=2606, framesAcquired=2, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=73)"
+    },
+    {
+      "second": 3,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=3609, framesAcquired=3, framesGraded=1, framesDropped=1, fileBytes=36394, waitFreeFrames=1, fallbackWaits=0, cpuChainMsAvg=1968.3416, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=5.5677757, ioBusyPct=27, encBusyPct=218, memPct=74)"
+    },
+    {
+      "second": 4,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=4612, framesAcquired=3, framesGraded=1, framesDropped=1, fileBytes=52388, waitFreeFrames=1, fallbackWaits=0, cpuChainMsAvg=1968.3416, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=1.4672378, ioBusyPct=27, encBusyPct=218, memPct=75)"
+    },
+    {
+      "second": 5,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=5615, framesAcquired=4, framesGraded=2, framesDropped=1, fileBytes=68429, waitFreeFrames=2, fallbackWaits=0, cpuChainMsAvg=1961.3247, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=1.2681142, ioBusyPct=26, encBusyPct=202, memPct=76)"
+    },
+    {
+      "second": 6,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=6621, framesAcquired=4, framesGraded=2, framesDropped=1, fileBytes=84541, waitFreeFrames=2, fallbackWaits=0, cpuChainMsAvg=1961.3247, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.8895363, ioBusyPct=26, encBusyPct=202, memPct=76)"
+    },
+    {
+      "second": 7,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=7627, framesAcquired=5, framesGraded=3, framesDropped=1, fileBytes=100628, waitFreeFrames=3, fallbackWaits=0, cpuChainMsAvg=1958.2832, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.9136321, ioBusyPct=27, encBusyPct=188, memPct=76)"
+    },
+    {
+      "second": 8,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=8635, framesAcquired=5, framesGraded=3, framesDropped=1, fileBytes=116668, waitFreeFrames=3, fallbackWaits=0, cpuChainMsAvg=1958.2832, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.74261874, ioBusyPct=27, encBusyPct=188, memPct=75)"
+    }
+  ],
+  "startWallNs": 886070008162663,
+  "stats": {
+    "aacBytes": 124565,
+    "audioChunks": 181,
+    "audioDropped": 14,
+    "audioFrames": 370688,
+    "audioOutBufs": 364,
+    "copyMsAvg": 7.6283927,
+    "copyMsMax": 8.424846,
+    "cpuChainMsAvg": 1947.7106,
+    "cpuChainMsMax": 1968.3416,
+    "cropRect": "3840x2160@(120,450)",
+    "cycleMsMax": 1974.06,
+    "cycleOverBudget": 4,
+    "degradedFrames": 0,
+    "exportSize": "1920x1080",
+    "fallbackWaits": 0,
+    "fenceWaitMsAvg": 13.646219,
+    "fenceWaitMsMax": 15.759692,
+    "fileBytes": 2625447,
+    "frameErrors": 0,
+    "framesAcquired": 5,
+    "framesDropped": 1,
+    "framesGraded": 4,
+    "fusedFrames": 0,
+    "hasAudio": true,
+    "hasStabGyro": false,
+    "headDroppedFrames": 1,
+    "heatDegraded": false,
+    "inputStarved": 0,
+    "maxBacklogDepth": 7,
+    "outputBuffers": 5,
+    "outputBytes": 2497676,
+    "overBudgetFrames": 4,
+    "previewFrames": 0,
+    "previewSkipped": 4,
+    "profile": "BT709",
+    "rcdFrames": 4,
+    "resultMiss": 1,
+    "sensorSize": "4080x3060",
+    "shadedFrames": 4,
+    "stabGyroSamples": 0,
+    "staleResults": 4,
+    "thermalStatus": 0,
+    "true10Bit": true,
+    "waitFreeFrames": 4
+  },
+  "actualOutput": [
+    1920,
+    1080
+  ],
+  "trackFormats": [
+    "{track-id=1, level=16384, mime=video\/hevc, frame-count=4, profile=2, language=```, color-standard=1, display-width=1920, color-transfer=3, durationUs=166600, display-height=1080, width=1920, color-range=2, max-input-size=865491, frame-rate=24, height=1080, csd-0=java.nio.HeapByteBuffer[pos=0 lim=80 cap=80]}",
+    "{max-bitrate=128000, sample-rate=48000, track-id=2, mime=audio\/mp4a-latm, profile=2, bitrate=128000, language=```, aac-profile=2, encoder-delay=0, durationUs=7791500, channel-count=2, encoder-padding=0, max-input-size=522, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}"
+  ],
+  "fileBytes": 2625447,
+  "trace": {
+    "columns": [
+      "kind",
+      "wall_ns",
+      "sensor_ns",
+      "identity_or_pts",
+      "value"
+    ],
+    "kinds": {
+      "1": "capture-result",
+      "2": "acquired-image",
+      "3": "submitted-RCD",
+      "4": "queued-codec",
+      "5": "muxed-video",
+      "6": "RCD-render-wall-ns",
+      "10": "RAW-normalize-ns",
+      "11": "RCD-engine-ns",
+      "12": "product-corrections-ns",
+      "13": "half-output-upload-ns"
+    },
+    "events": [
+      [
+        2,
+        886071155414355,
+        886071104125260,
+        -1,
+        0
+      ],
+      [
+        1,
+        886071156544509,
+        886071104125260,
+        0,
+        33350000
+      ],
+      [
+        2,
+        886071182545125,
+        886071137454260,
+        -1,
+        0
+      ],
+      [
+        6,
+        886073096315894,
+        886071137454260,
+        0,
+        1911385769
+      ],
+      [
+        10,
+        886073096363279,
+        886071137454260,
+        -1,
+        43974846
+      ],
+      [
+        11,
+        886073096363971,
+        886071137454260,
+        -1,
+        1146277923
+      ],
+      [
+        12,
+        886073096364279,
+        886071137454260,
+        -1,
+        516029461
+      ],
+      [
+        13,
+        886073096364586,
+        886071137454260,
+        -1,
+        116258461
+      ],
+      [
+        3,
+        886073152663048,
+        886071137454260,
+        0,
+        0
+      ],
+      [
+        1,
+        886073153299894,
+        886071137454260,
+        1,
+        33350000
+      ],
+      [
+        2,
+        886073154898740,
+        886071204113260,
+        -1,
+        0
+      ],
+      [
+        4,
+        886073196306663,
+        886071137454260,
+        0,
+        0
+      ],
+      [
+        5,
+        886073269271586,
+        0,
+        0,
+        80
+      ],
+      [
+        5,
+        886073271995663,
+        0,
+        0,
+        701033
+      ],
+      [
+        6,
+        886075048290663,
+        886071204113260,
+        1,
+        1892479000
+      ],
+      [
+        10,
+        886075048298663,
+        886071204113260,
+        -1,
+        31916000
+      ],
+      [
+        11,
+        886075048299663,
+        886071204113260,
+        -1,
+        764041231
+      ],
+      [
+        12,
+        886075048300279,
+        886071204113260,
+        -1,
+        866217846
+      ],
+      [
+        13,
+        886075048300817,
+        886071204113260,
+        -1,
+        201347154
+      ],
+      [
+        3,
+        886075053902740,
+        886071204113260,
+        1,
+        66659
+      ],
+      [
+        2,
+        886075055778048,
+        886071237443260,
+        -1,
+        0
+      ],
+      [
+        4,
+        886075074265509,
+        886071204113260,
+        1,
+        66659
+      ],
+      [
+        5,
+        886075091121433,
+        0,
+        66659,
+        865471
+      ],
+      [
+        6,
+        886076980656586,
+        886071237443260,
+        2,
+        1924508538
+      ],
+      [
+        10,
+        886076980666356,
+        886071237443260,
+        -1,
+        39765539
+      ],
+      [
+        11,
+        886076980667356,
+        886071237443260,
+        -1,
+        775638230
+      ],
+      [
+        12,
+        886076980667894,
+        886071237443260,
+        -1,
+        868485923
+      ],
+      [
+        13,
+        886076980668279,
+        886071237443260,
+        -1,
+        202048923
+      ],
+      [
+        3,
+        886076986975971,
+        886071237443260,
+        1,
+        99989
+      ],
+      [
+        2,
+        886076987589817,
+        886071270773260,
+        -1,
+        0
+      ],
+      [
+        4,
+        886077009911894,
+        886071237443260,
+        2,
+        99989
+      ],
+      [
+        5,
+        886077031989740,
+        0,
+        99989,
+        513986
+      ],
+      [
+        6,
+        886078839922125,
+        886071270773260,
+        0,
+        1852054770
+      ],
+      [
+        10,
+        886078839932817,
+        886071270773260,
+        -1,
+        41983385
+      ],
+      [
+        11,
+        886078839933433,
+        886071270773260,
+        -1,
+        797963308
+      ],
+      [
+        12,
+        886078839933740,
+        886071270773260,
+        -1,
+        863090385
+      ],
+      [
+        13,
+        886078839933817,
+        886071270773260,
+        -1,
+        128144923
+      ],
+      [
+        3,
+        886078840363971,
+        886071270773260,
+        1,
+        133319
+      ],
+      [
+        1,
+        886078840579664,
+        886071170784260,
+        2,
+        33350000
+      ],
+      [
+        1,
+        886078841018740,
+        886071204113260,
+        3,
+        33350000
+      ],
+      [
+        1,
+        886078841070664,
+        886071237443260,
+        4,
+        33350000
+      ],
+      [
+        1,
+        886078841091971,
+        886071270773260,
+        5,
+        33350000
+      ],
+      [
+        1,
+        886078841112510,
+        886071304102260,
+        6,
+        33350000
+      ],
+      [
+        1,
+        886078841129125,
+        886071337432260,
+        7,
+        33350000
+      ],
+      [
+        1,
+        886078841146740,
+        886071370761260,
+        8,
+        33350000
+      ],
+      [
+        1,
+        886078841179356,
+        886071404091260,
+        9,
+        33350000
+      ],
+      [
+        1,
+        886078841729202,
+        886071437420260,
+        10,
+        33350000
+      ],
+      [
+        1,
+        886078841951279,
+        886071470750260,
+        11,
+        33350000
+      ],
+      [
+        1,
+        886078842195894,
+        886073203886260,
+        13,
+        33350000
+      ],
+      [
+        1,
+        886078842246971,
+        886073237216260,
+        14,
+        33350000
+      ],
+      [
+        1,
+        886078842630971,
+        886075103671260,
+        16,
+        33350000
+      ],
+      [
+        1,
+        886078842711587,
+        886077036785260,
+        18,
+        33350000
+      ],
+      [
+        4,
+        886078857521202,
+        886071270773260,
+        3,
+        133319
+      ],
+      [
+        5,
+        886078873270125,
+        0,
+        133319,
+        417106
+      ]
+    ]
+  },
+  "endWallNs": 886079562539664
+}

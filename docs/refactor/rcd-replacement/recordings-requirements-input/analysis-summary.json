@@ -1,0 +1,35 @@
+[
+  {
+    "mode": "1920x1080-30-requirements-input",
+    "passed": false,
+    "fps": 0.606129162942445,
+    "render_ms": {
+      "median": 1448.953538,
+      "p95": 1560.661154,
+      "max": 1842.560847
+    },
+    "error": null
+  },
+  {
+    "mode": "2560x1440-30-requirements-input",
+    "passed": false,
+    "fps": 0.6917204947703769,
+    "render_ms": {
+      "median": 1637.7266155000002,
+      "p95": 1937.554154,
+      "max": 1937.554154
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-requirements-input",
+    "passed": false,
+    "fps": 0.5537984760573537,
+    "render_ms": {
+      "median": 1806.4459615,
+      "p95": 1976.046769,
+      "max": 1976.046769
+    },
+    "error": null
+  }
+]

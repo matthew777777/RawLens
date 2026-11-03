@@ -1,0 +1,23 @@
+{
+  "candidate_path": "tools/rcd-baseline/fast-20261026/vf_rcd_measured_200ms.comp",
+  "candidate_sha256": "79c7896d38d2d91d3034b7c94731475a27692d4f03d7ddc10b72153c20b015d8",
+  "photo_comparisons": [
+    {
+      "revision": "b247c913876a1b7cc3a7f889f693440ea7dfb7c3",
+      "photo_sha256": "5d9f70ca19011cbe0411df55dc596991513ec4585c501e3bd43d48aaf8a30585",
+      "noncomment_tokens_equal": false
+    },
+    {
+      "revision": "bf16f46c3d35d86e6cc0253c8a3e9fe1fd3b2243",
+      "photo_sha256": "a269c381faf03006ec5addde107e153a26675161640c4a55daece9bf0d431709",
+      "noncomment_tokens_equal": false
+    },
+    {
+      "revision": "a244814c1fcbcbb0d3f9d268a1bca5a8a32cde86",
+      "photo_sha256": "6e7786e71db6eac89b01e7189d5afce159fd9b5d13640e4dae46091704d1a816",
+      "noncomment_tokens_equal": false
+    }
+  ],
+  "history_note": "git log --follow follows a copy from the pre-dispute photo path; the backup path itself does not exist at a244814. Chronology alone does not establish later edit origin.",
+  "scope": "hash/path evidence, no candidate shader body used as implementation/oracle"
+}

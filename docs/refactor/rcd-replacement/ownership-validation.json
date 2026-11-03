@@ -1,0 +1,15 @@
+{
+  "tests": 3,
+  "failures": 0,
+  "errors": 0,
+  "cases": [
+    "waitExceptionDoesNotAuthorizeReuse",
+    "duplicateFailureRetainsOriginalUntilCompletion",
+    "deliveryAndOriginalHaveSeparateOwnersAcrossReuse"
+  ],
+  "source_sha256": {
+    "app/src/main/java/com/matthew/rawlens/PhotoRcdCompletion.kt": "ff22de343794f9f1759a5559b9de979a37d7300ae1a848f8673fe1305e77d418",
+    "app/src/main/java/com/matthew/rawlens/PhotoRcdRenderer.kt": "92b5ce49c27cf4ef1829e7f0e278fd2bdb62f6d0c1714762f3ea6931be412224",
+    "app/src/main/java/com/matthew/rawlens/EncodedVideoRecorder.kt": "45801c0aafef07f3283f943b9347b358e60c7f864683d0a4d207bc069b18e69f"
+  }
+}

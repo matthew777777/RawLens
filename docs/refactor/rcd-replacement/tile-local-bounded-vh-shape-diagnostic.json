@@ -1,0 +1,27 @@
+{
+  "scope": "Isolated full-source native Vulkan shape diagnostic on synthetic RAW16. No camera/encoder/recording delivered FPS or quality acceptance. Workload uncontrolled.",
+  "serial": "fe79feha9lmb6hhi",
+  "source": [
+    4080,
+    3060
+  ],
+  "crop": [
+    120,
+    450,
+    3840,
+    2160
+  ],
+  "pattern": "uint16((x*137+y*991+17)%5000), four sensor blacks, white4095",
+  "warmup_samples": 2,
+  "repeats": 6,
+  "binary_sha256": "fb9e68e4476ab63e1fecb95b0fa5b41aef8c710feefcb4d5ab2d7874655dbf40",
+  "shaders": {
+    "normalize.spv": "ed281628e2e0070187181018103a3aec18eca00680cac5cf6360d6e945488e1d",
+    "tile8x8.spv": "fbd291ab43aa675fc30496eb8bb3ee4bf427a6dbc9440257d5f3847089ea4711",
+    "tile16x8.spv": "f44f344a9878a8cd35fb8138db17dc6cebf94eb15e01e772526eb8c3927b930b",
+    "tile8x16.spv": "8102377226e3ffd1fdd1eeaffd8ce0f79bf495fffb401a481f941abfa54a2942",
+    "tile16x16.spv": "c423dbfdaf2a5f85471d22d2e3b24ba52f306cb6b146c56e19fbf7071615174d",
+    "tile32x8.spv": "09cb14ea8271eb56bad2026df71a7b7a18ad47bd320ae0241ca58c5b1cf1466d"
+  },
+  "runs": []
+}
