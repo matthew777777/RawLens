@@ -27,6 +27,11 @@ def source(image=False):
           'halfOutput[site.y*p.width+site.x]=uvec2(packHalf2x16(rgb.rg),packHalf2x16(vec2(rgb.b,1.0)));'
     assert ('imageStore(halfOutputImage' in product)==image
     s=s.replace('//@STORE@',store)
+    if image: s=s.replace('#extension GL_EXT_control_flow_attributes : require','#extension GL_EXT_control_flow_attributes : require\n#define IMAGE_OUTPUT 1',1)
+    # Stage 5 reads the output-resolution product RGB back.
+    product_rw=s.replace('writeonly restrict buffer HalfOutput','restrict buffer HalfOutput')
+    assert image or product_rw!=s
+    s=product_rw
     return expand(s)
 
 def image_source():

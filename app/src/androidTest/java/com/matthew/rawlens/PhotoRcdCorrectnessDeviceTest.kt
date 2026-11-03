@@ -29,6 +29,14 @@ class PhotoRcdCorrectnessDeviceTest {
         val floats = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
         return FloatArray(floats.remaining()).also { floats.get(it) }
     }
+    private fun cropPhase(channels: IntArray, left: Int, top: Int): Int {
+        var phase = 0
+        for (q in 0..3) {
+            val sensorSite = (((q / 2 + top) and 1) * 2) + ((q % 2 + left) and 1)
+            phase = phase or ((when (sensorSite) { channels[0] -> 0; channels[3] -> 2; else -> 1 }) shl (q * 2))
+        }
+        return phase
+    }
     private fun phase(pattern: String): Int = pattern.mapIndexed { q,c -> "RGB".indexOf(c) shl (q*2) }.reduce(Int::or)
 
     @Test fun canonicalBaselineAndOptimizedMatchPinnedOracle() {
@@ -208,6 +216,102 @@ class PhotoRcdCorrectnessDeviceTest {
         }
         File(File(context.getExternalFilesDir(null),"photo-rcd-correctness").apply { mkdirs() },"requirements-adapter.json")
             .writeText(JSONObject().put("cases",rows).put("passed",true).put("scaled_cases",scaledRows).put("scope","36 full-resolution and 28 independently area-reduced adapter comparisons; final half boundary; not perceptual quality acceptance").toString(2))
+    }
+
+    /**
+     * Frame-global recording RCD (A) against the exact tile-local port (B).
+     * A is not bit-exact: it reconstructs frame-globally and its final pass
+     * runs in FP16. Budget (provisional, set from host runs: 75 dB without
+     * LSC, max ~3.9e-3 with LSC): max |A-B| <= 4e-3, mean <= 2e-4 per FP16
+     * channel. Then the fused grade+P010 pass must match a CPU grade of A's own
+     * RGB at the same exact sample positions within 2 codes (host check: max 1).
+     */
+    @Test fun frameGlobalWithinBudgetAndFusedGradeMatchesSeparate() {
+        check(VfEglImport.available)
+        fun asset(path:String)=context.assets.open(path).use { it.readBytes() }
+        check(VfVulkan.initNative(asset("shaders/vf/vf_superpixel.spv"))==VfVulkan.OK)
+        check(VfVideoGrade.recordCubeUploadNative(null,0,null)==VfVulkan.OK)
+        check(VfVideoGrade.initGradeNative(asset("shaders/vf/vf_videograde.spv"))==VfVulkan.OK)
+        check(VfVideoGrade.initGradeYuvNative(asset("shaders/vf/vf_gradeyuv.spv"))==VfVulkan.OK)
+        check(VfVideoGrade.gradeLutUploadNative(VfVideoGrade.bakeLut(VfVideoGrade.DEFAULT_CONTRAST))==VfVulkan.OK)
+        val rows=JSONArray();val p010Rows=JSONArray()
+        val patterns=listOf("cfa" to listOf(intArrayOf(0,1,2,3),intArrayOf(1,0,3,2),intArrayOf(2,3,0,1),intArrayOf(3,2,1,0)))
+        val ccm=floatArrayOf(1.6f,-.45f,-.15f,-.2f,1.4f,-.2f,0f,-.5f,1.5f)
+        PhotoRcdRenderer.open(context,requirementsInput=true,normalizeOnce=true,tileLocal=true,frameGlobal=true).use { global ->
+            PhotoRcdRenderer.open(context).use { baseline ->
+                for(size in listOf(132 to 66,200 to 120,388 to 220)) for(left in listOf(0,4)) for(top in 0..1) for(channels in patterns[0].second) {
+                    val w=size.first;val h=size.second
+                    val sw=w+left+4;val sh=h+top+2;val row=(sw*2+15) and -8
+                    val raw=ByteBuffer.allocateDirect(row*sh).order(ByteOrder.LITTLE_ENDIAN)
+                    // Smooth ramp plus fine texture: exercises both RCD directions.
+                    fun code(x:Int,y:Int)=(300+x*9+y*5+((x*137+y*991+17)%997)).coerceAtMost(4000)
+                    repeat(sh) { y -> repeat(sw) { x -> raw.putShort(y*row+x*2,code(x,y).toShort()) } }
+                    val black=floatArrayOf(64f,64.5f,63.25f,65f);val wb=floatArrayOf(1.7f,1f,1.3f)
+                    val a=global.renderRawBuffer(raw,sw,sh,row,2,0,left,top,w,h,channels,black,4095f,wb,null,null)
+                    val b=baseline.renderRawBuffer(raw,sw,sh,row,2,0,left,top,w,h,channels,black,4095f,wb,null,null)
+                    val actual=checkNotNull(VfEglImport.dumpFp16(a,w,h));val expected=checkNotNull(VfEglImport.dumpFp16(b,w,h))
+                    var maximum=0f;var sum=0.0
+                    var worstAt=-1
+                    for(j in actual.indices) { assertTrue(actual[j].isFinite());val e=abs(actual[j]-expected[j]);if(e>maximum){maximum=e;worstAt=j};sum+=e }
+                    val mean=sum/actual.size
+                    assertTrue("frame-global $w x $h left=$left top=$top ch=${channels.toList()} max=$maximum at x=${worstAt/4%w} y=${worstAt/4/w} c=${worstAt%4} got=${actual.getOrNull(worstAt)} want=${expected.getOrNull(worstAt)}",maximum<=4e-3f)
+                    assertTrue("frame-global $w x $h left=$left top=$top mean=$mean",mean<=2e-4)
+                    rows.put(JSONObject().put("width",w).put("height",h).put("left",left).put("top",top).put("channels",JSONArray(channels.toList())).put("max_abs_half",maximum).put("mean_abs_half",mean))
+                    if(left!=0 || channels[0]!=0) continue
+                    for(profile in EncodedVideoProfile.entries) for(out in listOf(w to h,(w/2+1) and -2 to ((h/2+1) and -2),(w*2/3) and -2 to ((h*2/3) and -2))) {
+                        val ow=out.first;val oh=out.second;val strides=intArrayOf(ow*2,ow*2,ow,oh)
+                        val (dims,params)=VfVideoGrade.packGrade(intArrayOf(ow,oh),floatArrayOf(1.1f,1f,.9f,1f),ccm,.5f,false,profile=profile)
+                        checkNotNull(VfEglImport.createLinearP010(ow,oh)).use { fused ->
+                            val rgb=global.renderRawBuffer(raw,sw,sh,row,2,0,left,top,w,h,channels,black,4095f,wb,null,null)
+                            val fd=global.renderP010RawBuffer(raw,sw,sh,row,2,left,top,w,h,channels,black,4095f,wb,null,null,fused,params,strides)
+                            assertTrue("fused fd",fd>=0)
+                            try { assertTrue("fused completion",VfEglImport.awaitSyncFd(fd,10_000)) } finally { VfEglImport.closeSyncFd(fd) }
+                            // Reference: the fused path's exact integer sampling, srcOf(o) =
+                            // ((2o+1)*src)/(2*out), graded on the CPU from A's own RGB. (vf_gradeyuv
+                            // computes (o+0.5)*src/out with GPU float division, which is not
+                            // correctly rounded: at exact 2:1 it can read the neighbouring pixel.)
+                            val d=checkNotNull(VfEglImport.dumpFp16(rgb,w,h));val ev=Math.pow(2.0,.5).toFloat();val gn=floatArrayOf(1.1f,1f,.9f)
+                            val site11=(cropPhase(channels,left,top) shr 6) and 3
+                            val shiftX=if(2*ow==w && 2*oh==h && site11==1) -1 else 0
+                            fun src(o:Int,n:Int,sN:Int)=((2*o+1)*sN)/(2*n)
+                            fun yuvAt(ox:Int,oy:Int):FloatArray {
+                                val q=(src(oy,oh,h)*w+src(ox,ow,w)+shiftX)*4
+                                val dev=FloatArray(3){r->(0..2).map{i->ccm[r*3+i]*gn[i]*ev*d[q+i]}.sum()}
+                                val e=when(profile) {
+                                    EncodedVideoProfile.BT709 -> VfVideoGrade.encodePixel709(dev)
+                                    EncodedVideoProfile.SLOG3 -> VfVideoGrade.encodePixelSlog3(dev)
+                                    EncodedVideoProfile.HLG -> VfVideoGrade.encodePixelHlg(dev)
+                                    EncodedVideoProfile.ACES -> VfVideoGrade.encodePixelAces(dev)
+                                }
+                                val kr=if(profile==EncodedVideoProfile.HLG).2627f else .2126f
+                                val kb=if(profile==EncodedVideoProfile.HLG).0593f else .0722f
+                                val l=kr*e[0]+(1-kr-kb)*e[1]+kb*e[2]
+                                return floatArrayOf(l,(e[2]-l)/(2*(1-kb))+.5f,(e[0]-l)/(2*(1-kr))+.5f)
+                            }
+                            var worst=0;val bad=ArrayList<String>();var nbad=0
+                            for(y in 0 until oh-1 step maxOf(2,(oh/24) and -2)) for(x in 0 until ow-1 step maxOf(2,(ow/24) and -2)) {
+                                val f=checkNotNull(VfEglImport.sampleP010Center(fused,ow*2,ow*2,ow,oh,x,y))
+                                val cell=listOf(yuvAt(x,y),yuvAt(x+1,y),yuvAt(x,y+1),yuvAt(x+1,y+1))
+                                val want=intArrayOf((64+876*cell[0][0].coerceIn(0f,1f)).roundToInt(),
+                                    (64+896*cell.map{it[1]}.average().toFloat().coerceIn(0f,1f)).roundToInt(),
+                                    (64+896*cell.map{it[2]}.average().toFloat().coerceIn(0f,1f)).roundToInt())
+                                repeat(3) { c ->
+                                    assertEquals("fused P010 low bits",0,f[c] and 63)
+                                    val err=abs((f[c] shr 6)-want[c]);worst=maxOf(worst,err)
+                                    if(err>2){nbad++;if(bad.size<6)bad.add("($x,$y)c$c ${f[c] shr 6}/${want[c]}")}
+                                }
+                            }
+                            assertTrue("fused $profile $w x $h -> $ow x $oh top=$top bad=$nbad $bad",nbad==0)
+                            p010Rows.put(JSONObject().put("profile",profile.name).put("source",JSONArray(listOf(w,h))).put("output",JSONArray(listOf(ow,oh))).put("top",top).put("max_code_error",worst))
+                        }
+                    }
+                }
+            }
+        }
+        File(File(context.getExternalFilesDir(null),"photo-rcd-correctness").apply { mkdirs() },"frame-global.json")
+            .writeText(JSONObject().put("passed",true).put("budget",JSONObject().put("max_abs_half",4e-3).put("mean_abs_half",2e-4).put("fused_p010_codes",2))
+                .put("cases",rows).put("fused_p010_cases",p010Rows)
+                .put("scope","frame-global RCD vs exact port, 48 synthetic crops; fused grade vs CPU grade of the same RGB at exact sample positions, 4 profiles x 3 scales x 2 crops; not perceptual acceptance").toString(2))
     }
 
     @Test fun chromaUsesBothRowsOfEachOutputCell() {

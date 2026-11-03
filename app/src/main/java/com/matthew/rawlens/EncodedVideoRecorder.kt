@@ -246,6 +246,8 @@ class EncodedVideoRecorder(
     internal var validatePhotoRcdSharedFinal: Boolean = false
     internal var validatePhotoRcdTileLocal: Boolean = false
     internal var validatePhotoRcdFrameGlobal: Boolean = false
+    /** Frame-global RCD grades and packs P010 inside its final pass (no RGB intermediate). */
+    internal var validatePhotoRcdFusedGrade: Boolean = false
     internal var validatePhotoRcdGpuImage: Boolean = false
     internal var validatePhotoRcdReconstructionScale: Int = 1
     internal var photoRcdTrace: PhotoRcdRecordingTrace? = null
@@ -2044,6 +2046,8 @@ class EncodedVideoRecorder(
     private fun submitPhotoRcd(image: Image, f: FrameSubmit): Int? {
         val renderer = checkNotNull(photoRcdRenderer)
         val renderStarted = SystemClock.elapsedRealtimeNanos()
+        if (validatePhotoRcdFrameGlobal && validatePhotoRcdFusedGrade && sessionRecordLut == null)
+            return submitPhotoRcdFused(renderer, image, f, renderStarted)
         val rgb = try {
             renderer.render(image, f.slotIndex, f.crop.left, f.crop.top, f.crop.width, f.crop.height,
                 channels, f.levels, f.white, wbGains(f.result).copyOf(3), f.shadeD, f.shadeG)
@@ -2081,6 +2085,28 @@ class EncodedVideoRecorder(
         }
         publicPhotoRcdFrames.incrementAndGet()
         return deliveryFd
+    }
+
+    /** Frame-global fused path: RCD + grade + P010 in one engine submit. Cube-LUT sessions never come here. */
+    private fun submitPhotoRcdFused(renderer: PhotoRcdRenderer, image: Image, f: FrameSubmit, renderStarted: Long): Int? {
+        val (_, parameters) = VfVideoGrade.packGrade(intArrayOf(width, height),
+            wbGains(f.result), ccmMatrix(f.result, staticCcm), exposureEv, false, profile = sessionProfile)
+        val fd = try {
+            renderer.renderP010(image, f.crop.left, f.crop.top, f.crop.width, f.crop.height,
+                channels, f.levels, f.white, wbGains(f.result).copyOf(3), f.shadeD, f.shadeG,
+                f.p010Buf, parameters, f.strides)
+        } catch (e: Exception) {
+            // The engine's previous frame was checked before this submit; a
+            // failure here leaves nothing queued against this P010 buffer.
+            Log.w(TAG, "fused photo RCD frame failed; MHC fallback", e)
+            renderer.close(); photoRcdRenderer = null
+            return submitFused(f)
+        }
+        photoRcdTrace?.record(6, image.timestamp, f.slotIndex.toLong(), SystemClock.elapsedRealtimeNanos() - renderStarted)
+        if (photoRcdTrace != null) renderer.frameCosts().forEachIndexed { i, ms -> photoRcdTrace?.record(10+i,image.timestamp,value=(ms*1e6).toLong()) }
+        if (fd < 0) { Log.w(TAG, "fused photo RCD submit failed ($fd)"); dropped.incrementAndGet(); return null }
+        publicPhotoRcdFrames.incrementAndGet()
+        return fd
     }
 
     /** Retry only a failed RAW import, before any dispatch owns the slot.
@@ -2462,7 +2488,9 @@ class EncodedVideoRecorder(
         // arrives (submit-to-signal minus travel): sustained high here
         // means the GPU, not the CPU, is the bottleneck.
         val fenceStartNs = android.os.SystemClock.elapsedRealtimeNanos()
-        if (!VfEglImport.awaitSyncFd(job.fd, if(job.writerImage != null) 30_000 else 100)) {
+        // Fused photo RCD keeps two frames in flight: completion can trail
+        // submission by two GPU frames (>100 ms at 1440p/4K).
+        if (!VfEglImport.awaitSyncFd(job.fd, if(job.writerImage != null) 30_000 else if (validatePhotoRcdFusedGrade) 1_000 else 100)) {
             if (job.writerImage != null) {
                 job.retainGpuResources=true
                 // Preserve this fd/RAW lease/image/AHB across teardown; a later

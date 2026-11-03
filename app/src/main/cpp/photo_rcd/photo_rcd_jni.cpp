@@ -5,6 +5,8 @@
 #include <android/hardware_buffer.h>
 #include <android/hardware_buffer_jni.h>
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <jni.h>
 #include <map>
 #include <memory>
@@ -348,5 +350,106 @@ Java_com_matthew_rawlens_PhotoRcdRenderer_setOutputSamplingNative(
     get(handle)->setOutputSampling(width, height);
   } catch (const std::exception &e) {
     failure(env, e);
+  }
+}
+
+// Fused frame-global final+grade into the encoder P010 buffer. Same RAW and
+// product contract as renderNative; grade parameters from VfVideoGrade
+// .packGrade (18 floats), CCM folded exactly as the vf grade does
+// (rows = ccm * wb * 2^ev). Returns a completion sync fd (caller owns it).
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_PhotoRcdRenderer_renderP010Native(
+    JNIEnv *env, jobject, jlong handle, jobject input, jintArray geometry,
+    jfloatArray blacks, jfloat white, jfloatArray whiteBalance,
+    jintArray shadingDims, jshortArray shading, jobject p010,
+    jfloatArray gradeParams, jintArray layout) {
+  try {
+    if (!input || !geometry || env->GetArrayLength(geometry) != 9 || !blacks ||
+        env->GetArrayLength(blacks) != 4 || !whiteBalance ||
+        env->GetArrayLength(whiteBalance) != 3 || !p010 || !gradeParams ||
+        env->GetArrayLength(gradeParams) < 18 || !layout ||
+        env->GetArrayLength(layout) != 4)
+      throw std::invalid_argument("invalid fused frame arguments");
+    int g[9];
+    std::array<float, 4> black;
+    std::array<float, 3> wb;
+    float ff[18];
+    std::array<int, 4> lay;
+    env->GetIntArrayRegion(geometry, 0, 9, g);
+    env->GetFloatArrayRegion(blacks, 0, 4, black.data());
+    env->GetFloatArrayRegion(whiteBalance, 0, 3, wb.data());
+    env->GetFloatArrayRegion(gradeParams, 0, 18, ff);
+    env->GetIntArrayRegion(layout, 0, 4, lay.data());
+    if (env->ExceptionCheck())
+      return -1;
+    auto *bytes = static_cast<uint8_t *>(env->GetDirectBufferAddress(input));
+    jlong capacity = env->GetDirectBufferCapacity(input);
+    if (!bytes || capacity < 0)
+      throw std::invalid_argument("RAW input must be a direct buffer");
+    auto clockStart = Clock::now();
+    const auto engine = get(handle);
+    photo_rcd::validateRaw16(bytes, size_t(capacity), g[0], g[1], g[2], g[3],
+                             g[4], g[5], g[6], g[7], black, white);
+    std::vector<int> dimensions;
+    std::vector<uint16_t> gains;
+    if (shadingDims) {
+      auto n = env->GetArrayLength(shadingDims);
+      if (n != 6)
+        throw std::invalid_argument("invalid shading dimensions");
+      dimensions.resize(n);
+      env->GetIntArrayRegion(shadingDims, 0, n, dimensions.data());
+    }
+    if (shading) {
+      auto n = env->GetArrayLength(shading);
+      if (n > 65536 * 4)
+        throw std::invalid_argument("shading map too large");
+      gains.resize(n);
+      env->GetShortArrayRegion(shading, 0, n,
+                               reinterpret_cast<jshort *>(gains.data()));
+    }
+    if (env->ExceptionCheck())
+      return -1;
+    float validationPixel[4] = {0.f, 0.f, 0.f, 1.f};
+    photo_rcd::productCorrections(validationPixel, 1, 1, g[4], g[5], wb,
+                                  dimensions, gains);
+    std::vector<uint32_t> parameters(16 + gains.size(), 0);
+    parameters[0] = g[4];
+    parameters[1] = g[5];
+    for (int i = 0; i < 3; ++i)
+      std::memcpy(&parameters[2 + i], &wb[i], 4);
+    if (!dimensions.empty()) {
+      parameters[5] = dimensions[0];
+      parameters[6] = dimensions[1];
+      for (int i = 2; i < 6; ++i)
+        parameters[5 + i] = dimensions[i];
+      parameters[11] = 1;
+      for (size_t i = 0; i < gains.size(); ++i) {
+        float value = photo_rcd::halfToFloat(gains[i]);
+        std::memcpy(&parameters[16 + i], &value, 4);
+      }
+    }
+    std::array<float, 14> grade{};
+    const float ev = exp2f(ff[13]);
+    for (int r = 0; r < 3; ++r) {
+      for (int i = 0; i < 3; ++i)
+        grade[r * 4 + i] = ff[4 + r * 3 + i] * ff[i] * ev;
+      grade[r * 4 + 3] = 0.f;
+    }
+    grade[12] = float(int(ff[17] + 0.5f));
+    grade[13] = ff[14];
+    auto *buffer = AHardwareBuffer_fromHardwareBuffer(env, p010);
+    if (!buffer)
+      throw std::invalid_argument("Invalid P010 buffer");
+    std::array<int, 9> geometryValues;
+    std::copy(g, g + 9, geometryValues.begin());
+    int fd = engine->renderRawP010(bytes, size_t(capacity), geometryValues, black,
+                                   white, parameters, grade, lay, buffer);
+    const double submitMs = milliseconds(clockStart);
+    std::lock_guard<std::mutex> lock(registryMutex);
+    frameCosts[handle] = {{0.0, submitMs, 0.0, 0.0}};
+    return fd;
+  } catch (const std::exception &e) {
+    failure(env, e);
+    return -1;
   }
 }

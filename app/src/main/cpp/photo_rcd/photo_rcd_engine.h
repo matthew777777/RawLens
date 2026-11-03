@@ -55,6 +55,16 @@ public:
   // at int((i+0.5)*src/out); the final pass may skip source pixels it never
   // reads. 0x0 (default) computes every pixel.
   void setOutputSampling(int width, int height);
+  // Frame-global fused final+grade: writes P010 (gradeYuv equations, no
+  // record cube) into an Android encoder buffer and returns a sync fd that
+  // signals completion; does not wait. grade: folded CCM rows (12 floats),
+  // outMode, bypass. layout: outW, outH, yStrideBytes, uvStrideBytes.
+  int renderRawP010(const uint8_t *data, size_t bytes,
+                    const std::array<int, 9> &geometry,
+                    const std::array<float, 4> &black, float white,
+                    const std::vector<uint32_t> &correction,
+                    const std::array<float, 14> &grade,
+                    const std::array<int, 4> &layout, void *p010Buffer);
   int reconstructionScale() const;
   void renderRawHalf(const uint8_t *data, size_t bytes,
                      const std::array<int, 9> &geometry,

@@ -17,6 +17,41 @@
 #include <vulkan/vulkan.h>
 
 namespace photo_rcd {
+// Frame-global sample masks after the 64 metadata words: one bit per source
+// column, then per source row; set where the output reads that coordinate.
+// exact: P010 frames, integer srcOf(o) = ((2o+1)*src)/(2*out). Otherwise the
+// separate vf_gradeyuv grade samples int((o+0.5)*src/out) with GPU float
+// division, so a 1e-3 margin marks both candidates (superset).
+static size_t sampleMaskWords(int w, int h) { return size_t(w + 31) / 32 + size_t(h + 31) / 32; }
+static void writeSampleMask(int32_t *m, int w, int h, int outW, int outH, bool exact,
+                            int shiftX = 0, int shiftY = 0) {
+  auto *bits = reinterpret_cast<uint32_t *>(m + 64);
+  const size_t colWords = size_t(w + 31) / 32;
+  std::memset(bits, 0, sampleMaskWords(w, h) * 4);
+  auto axis = [](uint32_t *b, int src, int out, bool exactAxis, int shift) {
+    if (out <= 0 || out >= src) {
+      for (int c = 0; c < src; ++c)
+        b[c >> 5] |= 1u << (c & 31);
+      return;
+    }
+    for (int o = 0; o < out; ++o) {
+      if (exactAxis) {
+        const int c = int((int64_t(2 * o + 1) * src) / (2 * int64_t(out))) + shift;
+        b[c >> 5] |= 1u << (c & 31);
+        continue;
+      }
+      const double u = (o + 0.5) * src / out;
+      for (int c = std::max(0, int(std::ceil(u - 1.0 - 1e-3)));
+           c <= std::min(src - 1, int(std::floor(u + 1e-3))); ++c)
+        b[c >> 5] |= 1u << (c & 31);
+    }
+  };
+  axis(bits, w, outW, exact, shiftX);
+  axis(bits + colWords, h, outH, exact, shiftY);
+  // Words 16/17: every row / every column sampled (skip the mask loads).
+  m[16] = outH <= 0 || outH >= h;
+  m[17] = outW <= 0 || outW >= w;
+}
 static void ok(VkResult result, const char *what) {
   if (result != VK_SUCCESS)
     throw std::runtime_error(std::string(what) + ": Vulkan " +
@@ -45,6 +80,25 @@ struct Engine::State {
   // Frame-global subgroup walker (recording option A); requires tileLocal.
   bool frameGlobal = false;
   int sampleWidth = 0, sampleHeight = 0;
+  // Fused final+grade frames: P010 written by stage 4 into an imported
+  // encoder buffer (binding 11); completion exported as a sync fd.
+  bool p010Frame = false;
+  int p010W = 0, p010H = 0, recordedP010W = 0, recordedP010H = 0;
+  // P010 frames double-buffer the RAW staging (binding 9): the next frame's
+  // rows are copied into the idle half while the GPU still reads the other.
+  int stagingHalf = 0, recordedStagingHalf = 0;
+  size_t stagingSlot() const { return (rawBytes + 255) & ~size_t(255); }
+  bool frameMatches(int w, int h, uint32_t cfaPhase, bool half, size_t rawCapacity) const {
+    return width == w && height == h && phase == cfaPhase && halfFrame == half &&
+           rawBytes == rawCapacity && builtP010 == p010Frame;
+  }
+  std::map<void *, Buffer> p010Imports;
+  Buffer *selectedP010 = nullptr, *recordedP010 = nullptr;
+  VkSemaphore completion = VK_NULL_HANDLE;
+  bool statusPending = false;
+#ifdef __ANDROID__
+  PFN_vkGetSemaphoreFdKHR getSemaphoreFd = nullptr;
+#endif
   uint32_t coreX = 16, coreY = 16;
   bool imageOutput = false;
   std::map<void *, Image> outputImages;
@@ -55,7 +109,7 @@ struct Engine::State {
 #endif
   int reconstructionScale = 1;
   size_t rawBytes = 0;
-  size_t bindingCount() const { return rawInput ? 11 : 9; }
+  size_t bindingCount() const { return frameGlobal ? 12 : rawInput ? 11 : 9; }
   VkInstance instance = VK_NULL_HANDLE;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;
@@ -77,13 +131,75 @@ struct Engine::State {
   uint32_t timestampBits = 0;
   std::vector<int> queryStages;
   std::vector<double> lastGpuCosts = std::vector<double>(8, -1.0);
-  std::array<Buffer, 11> buffers;
+  std::array<Buffer, 12> buffers;
   int width = 0, height = 0;
   uint32_t phase = 0;
   bool submitted = false;
   bool halfFrame = false;
+  bool builtP010 = false;
   std::string name;
   std::mutex mutex;
+  // P010 frames keep two frames in flight: everything a submitted frame
+  // reads from the host or records (descriptor set, command buffer, fence,
+  // semaphore, timestamps, config and metadata) exists twice; the idle copy
+  // lives here and is swapped in for alternate frames. GPU-only buffers are
+  // shared and ordered by a compute barrier at the start of each frame.
+  struct Slot {
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkCommandBuffer command = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    VkSemaphore completion = VK_NULL_HANDLE;
+    VkQueryPool queryPool = VK_NULL_HANDLE;
+    std::vector<int> queryStages;
+    bool submitted = false, statusPending = false;
+    Buffer *recordedP010 = nullptr;
+    int recordedP010W = 0, recordedP010H = 0, recordedStagingHalf = -1;
+    Buffer config, meta;
+  };
+  Slot spare;
+  bool spareReady = false;
+  void swapSlot() {
+    std::swap(set, spare.set);
+    std::swap(command, spare.command);
+    std::swap(fence, spare.fence);
+    std::swap(completion, spare.completion);
+    std::swap(queryPool, spare.queryPool);
+    std::swap(queryStages, spare.queryStages);
+    std::swap(submitted, spare.submitted);
+    std::swap(statusPending, spare.statusPending);
+    std::swap(recordedP010, spare.recordedP010);
+    std::swap(recordedP010W, spare.recordedP010W);
+    std::swap(recordedP010H, spare.recordedP010H);
+    std::swap(recordedStagingHalf, spare.recordedStagingHalf);
+    std::swap(buffers[7], spare.config);
+    std::swap(buffers[10], spare.meta);
+  }
+  void prepareSpare();
+  void releaseSpare() {
+    if (!spareReady)
+      return;
+    swapSlot();
+    await();
+    swapSlot();
+    if (spare.command)
+      vkFreeCommandBuffers(device, commandPool, 1, &spare.command);
+    if (spare.fence)
+      vkDestroyFence(device, spare.fence, nullptr);
+    if (spare.completion)
+      vkDestroySemaphore(device, spare.completion, nullptr);
+    if (spare.queryPool)
+      vkDestroyQueryPool(device, spare.queryPool, nullptr);
+    for (Buffer *b : {&spare.config, &spare.meta}) {
+      if (b->mapped)
+        vkUnmapMemory(device, b->memory);
+      if (b->buffer)
+        vkDestroyBuffer(device, b->buffer, nullptr);
+      if (b->memory)
+        vkFreeMemory(device, b->memory, nullptr);
+    }
+    spare = Slot{};  // its descriptor set is freed with the pool
+    spareReady = false;
+  }
 
   void await() {
     if (!submitted)
@@ -101,6 +217,7 @@ struct Engine::State {
   void releaseFrame() {
     if (!device)
       return;
+    releaseSpare();
     await();
     if (command)
       vkFreeCommandBuffers(device, commandPool, 1, &command);
@@ -135,6 +252,17 @@ struct Engine::State {
       vkDeviceWaitIdle(device);
     submitted = false;
     releaseFrame();
+#ifdef __ANDROID__
+    for (auto &entry : p010Imports) {
+      if (entry.second.buffer)
+        vkDestroyBuffer(device, entry.second.buffer, nullptr);
+      if (entry.second.memory)
+        vkFreeMemory(device, entry.second.memory, nullptr);
+      AHardwareBuffer_release(static_cast<AHardwareBuffer *>(entry.first));
+    }
+#endif
+    if (completion)
+      vkDestroySemaphore(device, completion, nullptr);
     for (auto &entry : outputImages) {
       auto &i = entry.second;
       if (i.view)
@@ -300,8 +428,15 @@ struct Engine::State {
   }
   void frame(int w, int h, uint32_t cfaPhase, bool half = false,
              size_t rawCapacity = 0) {
-    if (width == w && height == h && phase == cfaPhase && halfFrame == half &&
-        rawBytes == rawCapacity) {
+    if (frameMatches(w, h, cfaPhase, half, rawCapacity)) {
+      if (p010Frame && (recordedP010 != selectedP010 || recordedP010H != p010H ||
+                        recordedP010W != p010W || recordedStagingHalf != stagingHalf)) {
+        updateP010Descriptor();
+        if (command)
+          vkFreeCommandBuffers(device, commandPool, 1, &command);
+        command = VK_NULL_HANDLE;
+        recordCommands(w, h, cfaPhase, half);
+      }
       if (imageOutput && recordedOutput != selectedOutput) {
         updateOutputDescriptor();
         if (command)
@@ -353,7 +488,7 @@ struct Engine::State {
         bytes = 16;
       // Five FP16 planes (VH, PQ, LP, green, missing), four pixels per uvec2.
       if (frameGlobal && i == 1)
-        bytes = n * 10;
+        bytes = n * 10 + size_t(2 * 9 * w + 18 * (h - 18)) * 8;
       if (rawInput && normalizeOnce && i == 0)
         bytes = n * 4;
       allocate(buffers[i], bytes,
@@ -370,17 +505,24 @@ struct Engine::State {
                       tiles);
       }
     allocate(buffers[7], (16 + 65536 * 4) * 4, false, frameGlobal);
-    allocate(buffers[8], imageOutput ? 16 : n * 8);
+    // P010 frames: output-resolution product RGB, GPU-only (stage 4 -> 5).
+    allocate(buffers[8], imageOutput ? 16 : n * 8, p010Frame);
+    if (frameGlobal)
+      allocate(buffers[11], 16, true);
     if (rawInput) {
-      allocate(buffers[9], rawCapacity, false, frameGlobal);
-      allocate(buffers[10], 80, false, frameGlobal);
+      allocate(buffers[9],
+               p010Frame ? 2 * ((rawCapacity + 255) & ~size_t(255)) : rawCapacity,
+               false, frameGlobal);
+      allocate(buffers[10], 256 + (frameGlobal ? sampleMaskWords(w, h) * 4 : 0), false, frameGlobal);
+      // Unwritten metadata words must read as "off", never stale memory.
+      std::memset(buffers[10].mapped, 0, buffers[10].bytes);
     }
     VkDescriptorPoolSize sizes[] = {
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, uint32_t(bindingCount())},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5}};
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, uint32_t(2 * bindingCount())},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 10}};
     VkDescriptorPoolCreateInfo pi{
         VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.maxSets = 1;
+    pi.maxSets = 2;
     pi.poolSizeCount = (imageIntermediates || imageOutput) ? 2 : 1;
     pi.pPoolSizes = sizes;
     ok(vkCreateDescriptorPool(device, &pi, nullptr, &descriptorPool),
@@ -422,7 +564,15 @@ struct Engine::State {
       writes[8].pBufferInfo = nullptr;
       writes[8].pImageInfo = &outputInfo;
     }
+    if (p010Frame && selectedP010)
+      infos[11] = {selectedP010->buffer, 0, VK_WHOLE_SIZE};
+    if (p010Frame) {
+      infos[9] = {buffers[9].buffer,
+                  VkDeviceSize(stagingHalf) * ((rawCapacity + 255) & ~size_t(255)),
+                  rawCapacity};
+    }
     vkUpdateDescriptorSets(device, writes.size(), writes.data(), 0, nullptr);
+    builtP010 = p010Frame;
     recordCommands(w, h, cfaPhase, half);
     width = w;
     height = h;
@@ -430,6 +580,74 @@ struct Engine::State {
     halfFrame = half;
     rawBytes = rawCapacity;
   }
+  void updateP010Descriptor() {
+    VkDescriptorBufferInfo info[2] = {
+        {selectedP010->buffer, 0, VK_WHOLE_SIZE},
+        {buffers[9].buffer, VkDeviceSize(stagingHalf) * stagingSlot(), rawBytes}};
+    VkWriteDescriptorSet write[2]{};
+    for (int i = 0; i < 2; ++i) {
+      write[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      write[i].dstSet = set;
+      write[i].dstBinding = i == 0 ? 11 : 9;
+      write[i].descriptorCount = 1;
+      write[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      write[i].pBufferInfo = &info[i];
+    }
+    vkUpdateDescriptorSets(device, 2, write, 0, nullptr);
+  }
+#ifdef __ANDROID__
+  // Import an encoder P010 buffer (BLOB or YCbCr P010 AHB) as a storage
+  // buffer; cached and retained for the engine lifetime like output images.
+  void selectP010(AHardwareBuffer *ahb, VkDeviceSize required) {
+    auto found = p010Imports.find(ahb);
+    if (found != p010Imports.end()) {
+      if (found->second.bytes < required)
+        throw std::invalid_argument("P010 buffer smaller than layout");
+      selectedP010 = &found->second;
+      return;
+    }
+    VkAndroidHardwareBufferPropertiesANDROID props{
+        VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
+    ok(getAhbProperties(device, ahb, &props), "query P010 Android buffer");
+    if (props.allocationSize < required)
+      throw std::invalid_argument("P010 allocation smaller than layout");
+    Buffer b;
+    VkExternalMemoryBufferCreateInfo ext{
+        VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+    ext.handleTypes =
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.pNext = &ext;
+    bi.size = props.allocationSize;
+    bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    ok(vkCreateBuffer(device, &bi, nullptr, &b.buffer), "create P010 buffer");
+    VkMemoryDedicatedAllocateInfo dedicated{
+        VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+    dedicated.buffer = b.buffer;
+    VkImportAndroidHardwareBufferInfoANDROID import{
+        VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID};
+    import.pNext = &dedicated;
+    import.buffer = ahb;
+    uint32_t type = 0;
+    while (type < 32 && !(props.memoryTypeBits & (1u << type)))
+      ++type;
+    if (type == 32)
+      throw std::runtime_error("No memory type for P010 import");
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.pNext = &import;
+    ai.allocationSize = props.allocationSize;
+    ai.memoryTypeIndex = type;
+    VkResult r = vkAllocateMemory(device, &ai, nullptr, &b.memory);
+    if (r != VK_SUCCESS) {
+      vkDestroyBuffer(device, b.buffer, nullptr);
+      ok(r, "import P010 memory");
+    }
+    ok(vkBindBufferMemory(device, b.buffer, b.memory, 0), "bind P010 memory");
+    b.bytes = props.allocationSize;
+    AHardwareBuffer_acquire(ahb);
+    selectedP010 = &(p010Imports[ahb] = b);
+  }
+#endif
   void updateOutputDescriptor() {
     VkDescriptorImageInfo info{VK_NULL_HANDLE, selectedOutput->view,
                                VK_IMAGE_LAYOUT_GENERAL};
@@ -491,9 +709,12 @@ struct Engine::State {
       vkCmdResetQueryPool(command, queryPool, 0, 16);
     queryStages.clear();
     VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_HOST_BIT,
+    // Host inputs, and (two frames in flight) the previous frame's use of the
+    // shared GPU-only planes: both precede this frame's first dispatch.
+    barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(command,
+                         VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier,
                          0, nullptr, 0, nullptr);
     vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0,
@@ -509,7 +730,8 @@ struct Engine::State {
     if (half)
       stages.push_back(6);
     if (tileLocal && half)
-      stages = frameGlobal ? std::vector<int>{0, 1, 2, 3}
+      stages = frameGlobal ? (p010Frame ? std::vector<int>{0, 1, 3, 2, 5}
+                                        : std::vector<int>{0, 1, 2, 3})
                            : std::vector<int>{7, 3, 5};
     if (frameGlobal && !half)
       throw std::invalid_argument("frame-global RCD has no FP32 readback mode");
@@ -529,6 +751,12 @@ struct Engine::State {
                 dispatchY = tileLocal ? int(coreY) : edge;
       if (stage == 7 && rawInput)
         vkCmdDispatch(command, ((w + 1) / 2 + 7) / 8, ((h + 1) / 2 + 7) / 8, 1);
+      else if (frameGlobal && stage == 4)
+        // Sampled final pass: 56-pixel bands, 8 output rows per group.
+        vkCmdDispatch(command, (w + 55) / 56, (p010H + 7) / 8, 1);
+      else if (frameGlobal && stage == 5)
+        // Grade + P010 pack: one invocation per 2x2 output cell.
+        vkCmdDispatch(command, (p010W / 2 + 15) / 16, p010H / 2, 1);
       else if (frameGlobal && stage == 3)
         vkCmdDispatch(command, (2 * 9 * w + 18 * (h - 18) + 15) / 16, 1, 1);
       else if (frameGlobal)
@@ -537,7 +765,7 @@ struct Engine::State {
         // Guides and green/missing walk 64-row blocks; the final pass is one
         // subgroup per output row.
         vkCmdDispatch(command, (w + (stage == 2 ? 55 : 47)) / (stage == 2 ? 56 : 48),
-                      stage == 2 ? (h + 7) / 8 : (h + 63) / 64, 1);
+                      stage == 2 ? (h + 7) / 8 : (h + 127) / 128, 1);
       else if (stage == 4 || stage == 6 ||
                (stage == 5 && rawInput && (cacheResponses || tileLocal)) ||
                (stage == 7 && !recordingCandidate))
@@ -585,6 +813,10 @@ struct Engine::State {
     }
     ok(vkEndCommandBuffer(command), "end frame");
     recordedOutput = selectedOutput;
+    recordedP010 = selectedP010;
+    recordedP010H = p010H;
+    recordedP010W = p010W;
+    recordedStagingHalf = stagingHalf;
   }
   uint64_t outputUsage() const {
 #ifndef __ANDROID__
@@ -744,6 +976,54 @@ struct Engine::State {
   }
 };
 
+void Engine::State::prepareSpare() {
+  if (spareReady)
+    return;
+  VkDescriptorSetAllocateInfo di{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  di.descriptorPool = descriptorPool;
+  di.descriptorSetCount = 1;
+  di.pSetLayouts = &descriptors;
+  ok(vkAllocateDescriptorSets(device, &di, &spare.set), "allocate spare descriptor set");
+  VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  ok(vkCreateFence(device, &fi, nullptr, &spare.fence), "create spare fence");
+  VkExportSemaphoreCreateInfo exportInfo{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
+  exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+  VkSemaphoreCreateInfo semaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+  semaphoreInfo.pNext = &exportInfo;
+  ok(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &spare.completion),
+     "create spare completion semaphore");
+  if (timestampBits) {
+    VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qi.queryCount = 16;
+    ok(vkCreateQueryPool(device, &qi, nullptr, &spare.queryPool), "create spare timestamps");
+  }
+  allocate(spare.config, buffers[7].bytes, false, frameGlobal);
+  allocate(spare.meta, buffers[10].bytes, false, frameGlobal);
+  std::memcpy(spare.config.mapped, buffers[7].mapped, buffers[7].bytes);
+  std::memcpy(spare.meta.mapped, buffers[10].mapped, buffers[10].bytes);
+  spareReady = true;
+  // Write every binding of the spare set from the swapped-in view.
+  swapSlot();
+  std::vector<VkDescriptorBufferInfo> infos(bindingCount());
+  std::vector<VkWriteDescriptorSet> writes(bindingCount());
+  for (size_t i = 0; i < bindingCount(); ++i) {
+    infos[i] = {buffers[i].buffer, 0, buffers[i].bytes};
+    if (i == 9)
+      infos[i] = {buffers[9].buffer, 0, rawBytes};
+    if (i == 11)
+      infos[i] = {selectedP010->buffer, 0, VK_WHOLE_SIZE};
+    writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[i].dstSet = set;
+    writes[i].dstBinding = uint32_t(i);
+    writes[i].descriptorCount = 1;
+    writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[i].pBufferInfo = &infos[i];
+  }
+  vkUpdateDescriptorSets(device, writes.size(), writes.data(), 0, nullptr);
+  swapSlot();
+}
+
 Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
                bool cacheResponses, bool tiledReconstruction,
                bool imageIntermediates, bool recordingCandidate,
@@ -902,10 +1182,13 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
   for (auto &e : extensions)
     if (std::strcmp(e.extensionName, "VK_KHR_portability_subset") == 0)
       enabled.push_back("VK_KHR_portability_subset");
-  if (imageOutput) {
-    for (const char *required :
-         {"VK_ANDROID_external_memory_android_hardware_buffer",
-          "VK_EXT_queue_family_foreign"}) {
+  if (imageOutput || frameGlobal) {
+    std::vector<const char *> required = {
+        "VK_ANDROID_external_memory_android_hardware_buffer",
+        "VK_EXT_queue_family_foreign"};
+    if (frameGlobal)
+      required.push_back("VK_KHR_external_semaphore_fd");
+    for (const char *required : required) {
       bool found = false;
       for (const auto &e : extensions)
         if (std::strcmp(e.extensionName, required) == 0)
@@ -929,7 +1212,20 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
   ok(vkCreateDevice(s.physical, &di, nullptr, &s.device), "create device");
   vkGetDeviceQueue(s.device, s.family, 0, &s.queue);
 #ifdef __ANDROID__
-  if (imageOutput) {
+  if (frameGlobal) {
+    s.getSemaphoreFd = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(
+        vkGetDeviceProcAddr(s.device, "vkGetSemaphoreFdKHR"));
+    if (!s.getSemaphoreFd)
+      throw std::runtime_error("Missing semaphore fd export");
+    VkExportSemaphoreCreateInfo exportInfo{
+        VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
+    exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+    VkSemaphoreCreateInfo semaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    semaphoreInfo.pNext = &exportInfo;
+    ok(vkCreateSemaphore(s.device, &semaphoreInfo, nullptr, &s.completion),
+       "create exportable completion semaphore");
+  }
+  if (imageOutput || frameGlobal) {
     s.getAhbProperties =
         reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(
             vkGetDeviceProcAddr(s.device,
@@ -981,7 +1277,7 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
   for (int pass = 0;
        pass < (specializePasses ? ((cacheResponses || s.rawInput) ? 8 : 7) : 1);
        ++pass) {
-    if (pass == 5 && !(s.rawInput && (cacheResponses || tileLocal)))
+    if (pass == 5 && !s.frameGlobal && !(s.rawInput && (cacheResponses || tileLocal)))
       continue;
     VkSpecializationMapEntry entry{9, 0, sizeof(pass)};
     VkSpecializationInfo specialization{1, &entry, sizeof(pass), &pass};
@@ -1160,6 +1456,7 @@ void Engine::renderRawFrame(const uint8_t *data, size_t bytes,
       throw std::invalid_argument("GPU output requires a HardwareBuffer");
   } else if (hardwareBuffer)
     throw std::invalid_argument("Engine has no GPU image output");
+  s.p010Frame = false;
   s.frame(w, h, uint32_t(g[8]), half != nullptr || hardwareBuffer != nullptr,
           padded);
   if (s.frameGlobal) {
@@ -1188,8 +1485,9 @@ void Engine::renderRawFrame(const uint8_t *data, size_t bytes,
   metadata[14] = g[7];
   metadata[15] = scale;
   if (s.frameGlobal) {
-    metadata[16] = s.sampleWidth;
-    metadata[17] = s.sampleHeight;
+    writeSampleMask(metadata, w, h, s.sampleWidth, s.sampleHeight, false);
+    metadata[18] = 0;
+    metadata[38] = 0;
   }
   s.flush(7);
   s.flush(9);
@@ -1218,6 +1516,138 @@ void Engine::renderRawFrame(const uint8_t *data, size_t bytes,
     rgba->resize(samples * 4);
     std::memcpy(rgba->data(), s.buffers[6].mapped, samples * 16);
   }
+}
+int Engine::renderRawP010(const uint8_t *data, size_t bytes,
+                          const std::array<int, 9> &g,
+                          const std::array<float, 4> &black, float white,
+                          const std::vector<uint32_t> &correction,
+                          const std::array<float, 14> &grade,
+                          const std::array<int, 4> &layout, void *p010Buffer) {
+#ifndef __ANDROID__
+  throw std::runtime_error("P010 output requires Android");
+#else
+  std::lock_guard<std::mutex> lock(state->mutex);
+  auto &s = *state;
+  if (!s.frameGlobal || s.imageOutput || !p010Buffer)
+    throw std::invalid_argument("fused P010 requires a buffer frame-global engine");
+  validateRaw16(data, bytes, g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7],
+                black, white);
+  if (g[3] != 2 || g[4] % 4 || g[2] % 8 || correction.size() < 16 ||
+      correction.size() > 16 + 65536 * 4 ||
+      (g[8] != 0x94 && g[8] != 0x16 && g[8] != 0x61 && g[8] != 0x49))
+    throw std::invalid_argument("invalid fused RAW arguments");
+  const int outW = layout[0], outH = layout[1], yStrideB = layout[2],
+            uvStrideB = layout[3];
+  if (outW <= 0 || outH <= 0 || outW % 2 || outH % 2 || outW > g[6] ||
+      outH > g[7] || yStrideB < outW * 2 || uvStrideB < outW * 2 ||
+      yStrideB % 2 || uvStrideB % 4 || grade[12] < 0 || grade[12] > 3)
+    throw std::invalid_argument("invalid P010 layout");
+  const size_t used = size_t(g[1] - 1) * g[2] + size_t(g[0] - 1) * g[3] + 2;
+  const size_t padded = (used + 3) & ~size_t(3);
+  const int w = g[6], h = g[7];
+  const size_t begin = size_t(g[5]) * g[2];
+  const size_t end = std::min(used, size_t(g[5] + g[7]) * g[2]);
+  // Same layout as the frame in flight: queue this frame behind it on the
+  // other slot (two frames in flight), waiting only for the frame before it,
+  // which used this slot and this staging half.
+  s.p010Frame = true;
+  const bool overlap = s.frameMatches(w, h, uint32_t(g[8]), true, padded) && s.submitted &&
+                       !s.imageIntermediates && s.selectedP010;
+  const int half = overlap ? 1 - s.stagingHalf : 0;
+  if (overlap) {
+    s.prepareSpare();
+    s.swapSlot();
+  }
+  s.await();
+  if (s.statusPending) {
+    s.statusPending = false;
+    s.collectCosts();
+    s.invalidate(7);
+    if (static_cast<uint32_t *>(s.buffers[7].mapped)[12])
+      throw std::runtime_error("GPU product output outside finite FP16 domain");
+  }
+  s.p010W = outW;
+  s.p010H = outH;
+
+  s.selectP010(static_cast<AHardwareBuffer *>(p010Buffer),
+               VkDeviceSize(yStrideB) * outH + VkDeviceSize(uvStrideB) * (outH / 2));
+  s.stagingHalf = half;
+  s.frame(w, h, uint32_t(g[8]), true, padded);
+  // The GPU may still run the other slot's frame (other staging half).
+  std::memcpy(static_cast<uint8_t *>(s.buffers[9].mapped) + half * s.stagingSlot() + begin,
+              data + begin, end - begin);
+  std::memcpy(s.buffers[10].mapped, g.data(), 32);
+  std::memcpy(static_cast<uint8_t *>(s.buffers[10].mapped) + 32, black.data(), 16);
+  std::memcpy(static_cast<uint8_t *>(s.buffers[10].mapped) + 48, &white, 4);
+  std::memcpy(s.buffers[7].mapped, correction.data(), correction.size() * 4);
+  static_cast<uint32_t *>(s.buffers[7].mapped)[12] = 0;
+  auto *m = static_cast<int32_t *>(s.buffers[10].mapped);
+  m[6] = w;
+  m[7] = h;
+  m[13] = w;
+  m[14] = h;
+  m[15] = 1;
+  // The final pass reconstructs only sampled pixels (same predicate as the
+  // separate grade path); stage 5 reads them at the exact integer positions.
+  {
+    // Exact 2:1 axes sample one CFA parity. When that site is green, shift
+    // the sampling by one source pixel (half an output pixel, the whole
+    // frame) onto a red/blue site, where RCD's final step needs no gradients.
+    int shiftX = 0, shiftY = 0;
+    const auto site = [&](int px, int py) {
+      return (uint32_t(g[8]) >> (2 * (py * 2 + px))) & 3u;
+    };
+    if (2 * outW == w && 2 * outH == h && site(1, 1) == 1u)
+      shiftX = -1;
+    m[39] = shiftX;
+    m[40] = shiftY;
+    writeSampleMask(m, w, h, outW, outH, true, shiftX, shiftY);
+  }
+  m[18] = 0;
+  {
+    // Word 38: all sampled pixels share one non-green CFA site.
+    auto parity = [](int src, int out, int shift) {
+      int seen = 0;
+      for (int o = 0; o < out; ++o)
+        seen |= 1 << ((int((int64_t(2 * o + 1) * src) / (2 * int64_t(out))) + shift) & 1);
+      return seen == 1 ? 0 : seen == 2 ? 1 : -1;
+    };
+    const int px = parity(w, outW, m[39]), py = parity(h, outH, m[40]);
+    m[38] = px >= 0 && py >= 0 &&
+            ((uint32_t(g[8]) >> (2 * (py * 2 + px))) & 3u) != 1u;
+  }
+  m[19] = int(grade[12] + 0.5f);
+  m[20] = grade[13] > 0.5f ? 1 : 0;
+  m[21] = yStrideB / 2;
+  m[22] = uvStrideB / 2;
+  m[23] = yStrideB * outH;
+  std::memcpy(m + 24, grade.data(), 12 * 4);
+  m[36] = outW;
+  m[37] = outH;
+  s.flush(7);
+  s.flush(9);
+  s.flush(10);
+  ok(vkResetFences(s.device, 1, &s.fence), "reset fused fence");
+  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &s.command;
+  submit.signalSemaphoreCount = 1;
+  submit.pSignalSemaphores = &s.completion;
+  ok(vkQueueSubmit(s.queue, 1, &submit, s.fence), "submit fused P010 frame");
+  s.submitted = true;
+  s.statusPending = true;
+  VkSemaphoreGetFdInfoKHR fdInfo{VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR};
+  fdInfo.semaphore = s.completion;
+  fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+  int fd = -1;
+  VkResult r = s.getSemaphoreFd(s.device, &fdInfo, &fd);
+  if (r != VK_SUCCESS || fd < 0) {
+    // No completion handle to give away: drain so the caller may reuse P010.
+    s.await();
+    ok(r == VK_SUCCESS ? VK_ERROR_UNKNOWN : r, "export fused completion fd");
+  }
+  return fd;
+#endif
 }
 void Engine::renderRawHalf(const uint8_t *data, size_t bytes,
                            const std::array<int, 9> &geometry,

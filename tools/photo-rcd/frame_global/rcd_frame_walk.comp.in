@@ -16,6 +16,8 @@
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_vote : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_control_flow_attributes : require
 layout(local_size_x=16) in;
 // Border pass uses the same 16-wide groups over a 1D border index.
 // RAW16 source words (binding 9); normalized in-shader, so no CFA pass.
@@ -25,7 +27,7 @@ layout(push_constant) uniform Params { int width; int height; int phase; int sta
 //@METADATA@
 layout(constant_id=9) const int algorithmPass=-1;
 const float eps=1e-5, epssq=1e-10;
-const int ROWS=64;
+const int ROWS=128;
 // Final pass rows per workgroup: one row per group made launch overhead dominate.
 const int FINAL_ROWS=8;
 // Planes: 0 VH, 1 PQ, 2 LP, 3 green, 4 missing (FP16, four pixels per uvec2).
@@ -54,23 +56,12 @@ uvec2 loadRaw(int y) {
 }
 int planeIndex(int plane,int y) { return plane*(p.width*p.height/4)+((y*p.width+x0)>>2); }
 uvec2 loadPlane(int plane,int y) { return stripInside(y)?planes[planeIndex(plane,y)]:uvec2(0u); }
-// Output sampling (RAW metadata words 16/17): gradeYuv reads source pixel
-// int((i+0.5)*src/out) per axis. A coordinate is computed when some output
-// index may map to it; 0 or out>=src computes everything.
+// Output sampling: the final pass computes only source pixels the output
+// reads (engine bit masks, see writeSampleMask).
 layout(binding=10,std430) readonly buffer RawMetadataWords { int metaWords[]; };
-bool sampled(int c,int outN,int srcN) {
-    if(outN<=0 || outN>=srcN) return true;
-    int j=int(floor((float(c)+0.5)*float(outN)/float(srcN)));
-    for(int k=j-1;k<=j+1;++k) {
-        if(k<0 || k>=outN) continue;
-        // gradeYuv computes int((k+0.5)*src/out) with GPU (not correctly
-        // rounded) division; when u is an integer either neighbour may be
-        // read, so both are computed (margin).
-        float u=(float(k)+0.5)*float(srcN)/float(outN);
-        if(abs(u-(float(c)+0.5))<=0.5+1e-3) return true;
-    }
-    return false;
-}
+// Engine-written bit masks (words 64..): columns, then rows.
+bool sampledCol(int c) { return ((uint(metaWords[64+(c>>5)])>>uint(c&31))&1u)!=0u; }
+bool sampledRow(int r) { return ((uint(metaWords[64+((p.width+31)>>5)+(r>>5)])>>uint(r&31))&1u)!=0u; }
 // Columns [erosion, 64-erosion) of the band are complete.
 bool ownsStrip(int erosion) { int c=4*lane;return c>=erosion && c+3<64-erosion; }
 #define W(a,b,c,j) ((j)<4?a[(j)&3]:(j)<8?b[(j)&3]:c[(j)&3])
@@ -134,17 +125,19 @@ void guides(int y0) {
         {
             WIN(vu,A0);WIN(vc,A1);WIN(vd,A2);WIN(qu,Q0);WIN(qc,Q1);WIN(qd,Q2);
             WIN(ru,R0);WIN(rc,R1);WIN(rd,R2);
-            vec4 vh,pq,lp;
+            vec4 vh,pq=vec4(0.0),lp;
+            // Light frames read PQ (missing colour) only on sampled rows.
+            bool needPq=metaWords[38]==0 || (z>=0 && z<p.height && sampledRow(z));
             for(int i=0;i<4;++i) {
                 int x=x0+i,j=i+4;
                 vh[i]=refine(AT(vc,j),AT(vu,j-1),AT(vu,j+1),AT(vd,j-1),AT(vd,j+1),true);
-                pq[i]=refine(AT(qc,j),AT(qu,j-1),AT(qu,j+1),AT(qd,j-1),AT(qd,j+1),false);
+                if(needPq) pq[i]=refine(AT(qc,j),AT(qu,j-1),AT(qu,j+1),AT(qd,j-1),AT(qd,j+1),false);
                 lp[i]=domain(x,z,2) && color(x,z)!=1
                     ? AT(rc,j)+0.5*(AT(ru,j)+AT(rd,j)+AT(rc,j-1)+AT(rc,j+1))+0.25*(AT(ru,j-1)+AT(ru,j+1)+AT(rd,j-1)+AT(rd,j+1))
                     : 0.0;
             }
             if(z>=y0 && z<y0+ROWS && ownsStrip(8) && stripInside(z)) {
-                planes[planeIndex(0,z)]=P(vh);planes[planeIndex(1,z)]=P(pq);planes[planeIndex(2,z)]=P(lp);
+                planes[planeIndex(0,z)]=P(vh);if(needPq) planes[planeIndex(1,z)]=P(pq);planes[planeIndex(2,z)]=P(lp);
             }
         }
     }
@@ -187,7 +180,9 @@ void greenMissing(int y0) {
             if(t>=y0 && t<y0+ROWS && ownsStrip(8) && stripInside(t)) planes[planeIndex(3,t)]=G4;
         }
         int m=r-6;
-        {
+        // Light final (word 38) reads missing colour only at its own sampled
+        // pixel: skip whole unsampled rows (subgroup-uniform branch).
+        if(metaWords[38]==0 || (m>=0 && m<p.height && sampledRow(m))) {
             WIN(r3u,R0);WIN(r1u,R2);WIN(rc,R3);WIN(r1d,R4);WIN(r3d,R6);
             WIN(g2u,G0);WIN(g1u,G1);WIN(gc,G2);WIN(g1d,G3);WIN(g2d,G4);
             vec4 pq=U(loadPlane(1,m));
@@ -256,7 +251,7 @@ void productRow(int x0,int y) {
     lscR=P(g0.x+slope.x*k);lscG=P(0.5*((g0.y+slope.y*k)+(g0.z+slope.z*k)));lscB=P(g0.w+slope.w*k);
 }
 bool productBad=false;
-void productFast(ivec2 site,vec3 sourceRgb,int lane4) {
+vec3 productFastRgb(ivec2 site,vec3 sourceRgb,int lane4) {
     precise vec3 rgb=sourceRgb;
     precise vec3 t=clamp((rgb-vec3(0.70))/vec3(0.99-0.70),0.0,1.0);
     precise vec3 white=t*t*(vec3(3.0)-2.0*t);
@@ -267,11 +262,106 @@ void productFast(ivec2 site,vec3 sourceRgb,int lane4) {
     }
     // Out-of-domain status is merged per subgroup by the caller.
     productBad=productBad || any(isnan(rgb)) || any(isinf(rgb)) || any(lessThan(rgb,vec3(0.0))) || any(greaterThan(rgb,vec3(65504.0)));
+    return rgb;
+}
+void productFast(ivec2 site,vec3 sourceRgb,int lane4) {
+    vec3 rgb=productFastRgb(site,sourceRgb,lane4);
     //@STORE@
 }
+// Same product equations per pixel (border pass, fused mode): exact
+// bilinear LSC evaluation, as productPixel.
+vec3 productExact(ivec2 site,vec3 sourceRgb) {
+    precise vec3 rgb=sourceRgb;
+    precise vec3 t=clamp((rgb-vec3(0.70))/vec3(0.99-0.70),0.0,1.0);
+    precise vec3 white=t*t*(vec3(3.0)-2.0*t);
+    precise float blend=max(white.r,max(white.g,white.b));
+    rgb=rgb+(vec3(pMin)/pWb-rgb)*blend;
+    if(pLsc) {
+        precise float ny=lscY(site.y);int gy=int(ny),gy1=min(gy+1,pRows-1);
+        precise float nx=lscX(site.x);int gx=int(nx),gx1=min(gx+1,pCols-1);
+        precise vec4 a=mapCorner(gx,gy)+(mapCorner(gx1,gy)-mapCorner(gx,gy))*(nx-float(gx));
+        precise vec4 b=mapCorner(gx,gy1)+(mapCorner(gx1,gy1)-mapCorner(gx,gy1))*(nx-float(gx));
+        precise vec4 gains=a+(b-a)*(ny-float(gy));
+        rgb*=vec3(gains.x,0.5*(gains.y+gains.z),gains.w);
+    }
+    if(any(isnan(rgb)) || any(isinf(rgb)) || any(lessThan(rgb,vec3(0.0))) || any(greaterThan(rgb,vec3(65504.0)))) atomicOr(config[12],1u);
+    return rgb;
+}
 
-void finalRow(int f) {
-    if(!sampled(f,metaWords[17],p.height)) return;
+// ---- Fused grade (stage 4): same equations as shaders/vf/vf_gradeyuv.comp
+// (direct profile encode, no record cube LUT), written straight to P010.
+// Metadata words: 18 fused flag, 19 outMode, 20 bypass, 21 yStride (u16),
+// 22 uvStride (u16), 23 uvBase (bytes), 24..35 folded CCM rows (vec4 x3),
+// 36/37 output W/H.
+layout(binding=11,std430) writeonly restrict buffer P010Out { uint p010[]; };
+float metaF(int i) { return intBitsToFloat(metaWords[i]); }
+vec3 bt709Encode(vec3 v) {
+    v=clamp(v,0.0,1.0);vec3 lo=4.5*v;vec3 hi=1.099*pow(v,vec3(0.45))-0.099;
+    return mix(hi,lo,vec3(lessThan(v,vec3(0.018))));
+}
+float hlgOetf(float e) {
+    e=clamp(e,0.0,1.0);if(e<=1.0/12.0) return sqrt(3.0*e);
+    return clamp(0.17883277*log(12.0*e-0.28466892)+0.55991073,0.0,1.0);
+}
+vec3 srgbToBt2020(vec3 v) {
+    return vec3(dot(v,vec3(0.6274040,0.3292820,0.0433136)),dot(v,vec3(0.0690970,0.9195400,0.0113612)),dot(v,vec3(0.0163916,0.0880132,0.8955950)));
+}
+vec3 srgbToSgamut3Cine(vec3 v) {
+    return vec3(dot(v,vec3(0.6456794776,0.2591145470,0.0952059754)),dot(v,vec3(0.0875299915,0.7596995626,0.1527704459)),dot(v,vec3(0.0369574199,0.1292809048,0.8337616753)));
+}
+float slog3cutY() { return (420.0+log2((0.01125+0.01)/0.19)*0.30102999566*261.5)/1023.0; }
+float sonySlog3(float x) {
+    if(x>=0.01125) return (420.0+log2((x+0.01)/0.19)*0.30102999566*261.5)/1023.0;
+    return (95.0+x*(slog3cutY()*1023.0-95.0)/0.01125)/1023.0;
+}
+vec3 acesFitted(vec3 v) {
+    v=vec3(dot(v,vec3(0.59719,0.35458,0.04823)),dot(v,vec3(0.07600,0.90834,0.01566)),dot(v,vec3(0.02840,0.13383,0.83777)));
+    v=(v*(v+0.0245786)-0.000090537)/(v*(0.983729*v+0.4329510)+0.238081);
+    return clamp(vec3(dot(v,vec3(1.60475,-0.53108,-0.07367)),dot(v,vec3(-0.10208,1.10813,-0.00605)),dot(v,vec3(-0.00327,-0.07276,1.07602))),0.0,1.0);
+}
+vec3 rgbToYuv(vec3 rgb,int mode) {
+    if(mode==2) {
+        float y=0.2627*rgb.r+0.6780*rgb.g+0.0593*rgb.b;
+        return vec3(y,(rgb.b-y)/1.8814+0.5,(rgb.r-y)/1.4746+0.5);
+    }
+    float y=0.2126*rgb.r+0.7152*rgb.g+0.0722*rgb.b;
+    return vec3(y,(rgb.b-y)/(2.0*(1.0-0.0722))+0.5,(rgb.r-y)/(2.0*(1.0-0.2126))+0.5);
+}
+vec3 gradeYuvOf(vec3 rgb) {
+    int mode=metaWords[19];
+    vec3 lg;
+    if(metaWords[20]!=0) lg=rgb;
+    else {
+        vec3 developed=vec3(dot(vec3(metaF(24),metaF(25),metaF(26)),rgb),dot(vec3(metaF(28),metaF(29),metaF(30)),rgb),dot(vec3(metaF(32),metaF(33),metaF(34)),rgb));
+        if(mode==3) lg=pow(acesFitted(developed),vec3(1.0/2.4));
+        else if(mode==1) { vec3 v=srgbToSgamut3Cine(developed);lg=vec3(sonySlog3(v.r),sonySlog3(v.g),sonySlog3(v.b)); }
+        else if(mode==2) { vec3 v=srgbToBt2020(developed);lg=vec3(hlgOetf(v.r),hlgOetf(v.g),hlgOetf(v.b)); }
+        else lg=bt709Encode(developed);
+    }
+    return rgbToYuv(lg,mode);
+}
+uint pack10(float v,float low,float high) { uint code=uint(round(clamp(v,0.0,1.0)*(high-low)+low));return (code<<6)&0xFFC0u; }
+// Exact integer form of gradeYuv's int((o+0.5)*src/out).
+int srcOf(int o,int outN,int srcN) { return ((2*o+1)*srcN)/(2*outN); }
+bool colNeeded(int c,int outN,int srcN) {
+    int num=2*outN*c-srcN,o=num<=0?0:(num+2*srcN-1)/(2*srcN);
+    return o<outN && srcOf(o,outN,srcN)==c;
+}
+int borderIndex(int x,int y) {
+    int w=p.width,h=p.height,rows=h-18;
+    if(y<9) return y*w+x;
+    if(y>=h-9) return (y-(h-18))*w+x;
+    return 18*w+(x<9?0:9*rows)+(y-9)*9+(x<9?x:x-(w-9));
+}
+int borderBase() { return 5*(p.width*p.height/4); }
+vec3 borderRgb(int x,int y) { uvec2 v=planes[borderBase()+borderIndex(x,y)];return vec3(unpackHalf2x16(v.x),unpackHalf2x16(v.y).x); }
+vec4 oY,oU,oV;
+// Fused mode: output column of each lane pixel (-1 = unsampled), computed
+// once per invocation (integer division is slow on Mali).
+ivec4 laneOut;
+
+void finalRow(int f,bool fused) {
+    if(!fused && (f>=p.height || (metaWords[16]==0 && !sampledRow(f)))) return;
     // FP16 arithmetic (RelaxedPrecision) for the final colour step: -3.5 ms
     // at 4K on Mali-G615; 68.5 dB vs exact engine with LSC (max 3.9e-3).
     precision mediump float;
@@ -287,13 +377,18 @@ void finalRow(int f) {
         if(!ownsStrip(4) || !stripInside(f)) return;
         vec4 vh=U(loadPlane(0,f));
         productRow(x0,f);
+        // x0%4==0: the lane's four column bits share one mask word.
+        uint colBits=metaWords[17]!=0?15u:x0>=0 && x0<p.width?uint(metaWords[64+(x0>>5)])>>uint(x0&31):0u;
         for(int i=0;i<4;++i) {
             int x=x0+i,j=i+4;
-            if(x>=p.width || !sampled(x,metaWords[16],p.width)) continue;
+            if(x>=p.width || (fused?laneOut[i]<0:((colBits>>uint(i))&1u)==0u)) continue;
             int c=color(x,f);
             vec3 result;
-            // Canonical border pixels are written by the border pass.
+            // Canonical border pixels come from the border pass (written
+            // there in half mode; read back as product RGB in fused mode).
             if(!domain(x,f,9)) {
+                if(!fused) continue;
+                vec3 rgbB=borderRgb(x,f);oY[i]=rgbB.x;oU[i]=rgbB.y;oV[i]=rgbB.z;
                 continue;
             } else if(c!=1) {
                 float mm=AT(mc,j);
@@ -314,7 +409,11 @@ void finalRow(int f) {
                     result[kk]=g0+rcdInterpolate(vh[i],he,ve);
                 }
             }
-            productFast(ivec2(x,f),max(vec3(0.0),result),i);
+            if(fused) {
+                // Product RGB here; graded after the lane loop (one copy).
+                vec3 rgbP=productFastRgb(ivec2(x,f),max(vec3(0.0),result),i);
+                oY[i]=rgbP.x;oU[i]=rgbP.y;oV[i]=rgbP.z;
+            } else productFast(ivec2(x,f),max(vec3(0.0),result),i);
         }
         if(subgroupAny(productBad) && subgroupElect()) atomicOr(config[12],1u);
     }
@@ -344,16 +443,109 @@ void borderPass() {
         total+=rawAt(nx,ny)*sel;count+=sel;
     }
     vec3 result=mix(total/max(count,vec3(1.0)),vec3(rawAt(x,y)),vec3(equal(ivec3(color(x,y)),ivec3(0,1,2))));
-    productPixel(ivec2(x,y),max(vec3(0.0),result));
+    if(metaWords[18]!=0) {
+        productSetup();
+        vec3 rgb=productExact(ivec2(x,y),max(vec3(0.0),result));
+        planes[borderBase()+borderIndex(x,y)]=uvec2(packHalf2x16(rgb.rg),packHalf2x16(vec2(rgb.b,0.0)));
+    } else productPixel(ivec2(x,y),max(vec3(0.0),result));
 }
+
+#ifndef IMAGE_OUTPUT
+// P010 frames, stage 4: the final pass for sampled source rows only. Product
+// RGB of sampled columns goes to an output-resolution FP16 buffer. Grading
+// here as well crossed Mali's register cliff (2-4x slower), so it is stage 5.
+int outIndex(int c,int outN,int srcN) {
+    int num=2*outN*c-srcN,o=num<=0?0:(num+2*srcN-1)/(2*srcN);
+    return o<outN && srcOf(o,outN,srcN)==c?o:-1;
+}
+void sampledFinal() {
+    int outW=metaWords[36],outH=metaWords[37],W=p.width,H=p.height;
+    for(int i=0;i<4;++i) laneOut[i]=x0+i<W?outIndex(x0+i,outW,W):-1;
+    for(int k=0;k<FINAL_ROWS;++k) {
+        int oy=int(gl_WorkGroupID.y)*FINAL_ROWS+k;
+        if(oy>=outH) return;
+        int f=srcOf(oy,outH,H);
+        oY=vec4(0.0);oU=oY;oV=oY;
+        finalRow(f,true);
+        if(!ownsStrip(4) || !stripInside(f)) continue;
+        for(int i=0;i<4;++i) {
+            int o=laneOut[i];
+            if(o>=0) halfOutput[oy*outW+o]=uvec2(packHalf2x16(vec2(oY[i],oU[i])),packHalf2x16(vec2(oV[i],1.0)));
+        }
+    }
+}
+// Stage 5: one invocation per 2x2 P010 cell (vf_gradeyuv layout and maths).
+float planeAt(int plane,int x,int y) {
+    uvec2 v=planes[plane*(p.width*p.height/4)+((y*p.width+x)>>2)];
+    vec2 h=unpackHalf2x16((x&2)!=0?v.y:v.x);
+    return (x&1)!=0?h.y:h.x;
+}
+// Light frames (word 38): RCD's final step at a red/blue site is the raw
+// value plus that pixel's green and missing colour, so stage 5 assembles it
+// directly (stage 2 is skipped). Canonical border pixels come from the
+// border pass output.
+vec3 lightRgb(int x,int y) {
+    if(!domain(x,y,9)) { uvec2 v=halfOutput[y*p.width+x];return vec3(unpackHalf2x16(v.x),unpackHalf2x16(v.y).x); }
+    float r=rawAt(x,y),g=planeAt(3,x,y),mm=planeAt(4,x,y);
+    vec3 result=color(x,y)==0?vec3(r,g,mm):vec3(mm,g,r);
+    return productExact(ivec2(x,y),max(vec3(0.0),result));
+}
+// Two light pixels of one source row in the same 4-pixel word: one raw,
+// green and missing load serve both, and one LSC corner fetch (when both sit
+// in the same map cell). Same equations as lightRgb/productExact.
+void lightPair(int xa,int xb,int y,out vec3 ra,out vec3 rb) {
+    if((xa>>2)!=(xb>>2) || !domain(xa,y,9) || !domain(xb,y,9)) { ra=lightRgb(xa,y);rb=lightRgb(xb,y);return; }
+    x0=xa&~3;
+    vec4 raw=normalizeCodes(sourcePairs[(uint(y+m.top)*uint(m.rowBytes)+uint(x0+m.left)*2u)>>3u],y);
+    int idx=(y*p.width+x0)>>2;
+    vec4 gr=U(planes[3*(p.width*p.height/4)+idx]),mi=U(planes[4*(p.width*p.height/4)+idx]);
+    int ia=xa&3,ib=xb&3;
+    vec3 sa=color(xa,y)==0?vec3(raw[ia],gr[ia],mi[ia]):vec3(mi[ia],gr[ia],raw[ia]);
+    vec3 sb=color(xb,y)==0?vec3(raw[ib],gr[ib],mi[ib]):vec3(mi[ib],gr[ib],raw[ib]);
+    ra=productExact(ivec2(xa,y),max(vec3(0.0),sa));
+    rb=productExact(ivec2(xb,y),max(vec3(0.0),sb));
+}
+vec3 sampledRgb(int ox,int oy) {
+    if(metaWords[38]!=0) return lightRgb(srcOf(ox,metaWords[36],p.width)+metaWords[39],srcOf(oy,metaWords[37],p.height)+metaWords[40]);
+    uvec2 v=halfOutput[(srcOf(oy,metaWords[37],p.height)+metaWords[40])*p.width+srcOf(ox,metaWords[36],p.width)+metaWords[39]];return vec3(unpackHalf2x16(v.x),unpackHalf2x16(v.y).x); }
+void gradePass() {
+    int outW=metaWords[36],outH=metaWords[37];
+    int kc=int(gl_GlobalInvocationID.x),j=int(gl_WorkGroupID.y),o0=2*kc;
+    if(o0>=outW || 2*j>=outH) return;
+    if(metaWords[38]!=0) productSetup();
+    vec3 a0,a1,b0,b1;
+    if(metaWords[38]!=0) {
+        int xa=srcOf(o0,outW,p.width)+metaWords[39],xb=srcOf(o0+1,outW,p.width)+metaWords[39];
+        lightPair(xa,xb,srcOf(2*j,outH,p.height)+metaWords[40],a0,a1);
+        lightPair(xa,xb,srcOf(2*j+1,outH,p.height)+metaWords[40],b0,b1);
+        a0=gradeYuvOf(a0);a1=gradeYuvOf(a1);b0=gradeYuvOf(b0);b1=gradeYuvOf(b1);
+    } else {
+        a0=gradeYuvOf(sampledRgb(o0,2*j));a1=gradeYuvOf(sampledRgb(o0+1,2*j));
+        b0=gradeYuvOf(sampledRgb(o0,2*j+1));b1=gradeYuvOf(sampledRgb(o0+1,2*j+1));
+    }
+    int yStride=metaWords[21];
+    uint yIdx=uint(2*j)*uint(yStride)+uint(o0);
+    p010[yIdx>>1u]=pack10(a0.x,64.0,940.0)|(pack10(a1.x,64.0,940.0)<<16u);
+    p010[(yIdx+uint(yStride))>>1u]=pack10(b0.x,64.0,940.0)|(pack10(b1.x,64.0,940.0)<<16u);
+    vec3 mean=((a0+a1)+(b0+b1))*0.25;
+    uint pairIdx=uint(metaWords[23])/2u+uint(j)*uint(metaWords[22])+uint(o0);
+    p010[pairIdx>>1u]=pack10(mean.g,64.0,960.0)|(pack10(mean.b,64.0,960.0)<<16u);
+}
+#endif
 
 void main() {
     int stage=algorithmPass<0?p.stage:algorithmPass;
     if(stage==3) { borderPass();return; }
+#ifndef IMAGE_OUTPUT
+    if(stage==5) { gradePass();return; }
+#endif
     lane=int(gl_SubgroupInvocationID);
-    int erosion=stage==2?4:8,stride=64-2*erosion;
+    int erosion=stage==2||stage==4?4:8,stride=64-2*erosion;
     band0=int(gl_WorkGroupID.x)*stride-erosion;
     x0=band0+4*lane;
     int y0=int(gl_WorkGroupID.y)*ROWS;
-    if(stage==0) guides(y0); else if(stage==1) greenMissing(y0); else if(stage==2) for(int k=0;k<FINAL_ROWS;++k) finalRow(int(gl_WorkGroupID.y)*FINAL_ROWS+k);
+    if(stage==0) guides(y0); else if(stage==1) greenMissing(y0); else if(stage==2) { if(metaWords[38]!=0) return; else for(int k=0;k<FINAL_ROWS;++k) finalRow(int(gl_WorkGroupID.y)*FINAL_ROWS+k,false); }
+#ifndef IMAGE_OUTPUT
+    else if(stage==4) sampledFinal();
+#endif
 }

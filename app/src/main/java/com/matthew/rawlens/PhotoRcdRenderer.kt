@@ -48,17 +48,60 @@ internal class PhotoRcdRenderer private constructor(private var handle: Long, pr
                     HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or (if(gpuImage) outputUsageNative(handle) else 0L)))
             slots[slot] = target
         }
+        val phase = cfaPhase(channels, left, top)
+        renderNative(handle, raw, intArrayOf(sensorWidth, sensorHeight,
+            rowStride, pixelStride, left, top, width, height, phase), black, white,
+            wb, shadeDims, shadeGains, target.buffer)
+        return target.buffer
+    }
+
+    private fun cfaPhase(channels: IntArray, left: Int, top: Int): Int {
         var phase = 0
         for (q in 0..3) {
             val sensorSite = (((q / 2 + top) and 1) * 2) + ((q % 2 + left) and 1)
             val color = when (sensorSite) { channels[0] -> 0; channels[3] -> 2; else -> 1 }
             phase = phase or (color shl (q * 2))
         }
-        renderNative(handle, raw, intArrayOf(sensorWidth, sensorHeight,
-            rowStride, pixelStride, left, top, width, height, phase), black, white,
-            wb, shadeDims, shadeGains, target.buffer)
-        return target.buffer
+        return phase
     }
+
+    /**
+     * Frame-global only: RCD final pass, grade and P010 pack in one submit.
+     * [gradeParams] is VfVideoGrade.packGrade's float block; [strides] is the
+     * recorder's {yStrideB, uvStrideB, outW, outH}. Returns the completion sync
+     * fd (caller owns it). The engine waits for its own previous frame before
+     * reusing staging, so no RGB slot is involved.
+     */
+    @Synchronized
+    fun renderP010(image: Image, left: Int, top: Int, width: Int, height: Int,
+                   channels: IntArray, black: FloatArray, white: Float, wb: FloatArray,
+                   shadeDims: IntArray?, shadeGains: ShortArray?, p010: HardwareBuffer,
+                   gradeParams: FloatArray, strides: IntArray): Int {
+        require(image.format == android.graphics.ImageFormat.RAW_SENSOR)
+        val plane = image.planes[0]
+        return renderP010RawBuffer(plane.buffer.slice(), image.width, image.height, plane.rowStride,
+            plane.pixelStride, left, top, width, height, channels, black, white, wb, shadeDims, shadeGains,
+            p010, gradeParams, strides)
+    }
+
+    /** [renderP010] with an explicit RAW plane, for headless validation. */
+    @Synchronized
+    internal fun renderP010RawBuffer(raw: ByteBuffer, sensorWidth: Int, sensorHeight: Int,
+                   rowStride: Int, pixelStride: Int, left: Int, top: Int, width: Int, height: Int,
+                   channels: IntArray, black: FloatArray, white: Float, wb: FloatArray,
+                   shadeDims: IntArray?, shadeGains: ShortArray?, p010: HardwareBuffer,
+                   gradeParams: FloatArray, strides: IntArray): Int {
+        check(handle != 0L)
+        require(channels.size == 4 && channels.sorted() == listOf(0, 1, 2, 3))
+        require(wb.size == 3 && black.size == 4 && gradeParams.size >= 18 && strides.size >= 4)
+        return renderP010Native(handle, raw, intArrayOf(sensorWidth, sensorHeight,
+            rowStride, pixelStride, left, top, width, height, cfaPhase(channels, left, top)),
+            black, white, wb, shadeDims, shadeGains, p010, gradeParams,
+            intArrayOf(strides[2], strides[3], strides[0], strides[1]))
+    }
+    private external fun renderP010Native(handle: Long, raw: ByteBuffer, geometry: IntArray,
+        black: FloatArray, white: Float, wb: FloatArray, shadeDims: IntArray?, shadeGains: ShortArray?,
+        p010: HardwareBuffer, gradeParams: FloatArray, layout: IntArray): Int
 
     /** Canonical FP32 readback before product corrections/final half storage. */
     @Synchronized internal fun canonical(width: Int, height: Int, phase: Int, cfa: FloatArray): FloatArray {
