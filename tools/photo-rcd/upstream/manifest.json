@@ -1,0 +1,40 @@
+{
+  "repositories": {
+    "RawTherapee": {
+      "url": "https://github.com/RawTherapee/RawTherapee",
+      "commit": "b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+      "source_paths": [
+        "rtengine/rcd_demosaic.cc",
+        "rtengine/rt_math.h",
+        "rtengine/demosaic_algos.cc",
+        "LICENSE"
+      ],
+      "license": "GPL-3.0-or-later (RCD and border file notices)",
+      "git_blobs": {
+        "LICENSE": "e963df8294069543e782fd72aa71832dca1571ca",
+        "rt_math.h": "6d4799254091d909396589a50443bca3f993c33b",
+        "demosaic_algos.cc": "2d9a778e48e16ccd345d341535e368ad9d255fec",
+        "rcd_demosaic.cc": "21b40b8fa195f8934f163cba6d1036725908a9f9"
+      }
+    },
+    "LuisSR": {
+      "url": "https://github.com/LuisSR/RCD-Demosaicing",
+      "commit": "0aa9d6e234f55adb0abf55a82be371ad32dbc60d",
+      "license": "GPL-3.0 repository LICENSE; provenance only, not compiled",
+      "git_blobs": {
+        "LICENSE": "94a9ed024d3859793618152ea559a168bbcbb5e2",
+        "rcd_demosaicing.c": "a530d7c7c2580345c783210ae0ab8a2b079b59da",
+        "README.md": "3809f76da6e0911638f1e61c2f922d2659570524"
+      }
+    }
+  },
+  "sha256": {
+    "LuisSR/LICENSE": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "LuisSR/README.md": "31132bd654a7c8a9cbff494e20c2bc7c56b1a93013aad05f83e4b74588a3b5e9",
+    "LuisSR/rcd_demosaicing.c": "49de57f000b9ab9a9e07ebb1dfa40b8d9afb1ad13c87526b206c6ed70cf7b84c",
+    "RawTherapee/LICENSE": "8c75a9231db8906865e29706ed63aad18fd918c92c15dbefbb13c25fe42850b4",
+    "RawTherapee/demosaic_algos.cc": "de1bae94d451881a99e5c45e099ebcc24a9ffa91943fcd3b55671523f4649d49",
+    "RawTherapee/rcd_demosaic.cc": "646262a75c72ff8bad8ef199bf5edb48b8d1a230b196914cc07c59be8547b083",
+    "RawTherapee/rt_math.h": "88c382a75bcb5dcafb62f6a527c713b2368f0d61b86e811ce3b97504a704706e"
+  }
+}

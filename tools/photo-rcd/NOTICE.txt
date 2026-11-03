@@ -1,0 +1,29 @@
+RawLens independent public-source photo RCD port
+
+Mathematical source:
+RawTherapee/RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c
+rtengine/rcd_demosaic.cc, Copyright (c) 2017-2020 Luis Sanz Rodriguez and
+Ingo Weyrich, GNU GPL version 3 or (at your option) any later version.
+Original RCD release 2.3 by Luis Sanz Rodriguez:
+https://github.com/LuisSR/RCD-Demosaicing
+Border interpolation: RawTherapee rtengine/demosaic_algos.cc,
+Copyright (c) 2004-2010 Gabor Horvath, GPL-3.0-or-later.
+
+New Vulkan layout, scheduling and Android/host integration written for RawLens
+by Codex, 2026-11-01, GPL-3.0-or-later. No warranty. See the accompanying GPL.
+This is an attributed public-source port, not a strict clean-room certification
+or legal clearance. Historical distribution questions remain separate.
+
+Corresponding source, exact hashes, adaptation patch and build instructions:
+tools/photo-rcd/ and app/src/main/cpp/photo_rcd/ in the RawLens source tree;
+docs/refactor/rcd-replacement/provenance.md and design.md.
+https://github.com/matthew777777/RawLens
+
+Recording compatibility candidate: adapted from the preserved RawLens still-photo
+RCD port introduced by matthew777777 at a244814c1fcbcbb0d3f9d268a1bca5a8a32cde86.
+The preserved shader attributes RawTherapee RCD 2.3, Luis Sanz Rodriguez /
+Ingo Weyrich, GPL-3.0-or-later. The new race-free adapter corrects diagonal
+lookup and applies the pinned public-source tile, scratch and border rules.
+Generated corresponding source: tools/photo-rcd/prepare_recording_candidate.py.
+Source lineage, limitations and measurements: recording-candidate.md and
+recording-candidate-validation.json under docs/refactor/rcd-replacement/.

@@ -1,0 +1,89 @@
+{
+  "source": "https://raw.pixls.us/getfile.php/3115/nice/Ricoh%20-%20GR%20III%20-%2014bit%20(3:2).DNG",
+  "source_sha256": "05513ee72f7cac4165534c9f64995412084f414a033c80c473c79fd94154292e",
+  "source_license": "CC0-1.0, individual raw.pixls.us repository entry",
+  "source_entry": [
+    "Ricoh",
+    "GR III",
+    "14bit (3:2)",
+    24.84,
+    "",
+    "<a href='https://creativecommons.org/publicdomain/zero/1.0/' title='Creative Commons 0 - Public Domain' class='cc'>co</a>",
+    "2019-05-02",
+    "<a href='https://raw.pixls.us/getfile.php/3115/nice/Ricoh - GR III - 14bit (3:2).DNG'>Ricoh - GR III - 14bit (3:2).DNG</a><div class='checksumdata'><span title='sha256 Checksum'>05513ee72f7cac4165534c9f64995412084f414a033c80c473c79fd94154292e</span>&nbsp;(31.83MB)</div>",
+    "<a target='_blank' href='https://raw.pixls.us/getfile.php/3115/exif/R0000357.DNG.exif.txt'>exifdata</a>"
+  ],
+  "photographer": "not identified by repository entry; do not infer from unrelated donor list",
+  "decoder": "LibRaw unprocessed_raw 0.22.2-Release, no gamma/auto-scale flags",
+  "pgm_sha256": "a67b3cca62d4df77dd48091b26ea0716eb0b1b7c31a1db22edea95f8682a8109",
+  "raw_size": [
+    6112,
+    4064
+  ],
+  "black_per_site": [
+    64,
+    64,
+    64,
+    64
+  ],
+  "white": 16314,
+  "dng_tags": {
+    "50714": [
+      64,
+      64,
+      64,
+      64
+    ],
+    "50717": [
+      16314
+    ],
+    "50829": [
+      28,
+      58,
+      4052,
+      6078
+    ]
+  },
+  "normalization": "clamp((code - black)/(white - black),0,1), FP32 store; no WB/LSC/color matrix",
+  "crops": [
+    {
+      "file": "ricoh-gr-iii-0.f32",
+      "size": [
+        97,
+        95
+      ],
+      "sensor_origin": [
+        68,
+        40
+      ],
+      "cfa": "RGGB",
+      "sha256": "dbce05dc047758ab155148e192e94159411e22ea384cbc0be5eccf1c152cc899"
+    },
+    {
+      "file": "ricoh-gr-iii-1.f32",
+      "size": [
+        97,
+        95
+      ],
+      "sensor_origin": [
+        1769,
+        1081
+      ],
+      "cfa": "BGGR",
+      "sha256": "f36f58e9ef69e8c8684a3ee9f9effacd6fcdab4abd18121c7d4fcad955e16c6f"
+    },
+    {
+      "file": "ricoh-gr-iii-2.f32",
+      "size": [
+        97,
+        95
+      ],
+      "sensor_origin": [
+        3500,
+        2501
+      ],
+      "cfa": "GBRG",
+      "sha256": "72096632a72106a685f332b14a249078a1faaeb62e50446ba91be386bf3f9da9"
+    }
+  ]
+}

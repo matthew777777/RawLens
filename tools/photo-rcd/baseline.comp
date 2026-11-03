@@ -1,0 +1,154 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Attributed FP32 public-source port, RawLens/Codex, 2026-11-01.
+// Mathematical source: RawTherapee b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c
+// rtengine/rcd_demosaic.cc, Copyright (c) 2017-2020 Luis Sanz Rodriguez
+// and Ingo Weyrich. Canonical border: Gabor Horvath, 2004-2010.
+// See upstream/RawTherapee/LICENSE and docs/refactor/rcd-replacement/provenance.md.
+// New full-resolution SSBO layout; immutable inputs per dispatch. No packing.
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0,std430) readonly buffer Cfa { float cfa[]; };
+layout(binding=1,std430) buffer Vh { float vh[]; };
+layout(binding=2,std430) buffer Lp { float lp[]; };
+layout(binding=3,std430) buffer Pq { float pq[]; };
+layout(binding=4,std430) buffer Green { float green[]; };
+layout(binding=5,std430) buffer Opposite { vec2 opposite[]; };
+layout(binding=6,std430) writeonly buffer Output { vec4 outputRgb[]; };
+layout(push_constant) uniform Params { int width; int height; int phase; int stage; } p;
+const float eps=1e-5;
+const float epssq=1e-10;
+const ivec2 N=ivec2(0,-1), S=ivec2(0,1), W=ivec2(-1,0), E=ivec2(1,0);
+const ivec2 NW=ivec2(-1,-1), NE=ivec2(1,-1), SW=ivec2(-1,1), SE=ivec2(1,1);
+const int tileSize=194, tileStep=176;
+ivec2 tileOrigin() { int nx=(p.width+tileStep-1)/tileStep; int t=int(gl_GlobalInvocationID.z);return ivec2(t%nx,t/nx)*tileStep; }
+ivec2 tileExtent() { return min(ivec2(tileSize),ivec2(p.width,p.height)-tileOrigin()); }
+ivec2 readOrigin;
+int reflection(int x,int n) { int period=2*n-2; int r=((x%period)+period)%period; return r<n?r:period-r; }
+int indexOf(ivec2 s) { return int(gl_GlobalInvocationID.z)*tileSize*tileSize+reflection(s.y,tileSize)*tileSize+reflection(s.x,tileSize); }
+bool domain(ivec2 s,int margin) { return all(greaterThanEqual(s,ivec2(margin))) && all(lessThan(s,tileExtent()-ivec2(margin))); }
+int color(ivec2 s) { return (p.phase >> (2*((s.y&1)*2+(s.x&1))))&3; }
+precise float raw(ivec2 s) { s+=readOrigin;return cfa[reflection(s.y,p.height)*p.width+reflection(s.x,p.width)]; }
+precise float g(ivec2 s) { return green[indexOf(s)]; }
+precise float rcdInterpolate(float a,float b,float c) { return a*(b-c)+c; }
+precise float response(ivec2 s,ivec2 d) {
+    precise float v=(raw(s-3*d)-raw(s-d)-raw(s+d)+raw(s+3*d))-3.0*(raw(s-2*d)+raw(s+2*d))+6.0*raw(s);
+    return v*v;
+}
+precise float direction(ivec2 s,ivec2 a,ivec2 b) {
+    precise float va=max(epssq,response(s-a,a)+response(s,a)+response(s+a,a));
+    precise float vb=max(epssq,response(s-b,b)+response(s,b)+response(s+b,b));
+    return va/(va+vb);
+}
+precise float upstreamVh(ivec2 s) {
+    // Upstream's scalar calloc scratch persists across tiles. Short tail tiles
+    // retain prior VH entries outside their written domain. Recompute the most
+    // recent written value from immutable CFA, avoiding inter-tile GPU races.
+    if(any(lessThan(s,ivec2(4)))) return 0.0;
+    int nx=(p.width+tileStep-1)/tileStep;
+    for(int t=int(gl_GlobalInvocationID.z);t>=0;--t) {
+        ivec2 origin=ivec2(t%nx,t/nx)*tileStep;
+        ivec2 extent=min(ivec2(tileSize),ivec2(p.width,p.height)-origin);
+        // Upstream skips an exactly 18-pixel tail before touching scratch.
+        if(extent.x==18 || extent.y==18) continue;
+        if(all(lessThan(s,extent-ivec2(4)))) {
+            readOrigin=origin;
+            precise float v=direction(s,S,E);
+            readOrigin=tileOrigin();return v;
+        }
+    }
+    return 0.0;
+}
+precise float diagonalResponse(ivec2 s,ivec2 d) {
+    // Pinned RT step 4.0 fills odd columns only; its indx/2 lookup maps
+    // both columns of each horizontal pair to that odd-column response.
+    // Preserve this actual upstream convention, including every CFA phase.
+    s.x=s.x|1;
+    if(!domain(s,3)) return 0.0;
+    return response(s,d);
+}
+precise float diagonalDirection(ivec2 s) {
+    precise float a=max(epssq,diagonalResponse(s+NW,SE)+diagonalResponse(s,SE)+diagonalResponse(s+SE,SE));
+    precise float b=max(epssq,diagonalResponse(s+NE,SW)+diagonalResponse(s,SW)+diagonalResponse(s+SW,SW));
+    return a/(a+b);
+}
+precise float refine(float c,float a,float b,float d,float e,bool cardinal) {
+    // Upstream green/VH groups pairs; diagonal PQ uses a left-associated sum.
+    precise float nb=cardinal?0.25*((a+b)+(d+e)):0.25*(a+b+d+e);
+    return abs(0.5-c)<abs(0.5-nb)?nb:c;
+}
+precise float vhAt(ivec2 s) {
+    return refine(vh[indexOf(s)],vh[indexOf(s+NW)],vh[indexOf(s+NE)],vh[indexOf(s+SW)],vh[indexOf(s+SE)],true);
+}
+precise float rawGradient(ivec2 s,ivec2 d) {
+    return eps+(abs(raw(s-d)-raw(s+d))+abs(raw(s)-raw(s+2*d)))+(abs(raw(s+d)-raw(s+3*d))+abs(raw(s+2*d)-raw(s+4*d)));
+}
+precise float greenEstimate(ivec2 s,ivec2 d) {
+    precise float l=lp[indexOf(s)];
+    return raw(s+d)*(l+l)/(eps+l+lp[indexOf(s+2*d)]);
+}
+precise float nativeColor(ivec2 s,int c) {
+    // Called only at a site whose known R/B channel is c.
+    return raw(s);
+}
+precise float diagonalGradient(ivec2 s,ivec2 d) {
+    return eps+abs(raw(s+d)-raw(s-d))+abs(raw(s+d)-raw(s+3*d))+abs(g(s)-g(s+2*d));
+}
+precise float colorAt(ivec2 s,int c) {
+    return color(s)==c?raw(s):opposite[indexOf(s)][c/2];
+}
+precise float cardinalGradient(ivec2 s,ivec2 d,int c) {
+    precise float first=eps+abs(g(s)-g(s+2*d));
+    return first+abs(colorAt(s-d,c)-colorAt(s+d,c))+abs(colorAt(s+d,c)-colorAt(s+3*d,c));
+}
+void main() {
+    ivec2 s=ivec2(gl_GlobalInvocationID.xy);
+    if(p.stage==4) {
+        if(s.x>=p.width || s.y>=p.height) return;
+        if(s.x>=9 && s.y>=9 && s.x<p.width-9 && s.y<p.height-9) return;
+        precise vec3 total=vec3(0.0); ivec3 count=ivec3(0);
+        for(int y=-1;y<=1;++y) for(int x=-1;x<=1;++x) {
+            ivec2 n=s+ivec2(x,y);
+            if(n.x<0 || n.y<0 || n.x>=p.width || n.y>=p.height) continue;
+            int nc=color(n); total[nc]+=cfa[n.y*p.width+n.x]; count[nc]++;
+        }
+        precise vec3 result=total/vec3(count); result[color(s)]=cfa[s.y*p.width+s.x];
+        outputRgb[s.y*p.width+s.x]=vec4(result,1.0);return;
+    }
+    if(any(greaterThanEqual(s,tileExtent())) || tileExtent().x==18 || tileExtent().y==18) return;
+    readOrigin=tileOrigin();
+    int i=indexOf(s), c=color(s);
+    if(p.stage==0) {
+        vh[i]=upstreamVh(s);
+        lp[i]=domain(s,2) && c!=1?raw(s)+0.5*(raw(s+N)+raw(s+S)+raw(s+W)+raw(s+E))+0.25*(raw(s+NW)+raw(s+NE)+raw(s+SW)+raw(s+SE)):0.0;
+        pq[i]=domain(s,4) && c!=1?diagonalDirection(s):0.0;
+    } else if(p.stage==1) {
+        if(c==1 || !domain(s,4)) { green[i]=raw(s); return; }
+        precise float ng=rawGradient(s,N), sg=rawGradient(s,S), wg=rawGradient(s,W), eg=rawGradient(s,E);
+        precise float ne=greenEstimate(s,N), se=greenEstimate(s,S), we=greenEstimate(s,W), ee=greenEstimate(s,E);
+        precise float ve=(sg*ne+ng*se)/(ng+sg);
+        precise float he=(wg*ee+eg*we)/(eg+wg);
+        green[i]=rcdInterpolate(vhAt(s),he,ve);
+    } else if(p.stage==2) {
+        if(c==1 || !domain(s,4)) { opposite[i]=vec2(raw(s)); return; }
+        precise float nwg=diagonalGradient(s,NW), neg=diagonalGradient(s,NE), swg=diagonalGradient(s,SW), seg=diagonalGradient(s,SE);
+        precise float nwe=raw(s+NW)-g(s+NW), nee=raw(s+NE)-g(s+NE), swe=raw(s+SW)-g(s+SW), see=raw(s+SE)-g(s+SE);
+        precise float pe=(nwg*see+seg*nwe)/(nwg+seg);
+        precise float qe=(neg*swe+swg*nee)/(neg+swg);
+        precise float disc=refine(pq[i],pq[indexOf(s+NW)],pq[indexOf(s+NE)],pq[indexOf(s+SW)],pq[indexOf(s+SE)],false);
+        precise float missing=g(s)+rcdInterpolate(disc,qe,pe);
+        opposite[i]=c==0?vec2(raw(s),missing):vec2(missing,raw(s));
+    } else {
+        if(!domain(s,9)) return;
+        precise vec3 result=vec3(opposite[i].x,g(s),opposite[i].y);
+        if(c==1) {
+            for(int k=0;k<=2;k+=2) {
+                precise float ng=cardinalGradient(s,N,k),sg=cardinalGradient(s,S,k),wg=cardinalGradient(s,W,k),eg=cardinalGradient(s,E,k);
+                precise float ne=colorAt(s+N,k)-g(s+N),se=colorAt(s+S,k)-g(s+S),we=colorAt(s+W,k)-g(s+W),ee=colorAt(s+E,k)-g(s+E);
+                precise float ve=(ng*se+sg*ne)/(ng+sg),he=(eg*we+wg*ee)/(eg+wg);
+                result[k]=g(s)+rcdInterpolate(vhAt(s),he,ve);
+            }
+        }
+        ivec2 outputSite=s+tileOrigin();
+        outputRgb[outputSite.y*p.width+outputSite.x]=vec4(max(vec3(0.0),result),1.0);
+    }
+}

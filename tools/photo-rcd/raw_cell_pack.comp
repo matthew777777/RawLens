@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Requirements-derived RAW16 cell packing, RawLens/Codex 2026-11-01.
+// No reconstruction equations or historical backend dependency.
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
+layout(binding=1,std430) writeonly buffer Cells { uvec2 cells[]; };
+layout(binding=2,std430) writeonly buffer Probe { vec4 normalizedCells[]; };
+layout(constant_id=0) const bool WRITE_NORMALIZED=false;
+layout(push_constant) uniform Params {
+    int sensorWidth; int sensorHeight; int rowBytes; int pixelBytes;
+    int left; int top; int width; int height;
+    vec4 black; float white; int reserved0; int reserved1; int reserved2;
+} p;
+uint sensorCode(ivec2 s) {
+    uint address=uint(s.y)*uint(p.rowBytes)+uint(s.x)*uint(p.pixelBytes);
+    uint offset=address&3u;
+    uint value=sourceWords[address>>2u]>>(offset*8u);
+    if(offset==3u) value|=(sourceWords[(address>>2u)+1u]&255u)<<8u;
+    return value&65535u;
+}
+void main() {
+    ivec2 cell=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 count=(ivec2(p.width,p.height)+ivec2(1))/2;
+    if(any(greaterThanEqual(cell,count))) return;
+    uvec4 codes=uvec4(0u); precise vec4 normalized=vec4(0.0);
+    for(int q=0;q<4;++q) {
+        ivec2 local=2*cell+ivec2(q&1,q>>1);
+        if(local.x>=p.width || local.y>=p.height) continue;
+        ivec2 sensor=local+ivec2(p.left,p.top);
+        codes[q]=sensorCode(sensor);
+        if(WRITE_NORMALIZED) {
+            int quad=(sensor.y&1)*2+(sensor.x&1);
+            precise float numerator=float(codes[q])-p.black[quad];
+            precise float denominator=p.white-p.black[quad];
+            normalized[q]=clamp(numerator/denominator,0.0,1.0);
+        }
+    }
+    int index=cell.y*count.x+cell.x;
+    cells[index]=uvec2(codes.x|(codes.y<<16u),codes.z|(codes.w<<16u));
+    if(WRITE_NORMALIZED) normalizedCells[index]=normalized;
+}
