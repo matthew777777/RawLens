@@ -44,6 +44,7 @@ struct Engine::State {
   bool tileLocal = false;
   // Frame-global subgroup walker (recording option A); requires tileLocal.
   bool frameGlobal = false;
+  int sampleWidth = 0, sampleHeight = 0;
   uint32_t coreX = 16, coreY = 16;
   bool imageOutput = false;
   std::map<void *, Image> outputImages;
@@ -372,7 +373,7 @@ struct Engine::State {
     allocate(buffers[8], imageOutput ? 16 : n * 8);
     if (rawInput) {
       allocate(buffers[9], rawCapacity, false, frameGlobal);
-      allocate(buffers[10], 64, false, frameGlobal);
+      allocate(buffers[10], 80, false, frameGlobal);
     }
     VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, uint32_t(bindingCount())},
@@ -536,7 +537,7 @@ struct Engine::State {
         // Guides and green/missing walk 64-row blocks; the final pass is one
         // subgroup per output row.
         vkCmdDispatch(command, (w + (stage == 2 ? 55 : 47)) / (stage == 2 ? 56 : 48),
-                      stage == 2 ? h : (h + 63) / 64, 1);
+                      stage == 2 ? (h + 7) / 8 : (h + 63) / 64, 1);
       else if (stage == 4 || stage == 6 ||
                (stage == 5 && rawInput && (cacheResponses || tileLocal)) ||
                (stage == 7 && !recordingCandidate))
@@ -1110,6 +1111,13 @@ void Engine::renderHalf(int width, int height, uint32_t phase, const float *cfa,
 }
 
 bool Engine::usesRawInput() const { return state->rawInput; }
+void Engine::setOutputSampling(int width, int height) {
+  std::lock_guard<std::mutex> lock(state->mutex);
+  if (!state->frameGlobal || width < 0 || height < 0)
+    throw std::invalid_argument("output sampling requires frame-global RCD");
+  state->sampleWidth = width;
+  state->sampleHeight = height;
+}
 bool Engine::usesImageOutput() const { return state->imageOutput; }
 uint64_t Engine::outputUsage() const {
   if (!state->imageOutput)
@@ -1179,6 +1187,10 @@ void Engine::renderRawFrame(const uint8_t *data, size_t bytes,
   metadata[13] = g[6];
   metadata[14] = g[7];
   metadata[15] = scale;
+  if (s.frameGlobal) {
+    metadata[16] = s.sampleWidth;
+    metadata[17] = s.sampleHeight;
+  }
   s.flush(7);
   s.flush(9);
   s.flush(10);

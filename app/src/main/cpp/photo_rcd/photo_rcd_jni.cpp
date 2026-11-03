@@ -340,3 +340,13 @@ Java_com_matthew_rawlens_PhotoRcdRenderer_outputUsageNative(JNIEnv *env,
     return 0;
   }
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_matthew_rawlens_PhotoRcdRenderer_setOutputSamplingNative(
+    JNIEnv *env, jobject, jlong handle, jint width, jint height) {
+  try {
+    get(handle)->setOutputSampling(width, height);
+  } catch (const std::exception &e) {
+    failure(env, e);
+  }
+}

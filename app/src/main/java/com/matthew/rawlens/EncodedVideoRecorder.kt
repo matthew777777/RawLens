@@ -809,6 +809,10 @@ class EncodedVideoRecorder(
                 Log.w(TAG, "public photo RCD native unavailable; retaining MHC/SUPER", e)
                 null
             }
+            if (photoRcdRenderer != null && validatePhotoRcdFrameGlobal) {
+                // gradeYuv point-samples the RCD frame at the export size.
+                photoRcdRenderer?.setOutputSampling(width, height)
+            }
             if (photoRcdRenderer != null) {
                 Log.i(TAG, "public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified")
             }

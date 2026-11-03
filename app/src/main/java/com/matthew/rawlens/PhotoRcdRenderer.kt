@@ -137,6 +137,9 @@ internal class PhotoRcdRenderer private constructor(private var handle: Long, pr
     }
     private external fun openNative(shader: ByteArray, specializePasses: Boolean, cacheResponses: Boolean, tiled: Boolean, images: Boolean, recordingCandidate: Boolean, stageCodes: Array<ByteArray?>?, packed: Boolean, rawPack: ByteArray?, reconstructionScale: Int, normalizeOnce: Boolean, tileLocal: Boolean, imageOutput: Boolean, frameGlobal: Boolean): Long
     private external fun outputUsageNative(handle: Long): Long
+    /** Frame-global only: final pass computes just the pixels a point-sampling grade to width x height reads. */
+    @Synchronized internal fun setOutputSampling(width: Int, height: Int) = setOutputSamplingNative(handle, width, height)
+    private external fun setOutputSamplingNative(handle: Long, width: Int, height: Int)
     private external fun closeNative(handle: Long)
     @Synchronized internal fun frameCosts(): DoubleArray = frameCostsNative(handle)
     private external fun frameCostsNative(handle: Long): DoubleArray

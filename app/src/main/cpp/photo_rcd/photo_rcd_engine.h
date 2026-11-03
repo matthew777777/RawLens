@@ -51,6 +51,10 @@ public:
                       const std::vector<uint32_t> &correction,
                       void *hardwareBuffer);
   bool usesRawInput() const;
+  // Frame-global recording: the downstream grade point-samples the RCD frame
+  // at int((i+0.5)*src/out); the final pass may skip source pixels it never
+  // reads. 0x0 (default) computes every pixel.
+  void setOutputSampling(int width, int height);
   int reconstructionScale() const;
   void renderRawHalf(const uint8_t *data, size_t bytes,
                      const std::array<int, 9> &geometry,

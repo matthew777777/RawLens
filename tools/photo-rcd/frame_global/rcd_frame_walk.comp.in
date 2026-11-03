@@ -26,6 +26,8 @@ layout(push_constant) uniform Params { int width; int height; int phase; int sta
 layout(constant_id=9) const int algorithmPass=-1;
 const float eps=1e-5, epssq=1e-10;
 const int ROWS=64;
+// Final pass rows per workgroup: one row per group made launch overhead dominate.
+const int FINAL_ROWS=8;
 // Planes: 0 VH, 1 PQ, 2 LP, 3 green, 4 missing (FP16, four pixels per uvec2).
 int lane,x0,band0;
 int color(int x,int y) { return (p.phase >> (2*((y&1)*2+(x&1))))&3; }
@@ -52,6 +54,23 @@ uvec2 loadRaw(int y) {
 }
 int planeIndex(int plane,int y) { return plane*(p.width*p.height/4)+((y*p.width+x0)>>2); }
 uvec2 loadPlane(int plane,int y) { return stripInside(y)?planes[planeIndex(plane,y)]:uvec2(0u); }
+// Output sampling (RAW metadata words 16/17): gradeYuv reads source pixel
+// int((i+0.5)*src/out) per axis. A coordinate is computed when some output
+// index may map to it; 0 or out>=src computes everything.
+layout(binding=10,std430) readonly buffer RawMetadataWords { int metaWords[]; };
+bool sampled(int c,int outN,int srcN) {
+    if(outN<=0 || outN>=srcN) return true;
+    int j=int(floor((float(c)+0.5)*float(outN)/float(srcN)));
+    for(int k=j-1;k<=j+1;++k) {
+        if(k<0 || k>=outN) continue;
+        // gradeYuv computes int((k+0.5)*src/out) with GPU (not correctly
+        // rounded) division; when u is an integer either neighbour may be
+        // read, so both are computed (margin).
+        float u=(float(k)+0.5)*float(srcN)/float(outN);
+        if(abs(u-(float(c)+0.5))<=0.5+1e-3) return true;
+    }
+    return false;
+}
 // Columns [erosion, 64-erosion) of the band are complete.
 bool ownsStrip(int erosion) { int c=4*lane;return c>=erosion && c+3<64-erosion; }
 #define W(a,b,c,j) ((j)<4?a[(j)&3]:(j)<8?b[(j)&3]:c[(j)&3])
@@ -251,7 +270,8 @@ void productFast(ivec2 site,vec3 sourceRgb,int lane4) {
     //@STORE@
 }
 
-void finalPass(int f) {
+void finalRow(int f) {
+    if(!sampled(f,metaWords[17],p.height)) return;
     // FP16 arithmetic (RelaxedPrecision) for the final colour step: -3.5 ms
     // at 4K on Mali-G615; 68.5 dB vs exact engine with LSC (max 3.9e-3).
     precision mediump float;
@@ -269,7 +289,7 @@ void finalPass(int f) {
         productRow(x0,f);
         for(int i=0;i<4;++i) {
             int x=x0+i,j=i+4;
-            if(x>=p.width) continue;
+            if(x>=p.width || !sampled(x,metaWords[16],p.width)) continue;
             int c=color(x,f);
             vec3 result;
             // Canonical border pixels are written by the border pass.
@@ -335,5 +355,5 @@ void main() {
     band0=int(gl_WorkGroupID.x)*stride-erosion;
     x0=band0+4*lane;
     int y0=int(gl_WorkGroupID.y)*ROWS;
-    if(stage==0) guides(y0); else if(stage==1) greenMissing(y0); else if(stage==2) finalPass(int(gl_WorkGroupID.y));
+    if(stage==0) guides(y0); else if(stage==1) greenMissing(y0); else if(stage==2) for(int k=0;k<FINAL_ROWS;++k) finalRow(int(gl_WorkGroupID.y)*FINAL_ROWS+k);
 }

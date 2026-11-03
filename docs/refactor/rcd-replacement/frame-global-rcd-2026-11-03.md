@@ -226,3 +226,14 @@ Targets still unmet. Remaining large levers (estimated):
 Recordings `recordings-frame-global-walker-2026-11-03-v4`: 1080p30 12.7 fps,
 1440p30 13.1 fps, 2160p24 11.9 fps (RCD wall medians 72 / 69 / 75 ms).
 Targets unmet.
+
+## Session 5: output-sampling skip (prep for fused grade)
+
+`Engine::setOutputSampling(w,h)` (recorder passes the export size): the final
+pass computes only source pixels gradeYuv can point-sample, 8 rows per
+workgroup (one-row groups made launch overhead dominate). Verified on phone:
+every sampled pixel bit-identical at 1080p and 1440p. GPU division is not
+correctly rounded, so at 1080p (integer sample positions) both neighbours must
+be kept: no gain there; 1440p final 18 → 15 ms. The fused grade will define
+sampling with exact integer arithmetic. Recording `...-v5`: 10.6 / 12.2 /
+10.5 fps (noise-level change). Targets unmet.
