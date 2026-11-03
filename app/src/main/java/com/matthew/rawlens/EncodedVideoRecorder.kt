@@ -245,6 +245,7 @@ class EncodedVideoRecorder(
     internal var validatePhotoRcdNormalizeOnce: Boolean = false
     internal var validatePhotoRcdSharedFinal: Boolean = false
     internal var validatePhotoRcdTileLocal: Boolean = false
+    internal var validatePhotoRcdFrameGlobal: Boolean = false
     internal var validatePhotoRcdGpuImage: Boolean = false
     internal var validatePhotoRcdReconstructionScale: Int = 1
     internal var photoRcdTrace: PhotoRcdRecordingTrace? = null
@@ -800,7 +801,7 @@ class EncodedVideoRecorder(
         }
         if (validatePublicPhotoRcd && effPreferMhc && videoDemosaic == VideoDemosaic.MHC && useFused) {
             photoRcdRenderer = try {
-                PhotoRcdRenderer.open(appContext, validatePublicPhotoRcdOptimized,validatePublicPhotoRcdResponseCache,validatePublicPhotoRcdTiled,validatePublicPhotoRcdImages,validatePhotoRcdRecordingCandidate,validatePhotoRcdBakedStages,validatePhotoRcdPackedCells,validatePhotoRcdDirectRaw,validatePhotoRcdRequirementsInput,validatePhotoRcdReconstructionScale,validatePhotoRcdNormalizeOnce,validatePhotoRcdSharedFinal,validatePhotoRcdTileLocal,validatePhotoRcdGpuImage)
+                PhotoRcdRenderer.open(appContext, validatePublicPhotoRcdOptimized,validatePublicPhotoRcdResponseCache,validatePublicPhotoRcdTiled,validatePublicPhotoRcdImages,validatePhotoRcdRecordingCandidate,validatePhotoRcdBakedStages,validatePhotoRcdPackedCells,validatePhotoRcdDirectRaw,validatePhotoRcdRequirementsInput,validatePhotoRcdReconstructionScale,validatePhotoRcdNormalizeOnce,validatePhotoRcdSharedFinal,validatePhotoRcdTileLocal,validatePhotoRcdGpuImage,validatePhotoRcdFrameGlobal)
             } catch (e: Exception) {
                 Log.w(TAG, "public photo RCD unavailable; retaining ${if (useFused) "MHC" else "SUPER"} (${e.message})")
                 null

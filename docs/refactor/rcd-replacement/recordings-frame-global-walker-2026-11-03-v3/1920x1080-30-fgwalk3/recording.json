@@ -1,0 +1,257 @@
+{
+  "requested": [
+    1920,
+    1080,
+    30
+  ],
+  "cameraId": "0",
+  "gpuImage": true,
+  "tileLocal": true,
+  "frameGlobal": true,
+  "sharedFinal": false,
+  "normalizeOnce": true,
+  "gpuWriterRequested": true,
+  "reconstructionScale": 1,
+  "requirementsInput": true,
+  "profile": "BT709",
+  "preview": false,
+  "sourcePolicy": "FULL rung, existing 16:9 crop\/FOV, full-source RCD; no detail reduction",
+  "intervals": [
+    {
+      "second": 1,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=3574, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=56)"
+    },
+    {
+      "second": 2,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=4576, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 3,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=5579, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 4,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=6582, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 5,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=7586, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 6,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=8591, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 7,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=9599, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 8,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=10605, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 9,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=11608, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=51)"
+    },
+    {
+      "second": 10,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=12613, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=47)"
+    },
+    {
+      "second": 11,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=13615, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=53)"
+    },
+    {
+      "second": 12,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=14618, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 13,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=15624, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 14,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=16642, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=58)"
+    },
+    {
+      "second": 15,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=17646, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=59)"
+    },
+    {
+      "second": 16,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=18669, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=61)"
+    },
+    {
+      "second": 17,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=19674, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=61)"
+    },
+    {
+      "second": 18,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=20676, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=62)"
+    },
+    {
+      "second": 19,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=21677, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=56)"
+    },
+    {
+      "second": 20,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=22679, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=51)"
+    },
+    {
+      "second": 21,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=23683, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=50)"
+    },
+    {
+      "second": 22,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=24685, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=50)"
+    },
+    {
+      "second": 23,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=25689, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=50)"
+    },
+    {
+      "second": 24,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=26693, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=51)"
+    },
+    {
+      "second": 25,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=27697, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=51)"
+    },
+    {
+      "second": 26,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=28702, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=51)"
+    },
+    {
+      "second": 27,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=29707, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=51)"
+    },
+    {
+      "second": 28,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=30712, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=51)"
+    },
+    {
+      "second": 29,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=31719, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=51)"
+    },
+    {
+      "second": 30,
+      "thermal": 0,
+      "stats": "VideoStats(recording=true, elapsedMs=32724, framesAcquired=0, framesGraded=0, framesDropped=0, fileBytes=0, waitFreeFrames=0, fallbackWaits=0, cpuChainMsAvg=0.0, previewFrames=0, profile=BT709, demosaic=PHOTO_RCD_VALIDATION, outputFps=0.0, ioBusyPct=0, encBusyPct=0, memPct=51)"
+    }
+  ],
+  "startWallNs": 47037379330465,
+  "stats": {
+    "aacBytes": 684,
+    "audioChunks": 0,
+    "audioDropped": 709,
+    "audioFrames": 0,
+    "audioOutBufs": 2,
+    "copyMsAvg": 0,
+    "copyMsMax": 0,
+    "cpuChainMsAvg": 0,
+    "cpuChainMsMax": 0,
+    "cropRect": "3840x2160@(120,450)",
+    "cycleMsMax": 0,
+    "cycleOverBudget": 0,
+    "degradedFrames": 0,
+    "exportSize": "1920x1080",
+    "fallbackWaits": 0,
+    "fenceWaitMsAvg": 0,
+    "fenceWaitMsMax": 0,
+    "fileBytes": 3970,
+    "frameErrors": 0,
+    "framesAcquired": 0,
+    "framesDropped": 0,
+    "framesGraded": 0,
+    "fusedFrames": 0,
+    "hasAudio": true,
+    "hasStabGyro": false,
+    "headDroppedFrames": 0,
+    "heatDegraded": false,
+    "inputStarved": 0,
+    "maxBacklogDepth": 0,
+    "outputBuffers": 0,
+    "outputBytes": 0,
+    "overBudgetFrames": 0,
+    "previewFrames": 0,
+    "previewSkipped": 0,
+    "profile": "BT709",
+    "rcdFrames": 0,
+    "resultMiss": 0,
+    "sensorSize": "4080x3060",
+    "shadedFrames": 0,
+    "stabGyroSamples": 0,
+    "staleResults": 0,
+    "thermalStatus": 0,
+    "true10Bit": true,
+    "waitFreeFrames": 0
+  },
+  "actualOutput": [
+    1920,
+    1080
+  ],
+  "trackFormats": [
+    "{max-bitrate=128000, sample-rate=48000, track-id=2, durationUs=42700, mime=audio\/mp4a-latm, profile=2, channel-count=2, bitrate=128000, language=```, aac-profile=2, max-input-size=361, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}"
+  ],
+  "fileBytes": 3970,
+  "trace": {
+    "columns": [
+      "kind",
+      "wall_ns",
+      "sensor_ns",
+      "identity_or_pts",
+      "value"
+    ],
+    "kinds": {
+      "1": "capture-result",
+      "2": "acquired-image",
+      "3": "submitted-RCD",
+      "4": "queued-codec",
+      "5": "muxed-video",
+      "6": "RCD-render-wall-ns",
+      "10": "RAW-input-validation-or-normalize-ns",
+      "11": "RCD-engine-ns",
+      "12": "product-corrections-ns",
+      "13": "half-output-upload-ns",
+      "14": "GPU-guides-ns",
+      "15": "GPU-green-ns",
+      "16": "GPU-opposite-ns",
+      "19": "GPU-response-cache-ns",
+      "17": "GPU-final-ns",
+      "18": "GPU-border-ns",
+      "20": "GPU-product-ns",
+      "21": "GPU-responses-or-RAW-pack-ns"
+    },
+    "events": []
+  },
+  "endWallNs": 47070618513544
+}

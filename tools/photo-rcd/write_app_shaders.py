@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 from build_variants import generate
 from prepare_recording_candidate import canonical_engine_source as engine_source, canonical_image_source, cached_engine_source, baked_stage_source, packed_engine_source, direct_raw_engine_source
 
@@ -47,8 +48,10 @@ def main(out,compiler):
     subprocess.run([str(compiler),'--target-env=vulkan1.1','-fshader-stage=compute','-O',str(source),'-o',str(binary)],check=True)
     manifest['recording_candidate_direct_raw']={'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'spirv_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'precision':'FP32 packed stages, read-only CFA','compiler_optimization':'-O','status':'internal diagnostic'}
     from tile_local import source as tile_local_source, image_source as tile_local_image_source
+    sys.path.insert(0,str(Path(__file__).resolve().parent/'frame_global'))
+    from generate import source as frame_global_source, image_source as frame_global_image_source
     from requirements_input_shaders import app_packing_source, app_reconstruction_source, app_normalizing_source, app_normalized_reconstruction_source, app_normalized_cached_source, app_normalized_shared_final_source
-    for name, generator in [('requirements_pack',app_packing_source),('requirements_rcd',app_reconstruction_source),('requirements_normalize',app_normalizing_source),('requirements_normalized_rcd',app_normalized_reconstruction_source),('requirements_normalized_cached_rcd',app_normalized_cached_source),('requirements_normalized_shared_rcd',app_normalized_shared_final_source),('requirements_tile_local_rcd',tile_local_source),('requirements_tile_image_rcd',tile_local_image_source)]:
+    for name, generator in [('requirements_pack',app_packing_source),('requirements_rcd',app_reconstruction_source),('requirements_normalize',app_normalizing_source),('requirements_normalized_rcd',app_normalized_reconstruction_source),('requirements_normalized_cached_rcd',app_normalized_cached_source),('requirements_normalized_shared_rcd',app_normalized_shared_final_source),('requirements_tile_local_rcd',tile_local_source),('requirements_tile_image_rcd',tile_local_image_source),('requirements_frame_global_rcd',frame_global_source),('requirements_frame_global_image_rcd',frame_global_image_source)]:
         source=out/(name+'.comp');source.write_text(generator());binary=source.with_suffix('.spv')
         subprocess.run([str(compiler),'--target-env=vulkan1.1','-fshader-stage=compute','-O',str(source),'-o',str(binary)],check=True)
         manifest[name]={'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'spirv_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'precision':'RAW16 cells, FP32 reconstruction; final half adapter only','compiler_optimization':'-O','status':'internal diagnostic'}

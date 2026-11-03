@@ -1,0 +1,74 @@
+--------- beginning of crash
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: FATAL EXCEPTION: main
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: PID: 12471
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: java.lang.IllegalStateException: UiAutomationService android.accessibilityservice.IAccessibilityServiceClient$Stub$Proxy@73f6f9calready registered!
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Parcel.createExceptionOrNull(Parcel.java:3369)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Parcel.createException(Parcel.java:3345)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3328)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3270)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.view.accessibility.IAccessibilityManager$Stub$Proxy.registerUiTestAutomationService(IAccessibilityManager.java:1154)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.app.UiAutomationConnection.registerUiTestAutomationServiceLocked(UiAutomationConnection.java:688)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.app.UiAutomationConnection.connect(UiAutomationConnection.java:117)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.app.UiAutomation.connectWithTimeout(UiAutomation.java:386)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.app.UiAutomation.connect(UiAutomation.java:331)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.uiautomator.core.UiAutomationShellWrapper.connect(UiAutomationShellWrapper.java:36)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.commands.uiautomator.DumpCommand.run(DumpCommand.java:78)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.commands.uiautomator.Launcher.main(Launcher.java:83)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit.nativeFinishInit(Native Method)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit.main(RuntimeInit.java:394)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: Caused by: android.os.RemoteException: Remote stack trace:
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.server.accessibility.UiAutomationManager.registerUiTestAutomationServiceLocked(UiAutomationManager.java:109)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.server.accessibility.AccessibilityManagerService.registerUiTestAutomationService(AccessibilityManagerService.java:1668)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.view.accessibility.IAccessibilityManager$Stub.onTransact(IAccessibilityManager.java:571)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Binder.execTransactInternal(Binder.java:1428)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Binder.execTransact(Binder.java:1372)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: Couldn't report crash. Here's the crash:
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: java.lang.IllegalStateException: UiAutomationService android.accessibilityservice.IAccessibilityServiceClient$Stub$Proxy@73f6f9calready registered!
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Parcel.createExceptionOrNull(Parcel.java:3369)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Parcel.createException(Parcel.java:3345)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3328)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3270)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.view.accessibility.IAccessibilityManager$Stub$Proxy.registerUiTestAutomationService(IAccessibilityManager.java:1154)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.app.UiAutomationConnection.registerUiTestAutomationServiceLocked(UiAutomationConnection.java:688)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.app.UiAutomationConnection.connect(UiAutomationConnection.java:117)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.app.UiAutomation.connectWithTimeout(UiAutomation.java:386)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.app.UiAutomation.connect(UiAutomation.java:331)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.uiautomator.core.UiAutomationShellWrapper.connect(UiAutomationShellWrapper.java:36)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.commands.uiautomator.DumpCommand.run(DumpCommand.java:78)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.commands.uiautomator.Launcher.main(Launcher.java:83)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit.nativeFinishInit(Native Method)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit.main(RuntimeInit.java:394)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: Caused by: android.os.RemoteException: Remote stack trace:
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.server.accessibility.UiAutomationManager.registerUiTestAutomationServiceLocked(UiAutomationManager.java:109)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.server.accessibility.AccessibilityManagerService.registerUiTestAutomationService(AccessibilityManagerService.java:1668)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.view.accessibility.IAccessibilityManager$Stub.onTransact(IAccessibilityManager.java:571)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Binder.execTransactInternal(Binder.java:1428)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Binder.execTransact(Binder.java:1372)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: Error reporting crash. Here's the error:
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: java.lang.RuntimeException: Bad file descriptor
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at android.os.BinderProxy.transactNative(Native Method)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at android.os.BinderProxy.transact(BinderProxy.java:736)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at android.app.IActivityManager$Stub$Proxy.handleApplicationCrash(IActivityManager.java:6551)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$KillApplicationHandler.uncaughtException(RuntimeInit.java:189)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at java.lang.ThreadGroup.uncaughtException(ThreadGroup.java:1098)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at java.lang.ThreadGroup.uncaughtException(ThreadGroup.java:1093)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at java.lang.Thread.dispatchUncaughtException(Thread.java:3380)
+--------- beginning of main
+11-03 09:03:23.074 29437 29470 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-03 09:03:23.074 29437 29470 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-03 09:03:23.077 29437 29470 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-03 09:03:23.078 29437 29470 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-03 09:03:23.079 29437 29470 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-03 09:03:23.113 29437 29470 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-03 09:03:23.579 29437 29470 I EncodedVideo: public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified
+11-03 09:03:23.579 29437 29470 I EncodedVideo: demosaic path=public-photo-rcd-validation
+11-03 09:03:23.816 29437 29470 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-03 09:03:23.816 29437 29470 I EncodedVideo: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+11-03 09:03:25.375 29437 29470 I EncodedVideo: Independent encoder content probe GPU writer=true 1920x1080
+11-03 09:03:25.375 29437 29470 I EncodedVideo: preview 1920x1080 -> 480x270 box=4
+11-03 09:03:25.377 29437 29470 I EncodedVideo: ours P010 yStride=3840 uvStride=3840
+11-03 09:03:25.519 29437 29470 I EncodedVideo: audio AAC 2ch
+11-03 09:03:56.134 29437 29547 I EncodedVideo: muxer started: video/hevc 1920x1080 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-03 09:03:56.189 29437 29470 I EncodedVideo: stop completed durationMs=393

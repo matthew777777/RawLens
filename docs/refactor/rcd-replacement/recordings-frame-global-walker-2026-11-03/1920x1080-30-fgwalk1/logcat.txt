@@ -1,0 +1,33 @@
+--------- beginning of main
+11-03 08:30:45.719 10662 10685 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-03 08:30:45.719 10662 10685 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-03 08:30:45.727 10662 10685 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-03 08:30:45.727 10662 10685 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-03 08:30:45.728 10662 10685 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-03 08:30:45.910 10662 10685 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-03 08:30:46.676 10662 10685 I EncodedVideo: public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified
+11-03 08:30:46.676 10662 10685 I EncodedVideo: demosaic path=public-photo-rcd-validation
+11-03 08:30:46.972 10662 10685 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-03 08:30:46.972 10662 10685 I EncodedVideo: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+11-03 08:30:48.475 10662 10685 I EncodedVideo: Independent encoder content probe GPU writer=true 1920x1080
+11-03 08:30:48.475 10662 10685 I EncodedVideo: preview 1920x1080 -> 480x270 box=4
+11-03 08:30:48.476 10662 10685 I EncodedVideo: ours P010 yStride=3840 uvStride=3840
+11-03 08:30:48.684 10662 10685 I EncodedVideo: audio AAC 2ch
+11-03 08:30:49.688 10662 10772 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=1.29D
+11-03 08:30:49.701 10662 10772 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-03 08:30:49.701 10662 10772 I EncodedVideo: RAW input app=2.1.10 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=gpu-storage
+11-03 08:30:49.703 10662 10772 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-03 08:30:49.704 10662 10772 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=45083950087260 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=94,68,79,94,98,74,84,108,103,91,99,96,69,68,71,77,66,58,68,65,52,70,65,61,77,62,63,67,51,66,65,66,73,69,59,73,65,77,82,65,64,66,71,63,54,61,55,67,63,56,54,73,69,59,59,64,54,69,64,64,67,76,62,57,72,80,69,65,78,68,73,71,67,54,70,60,74,58,68,77,62,68,63,66,68,68,62,63,66,71,69,58,49,67,58,47,66,66,77,66,63,63,67,76,62,71,70,65,67,63,58,69,64,63,62,72,74,63,63,74,63,70,65,71,73,74,63,53
+11-03 08:30:50.255 10662 10711 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=1920,1080,1920,54,1,16842803
+11-03 08:30:50.255 10662 10711 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output image=1920x1080 format=54 crop=Rect(0, 0 - 1920, 1080) planes=0[row=3840 px=2 pos=0 limit=4147200 capacity=4147200] 1[row=3840 px=4 pos=0 limit=2073600 capacity=2073600] 2[row=3840 px=4 pos=0 limit=2073600 capacity=2073600]
+11-03 08:30:50.256 10662 10711 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output timestamp=45083950087260 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=292,529,443,270,530,510,268,499,553,100,535,519,80,511,532,70,522,511,115,574,485,87,542,506,149,533,463,125,566,555,84,510,518,74,522,501,74,530,522,65,508,519,87,512,539,87,545,516,184,572,492,150,555,528,73,517,515,85,502,527,84,545,514,103,532,496,92,548,525,99,529,499,92,574,578,84,532,496,128,560,543,77,528,523,111,528,516,106,518,502,96,571,530,133,537,483 comparison=not-available sampleMs=0.730077
+11-03 08:30:50.256 10662 10772 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-03 08:30:50.256 10662 10772 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=45084373365230 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=114,84,82,100,109,89,106,122,128,99,120,134,78,66,71,81,68,60,63,72,63,64,70,55,85,58,67,60,60,66,61,53,82,84,70,82,69,65,69,84,68,60,64,71,63,66,63,68,67,70,65,67,70,71,61,66,60,81,65,63,68,56,76,59,75,87,84,79,80,68,71,67,77,56,77,78,65,65,72,65,63,68,61,63,65,71,62,63,60,59,66,65,67,73,62,59,77,67,63,73,67,66,78,74,64,68,73,76,76,70,73,66,64,65,62,69,66,61,57,67,60,70,66,58,67,54,63,62
+11-03 08:30:50.329 10662 10756 I EncodedVideo: muxer started: video/hevc 1920x1080 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-03 08:30:50.490 10662 10712 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=1920,1080,1920,54,1,16842803
+11-03 08:30:50.492 10662 10712 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output image=1920x1080 format=54 crop=Rect(0, 0 - 1920, 1080) planes=0[row=3840 px=2 pos=0 limit=4147200 capacity=4147200] 1[row=3840 px=4 pos=0 limit=2073600 capacity=2073600] 2[row=3840 px=4 pos=0 limit=2073600 capacity=2073600]
+11-03 08:30:50.494 10662 10712 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output timestamp=45084373365230 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=327,481,509,330,494,525,332,468,539,110,514,512,80,504,520,87,521,515,106,506,516,88,558,504,186,545,465,160,547,493,82,525,520,85,507,541,76,508,517,92,522,530,82,532,514,82,503,530,155,589,517,145,530,557,121,523,508,91,507,519,70,530,513,76,540,502,81,520,540,81,521,510,135,494,502,113,541,541,82,509,520,120,525,524,93,506,513,71,510,529,74,537,533,112,510,495 comparison=not-available sampleMs=3.786077
+11-03 08:30:50.700 10662 10772 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=1.29D
+11-03 08:30:51.244 10662 10772 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-03 08:31:05.891 10662 10772 I EncodedVideo: Encoded Video AF PASSIVE_FOCUSED mode=CONT_VIDEO fd=11.01D
+11-03 08:31:20.166 10662 10685 I EncodedVideo: stop completed durationMs=636

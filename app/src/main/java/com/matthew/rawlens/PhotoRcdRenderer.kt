@@ -102,7 +102,7 @@ internal class PhotoRcdRenderer private constructor(private var handle: Long, pr
 
     companion object {
         private val retained = mutableListOf<Slot>()
-        fun open(context: Context, optimized: Boolean = false, cacheResponses: Boolean = false, tiled: Boolean = false, images: Boolean = false, recordingCandidate: Boolean = false, baked: Boolean = false, packed: Boolean = false, directRaw: Boolean = false, requirementsInput: Boolean = false, reconstructionScale: Int = 1, normalizeOnce: Boolean = false, sharedFinal: Boolean = false, tileLocal: Boolean = false, gpuImage: Boolean = false): PhotoRcdRenderer {
+        fun open(context: Context, optimized: Boolean = false, cacheResponses: Boolean = false, tiled: Boolean = false, images: Boolean = false, recordingCandidate: Boolean = false, baked: Boolean = false, packed: Boolean = false, directRaw: Boolean = false, requirementsInput: Boolean = false, reconstructionScale: Int = 1, normalizeOnce: Boolean = false, sharedFinal: Boolean = false, tileLocal: Boolean = false, gpuImage: Boolean = false, frameGlobal: Boolean = false): PhotoRcdRenderer {
             synchronized(retained) {
                 val iterator = retained.iterator()
                 while (iterator.hasNext()) {
@@ -113,10 +113,11 @@ internal class PhotoRcdRenderer private constructor(private var handle: Long, pr
                 }
             }
             System.loadLibrary("rawLensPhotoRcd")
-            val asset = if(requirementsInput) (if(gpuImage) "requirements_tile_image_rcd" else if(tileLocal) "requirements_tile_local_rcd" else if(normalizeOnce) (if(sharedFinal) "requirements_normalized_shared_rcd" else if(cacheResponses) "requirements_normalized_cached_rcd" else "requirements_normalized_rcd") else "requirements_rcd") else if(recordingCandidate) (if(directRaw) "recording_candidate_direct_raw" else if(packed) "recording_candidate_packed" else if(cacheResponses) "recording_candidate_cached" else if(images) "recording_candidate_images" else "recording_candidate") else if(images) "images" else if(tiled) "tiled" else if(cacheResponses) "responsecache" else if (optimized) "optimized" else "baseline"
+            val asset = if(requirementsInput && frameGlobal) (if(gpuImage) "requirements_frame_global_image_rcd" else "requirements_frame_global_rcd") else if(requirementsInput) (if(gpuImage) "requirements_tile_image_rcd" else if(tileLocal) "requirements_tile_local_rcd" else if(normalizeOnce) (if(sharedFinal) "requirements_normalized_shared_rcd" else if(cacheResponses) "requirements_normalized_cached_rcd" else "requirements_normalized_rcd") else "requirements_rcd") else if(recordingCandidate) (if(directRaw) "recording_candidate_direct_raw" else if(packed) "recording_candidate_packed" else if(cacheResponses) "recording_candidate_cached" else if(images) "recording_candidate_images" else "recording_candidate") else if(images) "images" else if(tiled) "tiled" else if(cacheResponses) "responsecache" else if (optimized) "optimized" else "baseline"
             val code = context.assets.open("shaders/photo_rcd/$asset.spv").use { it.readBytes() }
             require(reconstructionScale in 1..8 && (requirementsInput || reconstructionScale==1))
             require(!gpuImage || tileLocal)
+            require(!frameGlobal || tileLocal)
             require(!tileLocal || (requirementsInput && normalizeOnce && !sharedFinal && !cacheResponses && reconstructionScale==1))
             require(!sharedFinal || (requirementsInput && normalizeOnce && cacheResponses && reconstructionScale==1))
             require(!normalizeOnce || (requirementsInput && reconstructionScale==1))
@@ -129,12 +130,12 @@ internal class PhotoRcdRenderer private constructor(private var handle: Long, pr
             val stages=if(baked) Array<ByteArray?>(8) { stage -> if(stage==5) null else context.assets.open("shaders/photo_rcd/recording_candidate_stage$stage.spv").use { it.readBytes() } } else null
             renderer.handle = renderer.openNative(code, optimized || cacheResponses || tiled || images || recordingCandidate || requirementsInput,
                 if(recordingCandidate) cacheResponses else (cacheResponses || tiled || images),
-                !recordingCandidate && tiled, images, recordingCandidate,stages,packed,rawPack,reconstructionScale,normalizeOnce,tileLocal,gpuImage)
+                !recordingCandidate && tiled, images, recordingCandidate,stages,packed,rawPack,reconstructionScale,normalizeOnce,tileLocal,gpuImage,frameGlobal)
             check(renderer.handle != 0L) { "Photo RCD unavailable" }
             return renderer
         }
     }
-    private external fun openNative(shader: ByteArray, specializePasses: Boolean, cacheResponses: Boolean, tiled: Boolean, images: Boolean, recordingCandidate: Boolean, stageCodes: Array<ByteArray?>?, packed: Boolean, rawPack: ByteArray?, reconstructionScale: Int, normalizeOnce: Boolean, tileLocal: Boolean, imageOutput: Boolean): Long
+    private external fun openNative(shader: ByteArray, specializePasses: Boolean, cacheResponses: Boolean, tiled: Boolean, images: Boolean, recordingCandidate: Boolean, stageCodes: Array<ByteArray?>?, packed: Boolean, rawPack: ByteArray?, reconstructionScale: Int, normalizeOnce: Boolean, tileLocal: Boolean, imageOutput: Boolean, frameGlobal: Boolean): Long
     private external fun outputUsageNative(handle: Long): Long
     private external fun closeNative(handle: Long)
     @Synchronized internal fun frameCosts(): DoubleArray = frameCostsNative(handle)

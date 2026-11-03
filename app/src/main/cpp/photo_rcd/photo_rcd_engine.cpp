@@ -42,6 +42,8 @@ struct Engine::State {
   bool rawInput = false;
   bool normalizeOnce = false;
   bool tileLocal = false;
+  // Frame-global subgroup walker (recording option A); requires tileLocal.
+  bool frameGlobal = false;
   uint32_t coreX = 16, coreY = 16;
   bool imageOutput = false;
   std::map<void *, Image> outputImages;
@@ -159,7 +161,11 @@ struct Engine::State {
     if (instance)
       vkDestroyInstance(instance, nullptr);
   }
-  void allocate(Buffer &b, VkDeviceSize bytes, bool gpuOnly = false) {
+  // deviceUpload: CPU-written/GPU-read buffers in device-local, host-visible,
+  // uncached memory. Mali's host-cached type is I/O-coherent and makes GPU
+  // reads of frequently sampled data (CFA, product map) markedly slower.
+  void allocate(Buffer &b, VkDeviceSize bytes, bool gpuOnly = false,
+                bool deviceUpload = false) {
     b.bytes = bytes;
     if (bytes > properties.limits.maxStorageBufferRange)
       throw std::runtime_error("unsupported SSBO range");
@@ -173,6 +179,20 @@ struct Engine::State {
     // Prefer CPU-cached unified memory, with explicit flush/invalidate. Mali's
     // first coherent type is uncached on the host and makes frame readback
     // costly.
+    if (deviceUpload && !gpuOnly)
+      for (uint32_t candidate = 0; candidate < memoryProperties.memoryTypeCount;
+           ++candidate) {
+        auto flags = memoryProperties.memoryTypes[candidate].propertyFlags;
+        if ((requirement.memoryTypeBits & (1u << candidate)) &&
+            (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+            (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+            !(flags & (VK_MEMORY_PROPERTY_HOST_CACHED_BIT |
+                       VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT |
+                       VK_MEMORY_PROPERTY_PROTECTED_BIT))) {
+          type = candidate;
+          break;
+        }
+      }
     if (gpuOnly) {
       for (uint32_t candidate = 0; candidate < memoryProperties.memoryTypeCount;
            ++candidate) {
@@ -291,6 +311,8 @@ struct Engine::State {
       return;
     }
     releaseFrame();
+    if (frameGlobal && (w % 4 || w < 64 || h < 64))
+      throw std::invalid_argument("frame-global RCD requires width%4==0, 64x64 minimum");
     const size_t n = size_t(w) * h;
     const uint32_t tiles = ((w + 175) / 176) * ((h + 175) / 176);
     if (tiles > properties.limits.maxComputeWorkGroupCount[2])
@@ -328,9 +350,13 @@ struct Engine::State {
         bytes = 16;
       if (tileLocal && i >= 1 && i <= 5)
         bytes = 16;
+      // Five FP16 planes (VH, PQ, LP, green, missing), four pixels per uvec2.
+      if (frameGlobal && i == 1)
+        bytes = n * 10;
       if (rawInput && normalizeOnce && i == 0)
         bytes = n * 4;
-      allocate(buffers[i], bytes, (i >= 1 && i <= 5) || (i == 6 && half));
+      allocate(buffers[i], bytes,
+               (i >= 1 && i <= 5) || (i == 6 && half) || (frameGlobal && i == 0));
     }
     if (imageIntermediates)
       for (size_t i = 0; i < 5; ++i) {
@@ -342,11 +368,11 @@ struct Engine::State {
                           : VK_FORMAT_R32_SFLOAT,
                       tiles);
       }
-    allocate(buffers[7], (16 + 65536 * 4) * 4);
+    allocate(buffers[7], (16 + 65536 * 4) * 4, false, frameGlobal);
     allocate(buffers[8], imageOutput ? 16 : n * 8);
     if (rawInput) {
-      allocate(buffers[9], rawCapacity);
-      allocate(buffers[10], 64);
+      allocate(buffers[9], rawCapacity, false, frameGlobal);
+      allocate(buffers[10], 64, false, frameGlobal);
     }
     VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, uint32_t(bindingCount())},
@@ -482,7 +508,10 @@ struct Engine::State {
     if (half)
       stages.push_back(6);
     if (tileLocal && half)
-      stages = {7, 3, 5};
+      stages = frameGlobal ? std::vector<int>{0, 1, 2, 3}
+                           : std::vector<int>{7, 3, 5};
+    if (frameGlobal && !half)
+      throw std::invalid_argument("frame-global RCD has no FP32 readback mode");
     for (const int stage : stages) {
       if (tiledReconstruction && (stage == 2 || stage == 3))
         continue;
@@ -499,6 +528,15 @@ struct Engine::State {
                 dispatchY = tileLocal ? int(coreY) : edge;
       if (stage == 7 && rawInput)
         vkCmdDispatch(command, ((w + 1) / 2 + 7) / 8, ((h + 1) / 2 + 7) / 8, 1);
+      else if (frameGlobal && stage == 3)
+        vkCmdDispatch(command, (2 * 9 * w + 18 * (h - 18) + 15) / 16, 1, 1);
+      else if (frameGlobal)
+        // Bands: 64 pixels per subgroup, overlapped by the stencil erosion
+        // (8 pixels for guides/green-missing, 4 for the final pass).
+        // Guides and green/missing walk 64-row blocks; the final pass is one
+        // subgroup per output row.
+        vkCmdDispatch(command, (w + (stage == 2 ? 55 : 47)) / (stage == 2 ? 56 : 48),
+                      stage == 2 ? h : (h + 63) / 64, 1);
       else if (stage == 4 || stage == 6 ||
                (stage == 5 && rawInput && (cacheResponses || tileLocal)) ||
                (stage == 7 && !recordingCandidate))
@@ -711,7 +749,8 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
                const std::vector<std::vector<uint32_t>> &stageShaders,
                bool packedCells, const std::vector<uint32_t> &rawPackShader,
                int reconstructionScale, bool normalizeOnce, bool tileLocal,
-               bool imageOutput, std::array<uint32_t, 2> tileShape)
+               bool imageOutput, std::array<uint32_t, 2> tileShape,
+               bool frameGlobal)
     : state(new State) {
   auto &s = *state;
   s.rawInput = !rawPackShader.empty();
@@ -725,6 +764,8 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
         "tile-local route requires full-source normalized RAW only");
   if (imageOutput && !tileLocal)
     throw std::invalid_argument("GPU image output requires tile-local RCD");
+  if (frameGlobal && !tileLocal)
+    throw std::invalid_argument("frame-global RCD uses the tile-local route");
 #ifndef __ANDROID__
   if (imageOutput)
     throw std::runtime_error(
@@ -740,6 +781,13 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
   uint32_t localBytes = 0;
   for (uint32_t radius : {11, 6, 7, 4, 5, 3})
     localBytes += (s.coreX + 2 * radius) * (s.coreY + 2 * radius) * 4;
+  s.frameGlobal = frameGlobal;
+  if (frameGlobal) {
+    // One 16-lane subgroup per group; no shared memory.
+    s.coreX = 16;
+    s.coreY = 1;
+    localBytes = 0;
+  }
   s.imageOutput = imageOutput;
   s.tileLocal = tileLocal;
   s.normalizeOnce = normalizeOnce;
@@ -1078,6 +1126,10 @@ void Engine::renderRawFrame(const uint8_t *data, size_t bytes,
   std::lock_guard<std::mutex> lock(state->mutex);
   validateRaw16(data, bytes, g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7],
                 black, white);
+  // Frame-global shaders read four crop pixels as one aligned 8-byte word.
+  if (state->frameGlobal && (g[3] != 2 || g[4] % 4 || g[2] % 8))
+    throw std::invalid_argument(
+        "frame-global RCD requires 2-byte pixels, left%4==0, stride%8==0");
   if (!state->rawInput || correction.size() < 16 ||
       correction.size() > 16 + 65536 * 4 ||
       (g[8] != 0x94 && g[8] != 0x16 && g[8] != 0x61 && g[8] != 0x49))
@@ -1102,9 +1154,19 @@ void Engine::renderRawFrame(const uint8_t *data, size_t bytes,
     throw std::invalid_argument("Engine has no GPU image output");
   s.frame(w, h, uint32_t(g[8]), half != nullptr || hardwareBuffer != nullptr,
           padded);
-  std::memcpy(s.buffers[9].mapped, data, used);
-  std::memset(static_cast<uint8_t *>(s.buffers[9].mapped) + used, 0,
-              padded - used);
+  if (s.frameGlobal) {
+    // Frame-global loads are bounds-guarded to the crop rows, so only those
+    // rows are staged (same offsets; ~30% of a 4:3 sensor is outside a 16:9
+    // crop).
+    const size_t begin = size_t(g[5]) * g[2];
+    const size_t end = std::min(used, size_t(g[5] + g[7]) * g[2]);
+    std::memcpy(static_cast<uint8_t *>(s.buffers[9].mapped) + begin,
+                data + begin, end - begin);
+  } else {
+    std::memcpy(s.buffers[9].mapped, data, used);
+    std::memset(static_cast<uint8_t *>(s.buffers[9].mapped) + used, 0,
+                padded - used);
+  }
   std::memcpy(s.buffers[10].mapped, g.data(), 32);
   std::memcpy(static_cast<uint8_t *>(s.buffers[10].mapped) + 32, black.data(),
               16);

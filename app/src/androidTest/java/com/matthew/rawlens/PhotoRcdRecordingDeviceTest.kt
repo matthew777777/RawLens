@@ -39,7 +39,7 @@ class PhotoRcdRecordingDeviceTest {
         val label="${w}x${h}-${fps}-${args.getString("label","initial")}";val file=File(directory,"$label.mp4")
         val trace=PhotoRcdRecordingTrace()
         val report=JSONObject().put("requested",JSONArray(listOf(w,h,fps))).put("cameraId",cameraId)
-            .put("gpuImage",args.getString("gpuImage")=="true").put("tileLocal",args.getString("tileLocal")=="true").put("sharedFinal",args.getString("sharedFinal")=="true").put("normalizeOnce",args.getString("normalizeOnce")=="true").put("gpuWriterRequested",args.getString("gpuWriter")=="true").put("reconstructionScale",args.getString("reconstructionScale","1").toInt()).put("requirementsInput",args.getString("requirementsInput")=="true").put("profile","BT709").put("preview",false).put("sourcePolicy",if(args.getString("reconstructionScale","1")=="1") "FULL rung, existing 16:9 crop/FOV, full-source RCD; no detail reduction" else "Approximate RCD: full crop/FOV, Bayer-cell area reduction before reconstruction; reduced fine detail")
+            .put("gpuImage",args.getString("gpuImage")=="true").put("tileLocal",args.getString("tileLocal")=="true").put("frameGlobal",args.getString("frameGlobal")=="true").put("sharedFinal",args.getString("sharedFinal")=="true").put("normalizeOnce",args.getString("normalizeOnce")=="true").put("gpuWriterRequested",args.getString("gpuWriter")=="true").put("reconstructionScale",args.getString("reconstructionScale","1").toInt()).put("requirementsInput",args.getString("requirementsInput")=="true").put("profile","BT709").put("preview",false).put("sourcePolicy",if(args.getString("reconstructionScale","1")=="1") "FULL rung, existing 16:9 crop/FOV, full-source RCD; no detail reduction" else "Approximate RCD: full crop/FOV, Bayer-cell area reduction before reconstruction; reduced fine detail")
         val recorder=EncodedVideoRecorder(manager,cameraId,context).apply {
             width=w;height=h;this.fps=fps;recordingProfile=EncodedVideoProfile.BT709
             rung=EncodedVideoLadder.Rung.FULL;computeStep=2;preferMhc=true;videoDemosaic=VideoDemosaic.MHC
@@ -52,6 +52,7 @@ class PhotoRcdRecordingDeviceTest {
             validatePhotoRcdPackedCells=args.getString("packed")=="true"
             validatePhotoRcdGpuImage=args.getString("gpuImage")=="true"
             validatePhotoRcdTileLocal=args.getString("tileLocal")=="true"
+            validatePhotoRcdFrameGlobal=args.getString("frameGlobal")=="true"
             validatePhotoRcdSharedFinal=args.getString("sharedFinal")=="true"
             validatePhotoRcdNormalizeOnce=args.getString("normalizeOnce")=="true"
             validatePhotoRcdGpuWriter=args.getString("gpuWriter")=="true"

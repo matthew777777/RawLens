@@ -1,0 +1,305 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Frame-global RCD for recording, strip schedule. RawLens, 2026-11-03.
+// Equations and step order: RawTherapee b2ee504c rtengine/rcd_demosaic.cc,
+// Copyright (c) 2017-2020 Luis Sanz Rodriguez and Ingo Weyrich, via the
+// attributed FP32 port tools/photo-rcd/baseline.comp. Canonical 9-pixel
+// border: Gabor Horvath. New schedule for load-issue-bound Mali GPUs: the
+// frame is one RCD domain; intermediates are FP16 in shared memory, eight
+// pixels per 128-bit load; each invocation evaluates a 4-pixel strip in FP32.
+// Stage 0 writes three FP16 planes (refined VH, refined PQ, LP); stage 1
+// writes the product half RGBA frame.
+#version 450
+layout(local_size_x=16,local_size_y=16) in;
+layout(binding=0,std430) readonly restrict buffer Cfa { vec4 cfa4[]; };
+layout(binding=1,std430) restrict buffer Guide { uvec2 guide[]; };
+layout(binding=2,std430) writeonly restrict buffer HalfOutput { uvec2 halfOutput[]; };
+layout(binding=3,std430) restrict buffer Config { uint config[]; };
+layout(push_constant) uniform Params { int width; int height; int phase; int stage; } p;
+const float eps=1e-5, epssq=1e-10;
+const int T=32;
+shared uvec4 pool[1688];
+// Geometry: RAW x0=base-16 (8 cols) y0=base-10 (52 rows).
+const int RAW=0, RAWC=8;
+// Guide arrays: x0=base-8 (6 cols).
+const int RV=416, RH=632, RSE=848, RSW=1064; // y0=base-2, 36 rows
+const int VH0=1280, PQ0=1484;                // y0=base-1, 34 rows
+// Reconstruct arrays (alias guide arrays): x0=base-8 (6 cols).
+const int GREEN=416; // y0=base-5, 42 rows
+const int MISS=668;  // y0=base-3, 38 rows
+ivec2 base;
+int color(int x,int y) { return (p.phase >> (2*((y&1)*2+(x&1))))&3; }
+bool inside(int x,int y) { return x>=0 && y>=0 && x<p.width && y<p.height; }
+bool domain(int x,int y,int m) { return x>=m && y>=m && x<p.width-m && y<p.height-m; }
+vec4 h4(uvec2 u) { return vec4(unpackHalf2x16(u.x),unpackHalf2x16(u.y)); }
+uvec2 p4(vec4 v) { return uvec2(packHalf2x16(v.xy),packHalf2x16(v.zw)); }
+// Four values at local x lx (multiple of 4).
+vec4 ctr(int off,int cols,int row,int lx) {
+    uvec4 u=pool[off+row*cols+(lx>>3)];
+    return h4((lx&4)==0?u.xy:u.zw);
+}
+// Twelve values lx-4 .. lx+7 as three vec4.
+void win(int off,int cols,int row,int lx,out vec4 a,out vec4 b,out vec4 c) {
+    int col=lx>>3;
+    if((lx&4)==0) {
+        uvec4 l=pool[off+row*cols+max(col-1,0)],m=pool[off+row*cols+col];
+        a=h4(l.zw);b=h4(m.xy);c=h4(m.zw);
+    } else {
+        uvec4 m=pool[off+row*cols+col],r=pool[off+row*cols+min(col+1,cols-1)];
+        a=h4(m.xy);b=h4(m.zw);c=h4(r.xy);
+    }
+}
+void put(int off,int cols,int row,int lx,vec4 v) {
+    int i=off+row*cols+(lx>>3);
+    if((lx&4)==0) { pool[i].x=packHalf2x16(v.xy);pool[i].y=packHalf2x16(v.zw); }
+    else { pool[i].z=packHalf2x16(v.xy);pool[i].w=packHalf2x16(v.zw); }
+}
+// Window element: index j in [0,12) of (a,b,c).
+#define W(a,b,c,j) ((j)<4?a[(j)&3]:(j)<8?b[(j)&3]:c[(j)&3])
+#define DECL(n) vec4 n##a,n##b,n##c
+#define LOAD(n,off,cols,row,lx) win(off,cols,row,lx,n##a,n##b,n##c)
+#define AT(n,j) W(n##a,n##b,n##c,j)
+
+// Task -> (row,strip) with all even rows first, then odd rows, so 16-wide
+// warps share CFA row parity and per-lane colour branches stay coherent.
+ivec2 parityTask(int k,int strips,int rows) {
+    int evenTasks=(rows/2)*strips,odd=k>=evenTasks?1:0,t=k-odd*evenTasks;
+    return ivec2(t%strips,2*(t/strips)+odd);
+}
+void loadRaw() {
+    for(int k=int(gl_LocalInvocationIndex);k<52*8;k+=256) {
+        int row=k/8,col=k%8;
+        int y=base.y-10+row,x=base.x-16+col*8;
+        vec4 lo=vec4(0.0),hi=vec4(0.0);
+        if(y>=0 && y<p.height) {
+            if(x>=0 && x<p.width) lo=cfa4[(y*p.width+x)>>2];
+            if(x+4>=0 && x+4<p.width) hi=cfa4[(y*p.width+x+4)>>2];
+        }
+        pool[k]=uvec4(p4(lo),p4(hi));
+    }
+}
+float hpf(float m3,float m2,float m1,float c,float p1,float p2,float p3) {
+    return (m3-m1-p1+p3)-3.0*(m2+p2)+6.0*c;
+}
+float refine(float c,float a,float b,float d,float e,bool cardinal) {
+    float nb=cardinal?0.25*((a+b)+(d+e)):0.25*(a+b+d+e);
+    return abs(0.5-c)<abs(0.5-nb)?nb:c;
+}
+float rcdInterpolate(float a,float b,float c) { return a*(b-c)+c; }
+int planeIndex(int plane,int x,int y) { return plane*(p.width*p.height/4)+(y*p.width+x)/4; }
+vec4 gctr(int plane,int x,int y) {
+    if(y<0 || y>=p.height || x<0 || x>=p.width) return vec4(0.0);
+    return h4(guide[planeIndex(plane,x,y)]);
+}
+
+void guides() {
+    loadRaw();
+    barrier();
+    // Unsquared high-pass responses at radius 2; FP16 storage, squared in FP32.
+    for(int k=int(gl_LocalInvocationIndex);k<36*12;k+=256) {
+        ivec2 pt=parityTask(k,12,36);int row=pt.y,y=base.y-2+row,x0=base.x-8+4*pt.x;
+        int lx=x0-(base.x-16),ry=y-(base.y-10);
+        DECL(m3);DECL(m2);DECL(m1);DECL(c0);DECL(p1);DECL(p2);DECL(p3);
+        LOAD(m3,RAW,RAWC,ry-3,lx);LOAD(m2,RAW,RAWC,ry-2,lx);LOAD(m1,RAW,RAWC,ry-1,lx);LOAD(c0,RAW,RAWC,ry,lx);
+        LOAD(p1,RAW,RAWC,ry+1,lx);LOAD(p2,RAW,RAWC,ry+2,lx);LOAD(p3,RAW,RAWC,ry+3,lx);
+        vec4 v,h,se,sw;
+        for(int i=0;i<4;++i) {
+            int x=x0+i,j=i+4;
+            bool ok=domain(x,y,3);
+            v[i]=ok?hpf(AT(m3,j),AT(m2,j),AT(m1,j),AT(c0,j),AT(p1,j),AT(p2,j),AT(p3,j)):0.0;
+            h[i]=ok?hpf(AT(c0,j-3),AT(c0,j-2),AT(c0,j-1),AT(c0,j),AT(c0,j+1),AT(c0,j+2),AT(c0,j+3)):0.0;
+            // Upstream convention: diagonal responses on odd columns, shared by pairs.
+            int io=i|1,o=x0+io,jo=io+4;
+            bool od=domain(o,y,3);
+            se[i]=od?hpf(AT(m3,jo-3),AT(m2,jo-2),AT(m1,jo-1),AT(c0,jo),AT(p1,jo+1),AT(p2,jo+2),AT(p3,jo+3)):0.0;
+            sw[i]=od?hpf(AT(m3,jo+3),AT(m2,jo+2),AT(m1,jo+1),AT(c0,jo),AT(p1,jo-1),AT(p2,jo-2),AT(p3,jo-3)):0.0;
+        }
+        int lg=x0-(base.x-8);
+        put(RV,6,row,lg,v);put(RH,6,row,lg,h);put(RSE,6,row,lg,se);put(RSW,6,row,lg,sw);
+    }
+    barrier();
+    // Unrefined VH and PQ at radius 1.
+    for(int k=int(gl_LocalInvocationIndex);k<34*12;k+=256) {
+        ivec2 pt=parityTask(k,12,34);int row=pt.y,y=base.y-1+row,x0=base.x-8+4*pt.x;
+        int lg=x0-(base.x-8),rr=row+1; // row in response arrays
+        vec4 vm=ctr(RV,6,rr-1,lg),vc=ctr(RV,6,rr,lg),vp=ctr(RV,6,rr+1,lg);
+        DECL(hc);LOAD(hc,RH,6,rr,lg);
+        DECL(em);DECL(ec);DECL(ep);LOAD(em,RSE,6,rr-1,lg);LOAD(ec,RSE,6,rr,lg);LOAD(ep,RSE,6,rr+1,lg);
+        DECL(wm);DECL(wc);DECL(wp);LOAD(wm,RSW,6,rr-1,lg);LOAD(wc,RSW,6,rr,lg);LOAD(wp,RSW,6,rr+1,lg);
+        vec4 vh=vec4(0.0),pq=vec4(0.0);
+        for(int i=0;i<4;++i) {
+            int x=x0+i,j=i+4;
+            if(!domain(x,y,4)) continue;
+            float va=max(epssq,vm[i]*vm[i]+vc[i]*vc[i]+vp[i]*vp[i]);
+            float h0=AT(hc,j-1),h1=AT(hc,j),h2=AT(hc,j+1);
+            float vb=max(epssq,h0*h0+h1*h1+h2*h2);
+            vh[i]=va/(va+vb);
+            if(color(x,y)!=1) {
+                float a0=AT(em,j-1),a1=AT(ec,j),a2=AT(ep,j+1);
+                float b0=AT(wm,j+1),b1=AT(wc,j),b2=AT(wp,j-1);
+                float a=max(epssq,a0*a0+a1*a1+a2*a2),b=max(epssq,b0*b0+b1*b1+b2*b2);
+                pq[i]=a/(a+b);
+            }
+        }
+        put(VH0,6,row,lg,vh);put(PQ0,6,row,lg,pq);
+    }
+    barrier();
+    // Owned strips: refined VH/PQ and LP, written as FP16 planes.
+    {
+        int k=int(gl_LocalInvocationIndex);
+        ivec2 pt=parityTask(k,8,32);int y=base.y+pt.y,x0=base.x+4*pt.x;
+        if(y<p.height && x0<p.width) {
+            int lg=x0-(base.x-8),rr=y-(base.y-1);
+            DECL(vu);DECL(vc);DECL(vd);LOAD(vu,VH0,6,rr-1,lg);LOAD(vc,VH0,6,rr,lg);LOAD(vd,VH0,6,rr+1,lg);
+            DECL(qu);DECL(qc);DECL(qd);LOAD(qu,PQ0,6,rr-1,lg);LOAD(qc,PQ0,6,rr,lg);LOAD(qd,PQ0,6,rr+1,lg);
+            int lx=x0-(base.x-16),ry=y-(base.y-10);
+            DECL(ru);DECL(rc);DECL(rd);LOAD(ru,RAW,RAWC,ry-1,lx);LOAD(rc,RAW,RAWC,ry,lx);LOAD(rd,RAW,RAWC,ry+1,lx);
+            vec4 vh,pq,lp;
+            for(int i=0;i<4;++i) {
+                int x=x0+i,j=i+4;
+                vh[i]=refine(AT(vc,j),AT(vu,j-1),AT(vu,j+1),AT(vd,j-1),AT(vd,j+1),true);
+                pq[i]=refine(AT(qc,j),AT(qu,j-1),AT(qu,j+1),AT(qd,j-1),AT(qd,j+1),false);
+                lp[i]=domain(x,y,2) && color(x,y)!=1
+                    ? AT(rc,j)+0.5*(AT(ru,j)+AT(rd,j)+AT(rc,j-1)+AT(rc,j+1))+0.25*(AT(ru,j-1)+AT(ru,j+1)+AT(rd,j-1)+AT(rd,j+1))
+                    : 0.0;
+            }
+            guide[planeIndex(0,x0,y)]=p4(vh);
+            guide[planeIndex(1,x0,y)]=p4(pq);
+            guide[planeIndex(2,x0,y)]=p4(lp);
+        }
+    }
+}
+
+void productPixel(int x,int y,vec3 rgb) {
+    vec3 wb=vec3(uintBitsToFloat(config[2]),uintBitsToFloat(config[3]),uintBitsToFloat(config[4]));
+    float minimum=min(wb.r,min(wb.g,wb.b));
+    vec3 t=clamp((rgb-vec3(0.70))/vec3(0.99-0.70),0.0,1.0);
+    vec3 white=t*t*(vec3(3.0)-2.0*t);
+    float blend=max(white.r,max(white.g,white.b));
+    rgb=rgb+(vec3(minimum)/wb-rgb)*blend;
+    if(any(isnan(rgb)) || any(isinf(rgb)) || any(lessThan(rgb,vec3(0.0))) || any(greaterThan(rgb,vec3(65504.0)))) atomicOr(config[12],1u);
+    halfOutput[y*p.width+x]=uvec2(packHalf2x16(rgb.rg),packHalf2x16(vec2(rgb.b,1.0)));
+}
+
+void reconstruct() {
+    loadRaw();
+    barrier();
+    // Green over rows base-5..base+36, x base-8..base+39.
+    for(int k=int(gl_LocalInvocationIndex);k<42*12;k+=256) {
+        ivec2 pt=parityTask(k,12,42);int row=pt.y,y=base.y-5+row,x0=base.x-8+4*pt.x;
+        int lx=x0-(base.x-16),ry=y-(base.y-10);
+        vec4 r4m=ctr(RAW,RAWC,ry-4,lx),r3m=ctr(RAW,RAWC,ry-3,lx),r2m=ctr(RAW,RAWC,ry-2,lx),r1m=ctr(RAW,RAWC,ry-1,lx);
+        vec4 r1p=ctr(RAW,RAWC,ry+1,lx),r2p=ctr(RAW,RAWC,ry+2,lx),r3p=ctr(RAW,RAWC,ry+3,lx),r4p=ctr(RAW,RAWC,ry+4,lx);
+        DECL(rc);LOAD(rc,RAW,RAWC,ry,lx);
+        vec4 lN=gctr(2,x0,y-2),lS=gctr(2,x0,y+2),lW=gctr(2,x0-4,y),lC=gctr(2,x0,y),lE=gctr(2,x0+4,y);
+        vec4 vh=gctr(0,x0,y);
+        vec4 out4;
+        for(int i=0;i<4;++i) {
+            int x=x0+i,j=i+4;
+            float c=AT(rc,j),v=0.0;
+            if(inside(x,y)) {
+                if(color(x,y)==1 || !domain(x,y,4)) v=c;
+                else {
+                    float ng=eps+(abs(r1p[i]-r1m[i])+abs(c-r2m[i]))+(abs(r1m[i]-r3m[i])+abs(r2m[i]-r4m[i]));
+                    float sg=eps+(abs(r1m[i]-r1p[i])+abs(c-r2p[i]))+(abs(r1p[i]-r3p[i])+abs(r2p[i]-r4p[i]));
+                    float wg=eps+(abs(AT(rc,j+1)-AT(rc,j-1))+abs(c-AT(rc,j-2)))+(abs(AT(rc,j-1)-AT(rc,j-3))+abs(AT(rc,j-2)-AT(rc,j-4)));
+                    float eg=eps+(abs(AT(rc,j-1)-AT(rc,j+1))+abs(c-AT(rc,j+2)))+(abs(AT(rc,j+1)-AT(rc,j+3))+abs(AT(rc,j+2)-AT(rc,j+4)));
+                    float l=lC[i],l2=l+l;
+                    float lw=i<2?lW[(i+2)&3]:lC[(i-2)&3],le=i<2?lC[(i+2)&3]:lE[(i-2)&3];
+                    float ne=r1m[i]*l2/(eps+l+lN[i]),se=r1p[i]*l2/(eps+l+lS[i]);
+                    float we=AT(rc,j-1)*l2/(eps+l+lw),ee=AT(rc,j+1)*l2/(eps+l+le);
+                    float ve=(sg*ne+ng*se)/(ng+sg),he=(wg*ee+eg*we)/(eg+wg);
+                    v=rcdInterpolate(vh[i],he,ve);
+                }
+            }
+            out4[i]=v;
+        }
+        put(GREEN,6,row,x0-(base.x-8),out4);
+    }
+    barrier();
+    // Missing R/B at R/B over rows base-3..base+34.
+    for(int k=int(gl_LocalInvocationIndex);k<38*12;k+=256) {
+        ivec2 pt=parityTask(k,12,38);int row=pt.y,y=base.y-3+row,x0=base.x-8+4*pt.x;
+        int lx=x0-(base.x-16),ry=y-(base.y-10),lg=x0-(base.x-8),gy=y-(base.y-5);
+        DECL(r3u);DECL(r1u);DECL(rc);DECL(r1d);DECL(r3d);
+        LOAD(r3u,RAW,RAWC,ry-3,lx);LOAD(r1u,RAW,RAWC,ry-1,lx);LOAD(rc,RAW,RAWC,ry,lx);LOAD(r1d,RAW,RAWC,ry+1,lx);LOAD(r3d,RAW,RAWC,ry+3,lx);
+        DECL(g2u);DECL(g1u);DECL(gc);DECL(g1d);DECL(g2d);
+        LOAD(g2u,GREEN,6,gy-2,lg);LOAD(g1u,GREEN,6,gy-1,lg);LOAD(gc,GREEN,6,gy,lg);LOAD(g1d,GREEN,6,gy+1,lg);LOAD(g2d,GREEN,6,gy+2,lg);
+        vec4 pq=gctr(1,x0,y);
+        vec4 out4;
+        for(int i=0;i<4;++i) {
+            int x=x0+i,j=i+4;
+            float v=0.0;
+            if(inside(x,y) && color(x,y)!=1) {
+                if(!domain(x,y,4)) v=AT(rc,j);
+                else {
+                    float g0=AT(gc,j);
+                    // d=NW: s+d=(j-1,y-1), s-d=(j+1,y+1), s+3d=(j-3,y-3), s+2d g=(j-2,y-2)
+                    float nwg=eps+abs(AT(r1u,j-1)-AT(r1d,j+1))+abs(AT(r1u,j-1)-AT(r3u,j-3))+abs(g0-AT(g2u,j-2));
+                    float neg=eps+abs(AT(r1u,j+1)-AT(r1d,j-1))+abs(AT(r1u,j+1)-AT(r3u,j+3))+abs(g0-AT(g2u,j+2));
+                    float swg=eps+abs(AT(r1d,j-1)-AT(r1u,j+1))+abs(AT(r1d,j-1)-AT(r3d,j-3))+abs(g0-AT(g2d,j-2));
+                    float seg=eps+abs(AT(r1d,j+1)-AT(r1u,j-1))+abs(AT(r1d,j+1)-AT(r3d,j+3))+abs(g0-AT(g2d,j+2));
+                    float nwe=AT(r1u,j-1)-AT(g1u,j-1),nee=AT(r1u,j+1)-AT(g1u,j+1),swe=AT(r1d,j-1)-AT(g1d,j-1),see=AT(r1d,j+1)-AT(g1d,j+1);
+                    float pe=(nwg*see+seg*nwe)/(nwg+seg),qe=(neg*swe+swg*nee)/(neg+swg);
+                    v=g0+rcdInterpolate(pq[i],qe,pe);
+                }
+            }
+            out4[i]=v;
+        }
+        put(MISS,6,row,lg,out4);
+    }
+    barrier();
+    {
+        int k=int(gl_LocalInvocationIndex);
+        ivec2 pt=parityTask(k,8,32);int y=base.y+pt.y,x0=base.x+4*pt.x;
+        if(y>=p.height || x0>=p.width) return;
+        int lx=x0-(base.x-16),ry=y-(base.y-10),lg=x0-(base.x-8),gy=y-(base.y-5),my=y-(base.y-3);
+        DECL(r3u);DECL(r1u);DECL(rc);DECL(r1d);DECL(r3d);
+        LOAD(r3u,RAW,RAWC,ry-3,lx);LOAD(r1u,RAW,RAWC,ry-1,lx);LOAD(rc,RAW,RAWC,ry,lx);LOAD(r1d,RAW,RAWC,ry+1,lx);LOAD(r3d,RAW,RAWC,ry+3,lx);
+        DECL(m3u);DECL(m1u);DECL(mc);DECL(m1d);DECL(m3d);
+        LOAD(m3u,MISS,6,my-3,lg);LOAD(m1u,MISS,6,my-1,lg);LOAD(mc,MISS,6,my,lg);LOAD(m1d,MISS,6,my+1,lg);LOAD(m3d,MISS,6,my+3,lg);
+        DECL(g2u);DECL(g1u);DECL(gc);DECL(g1d);DECL(g2d);
+        LOAD(g2u,GREEN,6,gy-2,lg);LOAD(g1u,GREEN,6,gy-1,lg);LOAD(gc,GREEN,6,gy,lg);LOAD(g1d,GREEN,6,gy+1,lg);LOAD(g2d,GREEN,6,gy+2,lg);
+        vec4 vh=gctr(0,x0,y);
+        // Raw rows y-2 and y+2 are needed only for the border average fallback (rows +-1).
+        for(int i=0;i<4;++i) {
+            int x=x0+i,j=i+4;
+            if(x>=p.width) continue;
+            int c=color(x,y);
+            vec3 result;
+            if(!domain(x,y,9)) {
+                vec3 total=vec3(0.0);ivec3 count=ivec3(0);
+                for(int dy=-1;dy<=1;++dy) for(int dx=-1;dx<=1;++dx) {
+                    if(!inside(x+dx,y+dy)) continue;
+                    float r=dy<0?AT(r1u,j+dx):dy>0?AT(r1d,j+dx):AT(rc,j+dx);
+                    int nc=color(x+dx,y+dy);total[nc]+=r;count[nc]++;
+                }
+                result=total/vec3(count);result[c]=AT(rc,j);
+            } else if(c!=1) {
+                float m=AT(mc,j);
+                result=c==0?vec3(AT(rc,j),AT(gc,j),m):vec3(m,AT(gc,j),AT(rc,j));
+            } else {
+                float g0=AT(gc,j);
+                result=vec3(0.0,g0,0.0);
+                for(int kk=0;kk<=2;kk+=2) {
+                    // colorAt at odd offsets: neighbours are R/B sites.
+                    #define CA(r,m,jj,yy) (color(x+(jj)-j,(yy))==kk?AT(r,jj):AT(m,jj))
+                    float n1=CA(r1u,m1u,j,y-1),n3=CA(r3u,m3u,j,y-3),s1=CA(r1d,m1d,j,y+1),s3=CA(r3d,m3d,j,y+3);
+                    float w1=CA(rc,mc,j-1,y),w3=CA(rc,mc,j-3,y),e1=CA(rc,mc,j+1,y),e3=CA(rc,mc,j+3,y);
+                    float ng=(eps+abs(g0-AT(g2u,j)))+abs(s1-n1)+abs(n1-n3);
+                    float sg=(eps+abs(g0-AT(g2d,j)))+abs(n1-s1)+abs(s1-s3);
+                    float wg=(eps+abs(g0-AT(gc,j-2)))+abs(e1-w1)+abs(w1-w3);
+                    float eg=(eps+abs(g0-AT(gc,j+2)))+abs(w1-e1)+abs(e1-e3);
+                    float ne=n1-AT(g1u,j),se=s1-AT(g1d,j),we=w1-AT(gc,j-1),ee=e1-AT(gc,j+1);
+                    float ve=(ng*se+sg*ne)/(ng+sg),he=(eg*we+wg*ee)/(eg+wg);
+                    result[kk]=g0+rcdInterpolate(vh[i],he,ve);
+                }
+            }
+            productPixel(x,y,max(vec3(0.0),result));
+        }
+    }
+}
+
+void main() {
+    base=ivec2(gl_WorkGroupID.xy)*T;
+    if(p.stage==0) guides(); else reconstruct();
+}

@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/3840x2160-24-fgwalk1.json: 1 file pulled, 0 skipped. 27.6 MB/s (375603 bytes in 0.013s)

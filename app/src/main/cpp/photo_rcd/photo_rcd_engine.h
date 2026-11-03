@@ -23,7 +23,8 @@ public:
                   const std::vector<uint32_t> &rawPackShader = {},
                   int reconstructionScale = 1, bool normalizeOnce = false,
                   bool tileLocal = false, bool imageOutput = false,
-                  std::array<uint32_t, 2> tileShape = {16, 16});
+                  std::array<uint32_t, 2> tileShape = {16, 16},
+                  bool frameGlobal = false);
   ~Engine();
   Engine(const Engine &) = delete;
   Engine &operator=(const Engine &) = delete;

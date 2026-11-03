@@ -1,0 +1,123 @@
+--------- beginning of crash
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: FATAL EXCEPTION: main
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: PID: 12471
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: java.lang.IllegalStateException: UiAutomationService android.accessibilityservice.IAccessibilityServiceClient$Stub$Proxy@73f6f9calready registered!
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Parcel.createExceptionOrNull(Parcel.java:3369)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Parcel.createException(Parcel.java:3345)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3328)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3270)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.view.accessibility.IAccessibilityManager$Stub$Proxy.registerUiTestAutomationService(IAccessibilityManager.java:1154)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.app.UiAutomationConnection.registerUiTestAutomationServiceLocked(UiAutomationConnection.java:688)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.app.UiAutomationConnection.connect(UiAutomationConnection.java:117)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.app.UiAutomation.connectWithTimeout(UiAutomation.java:386)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.app.UiAutomation.connect(UiAutomation.java:331)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.uiautomator.core.UiAutomationShellWrapper.connect(UiAutomationShellWrapper.java:36)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.commands.uiautomator.DumpCommand.run(DumpCommand.java:78)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.commands.uiautomator.Launcher.main(Launcher.java:83)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit.nativeFinishInit(Native Method)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit.main(RuntimeInit.java:394)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: Caused by: android.os.RemoteException: Remote stack trace:
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.server.accessibility.UiAutomationManager.registerUiTestAutomationServiceLocked(UiAutomationManager.java:109)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at com.android.server.accessibility.AccessibilityManagerService.registerUiTestAutomationService(AccessibilityManagerService.java:1668)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.view.accessibility.IAccessibilityManager$Stub.onTransact(IAccessibilityManager.java:571)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Binder.execTransactInternal(Binder.java:1428)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 	at android.os.Binder.execTransact(Binder.java:1372)
+11-03 08:32:16.305 12471 12471 E AndroidRuntime: 
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: Couldn't report crash. Here's the crash:
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: java.lang.IllegalStateException: UiAutomationService android.accessibilityservice.IAccessibilityServiceClient$Stub$Proxy@73f6f9calready registered!
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Parcel.createExceptionOrNull(Parcel.java:3369)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Parcel.createException(Parcel.java:3345)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3328)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3270)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.view.accessibility.IAccessibilityManager$Stub$Proxy.registerUiTestAutomationService(IAccessibilityManager.java:1154)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.app.UiAutomationConnection.registerUiTestAutomationServiceLocked(UiAutomationConnection.java:688)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.app.UiAutomationConnection.connect(UiAutomationConnection.java:117)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.app.UiAutomation.connectWithTimeout(UiAutomation.java:386)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.app.UiAutomation.connect(UiAutomation.java:331)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.uiautomator.core.UiAutomationShellWrapper.connect(UiAutomationShellWrapper.java:36)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.commands.uiautomator.DumpCommand.run(DumpCommand.java:78)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.commands.uiautomator.Launcher.main(Launcher.java:83)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit.nativeFinishInit(Native Method)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit.main(RuntimeInit.java:394)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: Caused by: android.os.RemoteException: Remote stack trace:
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.server.accessibility.UiAutomationManager.registerUiTestAutomationServiceLocked(UiAutomationManager.java:109)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at com.android.server.accessibility.AccessibilityManagerService.registerUiTestAutomationService(AccessibilityManagerService.java:1668)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.view.accessibility.IAccessibilityManager$Stub.onTransact(IAccessibilityManager.java:571)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Binder.execTransactInternal(Binder.java:1428)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 	at android.os.Binder.execTransact(Binder.java:1372)
+11-03 08:32:16.442 12471 12471 E AndroidRuntime: 
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: Error reporting crash. Here's the error:
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: java.lang.RuntimeException: Bad file descriptor
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at android.os.BinderProxy.transactNative(Native Method)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at android.os.BinderProxy.transact(BinderProxy.java:736)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at android.app.IActivityManager$Stub$Proxy.handleApplicationCrash(IActivityManager.java:6551)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$KillApplicationHandler.uncaughtException(RuntimeInit.java:189)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at java.lang.ThreadGroup.uncaughtException(ThreadGroup.java:1098)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at java.lang.ThreadGroup.uncaughtException(ThreadGroup.java:1093)
+11-03 08:32:16.445 12471 12471 E AndroidRuntime: 	at java.lang.Thread.dispatchUncaughtException(Thread.java:3380)
+--------- beginning of main
+11-03 09:58:13.834 22351 22375 I EncodedVideo: stop completed durationMs=533
+11-03 09:58:21.987 22725 22750 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-03 09:58:21.987 22725 22750 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-03 09:58:21.992 22725 22750 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-03 09:58:21.993 22725 22750 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-03 09:58:21.993 22725 22750 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-03 09:58:22.057 22725 22750 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-03 09:58:22.769 22725 22750 I EncodedVideo: public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified
+11-03 09:58:22.769 22725 22750 I EncodedVideo: demosaic path=public-photo-rcd-validation
+11-03 09:58:22.934 22725 22750 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-03 09:58:22.934 22725 22750 I EncodedVideo: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+11-03 09:58:24.839 22725 22750 I EncodedVideo: Independent encoder content probe GPU writer=true 2560x1440
+11-03 09:58:24.839 22725 22750 I EncodedVideo: preview 2560x1440 -> 640x360 box=4
+11-03 09:58:24.840 22725 22750 I EncodedVideo: ours P010 yStride=5120 uvStride=5120
+11-03 09:58:24.942 22725 22750 I EncodedVideo: audio AAC 2ch
+11-03 09:58:25.650 22725 22809 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-03 09:58:25.655 22725 22809 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-03 09:58:25.656 22725 22809 I EncodedVideo: RAW input app=2.1.12 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=gpu-storage
+11-03 09:58:25.658 22725 22809 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-03 09:58:25.658 22725 22809 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=50339899075490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=62,80,55,62,76,73,55,68,65,68,74,59,61,55,68,73,66,70,69,64,52,62,60,69,75,59,68,57,60,60,65,63,54,80,61,71,58,61,67,58,62,72,77,65,65,73,63,59,52,70,71,73,68,62,66,68,56,61,65,63,55,65,50,54,64,66,74,61,68,67,65,59,73,67,64,57,58,70,51,64,66,65,65,58,75,66,48,75,67,71,48,69,66,81,52,56,53,51,59,70,57,75,71,76,65,60,70,57,64,72,61,56,54,59,65,77,78,58,52,67,56,57,69,74,60,60,57,61
+11-03 09:58:25.838 22725 22809 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-03 09:58:25.838 22725 22809 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=50340032393490 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=64,77,73,61,66,51,70,55,67,61,67,66,61,60,68,66,60,54,59,61,68,63,64,59,63,53,68,72,54,65,63,79,72,56,43,74,54,63,59,55,68,68,76,65,61,69,55,62,68,60,54,63,64,70,64,69,53,72,47,59,68,65,70,53,71,76,72,67,76,68,58,63,69,58,66,73,77,64,64,88,67,66,71,76,62,56,65,86,68,69,57,67,58,60,61,53,68,76,57,68,64,72,64,67,74,53,64,73,69,57,64,64,59,58,60,66,62,50,56,59,62,62,78,70,68,71,73,63
+11-03 09:58:25.839 22725 22773 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=2560,1440,2560,54,1,16842803
+11-03 09:58:25.840 22725 22773 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output image=2560x1440 format=54 crop=Rect(0, 0 - 2560, 1440) planes=0[row=5120 px=2 pos=0 limit=7372800 capacity=7372800] 1[row=5120 px=4 pos=0 limit=3686400 capacity=3686400] 2[row=5120 px=4 pos=0 limit=3686400 capacity=3686400]
+11-03 09:58:25.841 22725 22773 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output timestamp=50339899075490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=83,566,499,125,516,517,95,542,556,75,509,517,66,532,517,64,515,521,115,510,519,78,551,510,91,533,513,126,522,549,72,527,542,74,524,505,79,506,522,86,506,519,86,515,512,84,528,525,86,523,542,69,519,521,65,521,518,73,531,542,96,511,535,71,508,521,101,518,534,84,560,538,75,509,539,77,535,539,100,530,550,72,544,531,77,542,510,69,506,510,107,518,552,103,505,508 comparison=not-available sampleMs=1.784924
+11-03 09:58:25.917 22725 22799 I EncodedVideo: muxer started: video/hevc 2560x1440 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-03 09:58:25.946 22725 22773 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=2560,1440,2560,54,1,16842803
+11-03 09:58:25.947 22725 22773 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output image=2560x1440 format=54 crop=Rect(0, 0 - 2560, 1440) planes=0[row=5120 px=2 pos=0 limit=7372800 capacity=7372800] 1[row=5120 px=4 pos=0 limit=3686400 capacity=3686400] 2[row=5120 px=4 pos=0 limit=3686400 capacity=3686400]
+11-03 09:58:25.947 22725 22773 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output timestamp=50340032393490 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=105,531,506,64,510,520,98,528,499,75,520,521,72,515,514,86,500,568,77,521,545,78,534,497,89,509,510,104,515,516,66,532,534,69,521,524,84,513,516,105,519,526,80,535,539,72,525,542,96,542,522,82,512,526,64,514,518,93,506,516,69,532,535,85,532,532,121,527,533,64,497,490,102,567,536,83,515,543,87,501,532,76,503,508,84,546,517,86,515,541,70,500,561,64,528,548 comparison=not-available sampleMs=0.767
+11-03 09:58:26.275 22725 22809 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=0.66D
+11-03 09:58:26.369 22725 22809 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-03 09:58:54.857 22725 22809 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=0.66D
+11-03 09:58:54.990 22725 22809 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-03 09:58:55.761 22725 22750 I EncodedVideo: stop completed durationMs=503
+11-03 09:59:04.826 23103 23127 I EncodedVideo: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+11-03 09:59:04.826 23103 23127 I EncodedVideo: lens shading: live HAL map (first frame arms it)
+11-03 09:59:04.831 23103 23127 I EncodedVideo: sensor RAW sizes: 4080x3060
+11-03 09:59:04.831 23103 23127 I EncodedVideo: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+11-03 09:59:04.831 23103 23127 I EncodedVideo: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+11-03 09:59:04.885 23103 23127 I EncodedVideo: fused asset shaders/vf/vf_mhcyuv.spv
+11-03 09:59:05.582 23103 23127 I EncodedVideo: public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified
+11-03 09:59:05.582 23103 23127 I EncodedVideo: demosaic path=public-photo-rcd-validation
+11-03 09:59:05.737 23103 23127 I EncodedVideo: Video GPU writer=false codec=OMX.MTK.VIDEO.ENCODER.HEVC delivery=plane-copy nativeLayoutAllowed=true
+11-03 09:59:05.737 23103 23127 I EncodedVideo: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+11-03 09:59:07.603 23103 23127 I EncodedVideo: Independent encoder content probe GPU writer=true 3840x2160
+11-03 09:59:07.603 23103 23127 I EncodedVideo: preview 3840x2160 -> 960x540 box=4
+11-03 09:59:07.606 23103 23127 I EncodedVideo: ours P010 yStride=7680 uvStride=7680
+11-03 09:59:07.696 23103 23127 I EncodedVideo: audio AAC 2ch
+11-03 09:59:08.400 23103 23188 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-03 09:59:08.403 23103 23188 I EncodedVideo: lens-shading live 17x17 active=0,0..4080,3060
+11-03 09:59:08.404 23103 23188 I EncodedVideo: RAW input app=2.1.12 size=4080x3060 rowStride=8160 pixelStride=2 pitch=4080 ahb=4080x3060 format=32 usage=131123 crop=3840x2160@120,450 delivery=gpu-storage
+11-03 09:59:08.405 23103 23188 I EncodedVideo: EVdiag seq=0 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-03 09:59:08.405 23103 23188 I EncodedVideo: EVdiag seq=0 stage=raw timestamp=50382638614750 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=62,60,63,54,64,68,71,58,67,75,63,69,71,57,67,71,66,58,71,66,73,57,70,70,73,56,63,73,66,63,68,75,68,63,65,57,63,59,72,65,71,64,70,70,70,83,71,76,68,68,69,71,58,61,71,63,53,68,68,70,69,52,58,62,70,69,76,59,64,76,57,73,68,63,67,69,60,63,73,71,61,62,64,78,70,66,53,65,64,63,61,64,62,73,68,57,69,71,67,81,61,72,69,78,66,53,68,61,64,72,63,69,71,53,66,76,58,67,50,76,61,61,68,65,69,45,71,64
+11-03 09:59:08.594 23103 23188 I EncodedVideo: EVdiag seq=1 stage=raw ahb[width,height,stride,format,layers,usage]=4080,3060,4080,32,1,131123
+11-03 09:59:08.595 23103 23188 I EncodedVideo: EVdiag seq=1 stage=raw timestamp=50382763624750 grid=8x4 crop=120,450,3840,2160 quadOrder=TL,TR,BL,BR channels=2,3,0,1 black=64.0,64.0,64.0,64.0 white=1023.0 codes=75,68,52,72,78,51,68,59,59,67,63,62,76,67,70,85,49,68,54,74,69,64,72,68,79,61,72,55,59,59,71,45,66,72,59,67,60,71,52,56,74,64,68,75,71,63,59,70,77,83,57,67,67,64,63,77,59,73,75,77,60,60,76,53,62,80,66,65,75,56,72,65,72,66,63,69,65,57,58,63,55,69,68,75,68,55,68,64,76,68,57,68,61,77,67,39,65,69,70,70,78,69,83,66,56,57,70,76,68,70,67,68,76,59,68,70,69,57,48,69,61,47,74,62,69,53,74,56
+11-03 09:59:08.599 23103 23150 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=3840,2160,3840,54,1,16842803
+11-03 09:59:08.599 23103 23150 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output image=3840x2160 format=54 crop=Rect(0, 0 - 3840, 2160) planes=0[row=7680 px=2 pos=0 limit=16588800 capacity=16588800] 1[row=7680 px=4 pos=0 limit=8294400 capacity=8294400] 2[row=7680 px=4 pos=0 limit=8294400 capacity=8294400]
+11-03 09:59:08.600 23103 23150 I EncodedVideo: EVdiag seq=0 stage=gpu-writer-output timestamp=50382638614750 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=64,535,526,90,522,562,82,546,499,92,499,521,83,512,543,106,504,526,105,500,490,82,504,523,82,504,506,68,510,532,95,502,536,90,537,522,83,526,521,74,505,542,76,532,539,89,507,507,111,544,576,64,531,506,80,503,512,71,503,550,67,525,510,87,512,500,67,515,516,77,556,530,107,525,500,98,529,530,76,505,525,69,541,503,91,496,498,75,505,507,77,507,530,96,497,550 comparison=not-available sampleMs=0.57377
+11-03 09:59:08.709 23103 23177 I EncodedVideo: muxer started: video/hevc 3840x2160 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+11-03 09:59:08.712 23103 23150 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output ahb[width,height,stride,format,layers,usage]=3840,2160,3840,54,1,16842803
+11-03 09:59:08.714 23103 23150 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output image=3840x2160 format=54 crop=Rect(0, 0 - 3840, 2160) planes=0[row=7680 px=2 pos=0 limit=16588800 capacity=16588800] 1[row=7680 px=4 pos=0 limit=8294400 capacity=8294400] 2[row=7680 px=4 pos=0 limit=8294400 capacity=8294400]
+11-03 09:59:08.714 23103 23150 I EncodedVideo: EVdiag seq=1 stage=gpu-writer-output timestamp=50382763624750 grid=8x4 order=Y,U,V lowBitsNonzero=0 codes10=123,497,483,125,511,532,66,516,505,114,486,500,66,520,496,95,495,599,138,508,533,90,507,572,83,574,497,64,519,510,111,500,519,100,514,517,123,533,513,80,510,525,65,540,529,94,502,589,83,597,522,128,521,529,97,504,498,76,525,519,65,531,498,92,512,536,138,525,540,100,577,543,82,538,533,143,508,593,73,497,527,82,529,531,112,493,507,85,505,501,105,526,570,104,494,582 comparison=not-available sampleMs=2.001538
+11-03 09:59:09.193 23103 23188 I EncodedVideo: Encoded Video AF PASSIVE_SCAN mode=CONT_VIDEO fd=0.66D
+11-03 09:59:09.296 23103 23188 I EncodedVideo: Encoded Video AF PASSIVE_UNFOCUSED mode=CONT_VIDEO fd=0.66D
+11-03 09:59:38.493 23103 23127 I EncodedVideo: stop completed durationMs=499

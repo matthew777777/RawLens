@@ -3,7 +3,7 @@
 
 No activity, camera, recording, benchmark or package uninstall command.
 """
-import argparse
+import argparse,os
 import hashlib
 import json
 from pathlib import Path
@@ -32,6 +32,7 @@ def run(serial,out,recording_candidate=False,images=False,cached=False,baked=Fal
     command=['shell','am','instrument','-w','-r','-e','class','com.matthew.rawlens.PhotoRcdCorrectnessDeviceTest',testpackage+'/androidx.test.runner.AndroidJUnitRunner']
     if gpu_image:command[-1:-1]=['-e','gpuImage','true']
     if tile_local:command[-1:-1]=['-e','tileLocal','true']
+    if os.environ.get('RCD_FRAME_GLOBAL')=='1':command[-1:-1]=['-e','frameGlobal','true']
     if shared_final:command[-1:-1]=['-e','sharedFinal','true']
     if normalize_once:command[-1:-1]=['-e','normalizeOnce','true']
     if requirements_input:command[-1:-1]=['-e','requirementsInput','true']
@@ -58,4 +59,4 @@ def run(serial,out,recording_candidate=False,images=False,cached=False,baked=Fal
     return passed
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--recording-candidate',action='store_true');p.add_argument('--images',action='store_true');p.add_argument('--baked',action='store_true');p.add_argument('--packed',action='store_true');p.add_argument('--direct-raw',action='store_true');p.add_argument('--requirements-input',action='store_true');p.add_argument('--normalize-once',action='store_true');p.add_argument('--shared-final',action='store_true');p.add_argument('--tile-local',action='store_true');p.add_argument('--gpu-image',action='store_true');p.add_argument('--cached',action='store_true');a=p.parse_args();raise SystemExit(0 if run(a.serial,a.out.resolve(),a.recording_candidate,a.images,a.cached,a.baked,a.packed,a.direct_raw,a.requirements_input,a.normalize_once,a.shared_final,a.tile_local,a.gpu_image) else 1)
+    p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--recording-candidate',action='store_true');p.add_argument('--images',action='store_true');p.add_argument('--baked',action='store_true');p.add_argument('--packed',action='store_true');p.add_argument('--direct-raw',action='store_true');p.add_argument('--requirements-input',action='store_true');p.add_argument('--normalize-once',action='store_true');p.add_argument('--shared-final',action='store_true');p.add_argument('--tile-local',action='store_true');p.add_argument('--frame-global',action='store_true');p.add_argument('--gpu-image',action='store_true');p.add_argument('--cached',action='store_true');a=p.parse_args();os.environ['RCD_FRAME_GLOBAL']='1' if a.frame_global else os.environ.get('RCD_FRAME_GLOBAL','0');raise SystemExit(0 if run(a.serial,a.out.resolve(),a.recording_candidate,a.images,a.cached,a.baked,a.packed,a.direct_raw,a.requirements_input,a.normalize_once,a.shared_final,a.tile_local,a.gpu_image) else 1)

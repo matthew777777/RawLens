@@ -167,12 +167,19 @@ def specialize_core(s,core):
     s=s.replace('local_size_x=16,local_size_y=16',f'local_size_x={x},local_size_y={y}')
     s=s.replace('ivec2(gl_WorkGroupID.xy)*16+ivec2(9)',f'ivec2(gl_WorkGroupID.xy)*ivec2({x},{y})+ivec2(9)')
     s=s.replace('ivec2(gl_WorkGroupID.xy),ivec2(11)',f'ivec2(gl_WorkGroupID.xy),ivec2({(176+x-1)//x},{(176+y-1)//y})')
+    # Two phases: sequential replacement collided when a new edge equalled a
+    # later array's 16x16 edge (8x8 raw 38->30 was then rewritten as LP 30->22),
+    # leaving shared memory partially unloaded. Placeholders cannot collide.
+    final={}
     for old,radius in [(38,11),(28,6),(30,7),(24,4),(26,5),(22,3)]:
-        w=x+2*radius;h=y+2*radius
-        s=s.replace(f'[{old}*{old}]',f'[{w}*{h}]')
-        s=s.replace(f'k<{old}u*{old}u',f'k<{w}u*{h}u')
-        s=s.replace(f'int(k)%{old}',f'int(k)%{w}').replace(f'int(k)/{old}',f'int(k)/{w}')
-        s=s.replace(f',{radius},{old})',f',{radius},{w})')
-    s=s.replace('q,ivec2(38)',f'q,ivec2({x+22},{y+22})').replace('q.y*38+q.x',f'q.y*{x+22}+q.x')
-    s=s.replace('k+=256u',f'k+={x*y}u')
+        w=x+2*radius;h=y+2*radius;W,H=f'@W{old}@',f'@H{old}@';final[W]=str(w);final[H]=str(h)
+        for a,b in [(f'[{old}*{old}]',f'[{W}*{H}]'),(f'k<{old}u*{old}u',f'k<{W}u*{H}u'),
+                    (f'int(k)%{old}',f'int(k)%{W}'),(f'int(k)/{old}',f'int(k)/{W}'),
+                    (f',{radius},{old})',f',{radius},{W})')]:
+            s=s.replace(a,b)
+        assert f'[{W}*{H}]' in s,old
+    for a,b in [('q,ivec2(38)','q,ivec2(@W38@,@H38@)'),('q.y*38+q.x','q.y*@W38@+q.x'),('k+=256u',f'k+={x*y}u')]:
+        assert a in s,a;s=s.replace(a,b)
+    for token,value in final.items():s=s.replace(token,value)
+    assert '@' not in s
     return s

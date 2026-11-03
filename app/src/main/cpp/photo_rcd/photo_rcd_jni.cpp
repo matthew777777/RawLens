@@ -40,7 +40,7 @@ Java_com_matthew_rawlens_PhotoRcdRenderer_openNative(
     jboolean imageIntermediates, jboolean recordingCandidate,
     jobjectArray stageCodes, jboolean packedCells, jbyteArray rawPackCode,
     jint reconstructionScale, jboolean normalizeOnce, jboolean tileLocal,
-    jboolean imageOutput) {
+    jboolean imageOutput, jboolean frameGlobal) {
   try {
     if (!code || env->GetArrayLength(code) < 20 ||
         env->GetArrayLength(code) % 4)
@@ -88,7 +88,8 @@ Java_com_matthew_rawlens_PhotoRcdRenderer_openNative(
         tiledReconstruction == JNI_TRUE, imageIntermediates == JNI_TRUE,
         recordingCandidate == JNI_TRUE, stages, packedCells == JNI_TRUE,
         rawPack, reconstructionScale, normalizeOnce == JNI_TRUE,
-        tileLocal == JNI_TRUE, imageOutput == JNI_TRUE);
+        tileLocal == JNI_TRUE, imageOutput == JNI_TRUE,
+        std::array<uint32_t, 2>{16, 16}, frameGlobal == JNI_TRUE);
     std::lock_guard<std::mutex> lock(registryMutex);
     jlong handle = nextHandle++;
     engines.emplace(handle, std::move(engine));
