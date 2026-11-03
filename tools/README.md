@@ -42,6 +42,7 @@ parity for MFSR is judged by the error envelopes in `sr-pipeline/PARITY.md`.
 
 | Path | What |
 |---|---|
+| `rt-fringe/` | Experimental RawTherapee RAW CA reference and low-memory streaming purple defringe port; host/Android benchmark tools, not enabled in the app. |
 | `amaze_reference_host.cpp`, `build_amaze_reference.py` | Pinned upstream scalar AMaZE kernel, host-buildable. |
 | `generate_amaze_fixtures.py` | Host-upstream oracle fixtures (never derive expected values on Android). |
 | `generate_amaze_gles_reference.py` | Experimental ordered GLES oracle from the pinned scalar body. |
