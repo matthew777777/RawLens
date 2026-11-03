@@ -144,6 +144,8 @@ class WaveletHost {
         pipe_.reset();
         destroy_owned(src_);
         destroy_owned(dst_);
+        destroy_owned(sharpClip_);
+        destroy_buffer(sharpClipStaging_);
         destroy_buffer(staging_);
         if (tsPool_ != VK_NULL_HANDLE) vkDestroyQueryPool(device_, tsPool_, nullptr);
         if (fence_ != VK_NULL_HANDLE) vkDestroyFence(device_, fence_, nullptr);
@@ -176,7 +178,7 @@ class WaveletHost {
         return 4;
     }
 
-    void process(const uint8_t* inHalf, uint8_t* outHalf, int w, int h, const WaveletParams* params, int sharpIterations = 0, int cfa = 0) {
+    void process(const uint8_t* inHalf, uint8_t* outHalf, int w, int h, const WaveletParams* params, int sharpIterations = 0, int cfa = 0, const uint8_t* clipState = nullptr) {
         if (pipe_ == nullptr) throw std::runtime_error("wavelet: shaders not loaded");
         if (inHalf == nullptr || outHalf == nullptr || params == nullptr) {
             throw std::runtime_error("wavelet: null process argument");
@@ -192,6 +194,16 @@ class WaveletHost {
                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         memcpy(staging_.mapped, inHalf, (size_t)bytes);
         flush(staging_);
+        if (sharpIterations > 0 && clipState) {
+            const VkDeviceSize clipBytes = VkDeviceSize(w / 2) * (h / 2) * 2u;
+            ensure_buffer(sharpClipStaging_, clipBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+            memcpy(sharpClipStaging_.mapped, clipState, size_t(clipBytes));
+            flush(sharpClipStaging_);
+            if (!sharpClip_.image) {
+                sharpClip_ = make_image(uint32_t(w / 2), uint32_t(h / 2), VK_FORMAT_R16_UINT);
+                sharpClipFresh_ = true;
+            }
+        }
 
         check(vkResetFences(device_, 1, &fence_), "wavelet: fence reset failed");
         VkCommandBufferBeginInfo bi{};
@@ -233,7 +245,25 @@ class WaveletHost {
             info.view = src_.view;
             info.cfaPattern = uint32_t(cfa);
             memcpy(info.whiteBalance, params->wb, sizeof info.whiteBalance);
+            if (clipState) {
+                barrier(cmd_, sharpClip_.image, sharpClipFresh_ ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        sharpClipFresh_ ? 0 : VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                        sharpClipFresh_ ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT);
+                VkBufferImageCopy copy{};
+                copy.imageExtent = {uint32_t(w / 2), uint32_t(h / 2), 1};
+                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                vkCmdCopyBufferToImage(cmd_, sharpClipStaging_.buffer, sharpClip_.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                barrier(cmd_, sharpClip_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+                sharpClipFresh_ = false;
+                info.clipState = sharpClip_.view;
+            }
             info.params.iterations = uint32_t(sharpIterations);
+            info.deconvBandRows = 16;
             if (!sharp_->record(info)) throw std::runtime_error("capture sharpening rejected input");
             resultImage = src_.image;
         } else {
@@ -319,12 +349,12 @@ class WaveletHost {
         b = OwnedBuffer{};
     }
 
-    OwnedImage make_image(uint32_t w, uint32_t h) {
+    OwnedImage make_image(uint32_t w, uint32_t h, VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT) {
         OwnedImage o{};
         VkImageCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ci.format = format;
         ci.extent = {w, h, 1};
         ci.mipLevels = 1;
         ci.arrayLayers = 1;
@@ -351,7 +381,7 @@ class WaveletHost {
         vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         vi.image = o.image;
         vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vi.format = format;
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         check(vkCreateImageView(device_, &vi, nullptr, &o.view), "wavelet: view failed");
         return o;
@@ -410,6 +440,7 @@ class WaveletHost {
         if (w == curW_ && h == curH_) return;
         destroy_owned(src_);
         destroy_owned(dst_);
+        destroy_owned(sharpClip_);
         src_ = make_image((uint32_t)w, (uint32_t)h);
         dst_ = make_image((uint32_t)w, (uint32_t)h);
         imagesFresh_ = true;
@@ -445,7 +476,9 @@ class WaveletHost {
     std::unique_ptr<rawr::capsharp::CaptureSharpening> sharp_;
     std::unique_ptr<raw_denoise::DenoisePipeline> pipe_;
     std::vector<std::vector<uint8_t>> spv_;
-    OwnedImage src_, dst_;
+    OwnedImage src_, dst_, sharpClip_;
+    OwnedBuffer sharpClipStaging_;
+    bool sharpClipFresh_ = true;
     OwnedBuffer staging_;
     int curW_ = 0, curH_ = 0;
     bool imagesFresh_ = false;
@@ -516,7 +549,7 @@ double wavelet_last_gpu_ms(WaveletContext* ctx) {
 void wavelet_destroy(WaveletContext* ctx) { delete ctx; }
 
 extern "C" int capture_sharpen_process(WaveletContext* ctx, uint8_t* half, int w, int h,
-                                       const float* wb, int cfa, int iterations,
+                                       const float* wb, int cfa, int iterations, const uint8_t* clipState,
                                        char* errmsg, int errlen) {
     try {
         if (!ctx || !wb || cfa < 0 || cfa > 3 || iterations < 1 || iterations > 250)
@@ -524,7 +557,7 @@ extern "C" int capture_sharpen_process(WaveletContext* ctx, uint8_t* half, int w
         WaveletParams p{};
         p.strength = 1;
         memcpy(p.wb, wb, sizeof p.wb);
-        ctx->host.process(half, half, w, h, &p, iterations, cfa);
+        ctx->host.process(half, half, w, h, &p, iterations, cfa, clipState);
         return 0;
     } catch (const std::exception& e) {
         set_err(errmsg, errlen, e.what());

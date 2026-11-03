@@ -22,7 +22,7 @@ typedef struct WaveletParams {
     float shadows;     // shadow-preservation fulcrum, default 1
     float noiseA;      // normalized green variance slope
     float noiseB;      // normalized green variance offset
-    float wb[3];       // camera WB multipliers, green == 1
+    float wb[3];       // camera WB multipliers, absolute Camera2 scale
     int maxScale;      // 1..7, default 7
     float forceY;      // luma force, default 0.25
     float forceUv;     // chroma force, default 0.75

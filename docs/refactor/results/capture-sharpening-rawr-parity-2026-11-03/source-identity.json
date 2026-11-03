@@ -1,0 +1,216 @@
+{
+  "revision": "e7c844192008e1006d48ef85d931bf298e928192",
+  "files": [
+    {
+      "path": "capture_sharpening/CMakeLists.txt",
+      "sha256": "5ced896a7cd9a1d626228884fdc00944c1eb6244ed08c4b35c2a9adb7ce9b3eb",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/NOTICE.md",
+      "sha256": "0e0cdd52a2154db1b6d5a1645822d61b83c37a0af7aacee781c384718827d25c",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/README.md",
+      "sha256": "b1ddcd280bb650cac02bbab9e1264c754c53ed6335ef135a807234538fd4f6d3",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/include/capture_sharpening/CaptureSharpening.h",
+      "sha256": "69e98efff705a4c63c8dde624a66a2ba0373bfdc736fdfd39d5b9a2653bf7765",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_apron.comp",
+      "sha256": "56480ccc0467207ebc779a8d64407acf96f2cad010a5a7358d9a9b8cf03ca46c",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_blend_raw.comp",
+      "sha256": "9e35deb64ea70ac38bd62dd47367cb059c06f27714403e4545898b84b1f03d8c",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_common.glsl",
+      "sha256": "65fea4291bfb3c0b295403b7dc90a63e94e6380008c119303c1466441d330d38",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_contrast.comp",
+      "sha256": "8a6329608c136baa425d26c22dacfb460cb0eb8fc8d1a2fe4175060d06d69b47",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_deconv.comp",
+      "sha256": "0b1814bebbd1141db8bea7cf3d2f85cefcce7f017467f48724e8926c21386237",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_iir.comp",
+      "sha256": "9a6b8b3e3607e8d61239fc238c84bff739a54d6d3d90998b11c7ece2e125ba9a",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_luma_blocks.comp",
+      "sha256": "07c18e59ebf19b0379dc19591d2ff146b7b8edf0887ce0c37a5e77ce14eedf4f",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_radius.comp",
+      "sha256": "e72dd826223f7f5a5c745925e44b764c1c974568030c1c925e8f524e816160fe",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_select.comp",
+      "sha256": "b8b2395d343319033c7ac62c04912ba67da86ecb1fec80d0eabedec7d0844440",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_tile_stats.comp",
+      "sha256": "5eaf1279eae202e21fcb1e26dbab2e789594397ceaa5767847fe8bb1b4c88664",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_transpose.comp",
+      "sha256": "457bfb268fe62192136fe1d588ff5fafcff9cbb5ef90c1bde0a72c5cf33ad0b2",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/shaders/cs_yold.comp",
+      "sha256": "0eb6912c4a0515497101648b517d7e3819e53ccb0b657a088eea1cb0db6a8e6f",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/src/CaptureSharpening.cpp",
+      "sha256": "9dac0ff5aec321c14a35b7308d2f92194694bd723f6840ebb3e84e5fbfca0bc6",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/tests/capture_sharpening_validate.cpp",
+      "sha256": "81fa2697b4455d0c884e277b0f1bfc722c7af10211472f87f9c42eb3c8c8c86f",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/tools/capsharp_reference.py",
+      "sha256": "05ba1e048fad81428fe2f816da152d874a8fd95b38a19561095340971a719403",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/tools/compare_gpu.py",
+      "sha256": "64c38246d8f53e88b2de5cc40e0c4b9bbe2169db52e9fa0d8b546c0c2a75b058",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/tools/parity.py",
+      "sha256": "39e5e451f41cb01110518eb0c642f9bc8ff5b6a653406180f36a0606e70188ba",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/tools/rt_amaze/amaze_ref.cpp",
+      "sha256": "a90e9aff5f9829a57ab8b9fdf722194b8f708f54b1c0a098c4a4a91d96c1ba63",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/tools/rt_amaze/build.sh",
+      "sha256": "0c9ccd834151e98ddbd7b9b3a72bf927672c2da803f8a73708e9931f62862a97",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/tools/rt_harness/build.sh",
+      "sha256": "ed9bda0f31b39cd53c0f6e42ec489ef145fbc7a010c9b67fae59940a30409c7c",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/tools/rt_harness/cs_ref.cpp",
+      "sha256": "4e360df82ab1b197fb005f74f2d69f3bcba40f6c99f572f10f3d2158853315ec",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "capture_sharpening/tools/run_dng.py",
+      "sha256": "0f704caf4a665d7851e59ce7cdf6c51686e90b1bf47ae96f112b4362807a99fc",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "vk_common/CMakeLists.txt",
+      "sha256": "c1b147b95469afd93c6fad3ebaff7eb56c528ef5cc0b8d247b4ef37f17994698",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "vk_common/cmake/EmbedBinary.cmake",
+      "sha256": "909584900c13b19d155ffa3c6a62cde2ecd14a33ec42f19982f2059358f1be71",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "vk_common/cmake/EmbedSpirv.cmake",
+      "sha256": "50d25705d8890089833578d6535665df6218bc35890a36d46ed640ffb332597a",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "vk_common/include/rawr/vk/DeviceObjects.h",
+      "sha256": "6b59bd15b953489f617c7497b02c627b33d4452cd13187d2aae685ac8fafe327",
+      "identical": false,
+      "handle_type_adaptation": true
+    },
+    {
+      "path": "vk_common/include/rawr/vk/GpuContext.h",
+      "sha256": "d2e552bd143a34bedb0a450e387bcebd2c9aba554121afe349fce63a254fea68",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "vk_common/include/rawr/vk/OwnedImage.h",
+      "sha256": "289ccd870e7f1e2cf14c1dddd3fadfa9297d8b2bc351cec1bf80ae092a03577d",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "vk_common/src/OwnedImage.cpp",
+      "sha256": "2c15d0c01bc253115fb6a1f1eec526ca19c360b7f090fa42ce662c3b245151f0",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "vk_common/testing/vk_test_common.hpp",
+      "sha256": "c715a15c025dc0284bf6ca0892a84aef1baec8632d5ddcbaa2879f4744a04ace",
+      "identical": true,
+      "handle_type_adaptation": false
+    },
+    {
+      "path": "shader_common/shaders/cfa_common.glsl",
+      "sha256": "8d8b85ff75665a2110c9cd973efd05443cbe4686ecada2c9cc7ff9a98dd52d5e",
+      "identical": true,
+      "handle_type_adaptation": false
+    }
+  ],
+  "passed": true
+}

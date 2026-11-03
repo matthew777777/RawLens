@@ -1,0 +1,54 @@
+{
+  "passed": true,
+  "cases": [
+    {
+      "case": "case-0-none",
+      "identical": true,
+      "max_error": 0.0,
+      "sha256": "8bf1ecbb5071c9a1c001025066b0d5714115999760058d5a11777ea938b7353f"
+    },
+    {
+      "case": "case-1-clear",
+      "identical": true,
+      "max_error": 0.0,
+      "sha256": "c2b05ae51e330626670e0c36dc49c2c75ea7aa80cb26c529230655c11d99a4cc"
+    },
+    {
+      "case": "case-2-sensor",
+      "identical": true,
+      "max_error": 0.0,
+      "sha256": "ded171d662adc6ae0d711609d8738db3754e68c96d61c5af591d99b59454501b"
+    },
+    {
+      "case": "case-3-all",
+      "identical": true,
+      "max_error": 0.0,
+      "sha256": "16282830c7a0406804806d0506f6a291521574d3dcba215d8e340de8cea2f174"
+    },
+    {
+      "case": "case-4-sensor",
+      "identical": true,
+      "max_error": 0.0,
+      "sha256": "cfcdbae7ef6bf9edd18513bc455a432bff73aeaf78088ec63a4b8d008c8f5540"
+    },
+    {
+      "case": "case-5-clear",
+      "identical": true,
+      "max_error": 0.0,
+      "sha256": "3859b040e552ea9b2d1d2d8e4ce42654cfa160efddb76e822119dc171f94e94e"
+    },
+    {
+      "case": "case-6-none",
+      "identical": true,
+      "max_error": 0.0,
+      "sha256": "e0795953fe33be3438cadb7b6fdd619941cc62f3637c89e26d524026df996dec"
+    },
+    {
+      "case": "case-7-sensor",
+      "identical": true,
+      "max_error": 0.0,
+      "sha256": "209acabf972c3ce7391026088c2f63f1b17639c358d02ec9164b1208667e6667"
+    }
+  ],
+  "scope": "shipping C++ bridge vs independent RAWR; same host GPU; Android asset IO stubbed"
+}

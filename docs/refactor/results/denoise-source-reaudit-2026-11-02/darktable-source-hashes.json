@@ -1,0 +1,6 @@
+{
+  "src/iop/denoiseprofile.c": "4fd3ee664a9a2b785e9c76df6f3b9c3d28c7109e67301da3d0ec3e7e659c39ab",
+  "data/kernels/denoiseprofile.cl": "2b1ca83d35340fa4d47a46844e7464c90e4ddfcf19d061e66e58877bacbd48ed",
+  "data/kernels/common.h": "43d834e48e5bc3b5d3c9e92b1275a83c935505d799bb85dab5164dac6545212f",
+  "src/common/eaw.c": "01a1e0462cfc6f7a6beb7ac35f05823306076d1a14f73e1b02f2043b7eed2c9f"
+}

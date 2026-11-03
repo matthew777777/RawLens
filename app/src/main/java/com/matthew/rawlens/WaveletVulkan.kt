@@ -53,8 +53,8 @@ object WaveletVulkan {
 
     /**
      * Full wavelet denoise. [noiseA]/[noiseB] are the normalized green
-     * variance slope/offset (see [WaveletDenoiser.greenNoiseNormalized]);
-     * [wbGains] are camera WB multipliers with green == 1.
+     * variance slope/offset (see [WaveletDenoiser.noiseAB]);
+     * [wbGains] preserve Camera2 gain scale, with both greens averaged (RAWR).
      */
     fun process(
         handle: Long,
@@ -80,7 +80,7 @@ object WaveletVulkan {
     fun lastGpuMs(handle: Long): Double = nativeLastGpuMs(handle)
 
     external fun captureSharpen(
-        handle: Long, pixels: ByteBuffer, w: Int, h: Int, wb: FloatArray, cfa: Int, iterations: Int
+        handle: Long, pixels: ByteBuffer, w: Int, h: Int, wb: FloatArray, cfa: Int, iterations: Int, clipState: ByteBuffer? = null
     )
 
     private external fun nativeInit(assetManager: AssetManager): Long

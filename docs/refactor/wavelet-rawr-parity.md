@@ -1,8 +1,44 @@
 # Photo profiled wavelet: RAWR parity audit (2026-11-01)
 
+## Follow-up: exact RAWR integration requested (2026-11-02)
+
+The Camera2 adapter correction described below is now superseded by an explicit
+request for RAWR behavior. Noise coefficients again use RAWR GreenNoiseToNormalized
+(including raw-range conversion and acceptance rules). Denoise WB now uses
+COLOR_CORRECTION_GAINS with both greens averaged and absolute scale preserved.
+See `denoise-source-reaudit-2026-11-02.md` for the implementation follow-up.
+
+
 Reference: https://github.com/adityawarmanfw/rawr at
 `537852ec0e109f78fb4ed54bc6a692d9c7cfca92`.
 Scope: existing photo denoiser, as confirmed by the user; video is excluded.
+
+## Camera2 integration correction (2026-11-01)
+
+The initial audit below missed a units mismatch. Its core source/GPU evidence
+remains valid for identical normalized coefficients, but did not prove the
+Camera2 metadata adapter was correct. Commit 0162125 accepted eight-value
+profiles and applied a raw-DN conversion to already-normalized coefficients.
+Previously, eight-value profiles took the six-value-only adapter's fixed fallback.
+This change could therefore reduce denoising substantially while still recording
+successful GPU execution.
+
+[SENSOR_NOISE_PROFILE](https://developer.android.com/reference/android/hardware/camera2/CaptureResult#SENSOR_NOISE_PROFILE)
+models noise for signal x in [0,1]. The corrected adapter averages the two
+CFA green S/O pairs and passes them directly to noiseA/noiseB. Black/white
+levels are validated but no longer rescale the coefficients. Invalid, negative,
+non-finite or all-zero green coefficients bypass denoise. No fixed noise model
+is fabricated. Native sources and shaders remain unchanged.
+
+Regression coverage uses a known normalized mid-gray variance across 10-, 12-
+and 14-bit normalization ranges, all four CFA layouts, invalid coefficients,
+and non-finite levels. Logs now include Detail, Luma, Chroma and noiseA/noiseB,
+and an explicit warning when enabled wavelet denoise bypasses an invalid profile.
+
+## Initial parity audit (superseded metadata claims)
+
+The noise-offset and normalization-black rows below describe the initial raw-DN
+mapping, not the corrected Camera2 adapter above.
 
 ## Corrections
 

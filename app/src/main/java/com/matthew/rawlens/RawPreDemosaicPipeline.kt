@@ -272,7 +272,11 @@ object RawPreDemosaicPipeline {
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         val shadingStatus = lensShadingStatus(metadata)
         val shading = lensShadingModel(metadata)
-        val corrected = LensShadingCorrector.applyOwnedInPlace(input, shading)
+        val sensorInput = if (input.captureSharpeningClipState == null && !metadata.quadBayer &&
+            input.width % 2 == 0 && input.height % 2 == 0) {
+            input.copy(captureSharpeningClipState = CaptureSharpeningClipState.fromSensorCfa(input))
+        } else input
+        val corrected = LensShadingCorrector.applyOwnedInPlace(sensorInput, shading)
         val shadingAt = SystemClock.elapsedRealtime()
         val defectStats = RawDefectCorrector.correctInPlace(
             corrected.cfa,

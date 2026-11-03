@@ -11,7 +11,7 @@ import java.nio.ByteBuffer
  * wavelet core. Input/output are pre-WB camera-linear RGBA16F direct buffers
  * (W*H*8 bytes). Noise comes from SENSOR_NOISE_PROFILE's green plane,
  * normalized exactly like GreenNoiseToNormalized; WB gains derive
- * from SENSOR_NEUTRAL_COLOR_POINT with green == 1.
+ * from COLOR_CORRECTION_GAINS, averaging both greens as in RAWR.
  */
 class WaveletDenoiser(context: Context) {
     private val assets = context.applicationContext.assets
@@ -75,17 +75,21 @@ class WaveletDenoiser(context: Context) {
         }
         val wallMs = (System.nanoTime() - startNs) / 1e6
         Log.i(TAG, "wavelet ${width}x${height} strength=${settings.strength} " +
-            "scales=${settings.maxScale} wall=${"%.0f".format(wallMs)}ms " +
+            "detail=${settings.detail} luma=${settings.forceY} chroma=${settings.forceUv} " +
+            "noiseA=$noiseA noiseB=$noiseB scales=${settings.maxScale} wall=${"%.0f".format(wallMs)}ms " +
             "gpu=${if (lastGpuMs >= 0) "%.0f".format(lastGpuMs) + "ms" else "n/a"}")
         return true
     }
 
     @Synchronized
     fun captureSharpen(pixels: ByteBuffer, width: Int, height: Int,
-                       wb: FloatArray, pattern: BayerPattern, settings: CaptureSharpeningSettings) {
+                       wb: FloatArray, pattern: BayerPattern, settings: CaptureSharpeningSettings,
+                       clipState: CaptureSharpeningClipState? = null) {
         if (!settings.enabled) return
         check(ensureInit()) { "Capture sharpening Vulkan initialization failed" }
-        WaveletVulkan.captureSharpen(handle, pixels, width, height, wb, pattern.ordinal, settings.level.iterations)
+        require(clipState == null || (clipState.width == width && clipState.height == height && clipState.pattern == pattern))
+        WaveletVulkan.captureSharpen(handle, pixels, width, height, wb, pattern.ordinal, settings.level.iterations,
+            clipState?.directBuffer())
         Log.i(TAG, "Capture sharpening ${width}x${height} ${settings.level.label} " +
             "iterations=${settings.level.iterations} cfa=$pattern gpuMs=${WaveletVulkan.lastGpuMs(handle)}")
     }
@@ -93,9 +97,9 @@ class WaveletDenoiser(context: Context) {
     companion object {
         private const val TAG = "WaveletDenoiser"
 
-        /** Float operation order mirrors RAWR GreenNoiseToNormalized/CfaNoiseToNormalized.
-         * Camera2 profile is row-major CFA (S0,O0,...,S3,O3). Invalid metadata
-         * bypasses denoise, as in RAWR; no invented fallback noise model.
+        /** Matches RAWR GreenNoiseToNormalized, including float operation order
+         * and acceptance rules. The caller supplies the mean green black level
+         * and effective white used for demosaic normalization.
          */
         fun noiseAB(
             noiseProfile: DoubleArray?, pattern: BayerPattern, black: Float, white: Float
@@ -107,16 +111,16 @@ class WaveletDenoiser(context: Context) {
             val slope = (noiseProfile[g0 * 2] + noiseProfile[g1 * 2]).toFloat() * 0.5f
             val offset = (noiseProfile[g0 * 2 + 1] + noiseProfile[g1 * 2 + 1]).toFloat() * 0.5f
             if (!slope.isFinite() || !offset.isFinite() || !(slope >= 0f)) return null
-            return greenNoiseNormalized(slope, offset, black, white)
+            val range = white - black
+            val a = if (range > 0f) slope / range else 0f
+            val b = if (range > 0f) (slope * black + offset) / (range * range) else 0f
+            return a to b
         }
 
-        fun greenNoiseNormalized(
-            slopeRaw: Float, offsetRaw: Float, black: Float, white: Float
-        ): Pair<Float, Float> {
-            val range = white - black
-            val a = if (range > 0f) slopeRaw / range else 0f
-            val b = if (range > 0f) (slopeRaw * black + offsetRaw) / (range * range) else 0f
-            return a to b
+        /** RAWR collapseRggbToRgb: preserve absolute gains, average both greens. */
+        fun rawrWhiteBalance(rggb: FloatArray?): FloatArray? {
+            if (rggb == null || rggb.size < 4 || rggb.take(4).any { !it.isFinite() || it <= 0f }) return null
+            return floatArrayOf(rggb[0], 0.5f * (rggb[1] + rggb[2]), rggb[3])
         }
 
         /**

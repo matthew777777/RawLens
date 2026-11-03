@@ -140,7 +140,7 @@ class CaptureSharpeningDeviceTest {
         whiteLevelSource = WhiteLevelSource.STATIC, pixelArraySize = 16 to 16,
         activeArray = IntRectSnapshot(0, 0, 16, 16), preCorrectionActiveArray = null,
         rawCropRegion = null, bufferGeometry = RawBufferGeometry.Supported(0, 0, RawCrop(0, 0, 16, 16), "test"),
-        lensShadingAlreadyApplied = true, lensShadingMap = null, hotPixels = emptyList(), wbGains = null,
+        lensShadingAlreadyApplied = true, lensShadingMap = null, hotPixels = emptyList(), wbGains = ImmutableFloatValues(floatArrayOf(1f, 1f, 1f, 1f)),
         neutralColorPoint = ImmutableDoubleValues(neutral), colorCorrectionTransform = null,
         colorMatrix1 = null, colorMatrix2 = null, cameraCalibration1 = null, cameraCalibration2 = null,
         forwardMatrix1 = ImmutableDoubleValues(doubleArrayOf(1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0)), forwardMatrix2 = null,

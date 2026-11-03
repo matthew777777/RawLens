@@ -1,0 +1,26 @@
+[
+  {
+    "name": "CaptureSharpeningTest",
+    "tests": 6,
+    "failures": 0,
+    "errors": 0
+  },
+  {
+    "name": "WaveletDenoiseTest",
+    "tests": 12,
+    "failures": 0,
+    "errors": 0
+  },
+  {
+    "name": "RawPreDemosaicPipelineTest",
+    "tests": 4,
+    "failures": 0,
+    "errors": 0
+  },
+  {
+    "name": "RawSensorUnpackerTest",
+    "tests": 7,
+    "failures": 0,
+    "errors": 0
+  }
+]

@@ -112,7 +112,9 @@ data class UnpackedRawCfa(
     val sensorCropLeft: Int = 0,
     val sensorCropTop: Int = 0,
     /** Null for sensor/HDR+ threshold detection; explicit unrecovered pixels for bracket HDR. */
-    val highlightClipping: CfaHighlightClipping? = null
+    val highlightClipping: CfaHighlightClipping? = null,
+    /** Original sensor clip evidence retained through LSC, AI and highlight reconstruction. */
+    val captureSharpeningClipState: CaptureSharpeningClipState? = null
 ) {
     fun requireAmazeCompatible() {
         require(width >= 4 && height >= 4 && width % 2 == 0 && height % 2 == 0) {

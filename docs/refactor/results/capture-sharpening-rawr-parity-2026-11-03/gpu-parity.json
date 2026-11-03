@@ -1,0 +1,184 @@
+{
+  "passed": true,
+  "cases": [
+    {
+      "case": {
+        "name": "preset-2-cfa-0",
+        "w": 193,
+        "h": 187,
+        "it": 2,
+        "cfa": 0
+      },
+      "identical": true,
+      "reference_sha256": "18f28c27e8c2c5ca4e49285696972b1d06fabbdf666339be19f102ee73d97c83",
+      "candidate_sha256": "18f28c27e8c2c5ca4e49285696972b1d06fabbdf666339be19f102ee73d97c83",
+      "finite": true,
+      "oracle": {
+        "max": 0.0009760856628417969,
+        "p99": 0.00047904253005981445,
+        "mean": 0.00012189292465336621,
+        "radius": 0.7268322706222534,
+        "contrast": 0.0
+      }
+    },
+    {
+      "case": {
+        "name": "preset-3-cfa-1",
+        "w": 193,
+        "h": 187,
+        "it": 3,
+        "cfa": 1
+      },
+      "identical": true,
+      "reference_sha256": "7b6dcfe9268b67473fa74c912273fcb605320f024f22fb2cef59f2b79cc68792",
+      "candidate_sha256": "7b6dcfe9268b67473fa74c912273fcb605320f024f22fb2cef59f2b79cc68792",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "preset-4-cfa-2",
+        "w": 193,
+        "h": 187,
+        "it": 4,
+        "cfa": 2
+      },
+      "identical": true,
+      "reference_sha256": "0fd021d61c1299dda6e286a37a2e5bccdd103ea2b53bb271a5342ed080409de0",
+      "candidate_sha256": "0fd021d61c1299dda6e286a37a2e5bccdd103ea2b53bb271a5342ed080409de0",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "preset-6-cfa-3",
+        "w": 193,
+        "h": 187,
+        "it": 6,
+        "cfa": 3
+      },
+      "identical": true,
+      "reference_sha256": "830a0e32238478e9067490080f86f30494d6520aa4b9652271c94cf9dc1b6f41",
+      "candidate_sha256": "830a0e32238478e9067490080f86f30494d6520aa4b9652271c94cf9dc1b6f41",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "kernel-0.45",
+        "w": 191,
+        "h": 185,
+        "it": 6,
+        "cfa": 0,
+        "radius": 0.45,
+        "manual": true
+      },
+      "identical": true,
+      "reference_sha256": "8f7605f164aceb4ef33cbb52ea920a81ceca5347104f5ec3dc6deec9018ef20d",
+      "candidate_sha256": "8f7605f164aceb4ef33cbb52ea920a81ceca5347104f5ec3dc6deec9018ef20d",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "kernel-0.8",
+        "w": 191,
+        "h": 185,
+        "it": 6,
+        "cfa": 0,
+        "radius": 0.8,
+        "manual": true
+      },
+      "identical": true,
+      "reference_sha256": "2536efa0a1afde9353f3d70f80d233fe1bb5b92926834be6ef281e08f86bb8f1",
+      "candidate_sha256": "2536efa0a1afde9353f3d70f80d233fe1bb5b92926834be6ef281e08f86bb8f1",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "kernel-1.1",
+        "w": 191,
+        "h": 185,
+        "it": 6,
+        "cfa": 0,
+        "radius": 1.1,
+        "manual": true
+      },
+      "identical": true,
+      "reference_sha256": "913463ed56f46159a3a549dee2df6772bd878c25abb4eb3d860f7e9ad690a614",
+      "candidate_sha256": "913463ed56f46159a3a549dee2df6772bd878c25abb4eb3d860f7e9ad690a614",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "kernel-1.3",
+        "w": 191,
+        "h": 185,
+        "it": 6,
+        "cfa": 0,
+        "radius": 1.3,
+        "manual": true
+      },
+      "identical": true,
+      "reference_sha256": "0aa7f8db0ba97f33631ac7175eaae7a4f402206a33c06c1d9e57c00f34da42cc",
+      "candidate_sha256": "0aa7f8db0ba97f33631ac7175eaae7a4f402206a33c06c1d9e57c00f34da42cc",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "kernel-1.6",
+        "w": 191,
+        "h": 185,
+        "it": 6,
+        "cfa": 0,
+        "radius": 1.6,
+        "manual": true
+      },
+      "identical": true,
+      "reference_sha256": "2ff08cef33c7bea95d76aa19456af3edb945daaf41178043c58083793b647780",
+      "candidate_sha256": "2ff08cef33c7bea95d76aa19456af3edb945daaf41178043c58083793b647780",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "offset-unlimited",
+        "w": 237,
+        "h": 219,
+        "it": 12,
+        "cfa": 0,
+        "radius": 1.2,
+        "manual": true,
+        "offset": 0.7,
+        "check": 0
+      },
+      "identical": true,
+      "reference_sha256": "6667e0ffbff453fd2558d6e0e7b5df7c07e48803c9e3b491e8f2bbc94a7f3dea",
+      "candidate_sha256": "6667e0ffbff453fd2558d6e0e7b5df7c07e48803c9e3b491e8f2bbc94a7f3dea",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "strips-bands",
+        "w": 521,
+        "h": 519,
+        "it": 6,
+        "cfa": 0,
+        "strip": 93780,
+        "band": 2
+      },
+      "identical": true,
+      "reference_sha256": "afc94524880d9640eec3239ad65dc8927543e8d75c114593a81a6a5a71123ea3",
+      "candidate_sha256": "afc94524880d9640eec3239ad65dc8927543e8d75c114593a81a6a5a71123ea3",
+      "finite": true
+    },
+    {
+      "case": {
+        "name": "full-resolution",
+        "w": 4208,
+        "h": 3120,
+        "it": 6,
+        "cfa": 0
+      },
+      "identical": true,
+      "reference_sha256": "6be8cd9cb845034a0c65e51f9714a6d18bd05a3be25a99ce0582740eb96b48cb",
+      "candidate_sha256": "6be8cd9cb845034a0c65e51f9714a6d18bd05a3be25a99ce0582740eb96b48cb",
+      "finite": true
+    }
+  ]
+}

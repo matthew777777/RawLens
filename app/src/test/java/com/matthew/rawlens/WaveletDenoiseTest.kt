@@ -59,11 +59,24 @@ class WaveletDenoiseTest {
         assertEquals(0f, b.forceUv, 0f)
     }
 
-    @Test fun greenNoiseNormalizationMatchesReference() {
-        // RAWR: a = S/range, b = (S*black+O)/range^2.
-        val (a, b) = WaveletDenoiser.greenNoiseNormalized(0.5f, 0.25f, 64f, 1088f)
-        assertEquals((0.5 / 1024.0).toFloat(), a, 0f)
-        assertEquals(((0.5 * 64 + 0.25) / (1024.0 * 1024.0)).toFloat(), b, 0f)
+    @Test fun noiseConversionMatchesRawrAtEveryBitDepth() {
+        val profile = doubleArrayOf(0.002, 0.00002, 0.004, 0.00004,
+            0.006, 0.00006, 0.008, 0.00008)
+        for ((black, white) in listOf(64f to 1023f, 256f to 4095f, 1024f to 16383f)) {
+            val actual = requireNotNull(WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, black, white))
+            val range = white - black
+            assertEquals(0.005f / range, actual.first, 0f)
+            assertEquals((0.005f * black + 0.00005f) / (range * range), actual.second, 0f)
+        }
+    }
+
+    @Test fun rawrWhiteBalancePreservesGainScaleAndAveragesGreens() {
+        assertArrayEquals(floatArrayOf(4f, 2f, 3f),
+            WaveletDenoiser.rawrWhiteBalance(floatArrayOf(4f, 1.5f, 2.5f, 3f)), 0f)
+        assertNull(WaveletDenoiser.rawrWhiteBalance(null))
+        assertNull(WaveletDenoiser.rawrWhiteBalance(floatArrayOf(1f, 1f, 1f)))
+        assertNull(WaveletDenoiser.rawrWhiteBalance(floatArrayOf(1f, Float.NaN, 1f, 1f)))
+        assertNull(WaveletDenoiser.rawrWhiteBalance(floatArrayOf(1f, 0f, 1f, 1f)))
     }
 
     @Test fun wbGainsNormalizeGreen() {
@@ -89,12 +102,28 @@ class WaveletDenoiseTest {
         val profile = doubleArrayOf(1.0, 0.1, 2.0, 0.2, 4.0, 0.4, 8.0, 0.8)
         for (pattern in BayerPattern.entries) {
             val edgeGreen = pattern == BayerPattern.GRBG || pattern == BayerPattern.GBRG
-            val expected = WaveletDenoiser.greenNoiseNormalized(
-                if (edgeGreen) 4.5f else 3f, if (edgeGreen) 0.45f else 0.3f, 64f, 1088f)
-            assertEquals(expected, WaveletDenoiser.noiseAB(profile, pattern, 64f, 1088f))
+            val expected = (if (edgeGreen) 4.5f else 3f) to
+                (if (edgeGreen) 0.45f else 0.3f)
+            val actual = requireNotNull(WaveletDenoiser.noiseAB(profile, pattern, 64f, 1088f))
+            assertEquals(expected.first / 1024f, actual.first, 0f)
+            assertEquals((expected.first * 64f + expected.second) / (1024f * 1024f), actual.second, 0f)
         }
         profile[2] = Double.NaN
         assertNull(WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, 64f, 1088f))
+    }
+
+    @Test fun invalidRawrCoefficientsBypass() {
+        for (pair in listOf(-0.001 to 0.0001,
+            Double.NaN to 0.0001, 0.001 to Double.POSITIVE_INFINITY)) {
+            val profile = DoubleArray(8) { if (it % 2 == 0) pair.first else pair.second }
+            assertNull(WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, 64f, 1023f))
+        }
+        val profile = DoubleArray(8) { if (it % 2 == 0) 0.001 else 0.0001 }
+        assertEquals(0f to 0f, WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, 64f, Float.POSITIVE_INFINITY))
+        assertEquals(0f to 0f, WaveletDenoiser.noiseAB(DoubleArray(8), BayerPattern.RGGB, 64f, 1023f))
+        val negativeOffset = DoubleArray(8) { if (it % 2 == 0) 0.001 else -0.0001 }
+        assertTrue(WaveletDenoiser.noiseAB(negativeOffset, BayerPattern.RGGB, 64f, 1023f) != null)
+        assertNull(WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, Float.NaN, 1023f))
     }
 
     @Test fun cfaModelGreenPlaneMatchesNoiseProfile() {

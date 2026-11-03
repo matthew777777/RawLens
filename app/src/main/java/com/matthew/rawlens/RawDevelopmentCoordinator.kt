@@ -266,6 +266,9 @@ class RawDevelopmentCoordinator(context: Context) {
             cpuCfa = requireNotNull(preDemosaic.cfa)
             preparedAt = SystemClock.elapsedRealtime()
         }
+        val captureClip = if (settings.denoise.captureSharpening.enabled && !metadata.quadBayer && packedFormat == null) {
+            CaptureSharpeningClipState.fromRawSensor(rawPlane, requireNotNull(layout), normalization, geometry.processingCrop)
+        } else cpuCfa?.captureSharpeningClipState
         // Direct RAW sampling avoids materializing a 50 MB FloatArray just for exposure metering.
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
@@ -308,7 +311,7 @@ class RawDevelopmentCoordinator(context: Context) {
                     settings.denoise.wavelet, settings.denoise.captureSharpening,
                     normalization.sensorPattern.shifted(
                         geometry.sensorOriginX + geometry.processingCrop.left,
-                        geometry.sensorOriginY + geometry.processingCrop.top), consume
+                        geometry.sensorOriginY + geometry.processingCrop.top), clipState = captureClip, consume = consume
                 )
             } else {
                 consume(SceneLinearGpuFrame(output, preDemosaic, transform))
@@ -411,6 +414,7 @@ class RawDevelopmentCoordinator(context: Context) {
         settings: WaveletSettings,
         sharpening: CaptureSharpeningSettings,
         pattern: BayerPattern,
+        clipState: CaptureSharpeningClipState? = preDemosaic.cfa?.captureSharpeningClipState,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
         val t0 = SystemClock.elapsedRealtime()
@@ -431,20 +435,25 @@ class RawDevelopmentCoordinator(context: Context) {
             metadata.noiseProfile?.toDoubleArray(), normalization.sensorPattern,
             black, normalization.whiteLevel
         )
-        val wb = FloatArray(3) { transform.whiteBalance[it].toFloat() }.let { gains ->
-            val g = gains[1].takeIf { it.isFinite() && it > 0f } ?: 1f
-            floatArrayOf(gains[0] / g, 1f, gains[2] / g)
+        val denoiseWb = WaveletDenoiser.rawrWhiteBalance(metadata.wbGains?.toFloatArray())
+        if (sharpening.enabled) {
+            waveletDenoiser.captureSharpen(camera, output.width, output.height,
+                CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray()),
+                pattern, sharpening, clipState)
         }
-        waveletDenoiser.captureSharpen(camera, output.width, output.height, wb, pattern, sharpening)
         val reconstructed = camera
         val t2 = SystemClock.elapsedRealtime()
         try {
             // Native stages the complete input before processing, then copies
             // output back only after a successful GPU wait. Reuse this owned
             // readback buffer: ~100 MiB less live memory for a 13 MP frame.
-            if (settings.enabled && settings.strength > 0f && noise != null) waveletDenoiser.process(
+            if (settings.enabled && settings.strength > 0f && (noise == null || denoiseWb == null)) {
+                Log.w(LOG_TAG, "Wavelet bypass: missing or invalid RAWR noise profile/WB gains " +
+                    "entries=${metadata.noiseProfile?.size ?: 0}")
+            }
+            if (settings.enabled && settings.strength > 0f && noise != null && denoiseWb != null) waveletDenoiser.process(
                 reconstructed, reconstructed, output.width, output.height,
-                settings.bounded(), noise.first, noise.second, wb
+                settings.bounded(), noise.first, noise.second, denoiseWb
             )
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
@@ -468,6 +477,11 @@ class RawDevelopmentCoordinator(context: Context) {
         return result
     }
 
+    private fun sharpeningClipState(cfa: UnpackedRawCfa): CaptureSharpeningClipState? =
+        cfa.captureSharpeningClipState ?: cfa.highlightClipping?.let {
+            CaptureSharpeningClipState.fromSensorCfa(cfa)
+        }
+
     private fun capturePattern(metadata: RawFrameMetadata): BayerPattern {
         val pattern = requireNotNull(metadata.normalizationOrNull()).sensorPattern
         val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported ?: return pattern
@@ -479,14 +493,16 @@ class RawDevelopmentCoordinator(context: Context) {
     private fun <T> consumeCaptureSharpened(
         output: AmazeGpuOutput, transform: ResolvedSceneLinearTransform,
         pattern: BayerPattern, sharpening: CaptureSharpeningSettings,
+        metadata: RawFrameMetadata,
+        clipState: CaptureSharpeningClipState? = null,
         externalContext: Boolean = false,
         consume: (AmazeGpuOutput) -> T
     ): T {
         if (!sharpening.enabled) return consume(output)
         require(output.colorDomain == AmazeColorDomain.CAMERA_LINEAR)
         val pixels = if (externalContext) amaze.readbackHalfFloatCurrentContext(output) else amaze.readbackHalfFloat(output)
-        val wb = FloatArray(3) { transform.whiteBalance[it].toFloat() }
-        waveletDenoiser.captureSharpen(pixels, output.width, output.height, wb, pattern, sharpening)
+        val wb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
+        waveletDenoiser.captureSharpen(pixels, output.width, output.height, wb, pattern, sharpening, clipState)
         return if (externalContext) amaze.transformCameraLinearFromExternalContext(
             pixels, output.width, output.height, transform.glslColumnMajorMatrix(), consume)
         else amaze.transformCameraLinear(pixels, output.width, output.height,
@@ -765,7 +781,8 @@ class RawDevelopmentCoordinator(context: Context) {
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern
+                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern,
+                            sharpeningClipState(cfa)
                         ) { frame -> finishJpeg(frame.texture, outputSettings) }
                     }
                 } else {
@@ -859,7 +876,7 @@ class RawDevelopmentCoordinator(context: Context) {
             ) { output ->
                 if (output.colorDomain == AmazeColorDomain.CAMERA_LINEAR) {
                     consumeCaptureSharpened(output, transform, reconstructed.pattern,
-                        settings.denoise.captureSharpening) { aces -> finishJpeg(aces, developOutput) }
+                        settings.denoise.captureSharpening, metadata, sharpeningClipState(cfa)) { aces -> finishJpeg(aces, developOutput) }
                 } else if (output.internalFormat == AmazeTextureFormat.RGBA8) {
                     jpegOutput.processEncoded(output, developOutput)
                 } else {
@@ -901,7 +918,7 @@ class RawDevelopmentCoordinator(context: Context) {
         ) { output ->
             consumeCaptureSharpened(output, transform,
                 capturePattern(metadata),
-                settings.denoise.captureSharpening) { aces -> jpegOutput.process(aces, outputSettings) }
+                settings.denoise.captureSharpening, metadata) { aces -> jpegOutput.process(aces, outputSettings) }
         }
     }
 
@@ -963,7 +980,7 @@ class RawDevelopmentCoordinator(context: Context) {
                 val metadata = input.referenceMetadata
                 val transform = SceneLinearColorProcessor.resolve(SceneLinearColorMetadata.from(metadata), settings.exposureEv)
                 val pattern = capturePattern(metadata).shifted(input.crop.left, input.crop.top)
-                consumeCaptureSharpened(scene, transform, pattern, settings.denoise.captureSharpening, externalContext = true) {
+                consumeCaptureSharpened(scene, transform, pattern, settings.denoise.captureSharpening, metadata, externalContext = true) {
                     aces -> jpegOutput.process(aces, outputSettings)
                 }
             } else mergedJpegOutput.process(scene, outputSettings)
@@ -1158,7 +1175,8 @@ class RawDevelopmentCoordinator(context: Context) {
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern
+                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern,
+                            sharpeningClipState(cfa)
                         ) { frame -> finishJxl(frame.texture, look, jxl) }
                     }
                 } else {
@@ -1233,7 +1251,7 @@ class RawDevelopmentCoordinator(context: Context) {
             ) { output ->
                 if (output.colorDomain == AmazeColorDomain.CAMERA_LINEAR) {
                     consumeCaptureSharpened(output, transform, reconstructed.pattern,
-                        settings.denoise.captureSharpening) { aces -> finishJxl(aces, lookCapped, jxl) }
+                        settings.denoise.captureSharpening, metadata, sharpeningClipState(cfa)) { aces -> finishJxl(aces, lookCapped, jxl) }
                 } else finishJxl(output, lookCapped, jxl)
             }
         }
@@ -1267,7 +1285,7 @@ class RawDevelopmentCoordinator(context: Context) {
         ) { output ->
             consumeCaptureSharpened(output, transform,
                 capturePattern(metadata),
-                settings.denoise.captureSharpening) { aces -> finishJxl(aces, look, jxl) }
+                settings.denoise.captureSharpening, metadata) { aces -> finishJxl(aces, look, jxl) }
         }
     }
 

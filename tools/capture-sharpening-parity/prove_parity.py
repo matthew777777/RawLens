@@ -62,7 +62,7 @@ def main():
     files=[]
     for prefix in ['capture_sharpening','vk_common','shader_common']:
         for local in sorted((NATIVE/prefix).rglob('*')):
-            if not local.is_file():continue
+            if not local.is_file() or "__pycache__" in local.parts:continue
             relative=local.relative_to(NATIVE)
             original=ref/relative
             same=local.read_bytes()==original.read_bytes()

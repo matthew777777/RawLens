@@ -13,13 +13,82 @@ and shaders are byte-identical to the pinned RAWR checkout. The sole shared
 Vulkan-helper adaptation replaces an untyped null in `std::exchange` with
 `VkDevice{}` so the same code compiles on armeabi-v7a. It changes no arithmetic.
 
+## Integration re-audit (2026-11-03)
+
+Reference refreshed against current RAWR HEAD
+`e7c844192008e1006d48ef85d931bf298e928192` (unchanged from the 2026-11-02
+fetch). All 35 checked module/helper files still match, except the documented
+non-arithmetic typed-null Vulkan adaptation. All eleven compiled shader
+binaries match independently compiled RAWR binaries.
+
+The enabled sharpening stage now uses Camera2 COLOR_CORRECTION_GAINS directly,
+collapsing RGGB to RGB by averaging both greens. It no longer uses the final
+color transform's calibrated WB. Missing/short gains default to unity, matching
+RAWR FrameMetadataSnapshot; present invalid gains are rejected. The core
+normalizes gain ratios internally as upstream does.
+
+Original sensor clipping is now supplied where available. RAW_SENSOR inputs
+are classified before LSC/WB/reconstruction at RAWR's 0.995 threshold, with
+R/G1/G2/B bit labels and per-2x2 R16_UINT layout. The classifier honors buffer
+position, row/pixel stride, crop origin, Bayer phase and per-site black levels;
+it retains the GPU demosaic route without allocating a float CFA. CPU CFA
+preprocessing also retains clip evidence before lens correction; CFA copies
+preserve it through AI and highlight reconstruction. Bracket merge provenance
+can supply the mask independently of HDR radiance. JNI validates mask capacity,
+even dimensions and the Kotlin facade validates matching dimensions/phase.
+The host uploads, transitions and binds the mask to unchanged RAWR shaders.
+
+Sharpening defaults **off**, as explicitly requested by the user on 2026-11-03.
+The enabled Low/Medium/Sharp/Sharpest presets remain RAWR's 2/3/4/6 iterations.
+Existing saved preferences are respected. This off default intentionally
+supersedes RAWR's default-on setting and the historical table below.
+
+Fresh evidence: `results/capture-sharpening-rawr-parity-2026-11-03/`:
+
+- 12 independently built core GPU cases: complete RGB bytes identical,
+  including 4208×3120, all presets/CFA patterns and strip/band cases.
+- 8 shipping C++ host bridge versus independent RAWR cases: complete RGB
+  bytes identical (maximum error zero). Covers absent, clear, channel-specific
+  and all-clipped sensor masks; non-unit green WB; all four presets/CFA patterns;
+  repeated calls and image-size changes within one host context.
+- Android application build and instrumented-test Kotlin compilation pass.
+  Focused unit tests cover presets/default off, WB defaults/green averaging,
+  sensor threshold/channel bits, crop/stride/phase, retained LSC evidence and
+  HDR provenance, plus wavelet and unpack/preprocessing regressions.
+- No phone was connected; no fresh Android GPU execution is claimed. Host
+  bridge verification stubs only Android asset IO; processing C++ is unchanged.
+
+Additional reproduction after running the core proof:
+
+```sh
+python tools/capture-sharpening-parity/prove_bridge.py \
+  --reference /path/to/rawr --proof /tmp/rawlens-capsharp-proof
+```
+
+### Remaining surrounding-pipeline limits
+
+These changes establish stage equality for identical input pixels, WB, phase,
+clip evidence and parameters. They do not make all RawLens photo development
+identical to RAWR. RawLens can reconstruct highlights in Bayer space **before**
+sharpening; the checked RAWR live capture path sharpens before its downstream
+highlight reconstruction. AI/demosaic/merge inputs can also differ. The auto
+radius reads native image samples, so original clip evidence alone cannot
+cancel differences in already-reconstructed input pixels.
+
+Imported CFAs without retained sensor evidence, merged RGB/SR and merged GPU
+textures still use RAWR's supported null-clip branch (0.95 native-sample
+classification). This branch is not equivalent to RAWR capture paths that
+supply an original sensor mask. No post-correction CFA is relabeled as original
+sensor evidence. Quad-Bayer sharpening remains bypassed. Complete capture
+parity therefore remains unproven for these surrounding paths.
+
 ## Settings
 
 Settings → Denoise → Capture sharpening exposes the same settings as RAWR:
 
 | Control | Values |
 |---|---|
-| Enabled | On by default, matching RAWR's persisted settings model |
+| Enabled | Off by default (user override, 2026-11-03); RAWR defaults on |
 | Strength | Low: 2; Medium: 3; Sharp: 4; Sharpest: 6 iterations |
 
 The native defaults remain auto radius on, radius 0.75, corner offset 0,
@@ -102,7 +171,7 @@ WB, Bayer phase and native parameters. Cross-vendor GPU equality and equality
 of complete developed RAWR/RawLens photos are not claimed; their demosaicers,
 highlight reconstruction and output rendering differ.
 
-RawLens currently uses RAWR's supported null-clip-state branch, which detects
+The initial port used RAWR's supported null-clip-state branch, which detects
 clipped sites from native demosaiced samples at 0.95 of white. It does not bind
 RAWR's optional separately retained pre-LSC sensor-clip image. With lens shading
 or reconstructed highlights, that branch can choose a different clipping mask

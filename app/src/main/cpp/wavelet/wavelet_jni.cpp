@@ -108,14 +108,20 @@ Java_com_matthew_rawlens_WaveletVulkan_nativeLastGpuMs(JNIEnv* /*env*/, jobject 
 
 }  // extern "C"
 
-extern "C" int capture_sharpen_process(WaveletContext*, uint8_t*, int, int, const float*, int, int, char*, int);
+extern "C" int capture_sharpen_process(WaveletContext*, uint8_t*, int, int, const float*, int, int, const uint8_t*, char*, int);
 extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_WaveletVulkan_captureSharpen(
     JNIEnv* env, jobject, jlong handle, jobject pixels, jint w, jint h,
-    jfloatArray wb, jint cfa, jint iterations) {
+    jfloatArray wb, jint cfa, jint iterations, jobject clipState) {
     auto* ptr = static_cast<uint8_t*>(env->GetDirectBufferAddress(pixels));
     if (!ptr || w < 64 || h < 64 || w > 16384 || h > 16384 ||
         env->GetDirectBufferCapacity(pixels) < jlong(w)*h*8 || !wb || env->GetArrayLength(wb) < 3) {
         throw_runtime(env, "invalid capture sharpening buffer/extent/WB");
+        return;
+    }
+    const auto* clip = clipState ? static_cast<const uint8_t*>(env->GetDirectBufferAddress(clipState)) : nullptr;
+    if (clipState && (!clip || (w & 1) || (h & 1) ||
+        env->GetDirectBufferCapacity(clipState) != jlong(w / 2) * (h / 2) * 2)) {
+        throw_runtime(env, "invalid capture sharpening sensor clip state");
         return;
     }
     float gains[3];
@@ -123,6 +129,6 @@ extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_WaveletVulkan_capture
     if (env->ExceptionCheck()) return;
     char error[512];
     if (capture_sharpen_process(reinterpret_cast<WaveletContext*>(handle), ptr, w, h,
-                               gains, cfa, iterations, error, sizeof error) != 0)
+                               gains, cfa, iterations, clip, error, sizeof error) != 0)
         throw_runtime(env, error);
 }

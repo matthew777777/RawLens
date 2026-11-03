@@ -1,5 +1,14 @@
 # Upstream provenance: RAWR raw_denoise
 
+## Integration update (2026-11-02)
+
+At the user’s explicit request, RawLens now mirrors RAWR’s Camera2 noise
+adapter: average green S/O, then a=S/range and b=(S*black+O)/range², with
+the same acceptance rules. Denoise WB uses actual COLOR_CORRECTION_GAINS,
+averaging both greens without normalizing green to 1. The normalized-pass-through
+adapter described later in this historical note has been superseded.
+
+
 Source: https://github.com/adityawarmanfw/rawr
 
 Originally vendored 2026-10-11 at 87c2209. Re-audited and restored to exact
@@ -27,8 +36,11 @@ RawLens-specific integration remains: `wavelet_host.*`, JNI, Kotlin facade,
 metadata/settings adapters and camera-linear readback/upload. Photo settings
 mirror RAWR: strength 0–8 step 0.1, detail 0–1.8 step 0.05 (VST shadows),
 luma 0–1 step 0.05 (forceY, independent of detail), scales 1–7; chroma 0.75.
-Noise profile selection/normalization follows RAWR's CFA-aware green-site
-average and black-level term; invalid/missing profiles bypass denoise.
+Noise selection averages the CFA green sites. Camera2 SENSOR_NOISE_PROFILE
+coefficients are already normalized and pass directly to the core; the
+raw-DN/black-level conversion in RAWR's helper must not be applied again.
+This Camera2 adapter deliberately differs from the pinned RAWR integration.
+Invalid/missing profiles bypass denoise.
 
 Reproduce source and same-GPU byte parity:
 
