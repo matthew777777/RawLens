@@ -27,7 +27,7 @@ layout(set = 0, binding = 1, rgba16f) readonly uniform image2D residueImg;
 layout(set = 0, binding = 2, std430) writeonly buffer OutBuf {
     uvec2 outTexels[];
 };
-// RawLens step 1: low-res chroma correction (xy = dU, dV), tile-local 1/4 grid.
+// RawLens step 1: low-res luma->chroma model (aU, bU, aV, bV), tile-local 1/4 grid.
 layout(set = 0, binding = 3, rgba32f) readonly uniform image2D lrCorr;
 // RawLens step 2: exact unbiased inverse VST tables. Header: y0[3], dy[3],
 // pad[2]; then 3 x lutN entries (true linear level per uniform VST step).
@@ -55,6 +55,9 @@ layout(push_constant) uniform Parameters {
     int lrOY;
     int lrNW;       // global 1/4-grid extent (frame blocks), for edge clamping
     int lrNH;
+    float neutral;  // RawLens step 5a: neutral colour at luma dips (0 = off)
+    float despeckT; // RawLens step 5b: |v| = 3 x luma noise sigma (VST units);
+                    // v > 0: despeckle on (threshold v), v < 0: sigma only
 }
 p;
 
@@ -85,27 +88,33 @@ float exactInverse(int c, float t, float alg) {
 }
 
 // Bilinear low-res correction, block centres at 4i + 1.5, clamped to frame blocks.
-vec2 lowresAt(ivec2 g) {
+vec4 lowresAt(ivec2 g) {
     vec2 u = (vec2(g) - 1.5) * 0.25;
     ivec2 i0 = ivec2(floor(u));
     vec2 fr = u - vec2(i0);
     ivec2 lo = ivec2(0), hi = ivec2(p.lrNW - 1, p.lrNH - 1);
     ivec2 a0 = clamp(i0, lo, hi) - ivec2(p.lrOX, p.lrOY);
     ivec2 a1 = clamp(i0 + 1, lo, hi) - ivec2(p.lrOX, p.lrOY);
-    vec2 v00 = imageLoad(lrCorr, ivec2(a0.x, a0.y)).xy, v10 = imageLoad(lrCorr, ivec2(a1.x, a0.y)).xy;
-    vec2 v01 = imageLoad(lrCorr, ivec2(a0.x, a1.y)).xy, v11 = imageLoad(lrCorr, ivec2(a1.x, a1.y)).xy;
+    vec4 v00 = imageLoad(lrCorr, ivec2(a0.x, a0.y)), v10 = imageLoad(lrCorr, ivec2(a1.x, a0.y));
+    vec4 v01 = imageLoad(lrCorr, ivec2(a0.x, a1.y)), v11 = imageLoad(lrCorr, ivec2(a1.x, a1.y));
     return mix(mix(v00, v10, fr.x), mix(v01, v11, fr.x), fr.y);
 }
 
-void main() {
-    uint lx = gl_GlobalInvocationID.x;
-    uint ly = gl_GlobalInvocationID.y;
-    if (lx >= p.tileW || ly >= p.tileH) return;
-    ivec2 tq = ivec2(p.halo + lx, p.halo + ly);
-    vec3 yuv = imageLoad(accumImg, tq).rgb + imageLoad(residueImg, tq).rgb;
-    if (p.lrWeight > 0.0) {
-        yuv.yz += p.lrWeight * lowresAt(ivec2(p.outOriginX + lx, p.outOriginY + ly));
+// Rank 4 of 8 (upper median), matching numpy sort()[4].
+float rank4(float v[8]) {
+    float m = 0.0;
+    for (int i = 0; i < 8; i++) {
+        int below = 0, same = 0;
+        for (int j = 0; j < 8; j++) {
+            below += v[j] < v[i] ? 1 : 0;
+            same += (v[j] == v[i] && j < i) ? 1 : 0;
+        }
+        if (below + same == 4) m = v[i];
     }
+    return m;
+}
+
+vec3 invVst(vec3 yuv) {
     vec3 rgb = p.toRgb * yuv;
     vec3 pv = vec3(p.p0, p.p1, p.p2);
     vec3 expon = 1.0 / (1.0 - pv * 0.5);
@@ -117,6 +126,122 @@ void main() {
         out_ = vec3(exactInverse(0, rgb.x, out_.x), exactInverse(1, rgb.y, out_.y),
                     exactInverse(2, rgb.z, out_.z));
     }
+    return out_;
+}
+
+void main() {
+    uint lx = gl_GlobalInvocationID.x;
+    uint ly = gl_GlobalInvocationID.y;
+    if (lx >= p.tileW || ly >= p.tileH) return;
+    ivec2 tq = ivec2(p.halo + lx, p.halo + ly);
+    vec3 yuv = imageLoad(accumImg, tq).rgb + imageLoad(residueImg, tq).rgb;
+    float med = yuv.x;
+    float yref = yuv.x;
+    // neutral >= 10: edge-steered luma pass + uniform grain (accum.w); the
+    // colour mode is neutral - 10.
+    bool steer = p.neutral >= 10.0;
+    float nmode = steer ? p.neutral - 10.0 : p.neutral;
+    float grain = steer ? imageLoad(accumImg, tq).a : 0.0;
+    if (nmode > 0.0 || p.despeckT != 0.0 || p.lrWeight > 0.0 || steer) {
+        float Y5[25];
+        for (int j = -2; j <= 2; j++)
+            for (int i = -2; i <= 2; i++) {
+                ivec2 o = tq + ivec2(i, j);
+                Y5[(j + 2) * 5 + i + 2] = imageLoad(accumImg, o).r + imageLoad(residueImg, o).r;
+            }
+        float n[8];
+        int k = 0;
+        for (int j = -1; j <= 1; j++)
+            for (int i = -1; i <= 1; i++)
+                if (i != 0 || j != 0) n[k++] = Y5[(j + 2) * 5 + i + 2];
+        med = rank4(n);
+        float sig = abs(p.despeckT) / 3.0;
+        if (p.despeckT != 0.0) {
+            // Colour reference luma: 5x5 mean on flat areas, the 3x3 median
+            // within 2 sigma of real luma edges (no colour bleeding across them).
+            float s5 = 0.0;
+            for (int i = 0; i < 25; i++) s5 += Y5[i];
+            s5 *= 1.0 / 25.0;
+            yref = abs(s5 - med) < 2.0 * sig ? s5 : med;
+        }
+        if (p.despeckT > 0.0) {
+            // Step 5b: isolated luma speck (both signs) on a locally flat ring.
+            float dv[8];
+            for (int i = 0; i < 8; i++) dv[i] = abs(n[i] - med);
+            if (abs(yuv.x - med) > p.despeckT && rank4(dv) < 0.5 * p.despeckT) {
+                yuv.x = med;
+                Y5[12] = med;
+            }
+        }
+        if (steer && sig > 0.0) {
+            // Step 6: edge-steered luma. Structure tensor of the denoised luma
+            // (central differences, 3x3 sum); smooth along the dominant edge
+            // (sigma 1.5), across it only on incoherent (flat) areas
+            // (sigma 1.2 -> 0.4 with coherence), range-weighted at 1.5 sigma.
+            float sxx = 0.0, sxy = 0.0, syy = 0.0;
+            for (int j = -1; j <= 1; j++)
+                for (int i = -1; i <= 1; i++) {
+                    int c = (j + 2) * 5 + i + 2;
+                    float gx = 0.5 * (Y5[c + 1] - Y5[c - 1]);
+                    float gy = 0.5 * (Y5[c + 5] - Y5[c - 5]);
+                    sxx += gx * gx; sxy += gx * gy; syy += gy * gy;
+                }
+            float tr = sxx + syy;
+            float dl = sqrt(max((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy, 0.0));
+            float l1 = 0.5 * (tr + dl), l2 = max(0.5 * (tr - dl), 0.0);
+            float coh = (l1 - l2) / max(l1 + l2, 1e-12);
+            coh *= coh;
+            vec2 tng = vec2(sxy, l1 - sxx);
+            if (dot(tng, tng) < 1e-20) tng = vec2(1.0, 0.0);
+            tng = normalize(tng);
+            float st = 1.5, sn = mix(1.2, 0.4, coh);
+            float rs = 1.5 * sig;
+            float acc = 0.0, wsum = 0.0;
+            for (int j = -2; j <= 2; j++)
+                for (int i = -2; i <= 2; i++) {
+                    vec2 d = vec2(float(i), float(j));
+                    float u = dot(d, tng), v = d.x * tng.y - d.y * tng.x;
+                    float yv = Y5[(j + 2) * 5 + i + 2];
+                    float dr = (yv - yuv.x) / rs;
+                    float w = exp(-0.5 * (u * u / (st * st) + v * v / (sn * sn)) - 0.5 * dr * dr);
+                    acc += w * yv; wsum += w;
+                }
+            yuv.x = acc / wsum;
+        }
+    }
+    yuv.x += grain;
+    if (p.lrWeight > 0.0) {
+        // Guided chroma (ESD3D2-style upsample of the 1/4-grid luma->chroma
+        // model) at the local median luma: colour follows luma edges at full
+        // resolution, without picking up the pixel's luma grain.
+        vec4 ab = lowresAt(ivec2(p.outOriginX + lx, p.outOriginY + ly));
+        yuv.yz = mix(yuv.yz, ab.xz * yref + ab.yw, p.lrWeight);
+    }
+    if (nmode >= 3.0 && med > 1e-4) {
+        // neutral 3: chroma follows the pixel's brightness in the VST domain
+        // (a pure brightness change scales Y, U, V together).
+        yuv.yz *= clamp(yuv.x / med, 0.25, 4.0);
+    }
+    vec3 out_ = invVst(yuv);
+    if (nmode > 0.0 && nmode < 3.0) {
+        // Step 5a: a luma dip through the per-channel inverse VST empties the
+        // weakest channel first (teal specks). Take the colour at the local
+        // median luma, the brightness from the pixel; only for dips.
+        vec3 ref = invVst(vec3(yref, yuv.yz));
+        const vec3 W = vec3(0.25, 0.5, 0.25);
+        float lp = dot(out_, W), lr = dot(ref, W);
+        if (lr > 1e-7) {
+            // Brightness ratio in the VST luma (white-balance aware), mapped to
+            // linear through the transform's power law; camera-space weights
+            // would shift perceived brightness on coloured detail.
+            float kk = yref > 1e-4 ? pow(max(yuv.x, 0.0) / yref, 1.0 / (1.0 - 0.5 * p.p1)) : lp / lr;
+            kk = clamp(kk, 0.0, 4.0);
+            // neutral >= 2: every pixel (luma grain both ways), else dips only.
+            float t = nmode >= 2.0 ? 1.0 : min(clamp(1.0 - kk, 0.0, 1.0) * 4.0, 1.0);
+            out_ = mix(out_, ref * kk, min(nmode, 1.0) * t);
+        }
+    }
     uint idx = (p.outOriginY + ly) * p.outStride + p.outOriginX + lx;
     outTexels[idx] = uvec2(packHalf2x16(out_.xy), packHalf2x16(vec2(out_.z, 1.0)));
 }
+

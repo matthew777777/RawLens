@@ -74,6 +74,8 @@ struct Cfg {
     float lumaScale = 1.0f;
     float impulseT = 0.0f, lowresWeight = 0.0f;
     bool exactInverse = false;
+    bool looY = false;
+    float neutral = 0.0f, despeckT = 0.0f, guideEps = 4.0f;
 };
 
 Cfg parse(int argc, char** argv) {
@@ -106,6 +108,10 @@ Cfg parse(int argc, char** argv) {
         else if (k == "--impulse") c.impulseT = std::strtof(need().c_str(), nullptr);
         else if (k == "--lowres") c.lowresWeight = std::strtof(need().c_str(), nullptr);
         else if (k == "--exact-inverse") c.exactInverse = true;
+        else if (k == "--loo-y") c.looY = true;
+        else if (k == "--guide-eps") c.guideEps = std::strtof(need().c_str(), nullptr);
+        else if (k == "--neutral") c.neutral = std::strtof(need().c_str(), nullptr);
+        else if (k == "--despeck") c.despeckT = std::strtof(need().c_str(), nullptr);
         else throw std::runtime_error("unknown arg " + k);
     }
     if (c.spvDir.empty() || c.inPath.empty() || !c.w || !c.h) throw std::runtime_error("missing args");
@@ -353,6 +359,10 @@ int main(int argc, char** argv) {
             p.impulseT = c.impulseT;
             p.lowresWeight = c.lowresWeight;
             p.exactInverse = c.exactInverse;
+            p.looY = c.looY;
+            p.neutral = c.neutral;
+            p.despeckT = c.despeckT;
+            p.guideEps = c.guideEps;
 #endif
             p.whiteBalance = {c.wb[0], c.wb[1], c.wb[2]};
             p.maxScale = c.scales;

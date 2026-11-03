@@ -416,7 +416,7 @@ DenoisePipeline::DenoisePipeline(VkPhysicalDevice physical, VkDevice device, Den
                               &im.prePipeLayout);
     im.atrLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_IMAGE},
                                        {3, STORAGE_BUFFER}, {4, STORAGE_BUFFER}, {5, STORAGE_IMAGE}},
-                              68, &im.atrPipeLayout);
+                              76, &im.atrPipeLayout);
     im.thrLayout = makeLayout(device, {{0, STORAGE_BUFFER}, {1, STORAGE_BUFFER}}, 36,
                               &im.thrPipeLayout);
     im.backLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_IMAGE}},
@@ -457,11 +457,11 @@ DenoisePipeline::DenoisePipeline(VkPhysicalDevice physical, VkDevice device, Den
         im.backBufSet = allocSet(device, im.pool, im.backBufLayout);
     }
     if (shaders.backtransformBufferRawLens.words) {
-        // + 3 low-res chroma correction, 4 inverse-VST tables; push +24 B.
+        // + 3 low-res chroma correction, 4 inverse-VST tables; push +32 B.
         im.backBufRl = makeModule(device, shaders.backtransformBufferRawLens, "denoise back buffer rl");
         im.backBufRlLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_BUFFER},
                                                  {3, STORAGE_IMAGE}, {4, STORAGE_BUFFER}},
-                                        120, &im.backBufRlPipeLayout);
+                                        128, &im.backBufRlPipeLayout);
         im.backBufRlPipe = makePipe(device, im.backBufRl, im.backBufRlPipeLayout);
         im.backBufRlSet = allocSet(device, im.pool, im.backBufRlLayout);
         void* mapped = nullptr;
@@ -765,6 +765,8 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                 float inv;
                 uint32_t mode, scaleIdx, groupsX, applyPrev, accumFirst;
                 float noiseY, noiseUv, guide, keepY, eps;
+                float looY;
+                float grainOut;
             };
             for (int scale = 0; scale < maxScale; scale++) {
                 const float sb = std::pow(varf, (float)scale);
@@ -776,11 +778,13 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                     // scale it (defaults 0.25/0.75 -> 1.0 / 1.5 fine, 3.0 coarse).
                     pa.mode = 2u;
                     pa.applyPrev = 0u;
-                    pa.eps = 4.0f;
+                    pa.eps = params.guideEps;
                     pa.accumFirst = scale == 0 ? 1u : 0u;
                     pa.noiseY = sb2 * std::max(4.0f * params.forceY * params.lumaScale, 1e-3f);
                     pa.noiseUv = sb2 * std::max((scale < 2 ? 2.0f : 4.0f) * params.forceUv, 1e-3f);
                     pa.guide = 1.0f;
+                    pa.looY = params.looY ? 1.0f : 0.0f;
+                    pa.grainOut = params.neutral >= 10.0f ? 1.0f : 0.0f;
                     const float g = std::clamp(params.grain, 0.0f, 1.0f);
                     pa.keepY = scale == 0 ? g : (scale == 1 ? 0.4f * g : 0.0f);
                     dispatch(im.atrPipe, im.atrPipeLayout, im.atrSets[scale], &pa, sizeof(pa), gx, gy);
@@ -829,7 +833,15 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                     uint32_t lutN;
                     float lrWeight;
                     int32_t lrOX, lrOY, lrNW, lrNH;
+                    float neutral, despeckT;
                 } pb{};
+                static_assert(sizeof(PB) == 128, "RawLens backtransform push block");
+                pb.neutral = rl ? params.neutral : 0.0f;
+                // Speck threshold in VST units: luma noise std = |toYuv row 0|.
+                // > 0: despeckle at despeckT sigma; otherwise -3 sigma (sigma only,
+                // for the colour reference).
+                const float sigY = std::sqrt(yuvM[0] * yuvM[0] + yuvM[1] * yuvM[1] + yuvM[2] * yuvM[2]);
+                pb.despeckT = !rl ? 0.0f : (params.despeckT > 0.0f ? params.despeckT * sigY : -3.0f * sigY);
                 pb.lutN = exactInv ? kLutN : 0u;
                 pb.lrWeight = lowres ? params.lowresWeight : 0.0f;
                 pb.lrOX = lrOX;

@@ -35,21 +35,26 @@ def estimate(x, cfa):
     h, w = x.shape
     np.repeat(x.astype(np.float16)[:, :, None], 4, 2).tofile(S + '/nm/in.f16')
     o = subprocess.check_output([REPLAY, 'est', S + '/nm/in.f16', str(w), str(h), str(CFAI[cfa])]).split()
-    return int(o[0]), float(o[1]), float(o[2]), int(o[3]), float(o[4])
+    return int(o[0]), float(o[1]), float(o[2]), int(o[3]), float(o[4]), float(o[5])
 
 
 def choose(est, prof):
     """wavelet_host choose_noise (no learned model yet: first shots)."""
-    ok, ea, eb, bins, med = est
+    ok, ea, eb, bins, med, corr = est
     a, b, src = (prof[0], prof[1], 'profile') if prof else (0, 0, 'none')
     if ok:
         x = max(med, 1e-3)
         ratio = (ea * x + eb) / max(a * x + b, 1e-12) if prof else 0
         if not prof or ratio < 0.4 or ratio > 2.5:
             a, b, src = ea, eb, 'estimate'
-    x = max(med, 1e-3); rel = np.sqrt(max(a * x + b, 0)) / x
+    x = max(med, 1e-3)
+    erel = np.sqrt(max(ea * x + eb, 0)) / x if ok else 0.0
+    tt = np.clip((erel - 0.06) / 0.06, 0, 1); tt = tt * tt * (3 - 2 * tt)
+    boost = 1 + tt * (np.clip(corr / 1.2, 1, 3) - 1)          # step 5c (host mirror)
+    pass  # boost measured, not applied (host mirror)
+    rel = np.sqrt(max(a * x + b, 0)) / x
     t = np.clip((rel - 0.04) / 0.06, 0, 1)
-    return dict(a=a, b=b, src=src, rel=rel, luma=float(np.clip(rel / 0.08, 0.4, 1)),
+    return dict(a=a, b=b, src=src, rel=rel, corr=corr, boost=boost, luma=float(np.clip(rel / 0.08, 0.4, 1)),
                 lowres=float(t * t * (3 - 2 * t)), impulse=4.0 if rel >= 0.10 else 0.0)
 
 
@@ -77,7 +82,8 @@ def run_all(img, wb, nz, prof):
     if prof:
         outs['RAWR'] = bench(img, wb, prof[0], prof[1], 0, [])
     outs['RawLens'] = bench(img, wb, nz['a'], nz['b'], 1, ['--grain', '0.25', '--luma-scale', str(nz['luma']),
-                            '--lowres', str(nz['lowres']), '--impulse', str(nz['impulse']), '--exact-inverse'])
+                            '--lowres', str(nz['lowres']), '--impulse', str(nz['impulse']), '--exact-inverse']
+                            + (['--loo-y', '--neutral', '1', '--despeck', '3'] if nz['impulse'] > 0 else []))
     t = time.time()
     outs['ESD3D2'], info = E.esd3d2(img, nz['a'], nz['b'])
     info['py_s'] = time.time() - t
@@ -125,7 +131,7 @@ for path in sys.argv[4:]:
     x, cfa, wb, prof, iso = load(path)
     nz = choose(estimate(x, cfa), prof)
     head = (f"{base} ISO {iso}: noise {nz['src']} a={nz['a']:.3g} b={nz['b']:.3g} rel={nz['rel']:.3f} "
-            f"luma={nz['luma']:.2f} lowres={nz['lowres']:.2f} impulse={nz['impulse']:.0f}")
+            f"corr={nz['corr']:.2f} boost={nz['boost']:.2f} luma={nz['luma']:.2f} lowres={nz['lowres']:.2f} impulse={nz['impulse']:.0f}")
     print(head, flush=True); report.append(head)
     if 'IMG_20261102_181122_683' in base:
         # NIGHT crops are in half-res (binned) coordinates: x2 for full res.

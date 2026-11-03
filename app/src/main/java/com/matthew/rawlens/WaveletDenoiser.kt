@@ -209,7 +209,7 @@ data class WaveletSettings(
     val grain: Float = DEFAULT_GRAIN
 ) {
     companion object {
-        const val DEFAULT_GRAIN = 0.25f
+        const val DEFAULT_GRAIN = 0.45f
     }
 
     /** RAWR: luma is independent of Detail (the VST shadow fulcrum). */

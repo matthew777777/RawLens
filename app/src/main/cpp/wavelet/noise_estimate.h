@@ -137,6 +137,88 @@ inline Estimate estimate(const uint8_t* rgbaHalf, int w, int h, int cfa) {
     return out;
 }
 
+// Spatial noise correlation (RawLens step 5c, not wired in: a noise boost from
+// it, global or coarse-band only, smeared HDR+ texture without matching
+// ESD3D2; kept for the next attempt). Merged / vendor-processed raws
+// (HDR+, multi-frame merges) carry noise correlated over a few pixels: the
+// neighbour-difference estimate above under-reads it and the per-scale white
+// noise model under-denoises the coarse bands. Ratio of the variance of 2x2
+// means of the green plane (x4) to the plain variance, both from the flattest
+// 8x8 blocks (plane-fit residual) near the median level: 1 for white noise,
+// measured ~1.0-1.4 on single-frame DNGs and 3.3-3.8 on HDR+ DNGs.
+inline float correlationRatio(const uint8_t* rgbaHalf, int w, int h, int cfa) {
+    if (!rgbaHalf || w < 256 || h < 256 || cfa < 0 || cfa > 3) return 1.0f;
+    const auto* px = reinterpret_cast<const uint16_t*>(rgbaHalf);
+    const bool diagMain = (cfa == 1 || cfa == 2);
+    // Half-res green: mean of the two green sites of each 2x2 quad.
+    const int gw = w / 2, gh = h / 2;
+    std::vector<float> g((size_t)gw * gh);
+    for (int y = 0; y < gh; y++)
+        for (int x = 0; x < gw; x++) {
+            const int x0 = 2 * x, y0 = 2 * y;
+            const int ax = diagMain ? x0 : x0 + 1, bx = diagMain ? x0 + 1 : x0;
+            g[(size_t)y * gw + x] = 0.5f * (halfToFloat(px[((size_t)y0 * w + ax) * 4 + 1]) +
+                                            halfToFloat(px[((size_t)(y0 + 1) * w + bx) * 4 + 1]));
+        }
+    auto lowVar = [](const std::vector<float>& img, int iw, int ih, float& level) {
+        constexpr int B = 8;
+        std::vector<float> means, vars;
+        for (int by = 0; by + B <= ih; by += B)
+            for (int bx = 0; bx + B <= iw; bx += B) {
+                // Plane fit z = c0 + c1*(i-3.5) + c2*(j-3.5): centred, so closed form.
+                double s = 0, sx = 0, sy = 0;
+                for (int j = 0; j < B; j++)
+                    for (int i = 0; i < B; i++) {
+                        const double v = img[(size_t)(by + j) * iw + bx + i];
+                        s += v; sx += v * (i - 3.5); sy += v * (j - 3.5);
+                    }
+                const double n = B * B, sxx = 8 * 42.0;  // sum (i-3.5)^2 over the block
+                const double c0 = s / n, c1 = sx / sxx, c2 = sy / sxx;
+                double r2 = 0;
+                for (int j = 0; j < B; j++)
+                    for (int i = 0; i < B; i++) {
+                        const double r = img[(size_t)(by + j) * iw + bx + i] - c0 - c1 * (i - 3.5) - c2 * (j - 3.5);
+                        r2 += r * r;
+                    }
+                means.push_back((float)c0);
+                vars.push_back((float)(r2 / (n - 3)));
+            }
+        if (means.size() < 64) return -1.0f;
+        std::vector<float> m = means;
+        std::nth_element(m.begin(), m.begin() + m.size() / 2, m.end());
+        level = m[m.size() / 2];
+        std::vector<float> sel;
+        for (size_t i = 0; i < means.size(); i++)
+            if (means[i] > 0.5f * level && means[i] < 2.0f * level && means[i] < 0.85f) sel.push_back(vars[i] / means[i]);
+        if (sel.size() < 32) return -1.0f;
+        const size_t k = sel.size() / 10;
+        std::nth_element(sel.begin(), sel.begin() + k, sel.end());
+        return sel[k];
+    };
+    float l1 = 0, l2 = 0;
+    const float v1 = lowVar(g, gw, gh, l1);
+    const int bw = gw / 2, bh = gh / 2;
+    std::vector<float> g2((size_t)bw * bh);
+    for (int y = 0; y < bh; y++)
+        for (int x = 0; x < bw; x++)
+            g2[(size_t)y * bw + x] = 0.25f * (g[(size_t)(2 * y) * gw + 2 * x] + g[(size_t)(2 * y) * gw + 2 * x + 1] +
+                                              g[(size_t)(2 * y + 1) * gw + 2 * x] + g[(size_t)(2 * y + 1) * gw + 2 * x + 1]);
+    const float v2 = lowVar(g2, bw, bh, l2);
+    if (!(v1 > 0.0f) || !(v2 > 0.0f)) return 1.0f;
+    const float r = 4.0f * v2 / v1;
+    return std::isfinite(r) ? r : 1.0f;
+}
+
+// Noise multiplier from the correlation ratio: dead zone up to 1.2 (single-
+// frame DNGs), capped at 3x, faded in by the shot's own relative noise at the
+// median exposure (0.06..0.12): at low noise the ratio picks up fine texture
+// instead (vivo base-ISO frames read 5-8) and extra smoothing is not needed.
+inline float correlationBoost(float ratio, float estRel) {
+    float t = std::clamp((estRel - 0.06f) / 0.06f, 0.0f, 1.0f);
+    t = t * t * (3.0f - 2.0f * t);
+    return 1.0f + t * (std::clamp(ratio / 1.2f, 1.0f, 3.0f) - 1.0f);
+}
+
 // Noise visibility (relative noise at the median exposure) -> luma strength.
 // Below ~0.08 relative noise, shrink luma progressively (down to 0.4x);
 // chroma always keeps full strength.

@@ -440,8 +440,17 @@ class WaveletHost {
         if (e.ok) {
             p.lumaScale = rawlens_noise::lumaScaleFor(p.noiseA, p.noiseB, e.medianX);
             const auto g = rawlens_noise::gatesFor(p.noiseA, p.noiseB, e.medianX);
-            p.lowresWeight = g.lowresWeight;
+            // Step 5d, every noise level: guided per-pixel chroma (1/4-grid
+            // luma->chroma model evaluated at an edge-aware smooth luma) and
+            // colour taken from that reference with the pixel's own brightness
+            // (luma grain stays neutral). gatesFor().lowresWeight is unused.
+            p.lowresWeight = 1.0f;
+            p.neutral = 12.0f;  // 10 + 2: edge-steered luma + uniform grain, linear colour
             p.impulseT = g.impulseT;
+            // Step 5b, high noise only (impulse gate): fewer single-pixel specks.
+            const bool high = g.impulseT > 0.0f;
+            p.looY = high;
+            p.despeckT = high ? 3.0f : 0.0f;
         }
         p.exactInverse = true;
         __android_log_print(ANDROID_LOG_INFO, "WaveletNoise",

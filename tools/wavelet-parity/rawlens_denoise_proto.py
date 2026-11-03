@@ -279,7 +279,7 @@ def backtransform_exact(yuv, to_rgb_f, luts, a, p, b, gate=None):
     return out.astype(F32)
 
 
-def lowres_chroma(yuv, n2y, k=4, r=4, eps=1.0, weight=1.0):
+def lowres_chroma(yuv, n2y, k=4, r=4, eps=1.0, weight=1.0, want_y=False):
     """Step 1: luma-guided chroma at 1/k resolution (guided filter, radius r),
     correction added bilinearly. Targets 3-50 px chroma mottle the per-band
     shrink leaves. n2y: luma noise variance of a k x k mean (regulariser).
@@ -305,7 +305,29 @@ def lowres_chroma(yuv, n2y, k=4, r=4, eps=1.0, weight=1.0):
     up = ((d[cy0][:, cx0] * (1 - fx) + d[cy0][:, cx1] * fx) * (1 - fy)
           + (d[cy1][:, cx0] * (1 - fx) + d[cy1][:, cx1] * fx) * fy)
     res = yuv.astype(np.float64).copy(); res[..., 1:] += weight * up
+    if want_y:  # bilinear 1/4-grid luma (step 5 neutral colour reference)
+        L = Y[..., None]
+        yup = ((L[cy0][:, cx0] * (1 - fx) + L[cy0][:, cx1] * fx) * (1 - fy)
+               + (L[cy1][:, cx0] * (1 - fx) + L[cy1][:, cx1] * fx) * fy)[..., 0]
+        return res.astype(F32), yup.astype(F32)
     return res.astype(F32)
+
+
+_RING8 = [(dy, dx) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx]
+
+
+def despeckle_y(yuv, sig, T=2.5, H=1.5):
+    """Step 5b: isolated luma specks in the VST domain (noise std sig): |Y -
+    median8| > T sig while the 8 neighbours agree (median |n - med8| < H sig).
+    Two-sided; mirrors denoise_img_backtransform_buffer_rl.comp."""
+    Y = yuv[..., 0]
+    P = np.pad(Y, 1, mode="edge"); h, w = Y.shape
+    ring = np.stack([P[1 + dy:1 + dy + h, 1 + dx:1 + dx + w] for dy, dx in _RING8], 0)
+    med = np.sort(ring, 0)[4]                     # rank 4 of 8 (= scipy / shader)
+    mad = np.sort(np.abs(ring - med), 0)[4]
+    hit = (np.abs(Y - med) > T * sig) & (mad < H * sig)
+    out = yuv.copy(); out[..., 0] = np.where(hit, med, Y)
+    return out.astype(F32), int(hit.sum())
 
 
 def noise_gates(a, b, median_x):
@@ -337,13 +359,39 @@ def denoise2(img, a_g, b_g, wb, prm, steps=(1, 2, 3), scales=7, strength=1.0):
         out += shrink("guided", det, sb2, s, prm)
         buf = coarse
     out += buf
+    rowy = (to_yuv / f)[0]
+    ysm = None
     if 1 in steps:
-        rowy = (to_yuv / f)[0]
-        out = lowres_chroma(out, float(rowy @ rowy) / 16.0, eps=prm.get("lr_eps", 1.0),
-                            weight=prm.get("lr_weight", 1.0))
+        out, ysm = lowres_chroma(out, float(rowy @ rowy) / 16.0, eps=prm.get("lr_eps", 1.0),
+                                 weight=prm.get("lr_weight", 1.0), want_y=True)
+    Yp = out[..., 0]; P_ = np.pad(Yp, 1, mode="edge"); h_, w_ = Yp.shape
+    med8 = np.sort(np.stack([P_[1 + dy:1 + dy + h_, 1 + dx:1 + dx + w_] for dy, dx in _RING8], 0), 0)[4]
+    if prm.get("despeck_T", 0) > 0:
+        out, nds = despeckle_y(out, float(np.sqrt(rowy @ rowy)), prm["despeck_T"], prm.get("despeck_H", 1.5))
+        nimp += nds
     if 2 in steps:
         luts = exact_inverse_luts(float(a_g), float(b_g), p, float(a_g), float(b_g),
                                   target=prm.get("inv_target", "truth"))
         gate = (float(a_g), float(b_g)) if prm.get("inv_gate", True) else None
-        return backtransform_exact(out, (to_rgb * f).astype(F32), luts, float(a_g), p, float(b_g), gate), nimp
+        bt = lambda q: backtransform_exact(q, (to_rgb * f).astype(F32), luts, float(a_g), p, float(b_g), gate)
+        res = bt(out)
+        nw = prm.get("neutral", 0.0)
+        if nw > 0 and ysm is not None:
+            # Step 5a: colour from the pixel's chroma at the smooth (1/4-grid)
+            # luma, brightness from the pixel. A luma dip through the per-channel
+            # inverse VST would otherwise empty the weakest channel first.
+            ref = out.copy()
+            if prm.get("neutral_ref", "med8") == "med8":
+                ref[..., 0] = med8
+            else:
+                ref[..., 0] = ysm
+            rc = bt(ref)
+            W3 = np.array([0.25, 0.5, 0.25], F32) * (wb if prm.get("neutral_wb", False) else 1)
+            lp = (res * W3).sum(-1, keepdims=True); lr = (rc * W3).sum(-1, keepdims=True)
+            k = np.clip(lp / np.maximum(lr, 1e-7), 0, 4)
+            neu = np.where(lr > 1e-7, rc * k, res)
+            if prm.get("neutral_dark", True):  # only luma dips empty a channel
+                t = np.clip(1 - k, 0, 1) * 4; nw = nw * np.minimum(t, 1)
+            res = (res + nw * (neu - res)).astype(F32)
+        return res, nimp
     return O.backtransform_y0u0v0(out, F32(a_g), p, F32(b_g), F32(0), (to_rgb * f).astype(F32)), nimp

@@ -254,3 +254,79 @@ Findings:
   and a hue shift on the night road (warm -> grey-purple). Both come from its
   luma-renormalized colour upsample.
 - RAWR with the wrong Motorola profile wipes all texture (texture kept 0.006).
+
+### Step 5 fixes from the comparison (2026-11-03, Mac-verified; device run pending)
+High noise only (relative noise >= 0.10, the impulse-filter gate); RAWR is
+byte-identical (10/10).
+- 5a, neutral specks (`backtransform_buffer_rl`): a luma dip through the
+  per-channel inverse VST emptied the weakest (red) channel first, so specks
+  came out teal (R/G/B 0.23/0.50/0.40 of local, 12.6% clipped to 0). Dips now
+  take their colour at the local 3x3 median luma (rank 4 of 8) and keep their
+  own brightness. Specks are neutral: 0.39/0.48/0.48, none clipped.
+- 5b, fewer specks: leave-one-out luma energy in `wiener_apply` (looY), plus
+  a two-sided luma despeckle in the VST domain: |Y - med8| > 3 sigma on a flat
+  ring (median |n - med8| < 1.5 sigma). On the night clouds, dark specks drop
+  from 2374 to about 290 (ESD3D2: 573).
+- Night region after 5a/5b: colour noise 0.0424 (ESD3D2 0.0431), flat luma
+  0.0163 (0.0157), texture kept 0.825 (0.789), removed noise vs edges 0.045
+  (0.220). GPU vs prototype: mean abs 8.6e-5; tiles 256/1536 byte-identical.
+- 5c, correlated noise (HDR+): the 2x2-binning variance ratio separates the
+  files cleanly (HDR+ 3.1-3.9, single-frame DNGs 1.0-1.4; vivo base ISO reads
+  5-8 from texture). A noise boost from it, global or coarse bands only, did
+  not close the gap and smeared texture. ESD3D2's remaining edge on HDR+ is
+  rendering, not noise level: its structure-tensor steered kernel keeps
+  oriented low-contrast texture (grass lines) crisp and leaves fine,
+  even-looking grain. `correlationRatio()` is kept in noise_estimate.h but
+  not wired in.
+- Open: an edge-steered pass for low-contrast oriented texture (the HDR+ gap),
+  and the mid-noise chroma gap (low-res chroma gate 0.04-0.10).
+
+### Beat-ESD3D2 scorecard (2026-11-03, in progress)
+`tools/wavelet-parity/esd3d2_compare.py` prints `SCORE` per crop. RawLens has
+to win or tie ESD3D2 on all four: chromaticity noise on flat areas (std of
+log R/G, log B/G; the brightness-independent version, since grain on a
+coloured surface faked colour noise), texture fidelity min(t, 1/t) (ESD3D2
+adds content: t > 1 on detail crops), flat luma at equal fidelity, and
+removed-noise vs edges. ESD3D2 outputs are cached.
+- Root cause of the mid-noise colour gap: not the chroma bands (forceUv and
+  slope eps changed nothing). In the VST domain a pure brightness change
+  scales Y, U, V together; denoised U, V under grainy Y gives
+  brightness-dependent colour, and ESD3D2 removes all chroma < 14 px.
+- 5d (all noise levels): the low-res pass now stores the 1/4-grid luma->chroma
+  model (aU, bU, aV, bV), and the backtransform evaluates it per pixel at the
+  local median luma (guided upsample). Then U, V are scaled by Y/median
+  (neutral = 3). Flat chroma: ISO 1442 0.0288 -> 0.0095 (ESD3D2 0.0084),
+  Motorola 0.0401 -> 0.0118 (0.0111), Redmi ISO 50 0.0186 -> 0.0065 (0.0123).
+- 5d refined: the colour reference luma is a 5x5 mean on flat areas, or the
+  3x3 median within 2 sigma of luma edges, and colour is taken in the linear
+  domain (neutral = 2: reference colour, pixel brightness). Night clouds,
+  chroma < 2 px: 0.059 -> 0.014 (ESD3D2 0.004). Flat chroma now beats ESD3D2
+  on 7 of 8 flat crops/regions (night region 0.294 vs 0.262 is the
+  exception).
+- Wins 5/15 crops (was 3). Open losses: low-ISO detail crops (grain slightly
+  above ESD3D2, removed noise correlates with edges), night region chroma
+  (0.294 vs 0.262), Motorola texture fidelity, vivo luma.
+- Prototype (`rawlens_denoise_proto.py`) still has the old low-res
+  correction semantics: parity check pending.
+
+## Step 6: edge-steered luma + uniform film-like grain (2026-11-03, Mac-verified)
+User goal: a natural, unified grain floor (film-like), and beating ESD3D2 on
+every image.
+- Grain used to be per-band `keep x removed noise`, so it showed only where
+  the Wiener filter judged an area flat: patchy. Now (neutral >= 10) the
+  Wiener stage writes `grain x noisy fine band` (scales 0 and 1) to accum.w
+  and outputs denoised luma only. The backtransform runs a structure-tensor
+  steered 5x5 luma filter (along the edge sigma 1.5; across sigma 1.2 -> 0.4
+  with coherence; range 1.5 sigma), then adds the grain back. That gives one
+  noise floor everywhere: in the VST domain the grain has constant amplitude,
+  so in linear it follows sqrt(signal), like shot noise or film grain.
+- Colour: brightness is matched in the VST luma, mapped through the power law
+  (camera-space weights shifted perceived brightness on coloured detail).
+- Default grain 0.25 -> 0.45 (stored user preferences keep their value).
+  Host: neutral = 12, lowres = 1.
+- Scorecard 6/15 wins (was 2): both HDR+ crops, mid-noise flats, Redmi ISO 50
+  flat, vivo ISO 72 flat. Remaining losses are mostly the luma-grain criterion
+  on detail crops: the film-grain floor is grainier than ESD3D2's smoothing
+  there by design. Plus night-region chroma, and Motorola flat texture/edges.
+- RAWR byte-identical 10/10; tiles 256/1536 byte-identical. The prototype has
+  not been updated for steps 5d/6 (GPU only so far).

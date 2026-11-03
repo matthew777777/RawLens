@@ -82,6 +82,13 @@ struct DenoiseParams {
     // step 1: low-res luma-guided chroma correction weight (0 = off).
     float lowresWeight = 0.0f;
     float lowresEps = 1.0f;
+    // step 5 (high noise): leave-one-out luma energy, neutral colour at luma
+    // dips, isolated luma speck threshold in sigma (0 = off).
+    bool looY = false;
+    float neutral = 0.0f;
+    float despeckT = 0.0f;
+    // Per-band chroma-on-luma slope regulariser (x luma noise variance).
+    float guideEps = 4.0f;
 };
 
 // Maps a Camera2 SENSOR_NOISE_PROFILE (S,O) pair to the normalized domain:

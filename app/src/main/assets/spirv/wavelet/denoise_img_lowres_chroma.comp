@@ -12,7 +12,7 @@
 //
 // mode 0 (down):  block means of accum + residue        -> lrImg  (Y,U,V)
 // mode 1 (stats): r-box regression of U,V on Y          -> abImg  (aU,bU,aV,bV)
-// mode 2 (corr):  r-box mean of a,b; d = a*Y + b - C     -> corrImg (dU,dV)
+// mode 2 (model): r-box mean of a,b                       -> corrImg (aU,bU,aV,bV)
 
 #ifndef LOCAL_X
 #define LOCAL_X 16
@@ -93,7 +93,7 @@ void main() {
     for (int j = -p.r; j <= p.r; j++)
         for (int i = -p.r; i <= p.r; i++) m += imageLoad(abImg, local(g + ivec2(i, j)));
     m *= inv;
-    vec3 v = imageLoad(lrImg, l).rgb;
-    vec2 d = vec2(m.x * v.x + m.y - v.y, m.z * v.x + m.w - v.z);
-    imageStore(corrImg, l, vec4(d, 0.0, 0.0));
+    // Box means of the local linear model (aU, bU, aV, bV): the backtransform
+    // evaluates chroma = a * Y + b with each pixel's own luma (guided upsample).
+    imageStore(corrImg, l, m);
 }
