@@ -11,7 +11,8 @@ def summarize(records):
     config = next(r for r in records if r['type'] == 'config')
     commands = [r for r in records if r['type'] == 'command']
     frames = [r for r in records if r['type'] == 'frame']
-    tolerance = max(.02, config['maxFocus'] * .02)
+    step = config.get('focusStep')
+    tolerance = min(.02, step * .2) if step else max(.02, config['maxFocus'] * .02)
     rows = []
     for command in commands:
         samples = sorted((f for f in frames if f['command'] == command['command']), key=lambda f: f['frame'])

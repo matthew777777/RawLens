@@ -1,9 +1,15 @@
 import unittest
 import numpy as np
-from compare_focus_metrics import scores, BLUR
+from compare_focus_metrics import scores, BLUR, repeatability_gate
 
 
 class FocusMetricsTest(unittest.TestCase):
+    def test_changed_scene_rejected_even_with_identical_focus_metadata(self):
+        rows = [dict(target=4., usable=True, mean=.02), dict(target=4., usable=True, mean=.001)]
+        self.assertFalse(repeatability_gate(rows)['eligibleForMetricComparison'])
+        rows[1]['mean'] = .021
+        self.assertTrue(repeatability_gate(rows)['eligibleForMetricComparison'])
+
     def test_optical_like_blur_reduces_scores_without_changing_exposure(self):
         image = np.zeros((64, 64)) + .15
         image[:, 29:35] = .7

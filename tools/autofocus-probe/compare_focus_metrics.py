@@ -46,6 +46,31 @@ def scores(image, variance):
             'laplacian_energy': metric(image, LAPLACIAN, variance, False)}
 
 
+def repeatability_gate(rows):
+    """Reject incomparable scene/exposure evidence; thresholds are diagnostic heuristics."""
+    grouped = {}
+    for row in rows:
+        if row.get('usable'):
+            grouped.setdefault(round(row['target'], 5), []).append(row)
+    comparisons = []
+    for target, repeats in grouped.items():
+        if len(repeats) < 2:
+            continue
+        means = [r['mean'] for r in repeats]
+        ratio = max(means) / max(min(means), 1e-6)
+        comparisons.append(dict(target=target, meanRatio=ratio, brightnessStable=ratio <= 1.25))
+    failures = sum(not r['brightnessStable'] for r in comparisons)
+    reasons = []
+    if not comparisons:
+        reasons.append('No repeated positions to check scene consistency')
+    if failures:
+        reasons.append(f'{failures}/{len(comparisons)} repeated positions change ROI mean by more than 25%')
+    if any(not r.get('usable') for r in rows):
+        reasons.append('Some commands lack enough matching stationary samples')
+    return dict(eligibleForMetricComparison=not reasons, reasons=reasons, repeatedPositions=comparisons,
+                caveat='Passing this brightness gate does not prove scene stability or accurate focus.')
+
+
 def analyze(trace, crops):
     records = [json.loads(line) for line in trace.read_text().splitlines() if line.strip()]
     config = next(r for r in records if r['type'] == 'config')
@@ -101,6 +126,7 @@ def analyze(trace, crops):
                              separatedAdjacentPairs=sum(contrasts), adjacentPairs=len(contrasts)))
         comparisons[name] = dict(legs=legs, peakSpread=max((l['bestTarget'] for l in legs), default=0)-min((l['bestTarget'] for l in legs), default=0))
     return dict(config=config, commands=rows, metrics=comparisons,
+                repeatability=repeatability_gate(rows),
                 unqualifiedCommands=sum(not r['usable'] for r in rows),
                 limitations=['Same ROI/scene only; not independent ground truth or production acceptance.',
                              'Noise subtraction assumes independent spatial noise and uses a conservative metadata bound.',

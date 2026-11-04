@@ -1,4 +1,4 @@
-# RawLens 2.0.0: remaining work (2026-10-22, cut revised 2026-10-25)
+ # RawLens 2.0.0: remaining work (2026-10-22, cut revised 2026-10-25)
 
 Proposed cut: **[2.0]** must land before the 2.0.0 release; **[2.0.x]**
 can follow. Owner may move items.
@@ -344,6 +344,14 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
       supplies libjxl source (else JXL is "not bundled").
 
 ## M. MFSR (moved last, owner 2026-10-22: after everything else; whole programme [2.0.x] per owner cut 2026-10-25)
+- GOAL (owner 2026-11-03): **MFSR 2.0 = proper multi-frame super-resolution
+  at 2x output**: real added detail beyond a single-frame demosaic + 2x
+  upscale (not just denoise at 1x), no zipper, no hallucination. Every M item
+  is judged against this. Acceptance (to measure, not assume):
+  synthetic known-truth burst: 2x merge beats single-frame demosaic + bicubic
+  2x in PSNR and in MTF above the 1x Nyquist; real burst crops: visible
+  extra detail at 2x, Z1-clean; app: 2x fits the 512 MB heap (output in
+  native memory / tiled) at acceptable time on the Mali G615 phone.
 - [ ] C13 [2.0.x] MFSR "Wronski 2.0" (owner goal: improve beyond the paper;
       Z1 and C9-C12 merged into this item 2026-10-23 - the zipper, the
       dim-burst divergence and the core reconstruction are one programme,
@@ -364,6 +372,10 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
             (70.5 dB).
       - [ ] C10 [2.0.x] Scale > 1 for zoom; S.3 thresholds; failed-tile
             alignment check (mfsr-paper-gaps.md).
+            Failed-tile leg 2026-11-03: border band root-caused (zero-padded
+            flow-upscale shortfall, bottom/right) and fixed behind
+            edgeExtendFlow (default on, false = Python-exact); A/B in
+            mfsr-wronski-2.md "C10 border band". Device cmp/timing open.
       - [x] C10a s1/s2 and kernel-GAT A/B: keep IPOL (closed
             2026-10-22, mfsr-paper-gaps.md).
       - [x] C11a [2.0.x] UI toggles (kernel, S.3) in Settings -> Burst
@@ -379,7 +391,14 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
             is the sr-pipeline classpath resource used by
             KernelNet.bundledWeights(). Orphaned KernelNet JNI exports
             remain in ncnnMl.cpp / flownet_stub.cpp, harmless.
-      - [ ] C11 [2.0.x] 150 MB FloatArray copy before the MFSR DNG;
+      - [x] C11a [2.0] (2026-11-03) 150 MB FloatArray copy removed: both MFSR
+            DNG saves (ZSL + offline) go through new
+            LinearRgbDngSaver.saveLinearRgbStriped, filling writeStriped bands
+            straight from the native merge buffer (writer documents it as
+            pixel-identical to write). Provenance "lens shading applied" now
+            true when the reference had a map (was always false).
+      - [ ] C11 [2.0.x] (rest: CPU pyramid, KernelNet conv, new HotPixels/ColourDiff
+            costs - phone timing) 150 MB FloatArray copy before the MFSR DNG;
             perf (CPU pyramid, KernelNet conv).
       - [ ] C12 [2.0.x] One 122 s first-merge outlier (likely thermal).
       - [ ] C14 [2.0.x] **MFSR auto exposure wiring, like HDR+** (owner
@@ -404,6 +423,128 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
             Gate: same-scene MFSR vs HDR+ vs single-frame JPEGs,
             brightness placement within a stated tolerance; preview
             (VF adaptive strength) matches the save.
+      Whole-MFSR audit 2026-11-03 (items not on the list before; code
+      refs as of this date; details in mfsr-wronski-2.md):
+      - [x] C15 [2.0] (2026-11-03, in the engine; device check pending) Z1 fixed
+            by colour-difference accumulation, sr-pipeline ColourDiff: R/B
+            splat as wb*C - G_hat (Hamilton-Adams), G unchanged, kernels and
+            robustness on the original frame, C = (G + D)/wb after the
+            divide. GPU (VulkanPipeline: one extra frameRes upload before
+            the splat, host rebuild after download), CPU EndToEnd, app
+            (Settings -> Burst "Zipper fix", mfsr_zipper_fix default ON,
+            WB from AsShotNeutral), CLI --colour-diff R,B (default off). A/B
+            picked HA + white-balanced diff (raw diff +8 % noise, plain-mean
+            G_hat no fix). Production EndToEnd crop (801,600): Wronski
+            zipper 1.396 -> 1.130, KernelNet 1.499 -> 1.149 (green 1.09-1.13);
+            Y noise +4-8 %, sharpness +0.3-1.2 %. Visual: KernelNet's coloured
+            stair-step fringes on the truss gone.
+      - [ ] (orig.) C15 [2.0] Z1 fix candidate: colour-difference merge (R/B enter
+            as C - G_hat, output C = G + diff). Crop A/B: R/B edge zipper
+            ratio 1.40 -> 1.09 (= G yardstick), sharpness +0.6-2.2 %, but
+            flat noise +8-16 %. Tune G_hat (two-pass merged G), then port
+            to merge_splat.comp + Kotlin merge behind a switch, parity
+            mode = off. Kernel floor alone rejected (does not fix Z1).
+      - [x] C16 [2.0] (2026-11-03: new takes store per-frame noiseProfile in .craw; OfflineBurstFrame reads it; old takes still use the warned fallback; device check pending) Offline merges run on invented noise: `.craw` takes
+            store no noise profile (OfflineBurstFrame.kt:102
+            `noiseProfile = null`), so MfsrMerge.runEngine falls back to
+            alpha 1e-4 / beta 1e-6. That sets SNR -> tile size + every
+            kernel parameter, and disables the noise LUT. Store
+            SENSOR_NOISE_PROFILE in the take; fall back to the camera
+            characteristic, never to constants.
+      - [x] C17 [2.0] (fixed with C21) 6-value (3-pair) noise profiles are dropped:
+            runEngine requires `noise.size == 8`, but DngMetadataOverrides
+            allows 6 (and this burst's DNGs carry 3 pairs). Expand R,G,B ->
+            R,G1,B,G2 like DngRead.noiseAlphaBeta and the CLI do.
+      - [x] C18 [2.0] (2026-11-03) HotPixels (sr-pipeline, shared by CLI and
+            app): darktable hotpixels rule (threshold 0.05, 2x every same-colour
+            neighbour) + isolation (1.5x the 4 adjacent pixels) + burst
+            confirmation (same position outlier in 2 more frames; app reads
+            those as point reads, no extra decode). Median replacement in every
+            frame. Census (full frames): daylight bursts 0 confirmed (output
+            unchanged), night ISO 4653: 66. A/B caught a regression before
+            shipping: without the isolation rule a static clipped lamp core was
+            "corrected" to black; fixed + unit test. Also: Kotlin computeK now
+            has the shader's l1+l2 guard (CPU = GPU). Device timing -> C11.
+      - [ ] (orig.) C18 No defect (hot/dead pixel) correction on MFSR inputs:
+            the still path runs RawDefectCorrector; MFSR decodeSharp applies
+            lens shading only. A reference-frame hot pixel goes straight
+            into the merge (robustness sees r=1 for the reference).
+      - [x] C19 [2.0] (2026-11-03; device A/B pending) Lens shading moved
+            after the merge (HDR+ order, Hasinoff et al. 2016): frames
+            enter unshaded (raw sensor noise matches GAT/SNR/robustness
+            LUT), MfsrMerge.applyShadingAfterMerge applies the reference
+            map to the merged RGB (R, mean G, B gains), live + offline.
+            Signal-equivalent (map is smooth and burst-constant); unit tests.
+      - [ ] (orig.) C19 [2.0] Lens shading is applied before the merge but the
+            noise model is not scaled with it: corner variance grows by
+            gain^2 while alpha/beta (GAT, SNR, robustness LUT) stay at
+            raw values. Either apply shading after the merge (on RGB) or
+            scale the noise model per pixel. Measure corners A/B.
+      - [x] C20 [2.0] (2026-11-03) Clean-up done: MfsrMerge header now states
+            the real noise/hot-pixel/zipper/shading pipeline; dead
+            flipFloatsToRggb removed; unread MfsrResult.refIndex/gpuMs
+            placeholders removed. Open question to owner:
+            MfsrSettings.MAX_MERGE_FRAMES 16 vs the 8-frame bursts.
+      - [ ] (orig.) C20 [2.0] Clean-up (AI-slop list): MfsrMerge header says
+            "noise correction stays off", but the code generates a
+            NoiseLutGen LUT; flipFloatsToRggb is dead code;
+            MfsrResult.refIndex is always 0 and gpuMs always 0.0
+            (placeholders); MfsrSettings.MAX_MERGE_FRAMES 16 vs the
+            "always 8" owner burst size. Confirm the intended cap.
+      - [x] C21 [2.0] Live noise profile read in the wrong channel order
+            (found 2026-11-03, fixed in MfsrMerge.engineNoiseAlphaBeta).
+            Camera2 SENSOR_NOISE_PROFILE is in CFA-layout order (AOSP
+            metadata_definitions.xml, android.sensor.noiseProfile), but
+            runEngine read the 8 values as R,G1,B,G2. On this GRBG phone R and G1
+            were swapped (R got G's slope, ~half), feeding GAT, SNR -> tile/
+            kernel params, the robustness LUT, and the KernelNet sigma. Now mapped
+            through the same flipSrcIndex as the pixels, with a test per Bayer
+            pattern. 3-pair (6-value) profiles accepted (C17 done); a missing
+            profile logs a warning. Device A/B pending.
+      - [x] C26 [2.0] (2026-11-04, owner; phone check pending) Wronski kernel
+            minimum std 0.64 (KernelParams.kMin; kernels.comp k_min, 9-float
+            param buffer; CPU computeK same; 0 = paper-exact for parity tests).
+            20 Vulkan crops: texture checker 0.62x today, 0/20 above the single
+            frame (was 9/20), edge sharpness 0.941x. Production param path ==
+            compiled-constant sweep (max per-crop diff 0).
+            Also fixed: the app never passed the SNR-tuned kernel params
+            (fin.kDetail/kDenoise/dTh/dTr) into PipelineConfig, so app Wronski
+            ran KernelParams() defaults (kDetail 1.0 vs 0.25-0.33).
+      - [x] C25 [2.0] (2026-11-04, owner) KernelNet is the default MFSR kernel
+            (MfsrSettings.kernel, fromPreferences fallback); Wronski stays in
+            Settings -> Burst; saved choices unchanged. Phone check pending.
+      - [x] C24 [2.0] (2026-11-03, fixed; phone check pending) KernelNet checkerboard.
+            Root cause (Vulkan sweeps, 20 crops): the merge gathers 3x3; KernelNet
+            widths outside ~[0.9, 1.2] px checker: cap 2.0 -> per-site sample count
+            sets the noise (flats), floor 0.25 -> per-lattice pick (texture).
+            Not stretch/tilt (cap 2:1, 1:1, rho 0 tested). Fix: kernelnet.comp
+            floor 0.90, DEFAULT_SIGMA_CAP 1.2. Production build on Vulkan:
+            texture checker 0.67x Wronski mean, worst 1.00x, 0/20 crops worse;
+            edge sharpness 0.949x Wronski (min 0.901). Rejected: 0.80/1.2
+            (1 crop 1.10x, sharpness 0.961), 0.70/1.2 (2 crops, 0.975).
+      - [ ] (orig.) C24 [2.0] KernelNet textured-area checkerboard (found on Mac Vulkan
+            2026-11-03, VulkanBurstCheckTest): remains with the Z1 fix, 1.5-3x
+            Wronski's texture-checker score; not the 0.25 px minimum width
+            (0.40/0.60 tested). Next: elongation cap / rho orientation. Gate:
+            texture checker <= Wronski on all 20 crops + visual sheets.
+      - [x] C23 [2.0] MFSR uses the learned per-device noise model (owner
+            2026-11-03), switch Settings -> Burst "Learned noise model"
+            (mfsr_learned_noise, default ON). Green level from the wavelet
+            store's rawlens_noise::fit (new JNI WaveletVulkan.predictNoise,
+            read-only, same key/store as the wavelet path via
+            NoiseSource.of + WaveletDenoiser.storePath). R/B shape from the
+            Camera2 profile (C21 order). Untrained model or OFF -> profile.
+            Feeds GAT, SNR/tiles, robustness LUT, KernelNet sigma. Logged as
+            "sharp merge noise: source=...". Reason: this phone's profile
+            overstates base-ISO noise 4-14x (wavelet-rawlens-wiener.md).
+            Unit tests pass; device A/B pending (same burst ON vs OFF).
+      - [ ] C22 [2.0, HDR - parity-gated, not MFSR] Same order bug in shared
+            CfaNoiseModel.from (claims R,Gr,Gb,B, stores CFA order):
+            HdrTileDeghost.pixelVariance indexes it by canonical slot. Fix at
+            the source with the Bayer pattern; needs an HDR A/B. Not touched in
+            the MFSR pass.
+      - [x] C10b [2.0] Border-band alignment (zero-padded flow-upscale
+            shortfall) fixed behind edgeExtendFlow, see C10.
       Research scan 2026-10-23 (online papers + open-source repos,
       6 angles; softness findings: mfsr-wronski-2.md):
       RE-EVALUATE BEFORE STARTING ANY ITEM BELOW: the scan's
@@ -424,21 +565,45 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
             phase-coverage per output pixel. Tests whether
             acceptance (R 0.95-0.99) != accuracy and whether
             fractional phases cluster. Gate for C13b-C13e.
+            Alignment leg measured 2026-11-03 (burst 170823_957, crops;
+            mfsr-wronski-2.md "C13a results"): ICA sound on known shifts
+            (0.03-0.07 px); real textured tiles 0.18 px RMS vs SSD oracle
+            (-> C13d checked: superseded, see C13d); shifts >= 16 px fail in a ~256 px
+            border band (new C10 defect); low-texture tiles phase-locked
+            (undetermined, harmless). Merge leg measured 2026-11-03: Z1
+            mechanism reproduced on CPU path: Wronski kernel minor std
+            down to 0.13 px << 2 px R/B spacing -> 1.1-1.6 % edge pixels
+            with n_eff ~1 of 8 frames -> site-alternating R/B (zipper).
+            Not robustness. Fix belongs to C13b; app-path confirmation
+            needs one app linear DNG of this burst.
       - [ ] C13b [2.0.x] Density-adaptive + order-1 kernel: log sample
             density/support vs sharpness; scale Omega by realised
             density (Drizzle pixfrac, BSD-3); then local-linear
             steering kernel regression (Takeda, equations only -
             toolbox license unstated, related patent ~2029).
-      - [ ] C13c [2.0.x] Iterative MAP reconstruction (structural fix):
+      - [ ] C13c [2.0] **CORE of MFSR 2.0 (2x goal), proven on known truth
+            2026-11-03 (Sr2xTruthTest):** today's merge at 2x adds NO detail
+            (detailSNR 1.35 dB clean vs 1.48 single frame + bicubic).
+            Forward-model back-projection (Irani-Peleg / Farsiu MAP,
+            chroma + luma priors), initialised from the merge: 11.3 dB with
+            true flows, 6.8 dB with our flows (clean); +2.2 dB iso100.
+            Next: noise-adaptive lambda + robust data term; real-burst 2x
+            crops; alignment-under-noise; tiled GPU port within the 512 MB
+            budget (mfsr-wronski-2.md "2x goal").
+      - [ ] (orig. text) C13c Iterative MAP reconstruction (structural fix):
             stripped Lecouat et al. 2021 "Lucas-Kanade Reloaded" /
             Farsiu (forward DBW model + BTV, 10-20 it, ICA flow as
             init, per-tile affine refine against the reconstructed
             HR image, not the LR reference). Paper-only (repo 404).
             Only class that inverts blur inside the merge.
-      - [ ] C13d [2.0.x] Phase-correlation alignment cross-check:
+      - [x] C13d [2.0.x] Phase-correlation alignment cross-check:
             Guizar-Sicairos single-step DFT (BSD-3, scikit-image),
             OpenCV phaseCorrelate (Apache-2.0) as offline oracle;
             ship only if C13a shows ICA RMS > ~0.1 px.
+            2026-11-03: NO-GO. Upsampled-DFT oracle as accurate as ICA
+            (0.05-0.07 px median on known shifts); ours vs DFT on real
+            textured tiles median 0.07 px, bias <= 0.012, no phase
+            locking. Keep ICA (mfsr-wronski-2.md "C13d second oracle").
       - [ ] C13e [2.0.x] Diff vs ImageStackAlignator (GPL-3.0, only
             GPL-compatible + portable repo found): documents
             Wronski paper errors inherited via Jamy-L (subsampled
