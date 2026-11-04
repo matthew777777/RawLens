@@ -39,6 +39,12 @@ data class KernelParams(
     val kShrink: Float = 2f,
     val selection: SelectionLaw = SelectionLaw.LINEAR,
     val iso: Boolean = false,
+    /**
+     * Minimum kernel std (C26, owner 2026-11-04): below ~0.64 px the merge's 3x3
+     * gather picks one green lattice (checker in texture; 20 Vulkan crops: checker
+     * 0.62x, sharpness 0.941x vs none). 0 = paper/IPOL-exact (parity tests).
+     */
+    val kMin: Float = 0f,
 )
 
 /**
@@ -288,15 +294,18 @@ fun linearSelection(a: Float, kShrink: Float, kStretch: Float): Pair<Float, Floa
  * `k = kDetail*((1-D)*kSel + D*kDenoise)`.
  */
 fun computeK(l1: Float, l2: Float, params: KernelParams): Pair<Float, Float> {
-    val a = 1f + sqrt((l1 - l2) / (l1 + l2))
+    // Same guard as kernels.comp (the app's GPU path): a perfectly flat
+    // window (clipped highlight, l1 = l2 = 0) gave 0/0 = NaN here, NaN
+    // kernels, NaN weights and black holes in blown lamps on the CPU path.
+    val a = 1f + sqrt(maxOf(l1 - l2, 0f) / maxOf(l1 + l2, 1e-30f))
     val d = (1f - sqrt(l1) / params.dTr + params.dTh).coerceIn(0f, 1f)
     val (k1, k2) = when (params.selection) {
         SelectionLaw.HARD_THRESHOLD -> hardThreshold(a, params.kShrink, params.kStretch)
         SelectionLaw.LINEAR -> linearSelection(a, params.kShrink, params.kStretch)
     }
     return Pair(
-        params.kDetail * ((1f - d) * k1 + d * params.kDenoise),
-        params.kDetail * ((1f - d) * k2 + d * params.kDenoise),
+        maxOf(params.kDetail * ((1f - d) * k1 + d * params.kDenoise), params.kMin),
+        maxOf(params.kDetail * ((1f - d) * k2 + d * params.kDenoise), params.kMin),
     )
 }
 

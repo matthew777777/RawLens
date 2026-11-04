@@ -1,6 +1,7 @@
 package com.rawlens.srpipeline.cli
 
 import com.rawlens.srpipeline.SrpBridge
+import com.rawlens.srpipeline.stages.HotPixels
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
@@ -43,10 +44,14 @@ private data class Plan(
     val s2: Float = 12f,
     /** GAT before Wronski kernel estimation (IPOL; the paper has none). */
     val kernelGat: Boolean = true,
+    /** Z1 colour-difference merge white balance (R, B gains); null = off. */
+    val colourDiff: FloatArray? = null,
+    /** Own noise model var = a x + b (normalised raw) replacing the DNG/Camera2 NoiseProfile; null = profile. */
+    val noiseAb: DoubleArray? = null,
 )
 
 private fun usage(): String = """
-    Usage: sr-pipeline --in DIR --out DIR [--ref N] [--crop x,y,w,h] [--limit N] --backend cpu|vulkan [--scale F] [--lib PATH] [--spv-dir DIR] [--lut PATH] [--heap-budget-mb N] [--kernel wronski|kernelnet] [--kn-scale F] [--kn-cap F] [--s3 on|off] [--s1 F --s2 F] [--kernel-gat on|off]
+    Usage: sr-pipeline --in DIR --out DIR [--ref N] [--crop x,y,w,h] [--limit N] --backend cpu|vulkan [--scale F] [--lib PATH] [--spv-dir DIR] [--lut PATH] [--heap-budget-mb N] [--kernel wronski|kernelnet] [--kn-scale F] [--kn-cap F] [--s3 on|off] [--s1 F --s2 F] [--kernel-gat on|off] [--noise-ab a,b]
       --in DIR       input frame directory with .dng burst frames (required)
       --out DIR      output directory, receives merged.dng (required)
       --ref N        reference frame index into the sorted frames, >= 0 (default 0)
@@ -59,6 +64,7 @@ private fun usage(): String = """
       --spv-dir DIR  directory with the 10 stage .spv modules (required for --backend vulkan)
       --lut PATH     noise LUT .npz (or "auto" to simulate it in-process); enables noise correction with its curves, validated
                      against the DNG noise profile (without it, noise correction is off)
+      --noise-ab a,b own noise model var = a*x + b (normalised raw) instead of the DNG/Camera2 NoiseProfile
       --heap-budget-mb N
                      peak JVM heap-pool gate in MB; fails the run when exceeded
 """.trimIndent()
@@ -99,6 +105,8 @@ private fun parseArgs(args: Array<String>): Plan {
     var s1 = 2f
     var s2 = 12f
     var kernelGat = true
+    var colourDiff: FloatArray? = null
+    var noiseAb: DoubleArray? = null
 
     var i = 0
     while (i < args.size) {
@@ -174,8 +182,20 @@ private fun parseArgs(args: Array<String>): Plan {
                 s2 = args.getOrNull(++i)?.toFloatOrNull() ?: fail("--s2 requires a number")
                 i++
             }
+            "--colour-diff" -> {
+                val parts = args.getOrNull(++i)?.split(",")?.mapNotNull { it.toFloatOrNull() }
+                colourDiff = parts?.takeIf { it.size == 2 && it.all { g -> g > 0f } }?.toFloatArray()
+                    ?: fail("--colour-diff requires wbR,wbB (positive gains, e.g. 1.88,1.49)")
+            }
             "--kernel-gat" -> {
                 kernelGat = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--kernel-gat requires on|off") }
+                i++
+            }
+            "--noise-ab" -> {
+                val raw = args.getOrNull(++i) ?: fail("--noise-ab requires a,b")
+                val v = raw.split(",").map { it.trim().toDoubleOrNull() }
+                if (v.size != 2 || v.any { it == null || it < 0.0 }) fail("--noise-ab must be a,b >= 0 (got \"$raw\")")
+                noiseAb = doubleArrayOf(v[0]!!, v[1]!!)
                 i++
             }
             "--lut" -> {
@@ -222,6 +242,8 @@ private fun parseArgs(args: Array<String>): Plan {
         s1 = s1,
         s2 = s2,
         kernelGat = kernelGat,
+        colourDiff = colourDiff,
+        noiseAb = noiseAb,
     )
 }
 
@@ -277,14 +299,26 @@ private fun merge(plan: Plan) {
     // 0.5s -> 2.1s on the crop from contention in concurrent native
     // decodes), so serial decode stays.
     val refImg = readFrame(refPath, plan.crop)
-    val compImgs = comps.map { p -> { readFrame(p, plan.crop) } }
     val h = refImg.size
     val w = refImg[0].size
+    // C18: static hot/dead pixels, same code as the app (HotPixels): reference
+    // candidates confirmed in the next two frames, corrected in every frame.
+    val defects = if (comps.size < 2) IntArray(0) else {
+        val verify = comps.take(2).map { p -> readFrame(p, plan.crop) }
+        HotPixels.confirm(HotPixels.candidates(refImg), h, w, verify.map { f -> { y: Int, x: Int -> f[y][x] } })
+    }
+    println("sr-pipeline: ${defects.size} static hot/dead pixels corrected")
+    HotPixels.correct(refImg, defects)
+    val compImgs = comps.map { p -> { readFrame(p, plan.crop).also { HotPixels.correct(it, defects) } } }
 
     // Noise profile from the reference tags; LUT validated against it like
     // `load_noise_lut`, otherwise noise correction stays off (zero curves).
     val refMeta = DngRead.readMeta(refPath.toString())
-    val (alpha, beta) = DngRead.noiseAlphaBeta(refMeta.noise, refMeta.noiseCount)
+    // --noise-ab: our own estimate (e.g. tools/lkr-pipeline NoiseAB on the
+    // reference) for all four planes, instead of the vendor NoiseProfile.
+    val (alpha, beta) = plan.noiseAb?.let { DoubleArray(4) { _ -> it[0] } to DoubleArray(4) { _ -> it[1] } }
+        ?: DngRead.noiseAlphaBeta(refMeta.noise, refMeta.noiseCount)
+    if (plan.noiseAb != null) println("sr-pipeline: noise model from --noise-ab a=${plan.noiseAb[0]} b=${plan.noiseAb[1]} (not the DNG profile)")
     // `--lut auto`: simulate in-process (NoiseLutGen, same model as the
     // Python monte_carlo; SRP_LUT_TRIALS overrides the trial count).
     val curves = plan.lut?.let {
@@ -324,6 +358,7 @@ private fun merge(plan: Plan) {
             dTr = fin.dTr.toFloat(),
         ),
         kernelPreprocessing = if (plan.kernelGat) "gat" else null,
+        colourDiff = plan.colourDiff,
         kernelAlpha = FloatArray(4) { alpha[it].toFloat() },
         kernelBeta = FloatArray(4) { beta[it].toFloat() },
         robustnessParams = RobustnessParams(noiseCorrection = noiseCorrection, s3 = plan.s3, s1 = plan.s1, s2 = plan.s2),

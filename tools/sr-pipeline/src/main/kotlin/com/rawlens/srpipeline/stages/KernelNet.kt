@@ -43,7 +43,13 @@ data class KernelNetConfig(
 
 object KernelNet {
     const val DEFAULT_SIGMA_SCALE = 0.25f
-    const val DEFAULT_SIGMA_CAP = 2.0f
+    /**
+     * 1.2 px (was 2.0, C24): with the 0.90 px floor in kernelnet.comp this
+     * puts KernelNet at or below Wronski's texture-checker score on all 20
+     * Vulkan check crops (VulkanBurstCheckTest), mean edge sharpness 0.949x
+     * Wronski's. 2.0 exceeded the merge's 3x3 gather and checkered flats.
+     */
+    const val DEFAULT_SIGMA_CAP = 1.2f
     const val RESOURCE_BIN = "/kernelnet/kernelnet_aniso_v2_2_params.ncnn.bin"
 
     /** (cin, cout, k) per Convolution in .param order. */

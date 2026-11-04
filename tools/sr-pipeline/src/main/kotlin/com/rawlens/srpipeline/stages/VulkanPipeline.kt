@@ -391,7 +391,7 @@ object VulkanPipeline {
         val kpBuf = pack(floatArrayOf(kp.kDetail, kp.kDenoise, kp.dTh, kp.dTr,
             kp.kStretch, kp.kShrink,
             java.lang.Float.intBitsToFloat(if (kp.selection == SelectionLaw.HARD_THRESHOLD) 0 else 1),
-            java.lang.Float.intBitsToFloat(if (kp.iso) 1 else 0)))
+            java.lang.Float.intBitsToFloat(if (kp.iso) 1 else 0), kp.kMin))
         val mergeFlowFlat = FloatArray(ftx0 * fty0 * 2)
         val mergeFlow = SrpBridge.directFloats(ftx0 * fty0 * 2)
         // Guide-grid robustness map staging: the robust-compute output
@@ -540,6 +540,12 @@ object VulkanPipeline {
                 // bit 1 makes the merge read it on the reference grid.
                 val covRes = if (knCovRes != 0L) knCovRes else frameKernelsGpuRes()
                 val mergeMode = if (knCovRes != 0L) 2 else 0
+                // Z1: kernels and robustness above read the original frame;
+                // only the splat reads the colour-difference frame (ColourDiff).
+                config.colourDiff?.let { cd ->
+                    timed("colourDiffUpload") { checkRc("colourDiffUpload", SrpBridge.uploadResident(handle, frameRes,
+                        ColourDiff.packInto(frame, frameBuf, cd[0], cd[1]), (w * h).toLong())) }
+                }
                 timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.nativeMergeSplatFrameRes(handle, frameRes,
                     packInto(mergeFlowFlat, mergeFlow), covRes, rBuf, numRes, denRes,
                     spirvs.mergeSplat, w, h, outW, outH, gw * gh * 4, gw * gh, tile,
@@ -711,6 +717,10 @@ object VulkanPipeline {
         } ?: SrpBridge.directFloats(total)
         timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, numRes, outBuf, total.toLong())) }
         outBuf.rewind()
+        config.colourDiff?.takeIf { config.bayer }?.let { cd ->
+            timed("colourDiffReconstruct") { ColourDiff.reconstruct(outBuf.asFloatBuffer(), total / 3, cd[0], cd[1]) }
+            outBuf.rewind()
+        }
         dumpClock()
         return outBuf
         } finally {

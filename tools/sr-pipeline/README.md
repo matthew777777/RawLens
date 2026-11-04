@@ -48,6 +48,7 @@ CLI flags (see `Main.kt` usage text):
 | `--kernel wronski\|kernelnet` | no | reconstruction kernel (`--kn-scale F`, `--kn-cap F` tune KernelNet) |
 | `--s3 on\|off` | no | supplement S.3 high-frequency artefact rejection |
 | `--s1 F --s2 F`, `--kernel-gat on\|off` | no | IPOL-vs-paper A/B parameters |
+| `--colour-diff R,B` | no | Z1 zipper fix: colour-difference merge with white-balance gains R,B (e.g. `1/AsShotNeutral`); off by default (Python parity) |
 | `--heap-budget-mb N` | no | fail the run if the JVM heap pool exceeds N MB |
 | `--help` / `-h` | no | print usage |
 

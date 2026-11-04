@@ -418,11 +418,12 @@ class SrpBridgeTest {
             }
             gradsBuf.rewind()
             // KParams: six scalars + selection/iso by bit pattern (std430).
-            val kpBuf = SrpBridge.directFloats(8)
+            val kpBuf = SrpBridge.directFloats(9)
             val kfb = kpBuf.asFloatBuffer()
             kfb.put(0.3f).put(4.0f).put(0.75f).put(1.1f).put(4.0f).put(2.0f)
             kfb.put(java.lang.Float.intBitsToFloat(1))
             kfb.put(java.lang.Float.intBitsToFloat(0))
+            kfb.put(0f) // kMin: paper-exact
             kpBuf.rewind()
             val covBuf = SrpBridge.directFloats(gw * gh * 4)
             val rc = SrpBridge.kernelsCov(handle, gradsBuf, kpBuf, covBuf,
@@ -1027,11 +1028,12 @@ class SrpBridgeTest {
                     gradsFlat[(y * kw + x) * 2 + 1] = grads[y][x][1]
                 }
                 fun freshKp(): java.nio.ByteBuffer {
-                    val b = SrpBridge.directFloats(8)
+                    val b = SrpBridge.directFloats(9)
                     val f = b.asFloatBuffer()
                     f.put(0.3f).put(4.0f).put(0.75f).put(1.1f).put(4.0f).put(2.0f)
                     f.put(java.lang.Float.intBitsToFloat(1))
                     f.put(java.lang.Float.intBitsToFloat(0))
+                    f.put(0f) // kMin: paper-exact
                     b.rewind()
                     return b
                 }

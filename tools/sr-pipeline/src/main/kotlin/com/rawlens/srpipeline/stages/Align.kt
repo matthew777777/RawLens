@@ -261,6 +261,12 @@ data class AlignLoopConfig(
     val icaClip: Boolean = true,
     val flowUpscaleMode: String = "bilinear",
     val preprocessing: String? = null,
+    /**
+     * Fill flow-upscale shortfall tiles from the nearest edge tile instead
+     * of zero (deliberate departure from `upscale_lvl`, checklist M / C10
+     * border band; see [Resample.upscaleLvl]). False = Python-exact.
+     */
+    val edgeExtendFlow: Boolean = true,
 )
 
 private fun requireAlignLoopConfig(config: AlignLoopConfig, name: String) {
@@ -432,6 +438,7 @@ fun upscaleLvl(
         prevTileSize = config.tileSizes[level + 1],
         upsamplingFactor = config.factors[level + 1],
         mode = config.flowUpscaleMode,
+        edgeExtend = config.edgeExtendFlow,
     )
 }
 

@@ -146,7 +146,7 @@ class AlignLoopTest {
     @Test
     fun `upscale lvl zero pads shortfall`() {
         val flow = Array(1) { Array(1) { floatArrayOf(3f, -1f) } }
-        val got = upscaleLvl(flow, intArrayOf(4, 4), 0, config)
+        val got = upscaleLvl(flow, intArrayOf(4, 4), 0, config.copy(edgeExtendFlow = false))
         for (ty in 0 until 4) {
             for (tx in 0 until 4) {
                 val inside = ty < 2 && tx < 2
@@ -154,6 +154,23 @@ class AlignLoopTest {
                 assertEquals(if (inside) -2f else 0f, got[ty][tx][1], 1e-7f)
             }
         }
+    }
+
+    /** Checklist M / C10: shortfall tiles take the nearest upscaled tile (default). */
+    @Test
+    fun `upscale lvl edge extends shortfall`() {
+        val flow = arrayOf(arrayOf(floatArrayOf(3f, -1f), floatArrayOf(5f, 2f)))
+        val got = upscaleLvl(flow, intArrayOf(3, 5), 0, config)
+        assertEquals(true, config.edgeExtendFlow)
+        // repeat 2, bilinear, *2: the last real column is tx=3, last real row ty=1.
+        for (ty in 0 until 3) for (tx in 0 until 5) {
+            val src = got[minOf(ty, 1)][minOf(tx, 3)]
+            assertEquals(src[0], got[ty][tx][0], 0f)
+            assertEquals(src[1], got[ty][tx][1], 0f)
+        }
+        // and it is a copy, not an alias
+        got[2][4][0] = 99f
+        assertEquals(false, got[1][3][0] == 99f)
     }
 
     @Test

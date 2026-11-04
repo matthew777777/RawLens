@@ -22,7 +22,38 @@ class LinearRgbDngSaver(private val context: Context) {
         captureId: Long = System.currentTimeMillis(),
         gps: GpsLocation? = null,
         noiseProfileOverride: DoubleArray? = null
+    ): String = publish(captureId) {
+        LinearRgbDngWriter.write(it, image, metadata, provenance, gps, noiseProfileOverride, captureId)
+    }
+
+    /**
+     * Same publication through [LinearRgbDngWriter.writeStriped] (pixel-
+     * identical to [saveLinearRgb]): samples are read band by band from
+     * [rgb], interleaved RGB in a native buffer, so no frame-sized heap copy
+     * is made (C11: ~150 MB at 12 MP for MFSR).
+     */
+    fun saveLinearRgbStriped(
+        width: Int,
+        height: Int,
+        rgb: java.nio.FloatBuffer,
+        metadata: RawFrameMetadata,
+        provenance: MergeProvenance,
+        captureId: Long = System.currentTimeMillis(),
+        gps: GpsLocation? = null,
+        noiseProfileOverride: DoubleArray? = null
     ): String {
+        require(rgb.capacity() >= Math.multiplyExact(Math.multiplyExact(width, height), 3)) { "RGB buffer too small" }
+        return publish(captureId) { out ->
+            LinearRgbDngWriter.writeStriped(out, width, height, metadata, provenance, gps,
+                noiseProfileOverride = noiseProfileOverride, captureTimeMillis = captureId) { startY, rows, band ->
+                val src = rgb.duplicate()
+                src.position(startY * width * 3)
+                src.get(band, 0, rows * width * 3)
+            }
+        }
+    }
+
+    private fun publish(captureId: Long, writeTo: (java.io.OutputStream) -> Unit): String {
         val displayName = CaptureFileNames.linearRgbDng(captureId)
         val resolver = context.contentResolver
         val values = ContentValues().apply {
@@ -34,7 +65,7 @@ class LinearRgbDngSaver(private val context: Context) {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IOException("Could not create Linear RGB DNG media entry")
         try {
-            resolver.openOutputStream(uri, "w")?.use { LinearRgbDngWriter.write(it, image, metadata, provenance, gps, noiseProfileOverride, captureId) }
+            resolver.openOutputStream(uri, "w")?.use { writeTo(it) }
                 ?: throw IOException("Could not open Linear RGB DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish Linear RGB DNG")

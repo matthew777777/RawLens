@@ -545,6 +545,7 @@ internal fun runKotlinPort(spec: StageSpec, inputs: Map<String, NpyArray>): List
                 metrics = listOf(
                     BlockMetric.L1, BlockMetric.L2, BlockMetric.L2,
                 ),
+                edgeExtendFlow = false, // Python-exact (reference parity)
             )
             val init = initAlignment(ref, loop)
             return listOf(flowToNpy(alignLevels(init, moving, loop)))
@@ -734,6 +735,7 @@ internal fun runKotlinPort(spec: StageSpec, inputs: Map<String, NpyArray>): List
                     BlockMetric.L1, BlockMetric.L2,
                     BlockMetric.L2, BlockMetric.L2,
                 ),
+                edgeExtendFlow = false, // Python-exact (reference parity)
             )
             val init = initAlignment(ref, loop)
             val levels = alignLevelsPerLevel(init, moving, loop)
@@ -776,6 +778,7 @@ internal fun runKotlinPort(spec: StageSpec, inputs: Map<String, NpyArray>): List
                 robustnessEnabled = true,
                 sigmaSqCurve = floatArrayOf(0f, 0f),
                 dSqCurve = floatArrayOf(0f, 0f),
+                edgeExtendFlow = false, // Python-exact (reference parity)
             )
             val out = EndToEnd.run(frame(0), listOf({ frame(1) }, { frame(2) }), config)
             return listOf(image3DToNpy(out))

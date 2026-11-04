@@ -79,6 +79,14 @@ data class PipelineConfig(
      * Vulkan bayer path only.
      */
     val kernelNet: KernelNetConfig? = null,
+    /** See [AlignLoopConfig.edgeExtendFlow]; false = Python-exact. */
+    val edgeExtendFlow: Boolean = true,
+    /**
+     * Colour-difference accumulation (Z1 zipper fix, [ColourDiff]): the
+     * (wbR, wbB) white-balance gains, or null for the plain Wronski Eq. 1
+     * accumulation (Python-exact, today's merge). Bayer only.
+     */
+    val colourDiff: FloatArray? = null,
 )
 
 object EndToEnd {
@@ -104,6 +112,7 @@ object EndToEnd {
             icaClip = config.icaClip,
             flowUpscaleMode = config.flowUpscaleMode,
             preprocessing = config.alignmentPreprocessing,
+            edgeExtendFlow = config.edgeExtendFlow,
         )
     }
 
@@ -155,7 +164,9 @@ object EndToEnd {
         val den = Array(outH) { Array(outW) { FloatArray(3) } }
         val zeroFlow = Array(finestTiles.size) { Array(finestTiles[0].size) { floatArrayOf(0f, 0f) } }
         val onesR = Array(reference.size) { FloatArray(reference[0].size) { 1f } }
-        merge(reference, zeroFlow, frameKernels(reference, config), onesR, num, den, config.bayer, config.scale, tile)
+        val cd = config.colourDiff?.takeIf { config.bayer }
+        fun splatIn(f: Array<FloatArray>) = if (cd == null) f else ColourDiff.toRows(f, cd[0], cd[1])
+        merge(splatIn(reference), zeroFlow, frameKernels(reference, config), onesR, num, den, config.bayer, config.scale, tile)
 
         // 4. Per comparison frame (decoded just in time).
         for (frameThunk in comparisons) {
@@ -171,11 +182,12 @@ object EndToEnd {
             } else {
                 Array(frame.size) { FloatArray(frame[0].size) { 1f } }
             }
-            merge(frame, flow, frameKernels(frame, config), robustness, num, den, config.bayer, config.scale, tile)
+            merge(splatIn(frame), flow, frameKernels(frame, config), robustness, num, den, config.bayer, config.scale, tile)
         }
 
         // 5. Normalise in place.
         divide(num, den)
+        if (cd != null) ColourDiff.reconstruct(num, cd[0], cd[1])
         return num
     }
 

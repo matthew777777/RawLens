@@ -10,8 +10,10 @@ import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
+import com.rawlens.srpipeline.stages.HotPixels
 import com.rawlens.srpipeline.stages.KernelNet
 import com.rawlens.srpipeline.stages.KernelNetConfig
+import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
@@ -34,9 +36,13 @@ import java.nio.ByteBuffer
  * .keepSourceBurst, run the same frames through the desktop CLI, and
  * census the pair (same envelope class as the crop gate).
  *
- * Noise correction stays off (no live LUT file; zero curves, the
- * recorded nc=false leg); kernel GAT uses the live SENSOR_NOISE_PROFILE
- * via [DngRead.noiseAlphaBeta], same as the CLI's DNG profile leg.
+ * Noise model (engineNoiseAlphaBeta / withLearnedGreen): the learned
+ * per-device model (switch: MfsrSettings.learnedNoise) or the Camera2
+ * profile mapped from CFA order; it drives GAT, SNR -> tile/kernel params,
+ * the in-app NoiseLutGen robustness LUT and the KernelNet sigma.
+ * Before the merge: static hot/dead pixels (HotPixels, C18). In the merge:
+ * colour-difference accumulation (Z1, MfsrSettings.zipperFix). After it:
+ * lens shading on the merged RGB (C19).
  */
 internal object MfsrMerge {
 
@@ -58,9 +64,7 @@ internal object MfsrMerge {
         val width: Int,
         val height: Int,
         val keptCount: Int,
-        val refIndex: Int,
         val mergeMs: Long,
-        val gpuMs: Double,
         /** Sharpest frame's metadata (DNG tags + provenance). */
         val refMetadata: RawFrameMetadata,
         /**
@@ -167,7 +171,7 @@ internal object MfsrMerge {
         val h = cfa.height
         require(w % 2 == 0 && h % 2 == 0) { "sharp merge needs even dimensions, got ${w}x$h" }
         // Single-alloc rows straight from the unpacked raster (same
-        // index map as flipFloatsToRggb): the old flat-flip-then-wrap
+        // index map as DngRead.flipToRggb): the old flat-flip-then-wrap
         // held three full-frame float arrays per decode (150 MB at
         // full-res), which OOM'd the on-device merge inside the very
         // first frame decode. Values-identical by construction.
@@ -200,7 +204,7 @@ internal object MfsrMerge {
     /**
      * Flat destination index → source index for the RGGB flip (same
      * index maps as DngRead.flipToRggb; values already normalised).
-     * Shared by [flipFloatsToRggb] and the single-alloc [decodeRows].
+     * Shared by [decodeRows], [restoreSensorCoordinates], the noise mapping and the hot-pixel verifiers.
      */
     private fun flipSrcIndex(i: Int, w: Int, h: Int, cfa: IntArray): Int {
         // Identity RGGB.
@@ -216,6 +220,139 @@ internal object MfsrMerge {
             return (h - 1 - i / w) * w + (i % w)
         }
         throw IllegalArgumentException("sharp merge: unsupported CFA pattern ${cfa.toList()}")
+    }
+
+    /**
+     * Noise model (S, O) per engine plane, in the engine's R, G1, B, G2 order
+     * (RGGB-normalised raster from [decodeRows]: R (0,0), G1 (0,1), B (1,1),
+     * G2 (1,0); the order BurstConfig / GAT / NoiseLutGen / KernelNet expect).
+     *
+     * Camera2 SENSOR_NOISE_PROFILE lists one (S, O) pair per CFA channel "in
+     * the same order as channels listed for the CFA layout key"
+     * (AOSP metadata_definitions.xml, android.sensor.noiseProfile), i.e.
+     * row-major over the sensor's 2x2 cell. Each engine phase is mapped back to
+     * its sensor phase with the same [flipSrcIndex] map [decodeRows] uses
+     * (even dims keep parity), so pixels and noise can never disagree.
+     * Previously the 8 values were read as R,G1,B,G2 directly: on a GRBG
+     * sensor that swapped red and green-1 (R got G's slope, ~half).
+     *
+     * 6 values: 3 planes R, G, B (DNG CFAPlaneColor order, e.g. a
+     * DngCreator NoiseProfile or a user override) -> R, G, B, G.
+     * 2 values: one plane for all. Anything else: null.
+     */
+    internal fun engineNoiseAlphaBeta(noise: DoubleArray?, pattern: BayerPattern): Pair<DoubleArray, DoubleArray>? {
+        if (noise == null) return null
+        val sensorCell: IntArray = when (noise.size) {
+            8 -> {
+                val codes = dngCodesFor(pattern)
+                // engine cells in R, G1, B, G2 order -> 2x2 row-major index -> sensor cell
+                val cells = intArrayOf(0, 1, 3, 2).map { flipSrcIndex(it, 2, 2, codes) }.toIntArray()
+                check(pattern.cellOrdinals[cells[0]] == CfaColor.RED.ordinal &&
+                    pattern.cellOrdinals[cells[2]] == CfaColor.BLUE.ordinal) {
+                    "noise mapping: engine R/B do not land on sensor R/B for $pattern"
+                }
+                cells
+            }
+            6 -> intArrayOf(0, 1, 2, 1)
+            2 -> intArrayOf(0, 0, 0, 0)
+            else -> return null
+        }
+        if (noise.any { !it.isFinite() } || (0 until noise.size / 2).any { noise[2 * it] <= 0.0 }) return null
+        return DoubleArray(4) { noise[2 * sensorCell[it]] } to DoubleArray(4) { noise[2 * sensorCell[it] + 1] }
+    }
+
+    /**
+     * Learned per-device model (green a, b at this ISO; [learned] = predictNoise
+     * output) as the level, the Camera2 profile ([profile], engine R,G1,B,G2) as
+     * the per-channel shape: each plane keeps its profile ratio to the mean green.
+     * The model is learned from green sites only (noise_estimate.h), so it
+     * cannot say R/B on its own. No profile: green values for all planes.
+     * Null when there is no learned model.
+     */
+    internal fun withLearnedGreen(
+        profile: Pair<DoubleArray, DoubleArray>?, learned: FloatArray?
+    ): Pair<DoubleArray, DoubleArray>? {
+        if (learned == null || learned.size < 2 || !(learned[0] > 0f) || !(learned[1] >= 0f)) return null
+        val aG = learned[0].toDouble(); val bG = learned[1].toDouble()
+        if (profile == null) return DoubleArray(4) { aG } to DoubleArray(4) { bG }
+        val (pa, pb) = profile
+        val paG = (pa[1] + pa[3]) / 2; val pbG = (pb[1] + pb[3]) / 2
+        val alpha = DoubleArray(4) { if (paG > 0) aG * pa[it] / paG else aG }
+        val beta = DoubleArray(4) { if (pbG > 0) bG * pb[it] / pbG else bG }
+        return alpha to beta
+    }
+
+    /**
+     * Reads one live frame's raw plane at engine-rows coordinates (same flip
+     * map as [decodeRows]), black-subtracted and normalised. Point reads only,
+     * for HotPixels.confirm before the frame is decoded (no extra full decode).
+     */
+    private fun liveVerifier(sharp: MfsrFrame, w: Int, h: Int): (Int, Int) -> Float {
+        val plane = sharp.frame.image.planes[0]
+        val shorts = plane.buffer.duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+        val rowShorts = plane.rowStride / 2
+        val colShorts = plane.pixelStride / 2
+        val norm = sharp.norm
+        val codes = dngCodesFor(norm.sensorPattern)
+        return { y, x ->
+            val src = flipSrcIndex(y * w + x, w, h, codes)
+            val sx = src % w; val sy = src / w
+            val black = norm.blackAt(sx, sy)
+            ((shorts.get(sy * rowShorts + sx * colShorts).toInt() and 0xffff) - black) / (norm.whiteLevel - black)
+        }
+    }
+
+    /**
+     * White-balance gains (1/neutral R, 1/neutral B, relative to G) for the Z1
+     * colour-difference merge, or (1, 1) when the frame has no usable neutral
+     * (the fix still removes the zipper; neutral just is not exactly 0).
+     */
+    internal fun zipperWb(neutral: DoubleArray?): FloatArray {
+        if (neutral == null || neutral.size < 3 || neutral.any { !(it > 0.0) || !it.isFinite() }) return floatArrayOf(1f, 1f)
+        return floatArrayOf((neutral[1] / neutral[0]).toFloat(), (neutral[1] / neutral[2]).toFloat())
+    }
+
+    /**
+     * C19: lens shading on the merged RGB (sensor coordinates, interleaved,
+     * top-down): R x gain(R), G x mean(gain(G even), gain(G odd)), B x
+     * gain(B), same LensShadingModel.gainAt the still path uses. Identity
+     * when the map is already applied.
+     */
+    internal fun applyShadingAfterMerge(rgb: java.nio.FloatBuffer, w: Int, h: Int, model: LensShadingModel) {
+        if (model.alreadyApplied) return
+        ShardWorkers.forEachShard(h) { y0, y1 ->
+            for (y in y0 until y1) for (x in 0 until w) {
+                val i = 3 * (y * w + x)
+                val gG = 0.5f * (model.gainAt(x, y, CfaColor.GREEN, 0) + model.gainAt(x, y, CfaColor.GREEN, 1))
+                rgb.put(i, rgb.get(i) * model.gainAt(x, y, CfaColor.RED))
+                rgb.put(i + 1, rgb.get(i + 1) * gG)
+                rgb.put(i + 2, rgb.get(i + 2) * model.gainAt(x, y, CfaColor.BLUE))
+            }
+        }
+    }
+
+    /**
+     * Lens shading for a merge of a sensor sub-region (LK-SR zoom): output
+     * pixel (x, y) sits at sensor (x0 + (x + 0.5) * sx, y0 + (y + 0.5) * sy).
+     */
+    internal fun applyShadingMapped(
+        rgb: java.nio.FloatBuffer, w: Int, h: Int, model: LensShadingModel,
+        x0: Int, y0: Int, sx: Float, sy: Float
+    ) {
+        if (model.alreadyApplied) return
+        ShardWorkers.forEachShard(h) { ya, yb ->
+            for (y in ya until yb) {
+                val syy = (y0 + (y + 0.5f) * sy).toInt()
+                for (x in 0 until w) {
+                    val sxx = (x0 + (x + 0.5f) * sx).toInt()
+                    val i = 3 * (y * w + x)
+                    val gG = 0.5f * (model.gainAt(sxx, syy, CfaColor.GREEN, 0) + model.gainAt(sxx, syy, CfaColor.GREEN, 1))
+                    rgb.put(i, rgb.get(i) * model.gainAt(sxx, syy, CfaColor.RED))
+                    rgb.put(i + 1, rgb.get(i + 1) * gG)
+                    rgb.put(i + 2, rgb.get(i + 2) * model.gainAt(sxx, syy, CfaColor.BLUE))
+                }
+            }
+        }
     }
 
     /** Undo decodeRows' spatial permutation on interleaved RGB, in place. */
@@ -236,11 +373,6 @@ internal object MfsrMerge {
         rgb.rewind()
     }
 
-    private fun flipFloatsToRggb(pixels: FloatArray, w: Int, h: Int, cfa: IntArray): FloatArray {
-        require(pixels.size == w * h) { "sharp merge: raster size mismatch" }
-        if (cfa[0] == 0 && cfa[1] == 1 && cfa[2] == 1 && cfa[3] == 2) return pixels
-        return FloatArray(w * h) { i -> pixels[flipSrcIndex(i, w, h, cfa)] }
-    }
 
     /**
      * Merges sharpest-first frames at native resolution (scale 1) and
@@ -292,10 +424,13 @@ internal object MfsrMerge {
                 }
             }, w, h,
             kept[0].metadata.noiseProfile?.toDoubleArray(), settings,
-            kept[0].norm.sensorPattern
+            kept[0].norm.sensorPattern, WaveletDenoiser.NoiseSource.of(kept[0].metadata),
+            kept[0].metadata.neutralColorPoint?.toDoubleArray(),
+            RawPreDemosaicPipeline.lensShadingModel(kept[0].metadata),
+            kept.drop(1).take(2).map { liveVerifier(it, w, h) }
         ) ?: return null
-        return MfsrResult(engine.rgb, engine.width, engine.height, count, 0,
-            engine.mergeMs, 0.0, kept[0].metadata, kept[0].frame.result)
+        return MfsrResult(engine.rgb, engine.width, engine.height, count,
+            engine.mergeMs, kept[0].metadata, kept[0].frame.result)
     }
 
     /**
@@ -315,10 +450,18 @@ internal object MfsrMerge {
         val engine = runEngine(
             context, kept.map { decoded -> { decodeRows(decoded.cfa) } }, w, h,
             kept[0].source.metadata.noiseProfile?.toDoubleArray(), settings,
-            kept[0].cfa.pattern
+            kept[0].cfa.pattern, WaveletDenoiser.NoiseSource.of(kept[0].source.metadata),
+            kept[0].source.metadata.neutralColorPoint?.toDoubleArray(),
+            RawPreDemosaicPipeline.lensShadingModel(kept[0].source.metadata),
+            kept.drop(1).take(2).map { decoded ->
+                val codes = dngCodesFor(decoded.cfa.pattern)
+                val v = decoded.cfa.values
+                val f: (Int, Int) -> Float = { y, x -> v[flipSrcIndex(y * w + x, w, h, codes)] }
+                f
+            }
         ) ?: return null
-        return MfsrResult(engine.rgb, engine.width, engine.height, count, 0,
-            engine.mergeMs, 0.0, kept[0].source.metadata, null)
+        return MfsrResult(engine.rgb, engine.width, engine.height, count,
+            engine.mergeMs, kept[0].source.metadata, null)
     }
 
     /**
@@ -344,14 +487,8 @@ internal object MfsrMerge {
         if (unpacked.size < MfsrSettings.MIN_MERGE_FRAMES) return null
         val refOrder = selectSharpestDecoded(unpacked) ?: return null
         val ordered = refOrder.map { unpacked[it] }
-        // Lens-shading correction after selection (same model as the
-        // live decodeSharp path): selection ranks uncorrected frames on
-        // both paths, the merge sees corrected ones. In-place, no extra
-        // allocation; identity when a take carries no map.
-        for (frame in ordered) {
-            LensShadingCorrector.applyOwnedInPlace(
-                frame.cfa, RawPreDemosaicPipeline.lensShadingModel(frame.source.metadata))
-        }
+        // C19: no lens shading here any more; it is applied to the merged
+        // RGB (applyShadingAfterMerge), so the merge sees raw sensor noise.
         return ordered
     }
 
@@ -394,14 +531,12 @@ internal object MfsrMerge {
             plane.rowStride, plane.pixelStride, 0, 0
         )
         val cfa = RawSensorUnpacker.unpackNormalized(plane.buffer.duplicate(), layout, sharp.norm)
-        // Lens-shading correction (same model the still path applies via
-        // RawPreDemosaicPipeline): live ZSL buffers are uncorrected while
-        // saved DNGs carry the GainMap opcode for the reader — without
-        // this the merge bakes the lens vignetting into both outputs
-        // (linear DNG + RGB JPEG). In-place, no extra allocation;
-        // identity when the map is missing or already applied.
-        LensShadingCorrector.applyOwnedInPlace(
-            cfa, RawPreDemosaicPipeline.lensShadingModel(sharp.metadata))
+        // C19: lens shading is NOT applied per frame any more. Gains up to
+        // 4x+ in the corners scaled noise variance by gain^2 while GAT, SNR
+        // and the robustness LUT assumed raw sensor noise (corner frames got
+        // rejected as "motion"). HDR+ (Hasinoff et al. 2016) merges raw and
+        // shades in finishing; applyShadingAfterMerge does the same on the
+        // merged RGB (the vignetting is still removed from both outputs).
         return decodeRows(cfa)
     }
 
@@ -418,7 +553,14 @@ internal object MfsrMerge {
         h: Int,
         noise: DoubleArray?,
         settings: MfsrSettings,
-        pattern: BayerPattern
+        pattern: BayerPattern,
+        noiseSource: WaveletDenoiser.NoiseSource?,
+        /** Reference AsShotNeutral (R, G, B) for the Z1 colour-difference merge. */
+        neutral: DoubleArray?,
+        /** Reference lens-shading model, applied to the merged RGB (C19). */
+        shading: LensShadingModel?,
+        /** Value accessors (engine rows coordinates, normalised) of two more frames, for HotPixels.confirm. */
+        verifiers: List<(Int, Int) -> Float> = emptyList()
     ): EngineOut? {
         val count = decoders.size
         try {
@@ -434,16 +576,37 @@ internal object MfsrMerge {
         }
         var nativeOut: ByteBuffer? = null
         try {
-            val (alpha, beta) = if (noise != null && noise.size == 8) {
-                DngRead.noiseAlphaBeta(noise, 8)
-            } else {
-                DoubleArray(4) { 1e-4 } to DoubleArray(4) { 1e-6 }
-            }
+            val profile = engineNoiseAlphaBeta(noise, pattern)
+            val learned = if (!settings.learnedNoise || noiseSource == null) null else
+                WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), noiseSource)
+                    ?.let { WaveletVulkan.predictNoise(it, noiseSource.iso.toFloat()) }
+            val (alpha, beta) = withLearnedGreen(profile, learned)
+                ?: profile
+                ?: (DoubleArray(4) { 1e-4 } to DoubleArray(4) { 1e-6 }).also {
+                    Log.w(LOG_TAG, "sharp merge: no usable noise profile (size ${noise?.size}), using constant fallback")
+                }
+            Log.i(LOG_TAG, "sharp merge noise: source=%s alpha=%s beta=%s".format(
+                when {
+                    learned != null -> "learned(samples=${learned[2].toInt()} isos=${learned[3].toInt()})"
+                    profile != null -> if (settings.learnedNoise) "profile (model untrained)" else "profile (learned off)"
+                    else -> "fallback"
+                },
+                alpha.joinToString(",") { "%.3g".format(it) }, beta.joinToString(",") { "%.3g".format(it) }))
             // Same recipe as the desktop CLI / crop gate (BurstConfig SNR
             // scan sizes the tiles); scale 1 keeps the source grid.
             // First thunk decodes now (reference rows); the rest decode
             // just in time inside the engine, one frame at a time.
             val first = decoders[0]()
+            // C18: static hot/dead pixels (HotPixels: darktable hotpixels rule,
+            // confirmed at the same position in two more frames so moving
+            // point lights survive), replaced in every frame before merging.
+            val defects = if (verifiers.size < 2) IntArray(0) else {
+                val t0 = SystemClock.elapsedRealtime()
+                HotPixels.confirm(HotPixels.candidates(first), h, w, verifiers.take(2)).also {
+                    Log.i(LOG_TAG, "sharp merge defects: ${it.size} confirmed in ${SystemClock.elapsedRealtime() - t0} ms")
+                }
+            }
+            HotPixels.correct(first, defects)
             val snr = BurstConfig.estimateSnr(first, alpha, beta)
             val fin = BurstConfig.finalize(snr)
             val factors = listOf(1, 2, 4, 4)
@@ -463,6 +626,11 @@ internal object MfsrMerge {
             }
             val config = PipelineConfig(
                 scale = 1f, bayer = true, factors = factors, tileSizes = fin.tileSizes,
+                // C26: the SNR-tuned Wronski kernel params (update_snr_config) were
+                // computed above but never passed, so the app ran KernelParams()
+                // defaults (kDetail 1.0 vs 0.25-0.33); kMin 0.64 = the checker fix.
+                kernelParams = KernelParams(fin.kDetail.toFloat(), fin.kDenoise.toFloat(),
+                    fin.dTh.toFloat(), fin.dTr.toFloat(), kMin = 0.64f),
                 kernelPreprocessing = "gat",
                 kernelAlpha = FloatArray(4) { alpha[it].toFloat() },
                 kernelBeta = FloatArray(4) { beta[it].toFloat() },
@@ -471,6 +639,7 @@ internal object MfsrMerge {
                 sigmaSqCurve = curves?.sigmaSq ?: floatArrayOf(0f, 0f),
                 dSqCurve = curves?.dSq ?: floatArrayOf(0f, 0f),
                 memoryTight = true,
+                colourDiff = if (!settings.zipperFix) null else zipperWb(neutral),
                 icaIterations = 3,
                 // KernelNet (when selected): one kernel map from the reference
                 // frame, which on the device IS the full frame, so no
@@ -487,7 +656,7 @@ internal object MfsrMerge {
                     )
                 }
             )
-            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=%s s3=%s".format(snr, fin.tileSize, settings.kernel, settings.s3))
+            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=%s s3=%s zipperFix=%s".format(snr, fin.tileSize, settings.kernel, settings.s3, settings.zipperFix))
             fun asset(name: String): ByteArray =
                 context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
             val fft = asset("fft")
@@ -498,7 +667,7 @@ internal object MfsrMerge {
             val rgb = VulkanPipeline.run(
                 { first },
                 decoders.drop(1).map { decode ->
-                    { _: ByteBuffer -> decode() }
+                    { _: ByteBuffer -> decode().also { HotPixels.correct(it, defects) } }
                 },
                 config, handle,
                 AlignGpu.Spirvs(
@@ -523,6 +692,12 @@ internal object MfsrMerge {
             // sensor metadata / EXIF orientation in either output tail.
             restoreSensorCoordinates(rgb.asFloatBuffer(), w, h, pattern)
             rgb.rewind()
+            shading?.let { model ->
+                val t0 = SystemClock.elapsedRealtime()
+                applyShadingAfterMerge(rgb.asFloatBuffer(), w, h, model)
+                rgb.rewind()
+                Log.i(LOG_TAG, "sharp merge lens shading after merge in ${SystemClock.elapsedRealtime() - t0} ms")
+            }
             Log.i(LOG_TAG, "sharp merge done ${w}x$h N=$count in ${mergeMs}ms")
             return EngineOut(rgb, w, h, mergeMs)
         } catch (failure: Exception) {

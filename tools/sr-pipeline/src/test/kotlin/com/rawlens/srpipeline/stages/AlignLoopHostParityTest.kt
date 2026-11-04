@@ -32,6 +32,7 @@ class AlignLoopHostParityTest {
         tileSizes = listOf(16, 16, 16, 8),
         searchRadii = listOf(1, 4, 4, 4),
         metrics = listOf(BlockMetric.L1, BlockMetric.L2, BlockMetric.L2, BlockMetric.L2),
+        edgeExtendFlow = false, // Python-exact (reference parity)
     )
 
     private fun maxAbsFlow(a: Array<Array<FloatArray>>, b: Array<Array<FloatArray>>): Float {

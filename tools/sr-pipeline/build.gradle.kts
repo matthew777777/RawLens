@@ -26,6 +26,7 @@ dependencies {
 // the real JNI entries on the desktop Vulkan loader. Unset (CI default):
 // the GPU tests skip and the suite stays green without Vulkan.
 tasks.withType<Test> {
+    maxHeapSize = (findProperty("srpHeap") as String?) ?: "512m"
     systemProperty("srpipeline.lib", (findProperty("srpLib") as String?) ?: "")
     systemProperty("srpipeline.spv", (findProperty("srpSpv") as String?) ?: "")
     systemProperty("srpipeline.spv_gat", (findProperty("srpSpvGat") as String?) ?: "")
@@ -39,6 +40,7 @@ tasks.withType<Test> {
     systemProperty("srpipeline.spv_divide", (findProperty("srpSpvDivide") as String?) ?: "")
     systemProperty("srpipeline.spv_robust", (findProperty("srpSpvRobust") as String?) ?: "")
     systemProperty("srpipeline.spv_merge_splat", (findProperty("srpSpvMergeSplat") as String?) ?: "")
+    systemProperty("srpipeline.diag", (findProperty("srpDiag") as String?) ?: "")
     systemProperty("srpipeline.fixtures", (findProperty("srpFixtures") as String?) ?: "parity/fixtures")
     systemProperty("srpipeline.gpuref", (findProperty("srpGpuRef") as String?) ?: "parity/gpu_reference")
     systemProperty("srpipeline.burst", (findProperty("srpBurstDir") as String?) ?: "/Users/monikamalinowska/Downloads/Photos/Photos/IMG_20260927_134544_522")

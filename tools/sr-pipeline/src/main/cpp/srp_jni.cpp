@@ -1530,7 +1530,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeGrad(
 
 // Real GPU path: kernel-covariance build (kernels.comp, Alg.5) over
 // caller-owned direct buffers. `grads_buffer` holds gradW*gradH*2
-// interleaved-pair floats, `kparams_buffer` holds 8 floats (six shaping
+// interleaved-pair floats, `kparams_buffer` holds 9 floats (six shaping
 // scalars + selection_law/is_iso by bit pattern), `cov_buffer` receives
 // covW*covH*4 floats ((xx,xy,yy,0) per cov pixel). `spirv` holds the
 // compiled shaders/kernels.comp module. Staged via StageAndRunCorr
@@ -1552,7 +1552,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKernelsCov(
   const int64_t cov_count = static_cast<int64_t>(cov_w) * cov_h * 4;
   const srp::Status status = StageAndRunCorr(
       env, ctx, device, physical, grads_buffer, kparams_buffer, cov_buffer,
-      grads_count, 8, cov_count, spirv,
+      grads_count, 9, cov_count, spirv,
       [&](VkBuffer a, VkBuffer b, VkBuffer c, VkShaderModule module) {
         return srp::SrpKernelsCovGpu(
             ctx, static_cast<uint32_t>(grad_w), static_cast<uint32_t>(grad_h),
@@ -2171,7 +2171,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKernelsCovRes
   }
   float* kp_ptr = static_cast<float*>(env->GetDirectBufferAddress(kp_buffer));
   if (kp_ptr == nullptr ||
-      env->GetDirectBufferCapacity(kp_buffer) < 32) {
+      env->GetDirectBufferCapacity(kp_buffer) < 36) {
     return static_cast<jint>(srp::Status::kInitFailed);
   }
   const jsize spirv_len = env->GetArrayLength(spirv);
@@ -2192,7 +2192,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKernelsCovRes
   VkBuffer kp_vk = VK_NULL_HANDLE;
   VkDeviceMemory kp_mem = VK_NULL_HANDLE;
   srp::Status status = srp::Status::kDispatchFailed;
-  if (MakeStagingBuffer(device, physical, 32, kp_ptr, &kp_vk, &kp_mem)) {
+  if (MakeStagingBuffer(device, physical, 36, kp_ptr, &kp_vk, &kp_mem)) {
     status = srp::SrpKernelsCovGpu(
         ctx, static_cast<uint32_t>(grad_w), static_cast<uint32_t>(grad_h),
         static_cast<uint32_t>(cov_w), static_cast<uint32_t>(cov_h), grads_vk,

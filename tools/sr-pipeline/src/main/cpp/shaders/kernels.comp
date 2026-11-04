@@ -26,6 +26,7 @@ layout(set = 0, binding = 1) buffer Cov { vec4 cov[]; };
 layout(set = 0, binding = 2) readonly buffer KParams {
   float k_detail; float k_denoise; float D_th; float D_tr;
   float k_stretch; float k_shrink; uint selectionLaw; uint isIso;
+  float k_min;  // C26 minimum kernel std (0 = paper-exact); KernelParams.kMin
 };
 
 // get_real_polyroots_2: |r1| >= |r2| ordering, delta clamped at 0.
@@ -110,6 +111,8 @@ void main() {
   }
   float k1 = k_detail * ((1.0 - D) * k1s + D * k_denoise);
   float k2 = k_detail * ((1.0 - D) * k2s + D * k_denoise);
+  k1 = max(k1, k_min);
+  k2 = max(k2, k_min);
   float k1sq = k1 * k1;
   float k2sq = k2 * k2;
   cov[i] = vec4(k1sq * e1.x * e1.x + k2sq * e2.x * e2.x,

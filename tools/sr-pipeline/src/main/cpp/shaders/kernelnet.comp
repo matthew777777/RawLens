@@ -96,7 +96,7 @@ void main() {
       // raw position (cell g centred at crop + 2g + 1), exactly as GL
       // texture() samples it at that normalized coordinate. Then
       // anisoupscale.glsl's shaping: sigmas *= raw/map texel ratio *
-      // sigmaScale, clamp [0.25, sigmaCap] px, elongation <= 7, rho clamp
+      // sigmaScale, clamp [0.90, sigmaCap] px, elongation <= 7, rho clamp
       // +-0.8, det >= 1e-2; its weight exp(-q) with q = c dx^2 + 2 b dx dy +
       // a dy^2 (s2 = x width, s1 = y width; verified on the model) is
       // Wronski's exp(-0.5 d^T Omega^-1 d) with
@@ -126,8 +126,14 @@ void main() {
       vec3 s = mix(mix(t00, t01, fu), mix(t10, t11, fu), fv);
       float s1 = max(s.x, 1e-4), s2 = max(s.y, 1e-4);
       float rho = clamp(s.z, -0.8, 0.8);
-      s1 = clamp(s1 * (rawW / float(mapW)) * p.alpha, 0.25, p.beta);
-      s2 = clamp(s2 * (rawH / float(mapH)) * p.alpha, 0.25, p.beta);
+      // Width window [0.90, cap]: RawLens C24 (VulkanBurstCheckTest, 5 bursts x
+      // 4 crops on Vulkan). The merge gathers a 3x3 neighbourhood: wider than
+      // that (cap 2.0) made the per-site sample count set the noise level
+      // (checker in flats); narrower than 0.90 px made texture a per-lattice
+      // pick (checker in texture). PhotonCamera's own 0.25 floor is kept for
+      // its upscaler, not for this merge. Cost: ~5 % edge sharpness vs Wronski.
+      s1 = clamp(s1 * (rawW / float(mapW)) * p.alpha, 0.90, p.beta);
+      s2 = clamp(s2 * (rawH / float(mapH)) * p.alpha, 0.90, p.beta);
       if (s1 > s2 * 7.0) s1 = s2 * 7.0; else if (s2 > s1 * 7.0) s2 = s1 * 7.0;
       float det = max(1.0 - rho * rho, 1e-2);
       float rhoEff = sign(rho) * sqrt(max(1.0 - det, 0.0));

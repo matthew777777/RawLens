@@ -38,6 +38,51 @@ class MfsrMergeTest {
         }
     }
 
+    /**
+     * Camera2 SENSOR_NOISE_PROFILE is in CFA-layout order (row-major sensor
+     * cell). The engine's R, G1, B, G2 noise must come from the same sensor
+     * cell its pixels come from: tag each sensor cell, decode, compare.
+     */
+    @Test fun engineNoiseFollowsThePixelMapForEveryPattern() {
+        for (pattern in BayerPattern.entries) {
+            val w = 6; val h = 4
+            val cfa = UnpackedRawCfa(w, h, pattern,
+                FloatArray(w * h) { i -> (((i / w) and 1) * 2 + ((i % w) and 1)).toFloat() }, RawCrop(0, 0, w, h))
+            val rows = MfsrMerge.decodeRows(cfa)
+            // distinct (S, O) per sensor cell, CFA order
+            val noise = DoubleArray(8) { if (it % 2 == 0) 1e-4 * (it / 2 + 1) else 1e-7 * (it / 2 + 1) }
+            val (alpha, beta) = MfsrMerge.engineNoiseAlphaBeta(noise, pattern)!!
+            // engine R (0,0), G1 (0,1), B (1,1), G2 (1,0)
+            val phases = listOf(0 to 0, 0 to 1, 1 to 1, 1 to 0)
+            for ((k, yx) in phases.withIndex()) {
+                val cell = rows[yx.first][yx.second].toInt()
+                assertEquals("$pattern plane $k S", noise[2 * cell], alpha[k], 0.0)
+                assertEquals("$pattern plane $k O", noise[2 * cell + 1], beta[k], 0.0)
+            }
+        }
+    }
+
+    @Test fun engineNoiseThreePlanesAndInvalid() {
+        val three = doubleArrayOf(3e-4, 1e-7, 1.7e-4, 2e-7, 3.1e-4, 3e-7)
+        val (a, b) = MfsrMerge.engineNoiseAlphaBeta(three, BayerPattern.GRBG)!!
+        assertArrayEquals(doubleArrayOf(3e-4, 1.7e-4, 3.1e-4, 1.7e-4), a, 0.0)
+        assertArrayEquals(doubleArrayOf(1e-7, 2e-7, 3e-7, 2e-7), b, 0.0)
+        assertEquals(null, MfsrMerge.engineNoiseAlphaBeta(null, BayerPattern.RGGB))
+        assertEquals(null, MfsrMerge.engineNoiseAlphaBeta(DoubleArray(5) { 1e-4 }, BayerPattern.RGGB))
+        assertEquals(null, MfsrMerge.engineNoiseAlphaBeta(DoubleArray(8) { Double.NaN }, BayerPattern.RGGB))
+    }
+
+    @Test fun learnedGreenSetsLevelProfileSetsShape() {
+        val profile = doubleArrayOf(4e-4, 2e-4, 6e-4, 2e-4) to doubleArrayOf(2e-6, 1e-6, 3e-6, 1e-6)
+        val (a, b) = MfsrMerge.withLearnedGreen(profile, floatArrayOf(5e-5f, 2e-7f, 30f, 4f))!!
+        assertArrayEquals(doubleArrayOf(1e-4, 5e-5, 1.5e-4, 5e-5), a, 1e-9)
+        assertArrayEquals(doubleArrayOf(4e-7, 2e-7, 6e-7, 2e-7), b, 1e-12)
+        val (a2, _) = MfsrMerge.withLearnedGreen(null, floatArrayOf(5e-5f, 2e-7f))!!
+        assertArrayEquals(DoubleArray(4) { 5e-5 }, a2, 1e-9)
+        assertEquals(null, MfsrMerge.withLearnedGreen(profile, null))
+        assertEquals(null, MfsrMerge.withLearnedGreen(profile, floatArrayOf(0f, 1e-7f)))
+    }
+
     @Test fun decodeRowsRejectsOddDimensions() {
         val cfa = cfaOf(BayerPattern.RGGB, w = 5, h = 4)
         assertThrows(IllegalArgumentException::class.java) { MfsrMerge.decodeRows(cfa) }
@@ -119,22 +164,27 @@ class MfsrMergeTest {
         )
     }
 
-    @Test fun prepareDecodedAppliesLensShadingMap() {
+    /** C19: frames enter the merge unshaded (raw sensor noise); shading is applied to the merged RGB. */
+    @Test fun prepareDecodedLeavesShadingForAfterTheMerge() {
         val twos = floatArrayOf(2f, 2f, 2f, 2f)
         val ordered = MfsrMerge.prepareDecoded(
             listOf(offlineFrame(0, twos), offlineFrame(1, twos), offlineFrame(2, null))
         ) ?: throw AssertionError("prepareDecoded returned null")
         assertEquals(3, ordered.size)
         val plain = 448f / 959f
-        for (decoded in ordered) {
-            val hasMap = decoded.source.metadata.lensShadingMap != null
-            val got = decoded.cfa.values[0]
-            if (hasMap) {
-                assertEquals("corrected frame doubles", plain * 2f, got, 0f)
-            } else {
-                assertEquals("mapless frame untouched", plain, got, 1e-6f)
-            }
-        }
+        for (decoded in ordered) assertEquals("frames stay unshaded", plain, decoded.cfa.values[0], 1e-6f)
+    }
+
+    @Test fun shadingAfterMergeScalesEachChannel() {
+        val model = LensShadingModel(1, 1, floatArrayOf(2f, 3f, 5f, 4f), IntRectSnapshot(0, 0, 4, 4))
+        val rgb = java.nio.FloatBuffer.wrap(FloatArray(4 * 4 * 3) { 0.1f })
+        MfsrMerge.applyShadingAfterMerge(rgb, 4, 4, model)
+        assertEquals(0.2f, rgb.get(0), 1e-6f)        // R x 2
+        assertEquals(0.4f, rgb.get(1), 1e-6f)        // G x mean(3, 5)
+        assertEquals(0.4f, rgb.get(2), 1e-6f)        // B x 4
+        val done = java.nio.FloatBuffer.wrap(FloatArray(4 * 4 * 3) { 0.1f })
+        MfsrMerge.applyShadingAfterMerge(done, 4, 4, model.copy(alreadyApplied = true))
+        assertEquals(0.1f, done.get(0), 0f)
     }
 
     @Test fun offlineSnapshotBuildInterleavesAndValidates() {

@@ -263,6 +263,7 @@ object Resample {
         prevTileSize: Int,
         upsamplingFactor: Int,
         mode: String = "bilinear",
+        edgeExtend: Boolean = false,
     ): Array<Array<FloatArray>> {
         require(targetTiles.size == 2 && targetTiles[0] >= 1 && targetTiles[1] >= 1) {
             "targetTiles must be [nTy >= 1, nTx >= 1] (got ${targetTiles.toList()})"
@@ -286,11 +287,22 @@ object Resample {
                 )
             }
         }
-        // Zero-pad shortfall, mirroring the `F.pad` tail of `upscale_lvl`.
+        // Shortfall tiles (the finer level holds more tiles than
+        // repeat * coarse tiles, bottom/right only). The Python reference
+        // zero-pads them (`F.pad` tail of `upscale_lvl`); zero flow there
+        // starts the finer search far from the true motion, and radii of
+        // 1-4 px cannot recover it: checklist M / C13a measured ~100 %
+        // wrong tiles within 128 raw px of the bottom/right border for
+        // motion >= 16 px. [edgeExtend] replicates the nearest upscaled
+        // tile instead (clamp-to-edge, the same rule the L2 search and
+        // patch extraction already use for pixels).
         return Array(targetTiles[0]) { ty ->
             Array(targetTiles[1]) { tx ->
-                if (ty < scaled.size && tx < scaled[0].size) scaled[ty][tx]
-                else floatArrayOf(0f, 0f)
+                when {
+                    ty < scaled.size && tx < scaled[0].size -> scaled[ty][tx]
+                    edgeExtend -> scaled[minOf(ty, scaled.size - 1)][minOf(tx, scaled[0].size - 1)].copyOf()
+                    else -> floatArrayOf(0f, 0f)
+                }
             }
         }
     }
