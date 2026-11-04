@@ -262,6 +262,8 @@ internal class PhotoSettingsTab(
                 .putInt(MainActivity.KEY_JPEG_QUALITY, resolved.jpegQuality)
                 .putString(MainActivity.KEY_JPEG_CHROMA_SUBSAMPLING, resolved.chromaSubsampling.name)
                 .putString(MainActivity.KEY_JPEG_DEMOSAIC, resolved.demosaic.name)
+                .putBoolean(ChromaCleanup.KEY_FALSE_COLOR, resolved.chromaCleanup.falseColorSuppression)
+                .putFloat(ChromaCleanup.KEY_DEFRINGE, resolved.chromaCleanup.defringeStrength)
                 .putFloat(MainActivity.KEY_JPEG_AGX_PURITY, resolved.agxPurityBoost)
                 .putString(AgxLook.PREFERENCE_KEY, resolved.agxLook.name)
                 .putFloat(MainActivity.KEY_JPEG_AGX_CONTRAST, resolved.agxContrast)
@@ -359,6 +361,40 @@ internal class PhotoSettingsTab(
         }
         kit.content.addView(demosaicButton)
         kit.content.addView(kit.sectionDesc("AMaZE (GLES) is the default still demosaic; RCD runs the Vulkan RCD modes and imports the result back. Quad-Bayer always uses AMaZE."))
+        val falseColorButton = Button(activity).apply {
+            fun refresh() {
+                text = "False-color suppression: ${if (currentJpegSettings.chromaCleanup.falseColorSuppression) "ON" else "OFF"}"
+            }
+            refresh()
+            setOnClickListener {
+                val cleanup = currentJpegSettings.chromaCleanup
+                val next = cleanup.copy(falseColorSuppression = !cleanup.falseColorSuppression)
+                if (applyJpegOutputSettings(currentJpegSettings.copy(chromaCleanup = next))) {
+                    refresh()
+                    host.setStatus("FALSE COLOR • ${if (next.falseColorSuppression) "ON" else "OFF"}")
+                }
+            }
+        }
+        kit.content.addView(falseColorButton)
+        val defringeSteps = floatArrayOf(0f, 0.5f, 1f)
+        val defringeButton = Button(activity).apply {
+            fun label(v: Float) = when { v <= 0f -> "OFF"; v < 1f -> "LOW"; else -> "HIGH" }
+            fun refresh() {
+                text = "Purple defringe: ${label(currentJpegSettings.chromaCleanup.defringeStrength)}"
+            }
+            refresh()
+            setOnClickListener {
+                val cleanup = currentJpegSettings.chromaCleanup
+                val index = defringeSteps.indexOfFirst { it >= cleanup.defringeStrength - 1e-3f }
+                val next = cleanup.copy(defringeStrength = defringeSteps[(index + 1) % defringeSteps.size])
+                if (applyJpegOutputSettings(currentJpegSettings.copy(chromaCleanup = next))) {
+                    refresh()
+                    host.setStatus("DEFRINGE • ${label(next.defringeStrength)}")
+                }
+            }
+        }
+        kit.content.addView(defringeButton)
+        kit.content.addView(kit.sectionDesc("Fused into the demosaic's final pass (no extra memory). False-color suppression: 3x3 color-difference median against moire on fine detail. Defringe: removes purple/magenta edges only at high-contrast edges."))
         if (host.developedFormat == DevelopedFormat.JPEG) {
         var jpegQuality = currentJpegSettings.jpegQuality.coerceIn(1, 100)
         val jpegQualityLabel = TextView(activity).apply {
@@ -585,7 +621,8 @@ internal class PhotoSettingsTab(
                     highlightHeadroom = currentJpegSettings.highlightHeadroom,
                     highlightSoftHeadroom = currentJpegSettings.highlightSoftHeadroom,
                     highlightShoulder = currentJpegSettings.highlightShoulder,
-                    demosaic = currentJpegSettings.demosaic
+                    demosaic = currentJpegSettings.demosaic,
+                    chromaCleanup = currentJpegSettings.chromaCleanup
                 )
                 if (applyJpegOutputSettings(official)) {
                     host.setStatus("AGX RESET • OFFICIAL BASE")

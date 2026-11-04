@@ -13,11 +13,19 @@ uniform highp vec3 u_camera_white_normalized;
 uniform int u_camera_linear;
 uniform highp vec2 u_white_window;
 
+highp vec3 cc_white() { return max(u_camera_white_normalized, vec3(1e-4)); }
+// Balanced RGB for the chroma cleanup (texture cache serves the 3x3 / 5x5 taps).
+highp vec3 fetch_bal(ivec2 off) {
+    ivec2 q = clamp(ivec2(gl_GlobalInvocationID.xy) + off, ivec2(0), u_outsize - 1);
+    return max(texelFetch(u_rgb, q, 0).rgb, vec3(0.0)) / cc_white();
+}
+#import cleanup
+
 layout(binding = 0, rgba16f) writeonly uniform highp image2D img_out;
 void main() {
     ivec2 o = ivec2(gl_GlobalInvocationID.xy);
     if (o.x >= u_outsize.x || o.y >= u_outsize.y) return;
-    vec3 cameraRgb = max(texelFetch(u_rgb, o, 0).rgb, vec3(0.0));
+    vec3 cameraRgb = chroma_cleanup(fetch_bal(ivec2(0))) * cc_white();
     vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), cameraRgb);
     float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
     if (u_camera_linear == 0) cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);

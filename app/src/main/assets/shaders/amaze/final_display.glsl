@@ -17,7 +17,8 @@ uniform highp vec3 u_camera_white_normalized;
 uniform highp vec2 u_white_window;
 uniform highp vec3 u_demosaic_unbalance;
 
-const int HALO = 2;
+// 2 for AMaZE's half-grid hpos reads + 2 for the cleanup footprint (5x5).
+const int HALO = 4;
 const int TW = LW + 2 * HALO;
 const int TH = LH + 2 * HALO;
 const int TN = TW * TH;
@@ -43,14 +44,8 @@ void load_tile() {
     barrier();
 }
 
-layout(binding = 0, rgba8) writeonly uniform highp image2D img_out;
-layout(binding = 1, rgba8) writeonly uniform highp image2D img_gainmap;
-
-void main() {
-    load_tile();
-    ivec2 o = ivec2(gl_GlobalInvocationID.xy);
-    if (o.x >= u_outsize.x || o.y >= u_outsize.y) return;
-    ivec2 p = o + u_inner;
+// AMaZE pass-15 RGB at window texel p (negatives clipped like RawTherapee).
+highp vec3 amaze_rgb(ivec2 p) {
     float g = s_chroma[SIDX(p)].b;
     float r, b;
     if (isG(p.y, p.x)) {
@@ -67,9 +62,41 @@ void main() {
         r = g - D0(p);
         b = g - D1(p);
     }
+    return max(vec3(r, g, b), vec3(0.0));
+}
+
+// Balanced RGB of the workgroup block + CR ring, for the chroma cleanup.
+const int CR = 2;
+const int CW = LW + 2 * CR;
+const int CN = CW * (LH + 2 * CR);
+shared highp vec3 s_rgb[CN];
+highp vec3 cc_white() { return max(u_camera_white_normalized, vec3(1e-4)); }
+void stage_rgb() {
+    ivec2 c0 = ivec2(gl_WorkGroupID.xy * uvec2(LW, LH)) + u_inner - CR;
+    highp vec3 inv = 1.0 / cc_white();
+    for (int i = int(gl_LocalInvocationIndex); i < CN; i += LW * LH)
+        s_rgb[i] = amaze_rgb(c0 + ivec2(i % CW, i / CW)) * inv;
+}
+highp vec3 fetch_bal(ivec2 off) {
+    ivec2 l = ivec2(gl_LocalInvocationID.xy) + CR + off;
+    return s_rgb[l.y * CW + l.x];
+}
+#import cleanup
+
+layout(binding = 0, rgba8) writeonly uniform highp image2D img_out;
+layout(binding = 1, rgba8) writeonly uniform highp image2D img_gainmap;
+
+void main() {
+    load_tile();
+    stage_rgb();
+    memoryBarrierShared();
+    barrier();
+    ivec2 o = ivec2(gl_GlobalInvocationID.xy);
+    if (o.x >= u_outsize.x || o.y >= u_outsize.y) return;
+    ivec2 p = o + u_inner;
     ivec2 outputPixel = o + u_outoff;
     // Match RawTherapee's AMaZE output boundary before applying the camera matrix.
-    highp vec3 cameraRgb = max(vec3(r, g, b), vec3(0.0));
+    highp vec3 cameraRgb = chroma_cleanup(fetch_bal(ivec2(0))) * cc_white();
 
     // Sensor-domain white-point protection, identical to the non-fused path. Detect clipping
     // from 70%..99% in demosaiced camera RGB and blend toward camera-space neutral white before

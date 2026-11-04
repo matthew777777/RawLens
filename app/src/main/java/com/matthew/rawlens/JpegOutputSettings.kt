@@ -50,6 +50,8 @@ data class JpegOutputSettings(
     val centerWeight: Float = 0f,
     /** Still-JPEG demosaic backend (AMaZE default; RCD via the Vulkan bridge). */
     val demosaic: JpegDemosaic = JpegDemosaic.AMAZE,
+    /** Post-demosaic false-color suppression + purple defringe (fused, no extra memory). */
+    val chromaCleanup: ChromaCleanup = ChromaCleanup(),
     // RAWR-parity Full Ultra HDR encode parameters. The gain map is the
     // scene-linear HDR to SDR-base ratio (log2, normalized by
     // gainMapMin/MaxLog2), dual-encoded with the SDR base and assembled by

@@ -422,6 +422,7 @@ class Gles31AmazeProcessor(
                                 check(it >= 0) { "rcd_final uniform 'u_camera_linear' is missing" }
                             }, if (cameraLinear) 1 else 0
                         )
+                        bindChromaCleanup(program)
                         GLES31.glBindImageTexture(
                             0, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
                         )
@@ -511,7 +512,7 @@ class Gles31AmazeProcessor(
                     GLES31.glUniform1i(
                         GLES31.glGetUniformLocation(program, "u_rgb").also {
                             check(it >= 0) { "rcd_final uniform 'u_rgb' is missing" }
-                        }, if (cameraLinear) 1 else 0
+                        }, 0 // TEXTURE0 holds the uploaded RGB
                     )
                     GLES31.glUniform2i(
                         GLES31.glGetUniformLocation(program, "u_outsize").also {
@@ -536,6 +537,7 @@ class Gles31AmazeProcessor(
                             check(it >= 0) { "rcd_final uniform 'u_camera_linear' is missing" }
                         }, if (cameraLinear) 1 else 0
                     )
+                    bindChromaCleanup(program)
                     GLES31.glBindImageTexture(
                         0, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
                     )
@@ -702,6 +704,22 @@ class Gles31AmazeProcessor(
         }
     }
 
+    /**
+     * Post-demosaic chroma cleanup fused into every final pass (amaze/cleanup.glsl).
+     * Set by the coordinator from the JPEG output settings before each develop.
+     */
+    @Volatile
+    var chromaCleanup: ChromaCleanup = ChromaCleanup()
+
+    private fun bindChromaCleanup(program: Int) {
+        val cleanup = chromaCleanup
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(program, "u_fc_median"),
+            if (cleanup.falseColorSuppression) 1 else 0
+        )
+        GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "u_defringe"), cleanup.defringeStrength)
+    }
+
     /** Raw-GLES dispatch of amaze/to_acescg.glsl (mirrors the rcdTail style). */
     private fun dispatchToAcescg(
         session: ProcessingSession,
@@ -824,7 +842,8 @@ class Gles31AmazeProcessor(
                 cameraLinear,
                 session.programs,
                 session.textures,
-                session.uploads
+                session.uploads,
+                chromaCleanup
             ).use { executor ->
                 val preparedAt = SystemClock.elapsedRealtime()
                 executor.run()
@@ -934,7 +953,8 @@ class Gles31AmazeProcessor(
         private val cameraLinear: Boolean,
         private val programs: ProgramCache,
         private val texturePool: TexturePool,
-        private val uploadBuffers: UploadBuffers
+        private val uploadBuffers: UploadBuffers,
+        private val chromaCleanup: ChromaCleanup
     ) : Closeable {
         private val textures = ArrayList<GlTexture>()
         private val window = AmazePipelineContract.WINDOW
@@ -1174,6 +1194,8 @@ class Gles31AmazeProcessor(
                 mat3("u_camera_to_acescg", demosaicCameraToAcescg)
                 vec3("u_camera_white_normalized", demosaicCameraWhiteNormalized)
                 vec2("u_white_window", whiteWindow)
+                integer("u_fc_median", if (chromaCleanup.falseColorSuppression) 1 else 0)
+                float("u_defringe", chromaCleanup.defringeStrength)
                 if (fusedSettings == null) {
                     integer("u_camera_linear", if (cameraLinear) 1 else 0)
                 }
@@ -1338,6 +1360,7 @@ class Gles31AmazeProcessor(
     internal class ProgramCache(private val context: Context, private val slicedDispatch: Boolean = false) : Closeable {
         private val programs = LinkedHashMap<String, Int>()
         private val common by lazy { read("shaders/utils/import_amaze.glsl") }
+        private val cleanupCommon by lazy { read("shaders/amaze/cleanup.glsl") }
         private val agxOutputCommon by lazy {
             val source = read("shaders/display/agx_srgb8.glsl")
             source.substring(
@@ -1351,6 +1374,7 @@ class Gles31AmazeProcessor(
                 .replace("#import amaze", common)
                 .replace("#import quad", if ("quad/" in asset) read("shaders/quad/common.glsl") else "")
                 .replace("#import agx_output", agxOutputCommon)
+                .replace("#import cleanup", cleanupCommon)
             val source = if (body.startsWith("#version")) body else "#version 310 es\n$body"
             compile(if (slicedDispatch) GpuScheduling.shaderSource(source) else source, asset)
         }.also(GLES31::glUseProgram)
