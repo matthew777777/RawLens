@@ -4,18 +4,17 @@
 package com.matthew.rawlens
 
 /**
- * HDR+ ZSL burst merge (upstream merge_hdrplus 1:1 port on Vulkan).
+ * HDR+ burst merge (upstream merge_hdrplus 1:1 port on Vulkan).
  *
  * Runs on Android 11+: fp32-only shaders, 1.0-core Vulkan entry points,
  * host-staged frame buffers via plain direct buffers — no half-float
  * HardwareBuffers, so unlike GPU video record it has no Android 13 floor.
  *
- * Merges the ZSL ring at sensor resolution: coarse-to-fine tile alignment
+ * Merges a fresh Photo burst or the ZSL ring at sensor resolution: coarse-to-fine tile alignment
  * per alternate, then a robust merge — spatial weighted average ("Fast")
  * or per-frequency Wiener merge ("Higher quality") — with the reference
  * frame's black/white normalization. One merged CFA DNG out. Mutually
- * exclusive with RAW SR in the quick panel (both own the ZSL ring at
- * shutter time) and with the HDR bracket tile (both merge one shutter
+ * exclusive with RAW SR in the quick panel (both own the shutter) and with the HDR bracket tile (both merge one shutter
  * press into one DNG: enabling one turns the other off).
  */
 data class HdrPlusSettings(
@@ -72,11 +71,11 @@ data class HdrPlusSettings(
         "hdr_plus_auto_quality" to autoQuality
     )
 
-    fun quickText(count: Int, buffered: Int, available: Boolean?, busy: Boolean): String = "HDR+\n" + when {
+    fun quickText(count: Int, buffered: Int, available: Boolean?, busy: Boolean, zsl: Boolean = true): String = "HDR+\n" + when {
         !enabled -> "OFF"
         busy -> "MERGING"
         available == false -> "UNAVAILABLE"
-        available == null || buffered < activeFrameCount(count) -> "WARMING"
+        available == null || (zsl && buffered < activeFrameCount(count)) -> "WARMING"
         autoQuality -> "AUTO ×${activeFrameCount(count)}"
         else -> "${if (highQuality) "HQ" else "FAST"} ×${activeFrameCount(count)}"
     }

@@ -1,0 +1,134 @@
+=== hdrplus-AUTO-8-JPEG_DNG-0 ===
+11-04 08:33:30.825 12465 12490 I RawLensSoak: Launching activity
+11-04 08:33:31.356 12465 12490 I RawLensSoak: Activity launched
+11-04 08:33:32.874 12465 12490 I RawLensSoak: Preview ready
+11-04 08:33:32.879 12465 12490 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:33:32.908 12465 12490 I RawLensSoak: Cycle 0 firing; artifacts=861
+11-04 08:33:32.915 12465 12540 I RawLensCamera: Submitting RAW capture id=2 frames=8 (pipelined)
+11-04 08:33:32.937 12465 12540 I RawLensCamera: STILL_REQUEST route=0 fps=[14, 30] intent=2 exposureNs=30001510
+11-04 08:33:33.374 12465 12540 I RawLensCamera: PHOTO_MERGE mode=AUTO frames=8 iso=20000 exposureNs=30001510 pairs=20000:30001510, 20000:30001510, 20000:30001510, 20000:30001510, 20000:30001510, 20000:30001510, 20000:30001510, 20000:30001510
+11-04 08:33:42.321 12465 12603 I RawLensCamera: HDR+ timing merge=8922ms frames=8/8 4080x3060
+11-04 08:33:49.093 12465 12490 I RawLensSoak: Cycle 1/1 passed; artifacts=863 pssKb=778030 nativeBytes=89924816 pairs=0 saves=0 minFps=15.360984 gpuOnly=0 vf=RawVfStats(fps=29.069767, frameMs=2.5, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=0, gpu=true, jpeg=true, exposureEv=1.2413781, engine=AUTO)
+
+=== hdrplus-AUTO ===
+11-04 08:30:54.048  7966  7989 I RawLensSoak: Launching activity
+11-04 08:30:55.145  7966  7989 I RawLensSoak: Activity launched
+11-04 08:30:59.282  7966  7989 I RawLensSoak: Preview ready
+11-04 08:30:59.284  7966  7989 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:30:59.310  7966  7989 I RawLensSoak: Cycle 0 firing; artifacts=853
+11-04 08:30:59.318  7966  8033 I RawLensCamera: Submitting RAW capture id=2 frames=2 (pipelined)
+11-04 08:30:59.321  7966  8033 I RawLensCamera: STILL_REQUEST route=0 fps=[14, 30] intent=2 exposureNs=30001510
+11-04 08:30:59.508  7966  8033 I RawLensCamera: PHOTO_MERGE mode=AUTO frames=2 iso=20000 exposureNs=30001510 pairs=20000:30001510, 20000:30001510
+11-04 08:31:02.598  7966  8308 I RawLensCamera: HDR+ timing merge=3084ms frames=2/2 4080x3060
+11-04 08:31:03.522  7966  7989 I RawLensSoak: Cycle 1/1 passed; artifacts=854 pssKb=299285 nativeBytes=69791504 pairs=0 saves=0 minFps=16.750418 gpuOnly=0 vf=RawVfStats(fps=30.120481, frameMs=2.1, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=0, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)
+
+=== hdrplus-MANUAL-2-DNG_ONLY-6000 ===
+11-04 08:34:45.221 13679 13705 I RawLensSoak: Launching activity
+11-04 08:34:45.787 13679 13705 I RawLensSoak: Activity launched
+11-04 08:34:47.780 13679 13705 I RawLensSoak: Preview ready
+11-04 08:34:47.782 13679 13705 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:34:47.809 13679 13705 I RawLensSoak: Cycle 0 firing; artifacts=865
+11-04 08:34:47.815 13679 13749 I RawLensCamera: Submitting RAW capture id=4 frames=2 (pipelined)
+11-04 08:34:47.820 13679 13749 I RawLensCamera: STILL_REQUEST route=0 fps=[14, 30] intent=2 exposureNs=400000000
+11-04 08:34:49.708 13679 13749 I RawLensCamera: PHOTO_MERGE mode=MANUAL frames=2 iso=100 exposureNs=400000000 pairs=100:400000000, 100:400000000
+11-04 08:34:51.559 13679 13920 I RawLensCamera: HDR+ timing merge=1843ms frames=2/2 4080x3060
+11-04 08:34:52.474 13679 13705 I RawLensSoak: Cycle 1/1 passed; artifacts=866 pssKb=273026 nativeBytes=60329056 pairs=0 saves=0 minFps=2.5043828 gpuOnly=0 vf=RawVfStats(fps=2.5182574, frameMs=6.4, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=0, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)
+
+=== hdrplus-MANUAL ===
+11-04 08:31:15.429  9024  9049 I RawLensSoak: Launching activity
+11-04 08:31:15.994  9024  9049 I RawLensSoak: Activity launched
+11-04 08:31:20.027  9024  9049 I RawLensSoak: Preview ready
+11-04 08:31:20.031  9024  9049 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:31:20.070  9024  9049 I RawLensSoak: Cycle 0 firing; artifacts=855
+11-04 08:31:20.083  9024  9094 I RawLensCamera: Submitting RAW capture id=4 frames=2 (pipelined)
+11-04 08:31:20.091  9024  9094 I RawLensCamera: STILL_REQUEST route=0 fps=[14, 30] intent=2 exposureNs=250000000
+11-04 08:31:21.371  9024  9094 I RawLensCamera: PHOTO_MERGE mode=MANUAL frames=2 iso=100 exposureNs=250000000 pairs=100:250000000, 100:250000000
+11-04 08:31:23.215  9024  9302 I RawLensCamera: HDR+ timing merge=1833ms frames=2/2 4080x3060
+11-04 08:31:24.099  9024  9049 I RawLensSoak: Cycle 1/1 passed; artifacts=856 pssKb=267102 nativeBytes=60383488 pairs=0 saves=0 minFps=3.9777248 gpuOnly=0 vf=RawVfStats(fps=4.0032024, frameMs=5.0, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=0, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)
+
+=== hdrplus-PROGRAM ===
+11-04 08:31:05.713  8526  8555 I RawLensSoak: Launching activity
+11-04 08:31:06.289  8526  8555 I RawLensSoak: Activity launched
+11-04 08:31:10.322  8526  8555 I RawLensSoak: Preview ready
+11-04 08:31:10.324  8526  8555 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:31:10.353  8526  8555 I RawLensSoak: Cycle 0 firing; artifacts=854
+11-04 08:31:10.361  8526  8632 I RawLensCamera: Submitting RAW capture id=4 frames=2 (pipelined)
+11-04 08:31:10.366  8526  8632 I RawLensCamera: STILL_REQUEST route=0 fps=[14, 30] intent=2 exposureNs=67033373
+11-04 08:31:10.701  8526  8632 I RawLensCamera: PHOTO_MERGE mode=PROGRAM frames=2 iso=12800 exposureNs=67033373 pairs=12800:67033373, 12800:67033373
+11-04 08:31:12.652  8526  8850 I RawLensCamera: HDR+ timing merge=1945ms frames=2/2 4080x3060
+11-04 08:31:13.471  8526  8555 I RawLensSoak: Cycle 1/1 passed; artifacts=855 pssKb=283693 nativeBytes=62785776 pairs=0 saves=0 minFps=13.888889 gpuOnly=0 vf=RawVfStats(fps=15.197568, frameMs=1.7, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=0, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)
+
+=== hdrplus-ZSL ===
+11-04 08:31:26.144  9425  9450 I RawLensSoak: Launching activity
+11-04 08:31:26.655  9425  9450 I RawLensSoak: Activity launched
+11-04 08:31:30.603  9425  9450 I RawLensSoak: Preview ready
+11-04 08:31:30.620  9425  9450 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:31:30.649  9425  9450 I RawLensSoak: Cycle 0 firing; artifacts=856
+11-04 08:31:33.020  9425  9679 I RawLensCamera: HDR+ timing merge=2356ms frames=2/2 4080x3060
+11-04 08:31:34.441  9425  9450 I RawLensSoak: Cycle 1/1 passed; artifacts=857 pssKb=292628 nativeBytes=61233392 pairs=0 saves=0 minFps=20.876825 gpuOnly=0 vf=RawVfStats(fps=32.258064, frameMs=2.4, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=0, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)
+
+=== mfsr-AUTO ===
+11-04 08:31:36.422  9794  9820 I RawLensSoak: Launching activity
+11-04 08:31:36.981  9794  9820 I RawLensSoak: Activity launched
+11-04 08:31:40.971  9794  9820 I RawLensSoak: Preview ready
+11-04 08:31:40.973  9794  9820 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:31:41.003  9794  9820 I RawLensSoak: Cycle 0 firing; artifacts=857
+11-04 08:31:41.011  9794  9921 I RawLensCamera: Submitting RAW capture id=4 frames=2 (pipelined)
+11-04 08:31:41.018  9794  9921 I RawLensCamera: STILL_REQUEST route=0 fps=[14, 30] intent=2 exposureNs=30001510
+11-04 08:31:41.212  9794  9921 I RawLensCamera: PHOTO_MERGE mode=AUTO frames=2 iso=20000 exposureNs=30001510 pairs=20000:30001510, 20000:30001510
+11-04 08:32:02.301  9794 10111 I RawLensCamera: MFSR timing merge=21085ms frames=2/2 4080x3060
+11-04 08:32:03.398  9794  9820 I RawLensSoak: Cycle 1/1 passed; artifacts=858 pssKb=245855 nativeBytes=59269280 pairs=0 saves=0 minFps=6.497726 gpuOnly=0 vf=RawVfStats(fps=27.322405, frameMs=3.9, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=0, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)
+
+=== mfsr-MANUAL ===
+11-04 08:32:33.344 11171 11224 I RawLensSoak: Launching activity
+11-04 08:32:33.954 11171 11224 I RawLensSoak: Activity launched
+11-04 08:32:37.946 11171 11224 I RawLensSoak: Preview ready
+11-04 08:32:37.950 11171 11224 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:32:37.979 11171 11224 I RawLensSoak: Cycle 0 firing; artifacts=859
+11-04 08:32:37.990 11171 11324 I RawLensCamera: Submitting RAW capture id=4 frames=2 (pipelined)
+11-04 08:32:38.000 11171 11324 I RawLensCamera: STILL_REQUEST route=0 fps=[14, 30] intent=2 exposureNs=250000000
+11-04 08:32:39.060 11171 11324 I RawLensCamera: PHOTO_MERGE mode=MANUAL frames=2 iso=100 exposureNs=250000000 pairs=100:250000000, 100:250000000
+11-04 08:32:57.485 11171 11526 I RawLensCamera: MFSR timing merge=18422ms frames=2/2 4080x3060
+11-04 08:32:58.290 11171 11224 I RawLensSoak: Cycle 1/1 passed; artifacts=860 pssKb=215043 nativeBytes=59073824 pairs=0 saves=0 minFps=2.6329648 gpuOnly=0 vf=RawVfStats(fps=4.009623, frameMs=2.1, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=4, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)
+
+=== mfsr-PROGRAM-8-JPEG_DNG-0 ===
+11-04 08:33:51.185 12897 12922 I RawLensSoak: Launching activity
+11-04 08:33:51.749 12897 12922 I RawLensSoak: Activity launched
+11-04 08:33:53.262 12897 12922 I RawLensSoak: Preview ready
+11-04 08:33:53.264 12897 12922 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:33:53.290 12897 12922 I RawLensSoak: Cycle 0 firing; artifacts=863
+11-04 08:33:53.297 12897 12964 I RawLensCamera: Submitting RAW capture id=2 frames=8 (pipelined)
+11-04 08:33:53.323 12897 12964 I RawLensCamera: STILL_REQUEST route=0 fps=[14, 30] intent=2 exposureNs=67033373
+11-04 08:33:54.064 12897 12964 I RawLensCamera: PHOTO_MERGE mode=PROGRAM frames=8 iso=12800 exposureNs=67033373 pairs=12800:67033373, 12800:67033373, 12800:67033373, 12800:67033373, 12800:67033373, 12800:67033373, 12800:67033373, 12800:67033373
+11-04 08:34:39.819 12897 13020 I RawLensCamera: MFSR timing merge=45750ms frames=8/8 4080x3060
+11-04 08:34:41.624 12897 12922 I RawLensSoak: Cycle 1/1 passed; artifacts=865 pssKb=359298 nativeBytes=78391104 pairs=0 saves=0 minFps=4.916421 gpuOnly=0 vf=RawVfStats(fps=14.925373, frameMs=2.4, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=55, gpu=true, jpeg=true, exposureEv=0.61408067, engine=AUTO)
+
+=== mfsr-PROGRAM ===
+11-04 08:32:06.128 10447 10471 I RawLensSoak: Launching activity
+11-04 08:32:06.681 10447 10471 I RawLensSoak: Activity launched
+11-04 08:32:10.684 10447 10471 I RawLensSoak: Preview ready
+11-04 08:32:10.687 10447 10471 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:32:10.721 10447 10471 I RawLensSoak: Cycle 0 firing; artifacts=858
+11-04 08:32:10.727 10447 10520 I RawLensCamera: Submitting RAW capture id=4 frames=2 (pipelined)
+11-04 08:32:10.734 10447 10520 I RawLensCamera: STILL_REQUEST route=0 fps=[14, 30] intent=2 exposureNs=67033373
+11-04 08:32:11.103 10447 10520 I RawLensCamera: PHOTO_MERGE mode=PROGRAM frames=2 iso=12800 exposureNs=67033373 pairs=12800:67033373, 12800:67033373
+11-04 08:32:30.139 10447 10705 I RawLensCamera: MFSR timing merge=19033ms frames=2/2 4080x3060
+11-04 08:32:30.962 10447 10471 I RawLensSoak: Cycle 1/1 passed; artifacts=859 pssKb=223804 nativeBytes=58887984 pairs=0 saves=0 minFps=5.299417 gpuOnly=0 vf=RawVfStats(fps=14.684288, frameMs=1.7, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=8, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)
+
+=== mfsr-ZSL-1-DNG_ONLY-0 ===
+11-04 08:34:54.361 14027 14055 I RawLensSoak: Launching activity
+11-04 08:34:54.904 14027 14055 I RawLensSoak: Activity launched
+11-04 08:34:56.856 14027 14055 I RawLensSoak: Preview ready
+11-04 08:34:56.858 14027 14055 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:34:56.887 14027 14055 I RawLensSoak: Cycle 0 firing; artifacts=866
+11-04 08:35:15.903 14027 14255 I RawLensCamera: MFSR timing merge=19010ms frames=2/2 4080x3060
+11-04 08:35:17.075 14027 14055 I RawLensSoak: Cycle 1/1 passed; artifacts=867 pssKb=253678 nativeBytes=59424400 pairs=0 saves=0 minFps=5.910166 gpuOnly=0 vf=RawVfStats(fps=29.15452, frameMs=4.2, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=0, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)
+
+=== mfsr-ZSL ===
+11-04 08:33:01.222 11849 11873 I RawLensSoak: Launching activity
+11-04 08:33:01.773 11849 11873 I RawLensSoak: Activity launched
+11-04 08:33:05.787 11849 11873 I RawLensSoak: Preview ready
+11-04 08:33:05.798 11849 11873 I RawLensSoak: Cycle 0 counting existing artifacts
+11-04 08:33:05.826 11849 11873 I RawLensSoak: Cycle 0 firing; artifacts=860
+11-04 08:33:25.974 11849 12123 I RawLensCamera: MFSR timing merge=20137ms frames=2/2 4080x3060
+11-04 08:33:26.852 11849 11873 I RawLensSoak: Cycle 1/1 passed; artifacts=861 pssKb=255494 nativeBytes=59368368 pairs=0 saves=0 minFps=5.9241705 gpuOnly=0 vf=RawVfStats(fps=29.069767, frameMs=4.0, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=0, gpu=true, jpeg=false, exposureEv=0.0, engine=AUTO)

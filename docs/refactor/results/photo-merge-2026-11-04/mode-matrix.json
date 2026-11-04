@@ -1,0 +1,114 @@
+[
+  {
+    "merge": "hdrplus",
+    "mode": "AUTO",
+    "ok": true,
+    "seconds": 12.1,
+    "photoMerge": [
+      "11-04 08:30:59.508  7966  8033 I RawLensCamera: PHOTO_MERGE mode=AUTO frames=2 iso=20000 exposureNs=30001510 pairs=20000:30001510, 20000:30001510"
+    ],
+    "pairedExposures": [
+      {
+        "iso": 20000,
+        "exposureNanos": 30001510,
+        "frames": 2
+      }
+    ]
+  },
+  {
+    "merge": "hdrplus",
+    "mode": "PROGRAM",
+    "ok": true,
+    "seconds": 9.7,
+    "photoMerge": [
+      "11-04 08:31:10.701  8526  8632 I RawLensCamera: PHOTO_MERGE mode=PROGRAM frames=2 iso=12800 exposureNs=67033373 pairs=12800:67033373, 12800:67033373"
+    ],
+    "pairedExposures": [
+      {
+        "iso": 12800,
+        "exposureNanos": 67033373,
+        "frames": 2
+      }
+    ]
+  },
+  {
+    "merge": "hdrplus",
+    "mode": "MANUAL",
+    "ok": true,
+    "seconds": 10.5,
+    "photoMerge": [
+      "11-04 08:31:21.371  9024  9094 I RawLensCamera: PHOTO_MERGE mode=MANUAL frames=2 iso=100 exposureNs=250000000 pairs=100:250000000, 100:250000000"
+    ],
+    "pairedExposures": [
+      {
+        "iso": 100,
+        "exposureNanos": 250000000,
+        "frames": 2
+      }
+    ]
+  },
+  {
+    "merge": "hdrplus",
+    "mode": "ZSL",
+    "ok": true,
+    "seconds": 10.1,
+    "photoMerge": [],
+    "pairedExposures": []
+  },
+  {
+    "merge": "mfsr",
+    "mode": "AUTO",
+    "ok": true,
+    "seconds": 29.1,
+    "photoMerge": [
+      "11-04 08:31:41.212  9794  9921 I RawLensCamera: PHOTO_MERGE mode=AUTO frames=2 iso=20000 exposureNs=30001510 pairs=20000:30001510, 20000:30001510"
+    ],
+    "pairedExposures": [
+      {
+        "iso": 20000,
+        "exposureNanos": 30001510,
+        "frames": 2
+      }
+    ]
+  },
+  {
+    "merge": "mfsr",
+    "mode": "PROGRAM",
+    "ok": true,
+    "seconds": 27.2,
+    "photoMerge": [
+      "11-04 08:32:11.103 10447 10520 I RawLensCamera: PHOTO_MERGE mode=PROGRAM frames=2 iso=12800 exposureNs=67033373 pairs=12800:67033373, 12800:67033373"
+    ],
+    "pairedExposures": [
+      {
+        "iso": 12800,
+        "exposureNanos": 67033373,
+        "frames": 2
+      }
+    ]
+  },
+  {
+    "merge": "mfsr",
+    "mode": "MANUAL",
+    "ok": true,
+    "seconds": 27.4,
+    "photoMerge": [
+      "11-04 08:32:39.060 11171 11324 I RawLensCamera: PHOTO_MERGE mode=MANUAL frames=2 iso=100 exposureNs=250000000 pairs=100:250000000, 100:250000000"
+    ],
+    "pairedExposures": [
+      {
+        "iso": 100,
+        "exposureNanos": 250000000,
+        "frames": 2
+      }
+    ]
+  },
+  {
+    "merge": "mfsr",
+    "mode": "ZSL",
+    "ok": true,
+    "seconds": 28.2,
+    "photoMerge": [],
+    "pairedExposures": []
+  }
+]

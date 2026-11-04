@@ -280,6 +280,9 @@ class RawCameraController(
     /** Flat per-shutter EV offsets for the in-flight bracket (see [HdrBracketConfig]). */
     private var activeHdrFrameEvs: IntArray = intArrayOf(-2, 0, 2)
     private val pendingHdrFrames = ArrayList<PendingHdrFrame>(3)
+    /** Fresh Photo bursts retain exact RAW/result pairs until one merge owns them. */
+    private var activePhotoMerge = false
+    private val pendingPhotoMergeFrames = ArrayList<BufferedRawFrame>()
     /**
      * Hybrid top-up (ZSL frames before the press + forward frames after it, as
      * in https://research.google/blog/hdr-with-bracketing-on-pixel-phones/): ring frames held aside while fresh
@@ -1040,7 +1043,7 @@ class RawCameraController(
             )
         }.also {
             rawReaderMaxImages = readerMaxImages
-            rawReaderHasZslBudget = rawZslRequested
+            rawReaderHasZslBudget = needsBurstReaderBudget()
             it.setOnImageAvailableListener({ reader -> onRawImageAvailable(reader, generation) }, cameraHandler)
         }
         rawStreamImages = 0
@@ -1685,7 +1688,11 @@ class RawCameraController(
      * ring instead of a rejected session or a dead process.
      */
     private fun fullReaderMaxImages(): Int =
-        SessionStreamSelection.readerMaxImagesFor(rawZslFrameCount, rawZslRequested)
+        SessionStreamSelection.readerMaxImagesFor(
+            maxOf(rawZslFrameCount, zslSelectedFrameCount(captureFormat)), needsBurstReaderBudget())
+
+    private fun needsBurstReaderBudget(): Boolean = rawZslRequested ||
+        (photoControlsBeforeVideo == null && (hdrPlusSettings.enabled || mfsrSettings.enabled))
 
     /**
      * Bounded reopen after an open rejection that smells transient: an ID
@@ -2411,12 +2418,12 @@ class RawCameraController(
 
     private fun applyHdrPlusCameraState(settings: HdrPlusSettings) {
         if (hdrPlusSettings != settings) return
-        if (settings.enabled && !rawZslRequested) {
-            rawZslRequested = true
-            rawZslDisabledForSession = false
-            rawZslFallbackDetail = null
-            updateRepeatingRequest()
-        }
+        // Merge acquisition follows the selected exposure mode. Only the reader
+        // budget is shared with ZSL; enabling a merger never enables the ring.
+        if (rawZslRequested && rawZslCapacity < zslSelectedFrameCount(captureFormat) &&
+            rawReaderMaxImages >= fullReaderMaxImages()) {
+            restartCameraForConfigurationChange()
+        } else updateRepeatingRequest()
         publishRawZslStatus()
     }
 
@@ -2441,12 +2448,12 @@ class RawCameraController(
 
     private fun applyMfsrCameraState(settings: MfsrSettings) {
         if (mfsrSettings != settings) return
-        if (settings.enabled && !rawZslRequested) {
-            rawZslRequested = true
-            rawZslDisabledForSession = false
-            rawZslFallbackDetail = null
-            updateRepeatingRequest()
-        }
+        // Merge acquisition follows the selected exposure mode. Only the reader
+        // budget is shared with ZSL; enabling a merger never enables the ring.
+        if (rawZslRequested && rawZslCapacity < zslSelectedFrameCount(captureFormat) &&
+            rawReaderMaxImages >= fullReaderMaxImages()) {
+            restartCameraForConfigurationChange()
+        } else updateRepeatingRequest()
         publishRawZslStatus()
     }
 
@@ -2464,6 +2471,12 @@ class RawCameraController(
             captureSingleWithFlash(outputFormat, orientationSnapshot)
             return
         }
+        if ((hdrPlusSettings.enabled || mfsrSettings.enabled) &&
+            (hdrPlusMergeInFlight.get() || mfsrMergeInFlight.get())) {
+            onState("MERGE BUSY")
+            refreshCaptureAvailability()
+            return
+        }
         // ZSL purity: when ZSL is requested and usable, reserve the full burst
         // up front. A 30-frame burst needs 30 slots; checking only 1 would lock
         // the shutter, spin the 3s recovery wait with no capacity, then degrade
@@ -2477,26 +2490,18 @@ class RawCameraController(
                 hdrPlusSettings,
                 rawZslFrameCount, outputFormat, mfsrSettings
             )
-            // Single-flight merge: a second press fails fast here, before
-            // any take drains the ring — the preserved ring then takes
-            // instantly on re-tap after the merge finishes.
-            if (hdrPlusSettings.enabled && hdrPlusMergeInFlight.get()) {
-                onState("HDR+ BUSY")
-                refreshCaptureAvailability()
-                return
-            }
             if (!beginCapture(outputFormat, requiredSaveSlots = needSlots, orientationSnapshot = orientationSnapshot)) return
             // Future SR hook: SR branch here (full consistent ring, no top-up
             // mixing; "SELECTING RAW SR" / "SR QUEUED" + SR BUSY gate above).
-            if (hdrPlusSettings.enabled) {
-                // HDR+ needs the full consistent ring; no top-up mixing.
+            if (hdrPlusSettings.enabled || mfsrSettings.enabled) {
+                // Both mergers need a consistent ring; no per-frame top-up saving.
                 if (rawZslStreaming) {
-                    onState("SELECTING HDR+")
+                    onState("SELECTING ${if (mfsrSettings.enabled) mfsrSettings.label else "HDR+"}")
                     if (selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot)) return
                     val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
                     retryZslSelectionUntil(deadlineMs)
                 } else {
-                    onState("HDR+ QUEUED")
+                    onState("${if (mfsrSettings.enabled) mfsrSettings.label else "HDR+"} QUEUED")
                     val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
                     retryZslSelectionUntil(deadlineMs)
                 }
@@ -2528,9 +2533,23 @@ class RawCameraController(
             }
         } else {
             if (!beginCapture(outputFormat, requiredSaveSlots = 1, orientationSnapshot = orientationSnapshot)) return
-            captureFrames(1, captureAlreadyStarted = true)
+            if (activeHdrPlusSettings.enabled || activeMfsrSettings.enabled) {
+                val count = zslSelectedFrameCount(outputFormat)
+                if (!photoMergeFitsReader(count)) {
+                    finishCapture("MERGE UNAVAILABLE: RAW buffer capacity")
+                    return
+                }
+                activePhotoMerge = true
+                captureFrames(count, captureAlreadyStarted = true)
+            } else {
+                captureFrames(1, captureAlreadyStarted = true)
+            }
         }
     }
+
+    private fun photoMergeFitsReader(count: Int): Boolean = CaptureQueueCapacity.accepts(
+        pendingFrameSaveCount.get(), count, MAX_ZSL_FRAMES,
+        rawReaderMaxImages, SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS)
 
     /**
      * Retries a ZSL selection until [deadlineMs]. Every tick uses a fresh cutoff
@@ -2549,11 +2568,14 @@ class RawCameraController(
         restartAttempted: Boolean = false,
         emptyStreak: Int = 0
     ) {
+        // A merge must never fall through to saving an unmerged top-up burst.
+        val allowTopup = zslHybridTopupEnabled &&
+            !activeHdrPlusSettings.enabled && !activeMfsrSettings.enabled
         val shot = captureSequence.get()
         val generation = lifecycleGeneration
         cameraHandler.postDelayed({
             if (!isCurrent(generation) || shot != captureSequence.get() || !captureInProgress.get()) return@postDelayed
-            if (rawZslDisabledForSession && zslHybridTopupEnabled) {
+            if (rawZslDisabledForSession && allowTopup) {
                 Log.w(
                     LOG_TAG,
                     "ZSL disabled for session (${rawZslFallbackDetail ?: "unknown"}); " +
@@ -2592,7 +2614,7 @@ class RawCameraController(
             // the full burst forward instead of riding out the whole deadline
             // into NOT READY. Capacity was reserved up front, so slots exist.
             val nextEmptyStreak = if (lastZslTakeSize == 0) emptyStreak + 1 else 0
-            if (nextEmptyStreak >= EMPTY_TOPUP_ESCALATION_TICKS && zslHybridTopupEnabled) {
+            if (nextEmptyStreak >= EMPTY_TOPUP_ESCALATION_TICKS && allowTopup) {
                 Log.i(LOG_TAG, "ZSL ring empty for ~1s; escalating to forward burst")
                 if (selectAndSaveRawZsl(tickElapsedNanos, tickSensorCutoff, forceTopup = true)) {
                     return@postDelayed
@@ -2606,7 +2628,7 @@ class RawCameraController(
                 // escalation fires first); reaching it means the session is
                 // sick, so count it toward rebuild like any dead chain.
                 Log.w(LOG_TAG, "ZSL ring did not recover in time; releasing (no single fallback)")
-                if (zslHybridTopupEnabled) {
+                if (allowTopup) {
                     startTopupBurst(emptyList(), zslSelectedFrameCount(activeCaptureFormat))
                     return@postDelayed
                 }
@@ -3232,6 +3254,22 @@ class RawCameraController(
         Log.i(LOG_TAG, "Submitting RAW capture id=$captureId frames=$frameCount " +
             if (pipelined) "(pipelined)" else "(serialized)")
         try {
+            val mergeExposure = if (activePhotoMerge) {
+                val seed = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                applyCameraControls(seed, applyDynamicCurve = true)
+                val manualSeed = seed.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_OFF
+                // AE-on templates can contain ignored sensor defaults. Auto must
+                // freeze the metered result rather than those template values.
+                RequestExposure.forPhotoMerge(
+                    if (manualSeed) seed.get(CaptureRequest.SENSOR_SENSITIVITY) else null,
+                    if (manualSeed) seed.get(CaptureRequest.SENSOR_EXPOSURE_TIME) else null,
+                    lastIso, lastExposureNanos,
+                    supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR))
+                    ?: run {
+                        finishCapture("MERGE UNAVAILABLE: manual sensor control required")
+                        return
+                    }
+            } else null
             val requests = List(frameCount) { frameIndex ->
                 device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(reader.surface)
@@ -3240,6 +3278,12 @@ class RawCameraController(
                     // Same split as PhotonCamera Photo mode: preview meters under hardware AE;
                     // the shutter-first pair is applied only to the submitted still request.
                     applyCameraControls(this, applyDynamicCurve = true)
+                    mergeExposure?.let { exposure ->
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                        set(CaptureRequest.SENSOR_SENSITIVITY, exposure.iso)
+                        set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposure.exposureNanos)
+                        set(CaptureRequest.SENSOR_FRAME_DURATION, exposure.exposureNanos)
+                    }
                     if (activeHdrBracket) applyHdrExposure(this, frameIndex)
                     // P0: resolve still flash after HDR (brackets force manual
                     // exposure) so the builder AE state is final. Never TORCH.
@@ -3258,7 +3302,10 @@ class RawCameraController(
             val bracketDurationMs = if (activeHdrBracket) requests.sumOf {
                 (it.get(CaptureRequest.SENSOR_EXPOSURE_TIME) ?: 0L) / 1_000_000L
             } else 0L
-            val chainMs = frameCount * maxOf(lastExposureNanos / 1_000_000L, 100L) + 2_000L
+            val longestExposureMs = requests.maxOfOrNull {
+                (it.get(CaptureRequest.SENSOR_EXPOSURE_TIME) ?: lastExposureNanos) / 1_000_000L
+            } ?: 0L
+            val chainMs = frameCount * maxOf(longestExposureMs, 100L) + 2_000L
             scheduleCaptureTimeout(
                 captureId, maxOf(bracketDurationMs, chainMs - CAPTURE_TIMEOUT_MS).coerceAtLeast(0L))
             val callback = captureCallback(generation, captureId)
@@ -3959,7 +4006,7 @@ class RawCameraController(
      * as metered.
      */
     private fun ettrModeAvailable(): Boolean =
-        captureExposureMode == CaptureExposureMode.AUTO
+        photoControlsBeforeVideo == null && captureExposureMode == CaptureExposureMode.AUTO
 
     private fun ettrCaptureActive(): Boolean =
         ettr.settings.enabled && ettrModeAvailable() && !rawZslRequested &&
@@ -4280,6 +4327,7 @@ class RawCameraController(
             cameraHandler.post { setRawZslEnabled(enabled) }
             return
         }
+        if (photoControlsBeforeVideo != null && enabled) return
         val wasRawZslRequested = rawZslRequested
         rawZslRequested = enabled
         if (enabled && !wasRawZslRequested) {
@@ -4306,6 +4354,40 @@ class RawCameraController(
             }
         }
         publishRawZslStatus()
+    }
+
+    private data class PhotoControlsBeforeVideo(
+        val mode: CaptureExposureMode,
+        val manual: VideoManualSnapshot,
+        val wbPresets: Boolean,
+    )
+    private var photoControlsBeforeVideo: PhotoControlsBeforeVideo? = null
+
+    /** Temporary session state only: never rewrites photo preferences or merge settings. */
+    fun beginVideoPreview() {
+        if (!isOnCameraThread()) { cameraHandler.post(::beginVideoPreview); return }
+        if (photoControlsBeforeVideo != null) return
+        photoControlsBeforeVideo = PhotoControlsBeforeVideo(
+            captureExposureMode, snapshotVideoManual(), wbPresetsEnabled)
+        clearEttrLiveState()
+        touchFocus.dropForManualFocus()
+        setCaptureExposureMode(CaptureExposureMode.AUTO)
+    }
+
+    fun endVideoPreview() {
+        if (!isOnCameraThread()) { cameraHandler.post(::endVideoPreview); return }
+        val saved = photoControlsBeforeVideo ?: return
+        photoControlsBeforeVideo = null
+        setCaptureExposureMode(saved.mode)
+        selectedIso = saved.manual.iso
+        selectedExposureNanos = saved.manual.shutterNanos
+        selectedWbKelvin = saved.manual.wbKelvin
+        selectedWbPreset = saved.manual.wbPreset
+        wbPresetsEnabled = saved.wbPresets
+        selectedFocusDistanceDiopters = saved.manual.focusDiopters
+        exposureCompensation = saved.manual.evIndex ?: 0
+        clampControlsToCamera()
+        controlsChanged()
     }
 
     fun setCaptureExposureMode(mode: CaptureExposureMode) {
@@ -4715,9 +4797,9 @@ class RawCameraController(
         }
         val device = camera ?: return
         val currentSession = session ?: return
-        if (SessionStreamSelection.needsZslReaderUpgrade(rawZslRequested, rawReaderHasZslBudget,
+        if (SessionStreamSelection.needsZslReaderUpgrade(needsBurstReaderBudget(), rawReaderHasZslBudget,
                 captureInProgress.get(), pendingSaveCount.get())) {
-            Log.i(LOG_TAG, "Expanding forward-capture RAW reader for requested ZSL ring")
+            Log.i(LOG_TAG, "Expanding RAW reader for requested burst / merge")
             restartCameraForConfigurationChange()
             return
         }
@@ -5887,6 +5969,12 @@ class RawCameraController(
         zslHealth.onForwardPair()
         if (remaining <= 0) cancelCaptureTimeout()
         if (activeDualRaw) pendingDualRawFrames += PendingHdrFrame(image,result)
+        else if (activePhotoMerge) pendingPhotoMergeFrames += BufferedRawFrame(
+            image, result, timestamp,
+            result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L,
+            result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW) ?: 0L,
+            motionTracker.currentMotion()
+        )
         else if (topupActive) accumulateTopupFrame(image, result)
         else if (activeHdrBracket) pendingHdrFrames += PendingHdrFrame(image, result)
         else saveRawFrame(image, result, null)
@@ -5908,7 +5996,8 @@ class RawCameraController(
      * collected frames to their save path and reopen the shutter.
      */
     private fun completeForwardCapture() {
-        if (topupActive) finishTopupBurst()
+        if (activePhotoMerge) finishPhotoMerge()
+        else if (topupActive) finishTopupBurst()
         else {
             if (activeDualRaw) {
                 activeDualRaw = false
@@ -5926,6 +6015,26 @@ class RawCameraController(
             finishCapture()
             resumeRawZslIfIdle()
         }
+    }
+
+    /** Transfer arrived frames once; fewer than two is a failed merge. */
+    private fun finishPhotoMerge() {
+        val selected = pendingPhotoMergeFrames.toList()
+        pendingPhotoMergeFrames.clear()
+        activePhotoMerge = false
+        if (selected.size < 2) {
+            selected.forEach { RawImageOwnership.release(it.image) }
+            finishCapture("MERGE FAILED: fewer than two RAW frames")
+            return
+        }
+        Log.i(LOG_TAG, "PHOTO_MERGE mode=$activeCaptureExposureMode frames=${selected.size} " +
+            "iso=${selected.first().result.get(CaptureResult.SENSOR_SENSITIVITY)} " +
+            "exposureNs=${selected.first().exposureNanos} " +
+            "pairs=${selected.joinToString { "${it.result.get(CaptureResult.SENSOR_SENSITIVITY)}:${it.exposureNanos}" }}")
+        onState("${if (activeMfsrSettings.enabled) "MFSR" else "HDR+"} ×${selected.size} • PREPARING")
+        if (activeMfsrSettings.enabled) saveMfsrMerge(selected) else saveHdrPlusMerge(selected)
+        finishCapture()
+        publishRawZslStatus()
     }
 
     /**
@@ -6306,6 +6415,9 @@ class RawCameraController(
         // inside finishTopupBurst first, so this is a no-op there and a release
         // everywhere else (errors, teardown).
         abortTopupFrames()
+        activePhotoMerge = false
+        pendingPhotoMergeFrames.forEach { RawImageOwnership.release(it.image) }
+        pendingPhotoMergeFrames.clear()
         activeDualRaw = false
         pendingDualRawFrames.forEach { RawImageOwnership.release(it.image) }
         pendingDualRawFrames.clear()
@@ -6352,21 +6464,23 @@ class RawCameraController(
             hasProcessingCapacity(
                 ZslPolicy.availabilitySlotCountFor(
                     hdrPlusSettings,
-                    rawZslFrameCount, captureFormat
+                    rawZslFrameCount, captureFormat, mfsrSettings
                 ),
                 captureFormat
             )
         } else {
             hasProcessingCapacity()
         }
+        val merging = (hdrPlusSettings.enabled || mfsrSettings.enabled) &&
+            (hdrPlusMergeInFlight.get() || mfsrMergeInFlight.get())
         onCaptureEnabled(
-            running && !destroyed && session != null && !captureInProgress.get() && hasCapacity
+            running && !destroyed && session != null && !captureInProgress.get() && hasCapacity && !merging
         )
     }
 
     private fun resumeRawZslIfIdle() {
         if (!running || session == null || captureInProgress.get()) return
-        if (SessionStreamSelection.needsZslReaderUpgrade(rawZslRequested, rawReaderHasZslBudget,
+        if (SessionStreamSelection.needsZslReaderUpgrade(needsBurstReaderBudget(), rawReaderHasZslBudget,
                 false, pendingSaveCount.get())) {
             updateRepeatingRequest()
             return
@@ -6417,7 +6531,8 @@ class RawCameraController(
      * the reader limit.
      */
     private fun calculateRawZslCapacity(rawSize: Size): Int =
-        if (rawSize.width.toLong() * rawSize.height.toLong() > 0L) rawZslFrameCount else 0
+        if (rawSize.width.toLong() * rawSize.height.toLong() > 0L)
+            maxOf(rawZslFrameCount, zslSelectedFrameCount(captureFormat)) else 0
 
     /**
      * Drive the repeating RAW ring at 30 fps when the HAL exposes such an AE range.

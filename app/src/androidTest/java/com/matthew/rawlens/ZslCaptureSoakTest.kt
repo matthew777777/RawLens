@@ -31,7 +31,7 @@ class ZslCaptureSoakTest {
         val burst = args.getString("burst", "false").toBoolean()
         // HDR bracket (-2/0/+2 EV): one merged DNG and/or JPEG per press.
         val hdrBracket = args.getString("hdrBracket", "false").toBoolean()
-        // ZSL merge (-e zslMerge hdrplus|mfsr, with -e mode ZSL): one merged
+        // Photo or ZSL merge (-e zslMerge hdrplus|mfsr, -e mode AUTO|PROGRAM|MANUAL|ZSL): one merged
         // file per press. Enables that merge and disables source-burst saves
         // for the run only; the user's values are restored afterwards.
         val zslMerge = args.getString("zslMerge")
@@ -124,6 +124,27 @@ class ZslCaptureSoakTest {
             awaitCondition("Initial RAW preview never became live", 30_000) {
                 uiBoolean { activity.findViewById<RawViewfinder>(R.id.rawViewfinder).snapshot().glActive &&
                     activity.findViewById<View>(R.id.shutter).isEnabled }
+            }
+            // Optional isolated UI exercise: toggles must preserve the chosen mode.
+            if (zslMerge != null && args.getString("exerciseMergeToggles") == "true") {
+                instrumentation.runOnMainSync {
+                    activity.applyCaptureExposureMode(mode)
+                    val method = MainActivity::class.java.getDeclaredMethod(
+                        if (zslMerge == "mfsr") "toggleMfsr" else "toggleHdrPlus")
+                        .apply { isAccessible = true }
+                    method.invoke(activity) // off
+                    method.invoke(activity) // on
+                    assertTrue("Merge toggle changed photo exposure mode", activity.captureExposureMode == mode)
+                }
+                SystemClock.sleep(2000)
+            }
+            if (zslMerge != null) {
+                val selectedMode = RawCameraController::class.java.getDeclaredField("captureExposureMode")
+                    .apply { isAccessible = true }.get(controller)
+                val ringRequested = RawCameraController::class.java.getDeclaredField("rawZslRequested")
+                    .apply { isAccessible = true }.getBoolean(controller)
+                assertTrue("Merger changed exposure mode: $selectedMode, expected $mode", selectedMode == mode)
+                assertTrue("Merger forced the ZSL ring in $mode", ringRequested == (mode == CaptureExposureMode.ZSL))
             }
             android.util.Log.i("RawLensSoak", "Preview ready")
             val burstFrames = RawCameraController::class.java.getDeclaredField("BURST_FRAME_COUNT")

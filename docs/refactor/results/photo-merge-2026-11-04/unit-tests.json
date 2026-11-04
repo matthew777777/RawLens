@@ -1,0 +1,44 @@
+[
+  {
+    "name": "com.matthew.rawlens.SessionStreamComboTest",
+    "tests": "29",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.matthew.rawlens.ZslSelectedFrameCountTest",
+    "tests": "6",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.matthew.rawlens.CaptureQueueCapacityTest",
+    "tests": "4",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.matthew.rawlens.MfsrSettingsTest",
+    "tests": "8",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.matthew.rawlens.RequestExposureTest",
+    "tests": "9",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.matthew.rawlens.HdrPlusSettingsTest",
+    "tests": "13",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  }
+]

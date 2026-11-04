@@ -199,9 +199,24 @@ RAW HDR (camera 0 only), face priority. Debug frames under Debug tab.
 - **About:** version, GPLv3+, open-source notices; GitHub builds add the
   update-check switch (off = no network at all).
 
+HDR+ and MFSR also work in **AUTO, PROGRAM and MANUAL**. These modes
+capture a fresh burst after the shutter press and merge it into one output;
+ZSL uses buffered frames. Enabling a merger keeps the selected exposure mode.
+Use Settings → Burst's frame count for both paths (each merger applies its
+own limits). PROGRAM uses its exposure curve; MANUAL keeps your ISO/shutter;
+AUTO freezes the metered exposure across the burst. Long manual exposures
+extend the burst's capture time. Flash stills use the existing single-frame
+path. Explicit BURST 6 / long-press remains a separate unmerged burst.
+
 ## 8B. Video
 
-Tap the red shutter mode. Two recorders:
+Tap the red shutter mode. Video temporarily starts in Auto exposure for both
+recording formats. PROGRAM, ZSL, ETTR and photo burst processing stay suspended
+while video is active. Manual video ISO/shutter controls remain available.
+Switching back restores the previous photo mode and manual controls without
+rewriting the saved photo preferences.
+
+Two recorders:
 
 - **RAW video** → `.craw` (lossless, Cinematic RAW Studio). Codec CRAW Live
   (default) / CRAW Live v1 — Legacy / CRAW Balanced, crop, binning (half resolution, RGB best or
@@ -210,7 +225,9 @@ Tap the red shutter mode. Two recorders:
 - **Encoded Video** → video file. Profile Rec.709 / S-Log3 (S-Gamut3.Cine) /
   HLG / ACES, resolution, frame rate, demosaic MHC (default) /
   Super pixel, crop, gain. Real time on the test phone: 4K 24 fps,
-  1440p and 1080p 30 fps.
+  1440p and 1080p 30 fps. Sound is uncompressed 48 kHz, 16-bit
+  little-endian stereo PCM (`sowt`, 1,536 kb/s; about 11 MiB per minute).
+  Devices without stereo input duplicate the mono microphone to both channels.
 - **S-Log3 LUT library:** `Import LUT (.cube)` (up to 16), choose assist or
   LUT, intensity. The LUT shows while recording; tick *Bake selected LUT*
   to record Rec.709 (`_LUT709` file). The before-record viewfinder does not

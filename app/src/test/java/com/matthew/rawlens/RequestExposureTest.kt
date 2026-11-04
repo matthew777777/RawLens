@@ -46,4 +46,22 @@ class RequestExposureTest {
 
     @Test fun noManualSensorMeansHardwareAe() =
         assertNull(RequestExposure.resolve(inputs(selectedIso = 400, manualSensor = false)))
+    @Test fun photoMergeAutoFreezesMeteredExposure() {
+        assertEquals(SensorExposure(320, 15_000_000L),
+            RequestExposure.forPhotoMerge(null, null, 320, 15_000_000L, true))
+    }
+
+    @Test fun photoMergePreservesProgramEttrAndManualStillSelection() {
+        for (pair in listOf(SensorExposure(800, 8_000_000L),
+            SensorExposure(100, 2_000_000_000L), SensorExposure(200, 30_000_000L))) {
+            assertEquals(pair, RequestExposure.forPhotoMerge(pair.iso, pair.exposureNanos,
+                1600, 1_000_000L, true))
+        }
+    }
+
+    @Test fun photoMergeDeclinesUnsupportedOrUnmeteredCapture() {
+        assertNull(RequestExposure.forPhotoMerge(100, 10_000_000L, 100, 10_000_000L, false))
+        assertNull(RequestExposure.forPhotoMerge(null, null, 0, 0L, true))
+    }
+
 }

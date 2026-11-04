@@ -36,6 +36,15 @@ internal object RequestExposure {
         val manualSensorSupported: Boolean,
     )
 
+    /** Photo-style burst: freeze the still-selected pair, or Auto's metered pair. */
+    fun forPhotoMerge(requestIso: Int?, requestExposureNanos: Long?, meteredIso: Int,
+                      meteredExposureNanos: Long, manualSensorSupported: Boolean): SensorExposure? {
+        if (!manualSensorSupported) return null
+        val iso = requestIso ?: meteredIso
+        val exposure = requestExposureNanos ?: meteredExposureNanos
+        return if (iso > 0 && exposure > 0L) SensorExposure(iso, exposure) else null
+    }
+
     fun resolve(i: Inputs): SensorExposure? {
         val manualExposure = i.selectedIso != null || i.selectedExposureNanos != null
         val programLive = !manualExposure && i.programCustomActive &&

@@ -140,4 +140,9 @@ class HdrPlusSettingsTest {
         assertEquals("HDR+ strength: 8.0", HdrPlusSettings.strengthSliderText(8f))
         assertEquals("HDR+ strength: 13.0", HdrPlusSettings.strengthSliderText(13f))
     }
+    @Test fun freshPhotoBurstDoesNotWaitForZslRing() {
+        val on = HdrPlusSettings(enabled = true)
+        assertEquals("HDR+\nHQ ×8", on.quickText(8, 0, true, false, zsl = false))
+    }
+
 }

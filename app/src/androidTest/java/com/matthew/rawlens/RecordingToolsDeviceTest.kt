@@ -74,6 +74,48 @@ class RecordingToolsDeviceTest {
         fun sleeping(): Boolean { var value = false; main { value = a.recordingTools.isPreviewSleeping }; return value }
         try {
             await("Live preview") { var ready = false; main { ready = a.controller.vfSnapshot()?.fps?.let { it > 0f } == true }; ready }
+            // Photo modes are temporary-suspended for either video format, without preference edits.
+            val controllerMode = RawCameraController::class.java.getDeclaredField("captureExposureMode").apply { isAccessible = true }
+            val zslRequested = RawCameraController::class.java.getDeclaredField("rawZslRequested").apply { isAccessible = true }
+            for (mode in listOf(CaptureExposureMode.PROGRAM, CaptureExposureMode.ZSL, CaptureExposureMode.MANUAL)) {
+                main { a.applyCaptureExposureMode(mode) }
+                await("Photo mode installed") { controllerMode.get(a.controller) == mode }
+                if (mode == CaptureExposureMode.MANUAL) {
+                    main {
+                        a.setManualValueFor(ManualControl.ISO, 400L)
+                        a.setManualValueFor(ManualControl.SHUTTER, 70_000_000L)
+                    }
+                    await("Photo manual values installed") { a.controller.snapshotVideoManual().iso == 400 }
+                }
+                val before = a.controller.snapshotVideoManual()
+                val savedPreferences = prefs.all.toMap()
+                click(R.id.videoRecordButton)
+                await("Video uses Android Auto") {
+                    controllerMode.get(a.controller) == CaptureExposureMode.AUTO &&
+                        a.controller.snapshotVideoManual().iso == null &&
+                        a.controller.snapshotVideoManual().shutterNanos == null &&
+                        !zslRequested.getBoolean(a.controller)
+                }
+                main {
+                    assertEquals(CaptureExposureMode.AUTO, a.captureExposureMode)
+                    assertEquals("Video entry preserves photo preferences", savedPreferences, prefs.all)
+                    a.setEncodedVideoMode(true)
+                    a.setEncodedVideoMode(false)
+                    a.findViewById<View>(R.id.isoControl).performClick()
+                }
+                // Manual video exposure remains available without activating the photo MANUAL mode.
+                main { a.setManualValueFor(ManualControl.ISO, 800L) }
+                await("Manual video adjustment works") { a.controller.snapshotVideoManual().iso == 800 }
+                main { assertEquals(CaptureExposureMode.AUTO, a.captureExposureMode) }
+                click(R.id.videoRecordButton)
+                await("Photo controls restored") {
+                    controllerMode.get(a.controller) == mode && a.controller.snapshotVideoManual() == before
+                }
+                main { assertEquals(mode, a.captureExposureMode) }
+                report.appendLine("$mode -> VIDEO AUTO -> $mode, manual controls restored")
+            }
+            main { a.applyCaptureExposureMode(CaptureExposureMode.AUTO) }
+            await("Auto photo restored for recording checks") { controllerMode.get(a.controller) == CaptureExposureMode.AUTO }
             val photoPanel = Rect()
             main { a.findViewById<View>(R.id.controlPanel).getGlobalVisibleRect(photoPanel) }
             shot("photo-layout")
@@ -98,7 +140,7 @@ class RecordingToolsDeviceTest {
                 main {
                     val tools = a.findViewById<View>(R.id.recordingToolsRow)
                     val rect = Rect()
-                    assertFalse("Focus tools hidden until focus slider opens", tools.getGlobalVisibleRect(rect))
+                    assertFalse("Focus tools hidden until focus slider opens", tools.isShown)
                     assertTrue(a.findViewById<TextView>(R.id.videoDebugOverlay).text.contains("HEALTH"))
                     report.appendLine("${if (encoded) "encoded" else "raw"} tools=$rect")
                 }
