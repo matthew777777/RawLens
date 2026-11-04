@@ -1,0 +1,35 @@
+[
+  {
+    "mode": "1920x1080-30-v15-inflight-all",
+    "passed": false,
+    "fps": 28.986317949395993,
+    "render_ms": {
+      "median": 30.6328075,
+      "p95": 41.703923,
+      "max": 55.461923
+    },
+    "error": null
+  },
+  {
+    "mode": "2560x1440-30-v15-inflight-all",
+    "passed": false,
+    "fps": 2.467810122879193,
+    "render_ms": {
+      "median": 57.9324225,
+      "p95": 66.631154,
+      "max": 90.197539
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-v15-inflight-all",
+    "passed": false,
+    "fps": 0,
+    "render_ms": {
+      "median": 70.352616,
+      "p95": 78.520539,
+      "max": 93.953923
+    },
+    "error": null
+  }
+]

@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/3840x2160-24-v22-foreground.mp4: 1 file pulled, 0 skipped. 34.8 MB/s (180511896 bytes in 4.946s)

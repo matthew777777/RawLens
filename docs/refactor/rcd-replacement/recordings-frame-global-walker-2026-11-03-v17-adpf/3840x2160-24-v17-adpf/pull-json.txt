@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/3840x2160-24-v17-adpf.json: 1 file pulled, 0 skipped. 18.7 MB/s (474818 bytes in 0.024s)

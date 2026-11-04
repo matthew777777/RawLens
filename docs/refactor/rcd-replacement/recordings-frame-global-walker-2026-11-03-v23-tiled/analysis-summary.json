@@ -1,0 +1,24 @@
+[
+  {
+    "mode": "2560x1440-30-v23-tiled",
+    "passed": false,
+    "fps": 15.917831922582078,
+    "render_ms": {
+      "median": 59.474846,
+      "p95": 74.513539,
+      "max": 102.323
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-v23-tiled",
+    "passed": false,
+    "fps": 13.83613026975,
+    "render_ms": {
+      "median": 68.1170775,
+      "p95": 77.983693,
+      "max": 90.941153
+    },
+    "error": null
+  }
+]

@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/2560x1440-30-v19-coarsefinal.json: 1 file pulled, 0 skipped. 25.0 MB/s (586787 bytes in 0.022s)

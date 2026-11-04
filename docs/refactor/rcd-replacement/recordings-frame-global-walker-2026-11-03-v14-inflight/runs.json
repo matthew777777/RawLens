@@ -1,0 +1,68 @@
+{
+  "artifacts": {
+    "/private/tmp/rawlens-rcd-full-source-snapshot/app/build/outputs/apk/github/deviceTest/RawLens-2.1.29-deviceTest-arm64-v8a.apk": "0e2c15b839d149289a68758a1b63d5b096b73f1a0eef566f817ac3e1b118b665",
+    "/private/tmp/rawlens-rcd-full-source-snapshot/app/build/outputs/apk/androidTest/github/deviceTest/app-github-deviceTest-androidTest.apk": "9611279e690a87e3ce601bec2bf1b436676b8d0079bf3a2fe8858ae67d552c09"
+  },
+  "installed_apk_sha256": "0e2c15b839d149289a68758a1b63d5b096b73f1a0eef566f817ac3e1b118b665",
+  "serial": "fe79feha9lmb6hhi",
+  "seconds_requested": 30,
+  "runs": [
+    {
+      "mode": [
+        1920,
+        1080,
+        30
+      ],
+      "out": "/Users/monikamalinowska/AndroidStudioProjects/RawLens/docs/refactor/rcd-replacement/recordings-frame-global-walker-2026-11-03-v14-inflight/1920x1080-30-v14-inflight",
+      "instrumentation_ok": true,
+      "command": [
+        "shell",
+        "am",
+        "instrument",
+        "-w",
+        "-r",
+        "-e",
+        "class",
+        "com.matthew.rawlens.PhotoRcdRecordingDeviceTest",
+        "-e",
+        "authorizeRcdRecording",
+        "true",
+        "-e",
+        "width",
+        "1920",
+        "-e",
+        "height",
+        "1080",
+        "-e",
+        "fps",
+        "30",
+        "-e",
+        "seconds",
+        "30",
+        "-e",
+        "label",
+        "v14-inflight",
+        "-e",
+        "tileLocal",
+        "true",
+        "-e",
+        "frameGlobal",
+        "true",
+        "-e",
+        "fusedGrade",
+        "true",
+        "-e",
+        "normalizeOnce",
+        "true",
+        "-e",
+        "requirementsInput",
+        "true",
+        "-e",
+        "reconstructionScale",
+        "1",
+        "com.matthew.rawlens.rcdcheck.test/androidx.test.runner.AndroidJUnitRunner"
+      ]
+    }
+  ],
+  "scope": "Real RCD + separate grade + Main10/audio recording; actual cadence evaluated from sensor identities, not PTS alone"
+}

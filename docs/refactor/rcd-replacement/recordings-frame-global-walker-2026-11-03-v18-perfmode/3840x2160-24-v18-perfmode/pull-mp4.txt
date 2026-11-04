@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/3840x2160-24-v18-perfmode.mp4: 1 file pulled, 0 skipped. 41.5 MB/s (179353056 bytes in 4.124s)

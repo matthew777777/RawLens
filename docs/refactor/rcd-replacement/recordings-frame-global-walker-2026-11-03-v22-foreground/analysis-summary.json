@@ -1,0 +1,35 @@
+[
+  {
+    "mode": "1920x1080-30-v22-foreground",
+    "passed": false,
+    "fps": 29.814247365808328,
+    "render_ms": {
+      "median": 10.7076925,
+      "p95": 34.595461,
+      "max": 76.275385
+    },
+    "error": null
+  },
+  {
+    "mode": "2560x1440-30-v22-foreground",
+    "passed": false,
+    "fps": 16.151273401456457,
+    "render_ms": {
+      "median": 60.021846,
+      "p95": 70.823461,
+      "max": 92.087077
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-v22-foreground",
+    "passed": false,
+    "fps": 13.402205395899715,
+    "render_ms": {
+      "median": 69.681924,
+      "p95": 82.370077,
+      "max": 115.17477
+    },
+    "error": null
+  }
+]

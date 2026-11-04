@@ -33,6 +33,7 @@
 //   glslangValidator -V --target-env vulkan1.1 vf_rcdyuv.comp -o vf_rcdyuv.spv
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
 
 #ifdef RECORD_CUBE
 #include "../record_cube.glsl"
@@ -149,66 +150,79 @@ float refineFrom(float central, float d0, float d1, float d2, float d3) {
     return (abs(0.5 - central) < abs(0.5 - nb)) ? nb : central;
 }
 
+// Stencil-tap mirror: taps sit within +-3 of an in-crop site and crops
+// are >= 8 px, so one reflection is exact (mir()'s modulo fallback is
+// only needed for the wide tile apron).
+ivec2 mirrorTap(ivec2 s) {
+    ivec2 n = u.cDims;
+    s = abs(s);
+    return min(s, 2 * n - 2 - s);
+}
+
+// One RCD mode-3 colour block (reference op order). On Bayer a green
+// site's vertical +-1/+-3 neighbours share one colour and its
+// horizontal ones the other, so each block takes mosaic (tile) values
+// on one axis and modes 1-2 image values on the other.
+float rcdBlock(float rgb1, float vhDisc, vec4 grad, vec4 gNSWE,
+               vec4 card, vec4 card3) {
+    float cN = card.x, cS = card.y, cW = card.z, cE = card.w;
+    float cN3 = card3.x, cS3 = card3.y, cW3 = card3.z, cE3 = card3.w;
+    float sn = abs(cN - cS), ew = abs(cW - cE);
+    float nG = grad.x + sn + abs(cN - cN3);
+    float sG = grad.y + sn + abs(cS - cS3);
+    float wG = grad.z + ew + abs(cW - cW3);
+    float eG = grad.w + ew + abs(cE - cE3);
+    float vEst = (nG * (cS - gNSWE.y) + sG * (cN - gNSWE.x)) / (nG + sG);
+    float hEst = (eG * (cW - gNSWE.z) + wG * (cE - gNSWE.w)) / (eG + wG);
+    return rgb1 + intp(vhDisc, hEst, vEst);
+}
+
 // Final RCD RGB at crop site s: R/B sites are modes 1-2 final (plain
 // image read); green sites run the RT 4.3 refinement (same op order as
 // vf_rcd.comp mode 3: red block, then blue block).
 vec3 rcdRgbAt(ivec2 s) {
+    vec4 px = imageLoad(img_rgb, s);
     int c = colorAt(s);
     // Non-green sites are modes 1-2 final: the exact texel (no mirror;
     // matches vf_rcd.comp mode 3, which leaves these texels untouched).
-    if (c != 1) return imageLoad(img_rgb, s).rgb;
-    vec4 d = dirAt(s);
-    float vhDisc = refineFrom(d.r,
-        dirAt(s + ivec2(-1, -1)).r, dirAt(s + ivec2(1, -1)).r,
-        dirAt(s + ivec2(-1, 1)).r, dirAt(s + ivec2(1, 1)).r);
-    float rgb1 = imageLoad(img_rgb, s).g;
-    float n1 = RCD_EPS + abs(rgb1 - rgbAt(s + ivec2(0, -2)).g);
-    float s1 = RCD_EPS + abs(rgb1 - rgbAt(s + ivec2(0, 2)).g);
-    float w1 = RCD_EPS + abs(rgb1 - rgbAt(s + ivec2(-2, 0)).g);
-    float e1 = RCD_EPS + abs(rgb1 - rgbAt(s + ivec2(2, 0)).g);
-    float gN = rgbAt(s + ivec2(0, -1)).g;
-    float gS = rgbAt(s + ivec2(0, 1)).g;
-    float gW = rgbAt(s + ivec2(-1, 0)).g;
-    float gE = rgbAt(s + ivec2(1, 0)).g;
-    vec4 px = imageLoad(img_rgb, s);
-    // c = 0 (red): cardinals +-1 are mosaic (tile), +-3 mode-2 (image).
-    {
-        float cN = (colorAt(s + ivec2(0, -1)) == 0) ? fetchN(s + ivec2(0, -1)) : rgbAt(s + ivec2(0, -1)).r;
-        float cS = (colorAt(s + ivec2(0, 1)) == 0) ? fetchN(s + ivec2(0, 1)) : rgbAt(s + ivec2(0, 1)).r;
-        float cW = (colorAt(s + ivec2(-1, 0)) == 0) ? fetchN(s + ivec2(-1, 0)) : rgbAt(s + ivec2(-1, 0)).r;
-        float cE = (colorAt(s + ivec2(1, 0)) == 0) ? fetchN(s + ivec2(1, 0)) : rgbAt(s + ivec2(1, 0)).r;
-        float cN3 = (colorAt(s + ivec2(0, -3)) == 0) ? fetchN(s + ivec2(0, -3)) : rgbAt(s + ivec2(0, -3)).r;
-        float cS3 = (colorAt(s + ivec2(0, 3)) == 0) ? fetchN(s + ivec2(0, 3)) : rgbAt(s + ivec2(0, 3)).r;
-        float cW3 = (colorAt(s + ivec2(-3, 0)) == 0) ? fetchN(s + ivec2(-3, 0)) : rgbAt(s + ivec2(-3, 0)).r;
-        float cE3 = (colorAt(s + ivec2(3, 0)) == 0) ? fetchN(s + ivec2(3, 0)) : rgbAt(s + ivec2(3, 0)).r;
-        float sn = abs(cN - cS), ew = abs(cW - cE);
-        float nG = n1 + sn + abs(cN - cN3);
-        float sG = s1 + sn + abs(cS - cS3);
-        float wG = w1 + ew + abs(cW - cW3);
-        float eG = e1 + ew + abs(cE - cE3);
-        float vEst = (nG * (cS - gS) + sG * (cN - gN)) / (nG + sG);
-        float hEst = (eG * (cW - gW) + wG * (cE - gE)) / (eG + wG);
-        px.r = rgb1 + intp(vhDisc, hEst, vEst);
-    }
-    // c = 2 (blue): same with mosaic/blue selection.
-    {
-        float cN = (colorAt(s + ivec2(0, -1)) == 2) ? fetchN(s + ivec2(0, -1)) : rgbAt(s + ivec2(0, -1)).b;
-        float cS = (colorAt(s + ivec2(0, 1)) == 2) ? fetchN(s + ivec2(0, 1)) : rgbAt(s + ivec2(0, 1)).b;
-        float cW = (colorAt(s + ivec2(-1, 0)) == 2) ? fetchN(s + ivec2(-1, 0)) : rgbAt(s + ivec2(-1, 0)).b;
-        float cE = (colorAt(s + ivec2(1, 0)) == 2) ? fetchN(s + ivec2(1, 0)) : rgbAt(s + ivec2(1, 0)).b;
-        float cN3 = (colorAt(s + ivec2(0, -3)) == 2) ? fetchN(s + ivec2(0, -3)) : rgbAt(s + ivec2(0, -3)).b;
-        float cS3 = (colorAt(s + ivec2(0, 3)) == 2) ? fetchN(s + ivec2(0, 3)) : rgbAt(s + ivec2(0, 3)).b;
-        float cW3 = (colorAt(s + ivec2(-3, 0)) == 2) ? fetchN(s + ivec2(-3, 0)) : rgbAt(s + ivec2(-3, 0)).b;
-        float cE3 = (colorAt(s + ivec2(3, 0)) == 2) ? fetchN(s + ivec2(3, 0)) : rgbAt(s + ivec2(3, 0)).b;
-        float sn = abs(cN - cS), ew = abs(cW - cE);
-        float nG = n1 + sn + abs(cN - cN3);
-        float sG = s1 + sn + abs(cS - cS3);
-        float wG = w1 + ew + abs(cW - cW3);
-        float eG = e1 + ew + abs(cE - cE3);
-        float vEst = (nG * (cS - gS) + sG * (cN - gN)) / (nG + sG);
-        float hEst = (eG * (cW - gW) + wG * (cE - gE)) / (eG + wG);
-        px.b = rgb1 + intp(vhDisc, hEst, vEst);
-    }
+    if (c != 1) return px.rgb;
+    float d = imageLoad(img_scratch, s).r;
+    float vhDisc = refineFrom(d,
+        imageLoad(img_scratch, mirrorTap(s + ivec2(-1, -1))).r,
+        imageLoad(img_scratch, mirrorTap(s + ivec2(1, -1))).r,
+        imageLoad(img_scratch, mirrorTap(s + ivec2(-1, 1))).r,
+        imageLoad(img_scratch, mirrorTap(s + ivec2(1, 1))).r);
+    float rgb1 = px.g;
+    vec4 grad = vec4(RCD_EPS) + abs(vec4(rgb1) - vec4(
+        imageLoad(img_rgb, mirrorTap(s + ivec2(0, -2))).g,
+        imageLoad(img_rgb, mirrorTap(s + ivec2(0, 2))).g,
+        imageLoad(img_rgb, mirrorTap(s + ivec2(-2, 0))).g,
+        imageLoad(img_rgb, mirrorTap(s + ivec2(2, 0))).g));
+    // +-1 cardinals: green from the image, plus the non-mosaic channel.
+    vec4 tN = imageLoad(img_rgb, mirrorTap(s + ivec2(0, -1)));
+    vec4 tS = imageLoad(img_rgb, mirrorTap(s + ivec2(0, 1)));
+    vec4 tW = imageLoad(img_rgb, mirrorTap(s + ivec2(-1, 0)));
+    vec4 tE = imageLoad(img_rgb, mirrorTap(s + ivec2(1, 0)));
+    vec4 gNSWE = vec4(tN.g, tS.g, tW.g, tE.g);
+    // Mosaic values (the vertical axis carries colour cv, horizontal 2-cv).
+    vec4 m1 = vec4(fetchN(s + ivec2(0, -1)), fetchN(s + ivec2(0, 1)),
+                   fetchN(s + ivec2(-1, 0)), fetchN(s + ivec2(1, 0)));
+    vec4 m3 = vec4(fetchN(s + ivec2(0, -3)), fetchN(s + ivec2(0, 3)),
+                   fetchN(s + ivec2(-3, 0)), fetchN(s + ivec2(3, 0)));
+    vec4 tN3 = imageLoad(img_rgb, mirrorTap(s + ivec2(0, -3)));
+    vec4 tS3 = imageLoad(img_rgb, mirrorTap(s + ivec2(0, 3)));
+    vec4 tW3 = imageLoad(img_rgb, mirrorTap(s + ivec2(-3, 0)));
+    vec4 tE3 = imageLoad(img_rgb, mirrorTap(s + ivec2(3, 0)));
+    bool vertRed = colorAt(s + ivec2(0, 1)) == 0;
+    // Red: mosaic on the red axis, image .r on the other.
+    vec4 rImg1 = vec4(tN.r, tS.r, tW.r, tE.r), rImg3 = vec4(tN3.r, tS3.r, tW3.r, tE3.r);
+    vec4 bImg1 = vec4(tN.b, tS.b, tW.b, tE.b), bImg3 = vec4(tN3.b, tS3.b, tW3.b, tE3.b);
+    bvec4 vSel = bvec4(true, true, false, false);
+    bvec4 redMosaic = vertRed ? vSel : not(vSel);
+    px.r = rcdBlock(rgb1, vhDisc, grad, gNSWE,
+                    mix(rImg1, m1, redMosaic), mix(rImg3, m3, redMosaic));
+    px.b = rcdBlock(rgb1, vhDisc, grad, gNSWE,
+                    mix(bImg1, m1, not(redMosaic)), mix(bImg3, m3, not(redMosaic)));
     return px.rgb;
 }
 
@@ -358,6 +372,7 @@ void main() {
     if (any(greaterThanEqual(ivec2(gl_WorkGroupID.xy) * ivec2(16, 8), u.cDims))) return;
     loadTile();
     ivec2 ij = ivec2(gl_GlobalInvocationID.xy) * ivec2(2, 1);
-    writeSite(ij);
-    writeSite(ij + ivec2(1, 0));
+    // Rolled on purpose: unrolled, both sites' RCD + grade bodies stay
+    // live together and spill (malioc G615: 716 B spill -> 0).
+    [[dont_unroll]] for (int k = 0; k < 2; ++k) writeSite(ij + ivec2(k, 0));
 }

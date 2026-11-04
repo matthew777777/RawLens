@@ -20,17 +20,24 @@ void main() {
     int dm = int(gl_LocalInvocationID.x), dn = int(gl_LocalInvocationID.y);
     ivec2 t0 = t * 8;
     float angle = 2.0 * PI / 8.0;
+    // Stage the tile's spectrum through shared memory: each lane loads
+    // its own bin once instead of every lane loading the whole row
+    // (16 rgba32f loads in flight spilled 48 B on Mali-G615).
+    ivec2 x = ivec2(2 * (t0.x + dm), t0.y + dn);
+    tmpRe[dn][dm] = imageLoad(ft, x);
+    tmpIm[dn][dm] = imageLoad(ft, x + ivec2(1, 0));
+    barrier();
     // Row-wise (x) transform.
     vec4 re = vec4(0.0), im = vec4(0.0);
     for (int dx = 0; dx < 8; ++dx) {
         // Upstream-parity patch (RawLens): twiddle argument associated
         // left-to-right like upstream's angle*dm*dx, not angle*(dm*dx).
         float c = cos(angle * float(dm) * float(dx)), s = sin(angle * float(dm) * float(dx));
-        ivec2 x = ivec2(2 * (t0.x + dx), t0.y + dn);
-        vec4 dRe = imageLoad(ft, x), dIm = imageLoad(ft, x + ivec2(1, 0));
+        vec4 dRe = tmpRe[dn][dx], dIm = tmpIm[dn][dx];
         re += c * dRe - s * dIm;
         im += s * dRe + c * dIm;
     }
+    barrier();
     tmpRe[dn][dm] = re;
     tmpIm[dn][dm] = im;
     barrier();

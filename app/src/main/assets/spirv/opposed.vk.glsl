@@ -21,6 +21,19 @@ layout(std140,binding=5) uniform Params {
 } p;
 int color(int x,int y) { return p.cells[2*(y&1)+(x&1)]; }
 // Correct a hardware division estimate using the exact product at float midpoints.
+// Register-only helpers (malioc G615: dynamic uvec3/vec3 indexing put
+// 720 B of arrays on the stack). Same results as the indexed forms.
+uvec3 shiftedMantissa(uint xm,int shift) {
+    int word=shift/32, bits=shift%32;
+    uint v0=xm<<bits, v1=(bits!=0)?xm>>(32-bits):0u;
+    return uvec3(word==0?v0:0u, word==1?v0:(word==0?v1:0u), word==2?v0:(word==1?v1:0u));
+}
+int compare3(uvec3 l,uvec3 r) {
+    if(l.z!=r.z) return l.z<r.z?-1:1;
+    if(l.y!=r.y) return l.y<r.y?-1:1;
+    if(l.x!=r.x) return l.x<r.x?-1:1;
+    return 0;
+}
 int divisionMidpoint(uint lower,float x,float y) {
     uint xb=floatBitsToUint(x), yb=floatBitsToUint(y);
     uint rm=(lower&0x7fffffu)|0x800000u;
@@ -29,12 +42,7 @@ int divisionMidpoint(uint lower,float x,float y) {
     int re=int(lower>>23)-150, ye=int(yb>>23)-150, xe=int(xb>>23)-150;
     uint hi,lo; umulExtended(2u*rm+1u,ym,hi,lo);
     int shift=xe-(re-1+ye);
-    uvec3 rhs=uvec3(0); int word=shift/32; int bits=shift%32;
-    rhs[word]=xm<<bits;
-    if(bits!=0 && word<2) rhs[word+1]=xm>>(32-bits);
-    uvec3 lhs=uvec3(lo,hi,0);
-    for(int j=2;j>=0;--j) { if(lhs[j]<rhs[j]) return -1; if(lhs[j]>rhs[j]) return 1; }
-    return 0;
+    return compare3(uvec3(lo,hi,0),shiftedMantissa(xm,shift));
 }
 float divideRounded(float x,float y) {
     if(y==1.0) return x;
@@ -88,14 +96,8 @@ int midpointCompare(uint lower,float x) {
     int xe=-149;
     if((xb>>23)!=0u) { xm|=0x800000u; xe=int(xb>>23)-150; }
     int shift=xe-3*(e-1);
-    uvec3 rhs=uvec3(0);
     // x and the midpoint cube have the same exponent basis.
-    int word=shift/32; int bits=shift%32;
-    rhs[word]=xm<<bits;
-    if(bits!=0 && word<2) rhs[word+1]=xm>>(32-bits);
-    uvec3 lhs=cube25(2u*m+1u);
-    for(int j=2;j>=0;--j) { if(lhs[j]<rhs[j]) return -1; if(lhs[j]>rhs[j]) return 1; }
-    return 0;
+    return compare3(cube25(2u*m+1u),shiftedMantissa(xm,shift));
 }
 float cubeRoot(float x) {
     if(x==0.0) return 0.0;
@@ -114,11 +116,16 @@ float refavg(int x,int y) {
     // Preserve upstream's exclusive maxrow-1/maxcol-1 limits, including borders.
     for(int yy=max(0,y-1); yy<min(p.sizeMode.y-1,y+2); ++yy)
         for(int xx=max(0,x-1); xx<min(p.sizeMode.x-1,x+2); ++xx) {
-            int c=color(xx,yy); mean[c]+=max(0.0,rawAt(ivec2(xx,yy))); cnt[c]+=1.0;
+            int c=color(xx,yy); float r=max(0.0,rawAt(ivec2(xx,yy)));
+            if(c==0) { mean.x+=r; cnt.x+=1.0; } else if(c==1) { mean.y+=r; cnt.y+=1.0; } else { mean.z+=r; cnt.z+=1.0; }
         }
-    for(int c=0;c<3;++c) mean[c]=cnt[c]>0.0 ? cubeRoot(divideRounded(p.correction[c]*mean[c],cnt[c])) : 0.0;
+    mean.x=cnt.x>0.0 ? cubeRoot(divideRounded(p.correction.x*mean.x,cnt.x)) : 0.0;
+    mean.y=cnt.y>0.0 ? cubeRoot(divideRounded(p.correction.y*mean.y,cnt.y)) : 0.0;
+    mean.z=cnt.z>0.0 ? cubeRoot(divideRounded(p.correction.z*mean.z,cnt.z)) : 0.0;
     precise vec3 opp=0.5*vec3(mean.y+mean.z,mean.x+mean.z,mean.x+mean.y);
-    precise float v=opp[color(x,y)]; return divideRounded((v*v)*v,p.correction[color(x,y)]);
+    int cc=color(x,y);
+    precise float v=cc==0?opp.x:cc==1?opp.y:opp.z;
+    return divideRounded((v*v)*v,cc==0?p.correction.x:cc==1?p.correction.y:p.correction.z);
 }
 bool clippedAt(ivec2 q,float value) {
     if(p.sizeMode.w!=0) {

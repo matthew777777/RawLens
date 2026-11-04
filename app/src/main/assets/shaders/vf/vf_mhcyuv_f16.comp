@@ -20,6 +20,7 @@
 //   glslangValidator -V --target-env vulkan1.1 vf_mhcyuv_f16.comp -o vf_mhcyuv_f16.spv
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 
@@ -337,20 +338,22 @@ void main() {
     if (any(greaterThanEqual(ij, u.oDims))) return;
     int yStride = int(u.gMisc.y);
     int outMode = u.sDims.w;
-    f16vec3 yuv0 = rgbToYuv(pixelLog(ij), outMode);
-    f16vec3 yuv1 = rgbToYuv(pixelLog(min(ij + ivec2(1, 0), u.oDims - 1)), outMode);
+    // Rolled over the two rows: four inlined MHC + grade bodies ran at
+    // 64 registers on Mali-G615 (malioc). Same values, same sum order.
     uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);
-    buf_out.words[yIdx >> 1u] = pack10(yuv0.x, 64.0hf, 940.0hf)
-        | (pack10(yuv1.x, 64.0hf, 940.0hf) << 16u);
-    f16vec3 sumTop = yuv0 + yuv1;
-    f16vec3 yuv2 = rgbToYuv(pixelLog(min(ij + ivec2(0, 1), u.oDims - 1)), outMode);
-    f16vec3 yuv3 = rgbToYuv(pixelLog(min(ij + ivec2(1, 1), u.oDims - 1)), outMode);
-    if (ij.y + 1 < u.oDims.y) {
-        uint nextIdx = yIdx + uint(yStride);
-        buf_out.words[nextIdx >> 1u] = pack10(yuv2.x, 64.0hf, 940.0hf)
-            | (pack10(yuv3.x, 64.0hf, 940.0hf) << 16u);
+    f16vec3 sumTop, sumBot;
+    [[dont_unroll]] for (int r = 0; r < 2; ++r) {
+        int y = min(ij.y + r, u.oDims.y - 1);
+        f16vec3 yuvA = rgbToYuv(pixelLog(ivec2(ij.x, y)), outMode);
+        f16vec3 yuvB = rgbToYuv(pixelLog(ivec2(min(ij.x + 1, u.oDims.x - 1), y)), outMode);
+        if (ij.y + r < u.oDims.y) {
+            uint idx = yIdx + uint(r) * uint(yStride);
+            buf_out.words[idx >> 1u] = pack10(yuvA.x, 64.0hf, 940.0hf)
+                | (pack10(yuvB.x, 64.0hf, 940.0hf) << 16u);
+        }
+        if (r == 0) sumTop = yuvA + yuvB; else sumBot = yuvA + yuvB;
     }
-    f16vec3 meanUV = (sumTop + (yuv2 + yuv3)) * 0.25hf;
+    f16vec3 meanUV = (sumTop + sumBot) * 0.25hf;
     uint pairIdx = uint(u.gMisc.w) / 2u
         + uint(ij.y / 2) * uint(u.gMisc.z) + uint(ij.x);
     buf_out.words[pairIdx >> 1u] = pack10(meanUV.g, 64.0hf, 960.0hf)

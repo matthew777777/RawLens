@@ -1,0 +1,24 @@
+[
+  {
+    "mode": "2560x1440-30-v25-noprodfinal",
+    "passed": false,
+    "fps": 17.750097296299455,
+    "render_ms": {
+      "median": 53.246231,
+      "p95": 64.890154,
+      "max": 85.875692
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-v25-noprodfinal",
+    "passed": false,
+    "fps": 14.741584312348802,
+    "render_ms": {
+      "median": 61.895077,
+      "p95": 76.96,
+      "max": 88.141923
+    },
+    "error": null
+  }
+]

@@ -72,6 +72,14 @@ plus the parity suite. Pre-patch md5s (this repo before the patch):
 - hdrp_correct_upsampling.comp: 711ceecdfc3466510549910a46c5dbc2 (the three
   candidate sums reduce on three lanes in the same order instead of one)
 
+RawLens performance patch (2026-11-04, malioc): same values, same op order;
+NOT yet byte-compared on device. Pre-patch md5:
+
+- hdrq_backward_dft.comp: 946ee316449adba8597625e762b68201 (each lane stages its
+  own spectrum bin through shared memory before the row pass instead of
+  every lane loading the whole row; malioc G615: 64 regs + 48 B spill ->
+  32 regs, full occupancy)
+
 Host deviations from RAWR toward Burst Photo (same proof doc): the HQ
 tile-border pass is skipped (upstream-off returns early for unknown black),
 and the spatial reference accumulates in frame order over a cleared

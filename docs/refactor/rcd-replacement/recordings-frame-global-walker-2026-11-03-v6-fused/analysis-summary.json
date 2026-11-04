@@ -1,0 +1,35 @@
+[
+  {
+    "mode": "1920x1080-30-fgfused6",
+    "passed": false,
+    "fps": 14.947265539260698,
+    "render_ms": {
+      "median": 62.1692305,
+      "p95": 81.763077,
+      "max": 108.556308
+    },
+    "error": null
+  },
+  {
+    "mode": "2560x1440-30-fgfused6",
+    "passed": false,
+    "fps": 13.226122744724128,
+    "render_ms": {
+      "median": 70.895846,
+      "p95": 84.918384,
+      "max": 107.368
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-fgfused6",
+    "passed": false,
+    "fps": 10.564892455748259,
+    "render_ms": {
+      "median": 83.9199615,
+      "p95": 127.181154,
+      "max": 249.664615
+    },
+    "error": null
+  }
+]

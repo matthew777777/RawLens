@@ -1,0 +1,24 @@
+[
+  {
+    "mode": "2560x1440-30-v26-splitguides",
+    "passed": false,
+    "fps": 17.325094849157512,
+    "render_ms": {
+      "median": 53.962769,
+      "p95": 67.164692,
+      "max": 88.118846
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-v26-splitguides",
+    "passed": false,
+    "fps": 14.3296989802146,
+    "render_ms": {
+      "median": 64.481154,
+      "p95": 78.189231,
+      "max": 86.581538
+    },
+    "error": null
+  }
+]

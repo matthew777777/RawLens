@@ -1,0 +1,24 @@
+[
+  {
+    "mode": "2560x1440-30-v24-splitmiss",
+    "passed": false,
+    "fps": 15.887507304395783,
+    "render_ms": {
+      "median": 59.754231,
+      "p95": 73.848538,
+      "max": 106.227693
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-v24-splitmiss",
+    "passed": false,
+    "fps": 13.058536666108624,
+    "render_ms": {
+      "median": 70.499307,
+      "p95": 83.828077,
+      "max": 110.772923
+    },
+    "error": null
+  }
+]

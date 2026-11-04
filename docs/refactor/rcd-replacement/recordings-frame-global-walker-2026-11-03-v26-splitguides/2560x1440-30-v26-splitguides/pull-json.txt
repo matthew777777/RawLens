@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/2560x1440-30-v26-splitguides.json: 1 file pulled, 0 skipped. 32.4 MB/s (674938 bytes in 0.020s)

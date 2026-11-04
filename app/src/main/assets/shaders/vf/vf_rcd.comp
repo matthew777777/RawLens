@@ -71,6 +71,14 @@ ivec2 mirror(ivec2 s) {
     return ivec2(mir(s.x, p.u_dims.x), mir(s.y, p.u_dims.y));
 }
 
+// Stencil-tap mirror for image reads: taps sit within +-4 of an in-crop
+// site and crops are >= 8 px, so one reflection is exact (mir()'s modulo
+// fallback is only needed for the wide tile apron in loadTile).
+ivec2 mirrorTap(ivec2 s) {
+    s = abs(s);
+    return min(s, 2 * p.u_dims - 2 - s);
+}
+
 // Quad offset (0..3) of crop pixel s in sensor phase.
 int quadOf(ivec2 s) {
     return (((s.y + p.u_origin.y) & 1) << 1) | ((s.x + p.u_origin.x) & 1);
@@ -123,12 +131,12 @@ float fetchN(ivec2 s) {
 
 // Prior-mode rgb read (imageLoad neither clamps nor mirrors).
 vec4 rgbAt(ivec2 s) {
-    return imageLoad(img_rgb, mirror(s));
+    return imageLoad(img_rgb, mirrorTap(s));
 }
 
 // Scratch direction read (mode 0 output, mirrored like rgb).
 vec4 dirAt(ivec2 s) {
-    return imageLoad(img_scratch, mirror(s));
+    return imageLoad(img_scratch, mirrorTap(s));
 }
 
 float intp(float d, float h, float v) { return d * (h - v) + v; }
@@ -301,7 +309,9 @@ void main() {
         float pEst = (nw * seE + se * nwE) / (nw + se);
         float qEst = (ne * swE + sw * neE) / (ne + sw);
         vec4 px = imageLoad(img_rgb, ij);
-        px[opp] = gHere + intp(pqDisc, qEst, pEst);
+        // Select, not px[opp]: a dynamic vector index put px on the stack.
+        float est = gHere + intp(pqDisc, qEst, pEst);
+        if (opp == 0) px.r = est; else px.b = est;
         imageStore(img_rgb, ij, px);
         return;
     }

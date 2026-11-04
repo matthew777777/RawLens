@@ -1,0 +1,24 @@
+[
+  {
+    "mode": "2560x1440-30-v16-timeout",
+    "passed": false,
+    "fps": 15.97881599847339,
+    "render_ms": {
+      "median": 59.372616,
+      "p95": 69.235384,
+      "max": 102.672077
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-v16-timeout",
+    "passed": false,
+    "fps": 12.65761668074564,
+    "render_ms": {
+      "median": 73.104616,
+      "p95": 87.936616,
+      "max": 111.831
+    },
+    "error": null
+  }
+]

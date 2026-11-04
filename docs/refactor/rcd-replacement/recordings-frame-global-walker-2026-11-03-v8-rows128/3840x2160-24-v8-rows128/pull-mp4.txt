@@ -1,0 +1,1 @@
+/sdcard/Android/data/com.matthew.rawlens.rcdcheck/files/photo-rcd-recordings/3840x2160-24-v8-rows128.mp4: 1 file pulled, 0 skipped. 40.5 MB/s (264227949 bytes in 6.218s)

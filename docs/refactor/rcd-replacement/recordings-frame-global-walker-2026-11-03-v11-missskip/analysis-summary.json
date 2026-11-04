@@ -1,0 +1,35 @@
+[
+  {
+    "mode": "1920x1080-30-v11-missskip",
+    "passed": false,
+    "fps": 22.886689214773057,
+    "render_ms": {
+      "median": 40.244769500000004,
+      "p95": 47.55723,
+      "max": 63.73223
+    },
+    "error": null
+  },
+  {
+    "mode": "2560x1440-30-v11-missskip",
+    "passed": false,
+    "fps": 12.373364077503842,
+    "render_ms": {
+      "median": 76.615615,
+      "p95": 88.591462,
+      "max": 98.837538
+    },
+    "error": null
+  },
+  {
+    "mode": "3840x2160-24-v11-missskip",
+    "passed": false,
+    "fps": 10.98210348281549,
+    "render_ms": {
+      "median": 84.363154,
+      "p95": 97.266154,
+      "max": 107.400308
+    },
+    "error": null
+  }
+]
