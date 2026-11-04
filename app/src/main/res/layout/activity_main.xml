@@ -151,6 +151,29 @@
         android:textSize="10sp"
         android:visibility="gone" />
 
+    <!-- LK-SR zoom chip: floats on the viewfinder's bottom-right corner,
+         mirroring the scope (bottom-left: 8dp side, 248dp bottom), independent
+         of how many lenses the lens row holds.
+         1x / 1.5x / 2x centre crop solved at x2; output stays sensor size.
+         Shown only while LK-SR is the active merge in photo mode. -->
+    <com.matthew.rawlens.RotatingTextView
+        android:id="@+id/lkrZoomChip"
+        android:layout_width="wrap_content"
+        android:layout_height="40dp"
+        android:layout_gravity="end|bottom"
+        android:layout_marginEnd="8dp"
+        android:layout_marginBottom="248dp"
+        android:background="@drawable/control_chip"
+        android:gravity="center"
+        android:minWidth="56dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:text="SR 1×"
+        android:textColor="@color/text_primary"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
     <!-- Top bar: opaque black island, edge-to-edge with rounded bottom corners
          mirroring the bottom panel. Single controls row in photo mode; the
          capture info line lives in the bottom panel in both modes so the
@@ -330,41 +353,42 @@
     </LinearLayout>
 
     <LinearLayout android:id="@+id/quickSettingsPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginStart="16dp" android:layout_marginEnd="16dp" android:layout_marginBottom="248dp" android:background="@drawable/quick_panel" android:orientation="vertical" android:visibility="gone">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal" android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal" android:baselineAligned="false" android:visibility="gone">
             <com.matthew.rawlens.RotatingTextView android:id="@+id/quickPanelTitle" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:letterSpacing="0.08" android:text="Quick controls" android:textColor="@color/text_primary" android:textSize="9sp" android:textStyle="bold" />
             <com.matthew.rawlens.RotatingTextView android:id="@+id/quickPanelHint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Tap outside to close" android:textColor="@color/text_muted" android:textSize="9sp" />
         </LinearLayout>
-        <LinearLayout android:id="@+id/videoModeQuickRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:visibility="gone">
+        <LinearLayout android:id="@+id/videoModeQuickRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:baselineAligned="false" android:visibility="gone">
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/videoModeQuick" style="@style/QuickControlTile" android:layout_marginStart="0dp" android:text="VIDEO" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/recordingPreviewSleep" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="PREVIEW" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/encodedVideoCropQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="CROP" android:visibility="gone" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/videoBinningQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="BINNING" />
         </LinearLayout>
-        <LinearLayout android:id="@+id/videoFormatQuickRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:visibility="gone">
+        <LinearLayout android:id="@+id/videoFormatQuickRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:baselineAligned="false" android:visibility="gone">
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/videoResolutionQuick" style="@style/QuickControlTile" android:layout_marginStart="0dp" android:text="RESOLUTION" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/videoFpsQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="FPS" />
         </LinearLayout>
         <!-- Balanced 3 x 3 grid: every row same weight so tiles never stretch. -->
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal" android:baselineAligned="false">
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/gridQuick" style="@style/QuickControlTile" android:text="GRID\nTHIRDS" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/histogramQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="SCOPE\nHISTO" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/levelQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LEVEL\nOFF" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/aeMeteringQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="AE METER\nAUTO" />
         </LinearLayout>
-        <LinearLayout android:id="@+id/photoCaptureQuickRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
+        <LinearLayout android:id="@+id/photoCaptureQuickRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:baselineAligned="false">
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/timerQuick" style="@style/QuickControlTile" android:text="TIMER\nOFF" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/releaseQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="RELEASE\nSINGLE" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/hdrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="HDR\nOFF" />
         </LinearLayout>
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:baselineAligned="false">
             <!-- Future SR hook: rawSrQuick tile here. -->
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/ettrQuick" style="@style/QuickControlTile" android:text="ETTR\nOFF" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/resetTargetsQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="AF / AE\nRESET" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/lightQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LIGHT\nOFF" />
         </LinearLayout>
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:baselineAligned="false">
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/hdrPlusQuick" style="@style/QuickControlTile" android:text="HDR+\nOFF" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/mfsrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="MFSR\nOFF" />
+            <com.matthew.rawlens.QuickControlTileView android:id="@+id/lkrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LK-SR\nOFF" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/dLightingQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="D-LIGHTING\nOFF" android:visibility="gone" />
         </LinearLayout>
     </LinearLayout>

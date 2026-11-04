@@ -58,7 +58,7 @@ internal fun MainActivity.showLensesSettings(p: SettingsPage) {
     fun sectionDesc(text: String): TextView = p.kit.sectionDesc(text)
     fun polish() = p.kit.polish()
     fun markActive(active: Button) = p.markActive(active)
-    val lensesTab = p.tabs[6]
+    val lensesTab = p.tabs[7]
         rawZslSettingsStatus = null
         sidecarSettingsStatus = null
         content.removeAllViews()

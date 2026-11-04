@@ -3,7 +3,10 @@
 
 package com.matthew.rawlens
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MfsrSettingsTest {
@@ -32,13 +35,47 @@ class MfsrSettingsTest {
 
     @Test fun quickTextUsesConfiguredCountAndWaitsForFullSelection() {
         val on = MfsrSettings(enabled = true)
-        assertEquals("MFSR\nOFF", MfsrSettings().quickText(12, 12, true, false))
-        assertEquals("MFSR\nMERGING", on.quickText(12, 12, true, true))
-        assertEquals("MFSR\nUNAVAILABLE", on.quickText(12, 12, false, false))
-        assertEquals("MFSR\nWARMING", on.quickText(12, 8, true, false))
-        assertEquals("MFSR\n×12", on.quickText(12, 12, true, false))
-        assertEquals("MFSR\nWARMING", on.quickText(30, 15, true, false))
-        assertEquals("MFSR\n×16", on.quickText(30, 16, true, false))
+        val m = MfsrEngine.MFSR
+        assertEquals("MFSR\nOFF", MfsrSettings().quickText(m, 12, 12, true, false))
+        assertEquals("MFSR\nMERGING", on.quickText(m, 12, 12, true, true))
+        assertEquals("MFSR\nUNAVAILABLE", on.quickText(m, 12, 12, false, false))
+        assertEquals("MFSR\nWARMING", on.quickText(m, 12, 8, true, false))
+        assertEquals("MFSR\n×12", on.quickText(m, 12, 12, true, false))
+        assertEquals("MFSR\nWARMING", on.quickText(m, 30, 15, true, false))
+        assertEquals("MFSR\n×16", on.quickText(m, 30, 16, true, false))
+    }
+
+    @Test fun lkrDefaultsToTunedVersionNotPaperParity() {
+        assertFalse(MfsrSettings().lkrPaperParity)
+        assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).lkrPaperParity)
+        // A value saved under the earlier key (testing, backups) must not turn parity on.
+        assertFalse(MfsrSettings.fromPreferences(mapOf("lkr_paper_parity" to true)).lkrPaperParity)
+        // The switch itself still works and survives a reload.
+        val on = MfsrSettings(lkrPaperParity = true)
+        assertTrue(MfsrSettings.fromPreferences(on.toPreferences()).lkrPaperParity)
+    }
+
+    @Test fun lkrZoomCropsTheCentreAndKeepsSensorOutput() {
+        assertEquals(null, LkrZoom.X1.crop(4080, 3060))
+        // 2x: centre half, solved at x2 -> exactly 4080x3060
+        assertArrayEquals(intArrayOf(1020, 764, 2040, 1530), LkrZoom.X2.crop(4080, 3060))
+        // 1.5x: centre 2720x2040, solved at x2 (5440x4080) then resampled to the sensor size
+        assertArrayEquals(intArrayOf(680, 510, 2720, 2040), LkrZoom.X1_5.crop(4080, 3060))
+        for (z in LkrZoom.entries) z.crop(4080, 3060)?.forEach { assertEquals(0, it % 2) }   // Bayer phase
+        assertEquals(LkrZoom.X1_5, LkrZoom.X1.next())
+        assertEquals(LkrZoom.X1, LkrZoom.X2.next())
+        val z = MfsrSettings(lkrZoom = LkrZoom.X2)
+        assertEquals(LkrZoom.X2, MfsrSettings.fromPreferences(z.toPreferences()).lkrZoom)
+    }
+
+    @Test fun eachEngineHasItsOwnTile() {
+        val lkr = MfsrSettings(enabled = true, engine = MfsrEngine.LKR)
+        assertEquals("LK-SR\n×12", lkr.quickText(MfsrEngine.LKR, 12, 12, true, false))
+        assertEquals("MFSR\nOFF", lkr.quickText(MfsrEngine.MFSR, 12, 12, true, false))
+        assertTrue(lkr.isOn(MfsrEngine.LKR))
+        assertFalse(lkr.isOn(MfsrEngine.MFSR))
+        assertFalse(lkr.copy(enabled = false).isOn(MfsrEngine.LKR))
+        assertEquals("LK-SR\nOFF", MfsrSettings().quickText(MfsrEngine.LKR, 12, 12, true, false))
     }
 
     @Test fun kernelAndS3SurviveReload() {
@@ -48,7 +85,7 @@ class MfsrSettingsTest {
         }
         // Corrupt values heal to the defaults, like the frame count.
         assertEquals(
-            MfsrKernel.WRONSKI,
+            MfsrKernel.KERNELNET,
             MfsrSettings.fromPreferences(mapOf("mfsr_kernel" to "junk")).kernel
         )
         assertEquals(
@@ -62,7 +99,18 @@ class MfsrSettingsTest {
         assertEquals(MfsrSettings(), fresh)
         assertEquals(false, fresh.enabled)
         assertEquals(false, fresh.keepSourceBurst)
-        assertEquals(MfsrKernel.WRONSKI, fresh.kernel)
+        assertEquals(MfsrKernel.KERNELNET, fresh.kernel)
         assertEquals(true, fresh.s3)
     }
+
+    @org.junit.Test fun learnedNoiseDefaultsOnAndRoundTrips() {
+        org.junit.Assert.assertEquals(true, MfsrSettings.fromPreferences(emptyMap<String, Any>()).learnedNoise)
+        val off = MfsrSettings(learnedNoise = false)
+        org.junit.Assert.assertEquals(off, MfsrSettings.fromPreferences(off.toPreferences()))
+    }
+    @Test fun freshPhotoBurstDoesNotWaitForZslRing() {
+        val on = MfsrSettings(enabled = true)
+        assertEquals("MFSR\n×8", on.quickText(MfsrEngine.MFSR, 8, 0, true, false, zsl = false))
+    }
+
 }

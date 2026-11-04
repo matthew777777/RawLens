@@ -35,12 +35,16 @@ class MergesActivity : Activity() {
     private lateinit var statusLine: TextView
     private lateinit var methodMfsr: Button
     private lateinit var methodHdrPlus: Button
+    private lateinit var methodLkr: Button
     private lateinit var outDng: Button
     private lateinit var outJpeg: Button
     private lateinit var outBoth: Button
     private lateinit var developedJpeg: Button
     private lateinit var developedJxl: Button
     private lateinit var runButton: Button
+    private lateinit var zoomTitle: TextView
+    private lateinit var zoomRow: LinearLayout
+    private lateinit var zoomButtons: List<Pair<LkrZoom, Button>>
 
     private var rows: List<BurstTakeRow> = emptyList()
     private var publishedRows: List<PublishedTake> = emptyList()
@@ -49,6 +53,8 @@ class MergesActivity : Activity() {
     private var method = BurstMergeRunner.Method.MFSR
     private var format = CaptureFormat.DNG_ONLY
     private var developedFormat = DevelopedFormat.JPEG
+    /** LK-SR zoom for staged takes (own choice, not the live chip's). */
+    private var lkrZoom = LkrZoom.X1
     private val mergeRunning = AtomicBoolean(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,7 +93,23 @@ class MergesActivity : Activity() {
             button.setOnClickListener { setMethod(BurstMergeRunner.Method.HDRPLUS) }
             methodRow.addView(button, rowParams())
         }
+        methodLkr = optionButton("LK-SR").also { button ->
+            button.setOnClickListener { setMethod(BurstMergeRunner.Method.LKR) }
+            methodRow.addView(button, rowParams())
+        }
         root.addView(methodRow)
+        // LK-SR zoom: centre 1/zoom crop solved at x2, output stays sensor size.
+        lkrZoom = LkrZoom.entries.firstOrNull { it.name == prefs().getString(KEY_MERGE_LKR_ZOOM, null) } ?: LkrZoom.X1
+        zoomTitle = title("LK-SR ZOOM")
+        root.addView(zoomTitle)
+        zoomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        zoomButtons = LkrZoom.entries.map { z ->
+            z to optionButton(z.label).also { button ->
+                button.setOnClickListener { setLkrZoom(z) }
+                zoomRow.addView(button, rowParams())
+            }
+        }
+        root.addView(zoomRow)
         root.addView(title("OUTPUT"))
         val outRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         outDng = optionButton("DNG").also { button ->
@@ -232,6 +254,12 @@ class MergesActivity : Activity() {
         refreshOptions()
     }
 
+    private fun setLkrZoom(next: LkrZoom) {
+        lkrZoom = next
+        prefs().edit().putString(KEY_MERGE_LKR_ZOOM, next.name).apply()
+        refreshOptions()
+    }
+
     private fun setFormat(next: CaptureFormat) {
         format = next
         prefs().edit().putString(KEY_MERGE_OUTPUT_FORMAT, next.name).apply()
@@ -248,6 +276,13 @@ class MergesActivity : Activity() {
         if (!::methodMfsr.isInitialized) return
         stylePick(methodMfsr, method == BurstMergeRunner.Method.MFSR)
         stylePick(methodHdrPlus, method == BurstMergeRunner.Method.HDRPLUS)
+        stylePick(methodLkr, method == BurstMergeRunner.Method.LKR)
+        val lkr = method == BurstMergeRunner.Method.LKR
+        if (::zoomTitle.isInitialized) {
+        zoomTitle.visibility = if (lkr) android.view.View.VISIBLE else android.view.View.GONE
+        zoomRow.visibility = zoomTitle.visibility
+        zoomButtons.forEach { (z, b) -> stylePick(b, z == lkrZoom) }
+        }
         stylePick(outDng, format == CaptureFormat.DNG_ONLY)
         stylePick(outJpeg, format == CaptureFormat.JPEG)
         stylePick(outBoth, format == CaptureFormat.JPEG_DNG)
@@ -265,7 +300,7 @@ class MergesActivity : Activity() {
         progressLine.text = "Starting…"
         val prefs = prefs()
         val inputs = BurstMergeRunner.Inputs(
-            mfsr = MfsrSettings.fromPreferences(prefs.all),
+            mfsr = MfsrSettings.fromPreferences(prefs.all).copy(lkrZoom = lkrZoom),
             hdrPlus = HdrPlusSettings.fromPreferences(prefs.all),
             jpeg = MergeScreenSettings.jpeg(prefs),
             denoise = MergeScreenSettings.denoise(prefs),
@@ -291,7 +326,11 @@ class MergesActivity : Activity() {
                     runButton.isEnabled = true
                     progressLine.text = "Done • ${result.outputs.size} output${if (result.outputs.size == 1) "" else "s"}"
                     statusLine.text =
-                        "${if (method == BurstMergeRunner.Method.MFSR) "MFSR" else "HDR+"} " +
+                        "${when (method) {
+                            BurstMergeRunner.Method.MFSR -> "MFSR"
+                            BurstMergeRunner.Method.HDRPLUS -> "HDR+"
+                            BurstMergeRunner.Method.LKR -> "LK-SR"
+                        }} " +
                             "×${result.keptFrames}/${result.pooledFrames} • " +
                             "${result.width}×${result.height} • " +
                             "${result.mergeMs}ms merge • " +
@@ -348,6 +387,7 @@ class MergesActivity : Activity() {
 
     companion object {
         const val KEY_MERGE_METHOD = "burst_merge_method"
+        private const val KEY_MERGE_LKR_ZOOM = "merges_lkr_zoom"
         const val KEY_MERGE_OUTPUT_FORMAT = "burst_merge_output_format"
     }
 }

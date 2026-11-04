@@ -75,7 +75,7 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
         content.removeAllViews()
         content.addView(sectionTitle("Offline burst merges"))
         content.addView(sectionDesc(
-            "Staged IMG_<ts>_BURST.craw takes merge here later via MFSR or HDR+, " +
+            "Staged IMG_<ts>_BURST.craw takes merge here later via MFSR, LK-SR or HDR+, " +
                 "to DNG, JPEG, or both. RAW Video never lists."
         ))
         content.addView(settingsButton("OPEN MERGES").apply {
@@ -139,7 +139,7 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
                         .putInt(KEY_RAW_ZSL_FRAME_COUNT, selectedFrameCount)
                         .apply()
                     controller.setRawZslFrameCount(selectedFrameCount)
-                    setStatus("ZSL ×$selectedFrameCount")
+                    setStatus("BURST / MERGE ×$selectedFrameCount")
                 }
             })
         })
@@ -153,107 +153,6 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
                 text = zslHybridTopupText(hybridTopup)
                 setStatus(if (hybridTopup) "ZSL TOP-UP ON" else "ZSL TOP-UP OFF")
             }
-        })
-        content.addView(sectionTitle("MFSR sharp merge"))
-        content.addView(sectionDesc(
-            "Reconstruction kernel and Wronski supplement S.3 high-frequency " +
-                "artefact rejection for the sharp merge (live tile and offline " +
-                "merges). KernelNet predicts one kernel map from the reference " +
-                "frame; Wronski uses the paper's per-frame anisotropic kernels. " +
-                "S.3 off gives 1:1 parity with the IPOL reference, which has no S.3."
-        ))
-        fun mfsrKernelText(kernel: MfsrKernel): String = when (kernel) {
-            MfsrKernel.KERNELNET -> "Kernel: KernelNet"
-            MfsrKernel.WRONSKI -> "Kernel: Wronski (paper S.1)"
-        }
-        content.addView(settingsButton(mfsrKernelText(mfsrSettings.kernel)).apply {
-            setOnClickListener {
-                val next = when (mfsrSettings.kernel) {
-                    MfsrKernel.KERNELNET -> MfsrKernel.WRONSKI
-                    MfsrKernel.WRONSKI -> MfsrKernel.KERNELNET
-                }
-                if (applyMfsrSettings(mfsrSettings.copy(kernel = next))) {
-                    text = mfsrKernelText(next)
-                    setStatus("MFSR ${mfsrKernelText(next).uppercase(Locale.US)}")
-                }
-            }
-        })
-        content.addView(settingsCheck("S.3 artefact rejection", mfsrSettings.s3).apply {
-            setOnCheckedChangeListener { _, checked ->
-                if (checked != mfsrSettings.s3) {
-                    if (applyMfsrSettings(mfsrSettings.copy(s3 = checked))) {
-                        setStatus(if (checked) "MFSR S.3 • ON" else "MFSR S.3 • OFF")
-                    } else {
-                        isChecked = mfsrSettings.s3
-                    }
-                }
-            }
-        })
-        content.addView(sectionTitle("HDR+ merge"))
-        content.addView(sectionDesc(
-            "Noise-reduction strength " +
-                "${HdrPlusSettings.MIN_STRENGTH.toInt()}–${HdrPlusSettings.MAX_STRENGTH.toInt()}. " +
-                "Higher merges harder: cleaner stills, more ghosting on motion. " +
-                "AUTO picks ${HdrPlusAutoTuning.AUTO_STRENGTH_MIN.toInt()}–" +
-                "${HdrPlusAutoTuning.AUTO_STRENGTH_MAX.toInt()} from scene motion " +
-                "and ignores the slider."
-        ))
-        fun strengthRowText(value: Float): String =
-            HdrPlusSettings.strengthSliderText(value) +
-                if (hdrPlusSettings.autoStrength) " • AUTO" else ""
-        var selectedStrength = hdrPlusSettings.strength
-        val strengthLabel = TextView(this).apply {
-            text = strengthRowText(selectedStrength)
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 14f
-            setPadding(dp(12), dp(8), dp(12), 0)
-        }
-        content.addView(settingsCheck("Auto strength", hdrPlusSettings.autoStrength).apply {
-            setOnCheckedChangeListener { _, checked ->
-                val applied = applyHdrPlusSettings(
-                    hdrPlusSettings.copy(autoStrength = checked)
-                )
-                if (applied) {
-                    strengthLabel.text = strengthRowText(selectedStrength)
-                    setStatus(if (checked) "HDR+ STRENGTH • AUTO" else "HDR+ STRENGTH • MANUAL")
-                } else {
-                    isChecked = hdrPlusSettings.autoStrength
-                }
-            }
-        })
-        content.addView(strengthLabel)
-        content.addView(SettingsSlider(this).apply {
-            max = HdrPlusSettings.STRENGTH_SLIDER_STEPS
-            progress = HdrPlusSettings.strengthToProgress(selectedStrength)
-            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
-                override fun onProgressChanged(
-                    seekBar: SettingsSlider,
-                    progress: Int,
-                    fromUser: Boolean
-                ) {
-                    selectedStrength = HdrPlusSettings.progressToStrength(progress)
-                    strengthLabel.text = strengthRowText(selectedStrength)
-                }
-
-                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
-
-                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
-                    val applied = applyHdrPlusSettings(
-                        hdrPlusSettings.copy(autoStrength = false, strength = selectedStrength)
-                    )
-                    if (applied) {
-                        strengthLabel.text = strengthRowText(selectedStrength)
-                        setStatus(
-                            String.format(Locale.US, "HDR+ STRENGTH • %.1f", selectedStrength)
-                        )
-                    } else {
-                        selectedStrength = hdrPlusSettings.strength
-                        seekBar.progress =
-                            HdrPlusSettings.strengthToProgress(selectedStrength)
-                        strengthLabel.text = strengthRowText(selectedStrength)
-                    }
-                }
-            })
         })
         rawZslSettingsStatus = TextView(this).apply {
             text = rawZslSettingsText(rawZslStatus)

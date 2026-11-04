@@ -57,7 +57,7 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
     val content = p.content
     fun polish() = p.kit.polish()
     fun markActive(active: Button) = p.markActive(active)
-    val aboutTab = p.tabs[8]
+    val aboutTab = p.tabs[9]
         rawZslSettingsStatus = null
         sidecarSettingsStatus = null
         content.removeAllViews()

@@ -326,7 +326,12 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
             return
         }
         val merged = try {
-            MfsrMerge.merge(context, ordered, settings)
+            // Same shutter / ZSL / save tail for both engines; only the merge differs.
+            if (settings.engine == MfsrEngine.LKR)
+                LkrMerge.mergeLive(context, ordered,
+                    LkrMerge.Settings(paperParity = settings.lkrPaperParity, tuning = LkrTuning.overrides(context),
+                        zoom = settings.lkrZoom))
+            else MfsrMerge.merge(context, ordered, settings)
         } finally {
             selected.forEach { RawImageOwnership.release(it.image) }
         } ?: run {
@@ -394,9 +399,6 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
         selected: List<BufferedRawFrame>
     ): String {
         merged.rgb.rewind()
-        val triplets = FloatArray(merged.width * merged.height * 3)
-        merged.rgb.asFloatBuffer().get(triplets)
-        val image = MergedLinearRgb(merged.width, merged.height, triplets)
         val provenance = MergeProvenance(
             algorithmVersion = "RawLens-Mfsr/scale1-sr-pipeline",
             selectedFrames = selected.size,
@@ -405,11 +407,14 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
             referenceTimestampNs = merged.refMetadata.timestampNanos,
             outputScale = 1,
             sourceCameraId = cameraId,
-            lensShadingApplied = false,
+            // C19: shading is applied to the merged RGB whenever the reference has a map
+            lensShadingApplied = RawPreDemosaicPipeline.lensShadingModel(merged.refMetadata) != null,
             effectiveFrames = merged.keptCount.toDouble()
         )
-        return LinearRgbDngSaver(context).saveLinearRgb(
-            image, merged.refMetadata, provenance, captureId = captureTimeMillis, gps = captureGps
+        // C11: striped from the native merge buffer (no 150 MB heap copy)
+        return LinearRgbDngSaver(context).saveLinearRgbStriped(
+            merged.width, merged.height, merged.rgb.asFloatBuffer(),
+            merged.refMetadata, provenance, captureId = captureTimeMillis, gps = captureGps
         )
     }
 

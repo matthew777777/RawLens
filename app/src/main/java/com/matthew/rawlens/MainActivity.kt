@@ -141,7 +141,7 @@ class MainActivity : Activity() {
     internal var hdrPlusSettings = HdrPlusSettings()
     internal var mfsrSettings = MfsrSettings()
     internal lateinit var mfsrQuick: TextView
-    private var modeBeforeMfsr: CaptureExposureMode? = null
+    internal lateinit var lkrQuick: TextView
     /** Offline-merge switch (Settings → Burst): when on, the shutter dumps the ZSL ring to _BURST.craw. */
     internal var burstCrawEnabled = false
     private var modeBeforeBurst: CaptureExposureMode? = null
@@ -180,8 +180,6 @@ class MainActivity : Activity() {
     /** Video light (quick-panel TORCH tile); off on every video exit. */
     private var videoTorchOn = false
     private var lastPhotoExposureMode = CaptureExposureMode.AUTO
-    /** Photo mode before HDR+ pulled the camera into ZSL; restored on toggle-off. */
-    private var modeBeforeHdrPlus: CaptureExposureMode? = null
     internal var videoRecorder: RawVideoRecorder? = null
     internal val recordingTools by lazy { RecordingTools(this) }
     internal var videoRecording = false
@@ -225,7 +223,7 @@ class MainActivity : Activity() {
         status = findViewById(R.id.status)
         isoControl = findViewById(R.id.isoControl)
         shutterControl = findViewById(R.id.shutterControl)
-        wbControl = findViewById(R.id.wbControl)
+        wbControl = findViewById<RotatingTextView>(R.id.wbControl).apply { fitRotatedText = true }
         focusControl = findViewById(R.id.focusControl)
         evControl = findViewById(R.id.evControl)
         lensSwitcher = findViewById(R.id.lensSwitcher)
@@ -293,25 +291,21 @@ class MainActivity : Activity() {
         if (lensPreferences().getBoolean(KEY_BURST_FUSION_ENABLED, false)) {
             captureExposureMode = CaptureExposureMode.ZSL
         }
-        if (hdrPlusSettings.enabled) {
-            captureExposureMode = CaptureExposureMode.ZSL
-        }
         // HDR bracket and HDR+ both merge one shutter press into one DNG, so
         // a stale both-on pair cannot survive: it resolves to HDR+.
         hdrEnabled = HdrShutterExclusivity.resolveStale(
             hdrEnabled, hdrPlusSettings.enabled).first
         mfsrSettings = MfsrSettings.fromPreferences(lensPreferences().all)
         // The sharp merger owns the shutter like HDR+ does: a stale
-        // sharp-on pair turns HDR+ and the bracket off and forces ZSL.
+        // sharp-on pair turns HDR+ and the bracket off.
         if (mfsrSettings.enabled) {
             if (hdrPlusSettings.enabled) {
                 hdrPlusSettings = hdrPlusSettings.copy(enabled = false)
                 lensPreferences().edit().putBoolean("hdr_plus_enabled", false).apply()
             }
             hdrEnabled = false
-            captureExposureMode = CaptureExposureMode.ZSL
         }
-        // Offline-merge burst switch survives restarts; like the mergers it
+        // Offline-merge burst switch survives restarts; it
         // needs the ZSL ring, so a stale on-switch pulls the mode into ZSL.
         burstCrawEnabled = lensPreferences().getBoolean(KEY_BURST_CRAW_ENABLED, false) &&
             CrawWriter.available
@@ -410,6 +404,7 @@ class MainActivity : Activity() {
         releaseQuick = findViewById(R.id.releaseQuick)
         hdrPlusQuick = findViewById(R.id.hdrPlusQuick)
         mfsrQuick = findViewById(R.id.mfsrQuick)
+        lkrQuick = findViewById(R.id.lkrQuick)
         ettrQuick = findViewById(R.id.ettrQuick)
         featureTags = findViewById(R.id.featureTags)
         lightQuick = findViewById(R.id.lightQuick)
@@ -851,7 +846,9 @@ class MainActivity : Activity() {
         aeMeteringQuick.setOnClickListener { cycleAeMeteringMode() }
         hdrPlusQuick.setOnClickListener { toggleHdrPlus() }
         hdrPlusQuick.setOnLongClickListener { cycleHdrPlusQuality(); true }
-        mfsrQuick.setOnClickListener { toggleMfsr() }
+        mfsrQuick.setOnClickListener { toggleSharpMerge(MfsrEngine.MFSR) }
+        lkrQuick.setOnClickListener { toggleSharpMerge(MfsrEngine.LKR) }
+        wireLkrZoomChip()
         ettrQuick.setOnClickListener { toggleEttr() }
         hdrQuick.setOnClickListener { toggleHdrEnabled() }
         timerQuick.setOnClickListener { cycleTimer() }
@@ -1498,6 +1495,7 @@ class MainActivity : Activity() {
                     controlRotationDegrees
             }
         }
+        (findViewById<View>(R.id.lkrZoomChip) as? RotatingContent)?.contentRotation = controlRotationDegrees
         positionQuickPanel()
         positionWholeRotatedPanels()
     }
@@ -2015,13 +2013,16 @@ class MainActivity : Activity() {
     // the record timecode, settings button, bottom bar with crop + audio
     // meter) over the live RAW viewfinder. The red dot under the quick
     // access toggles photo <-> video, the shutter ring toggles recording,
-    // and the photo switcher exits back to photo. Orthogonal to
-    // CaptureExposureMode so no stills state machine is touched.
+    // and the photo switcher exits back to photo. Video temporarily suspends
+    // the photo exposure mode; returning restores its saved controls.
     // ------------------------------------------------------------------
 
     private fun enterVideoMode() {
         lastPhotoExposureMode = captureExposureMode
         isVideoMode = true
+        // Video owns a temporary AUTO session. Photo preferences and merge switches stay intact.
+        captureExposureMode = CaptureExposureMode.AUTO
+        controller.beginVideoPreview()
         recordingTools.show()
         Log.i(LOG_TAG, "video enter from $lastPhotoExposureMode")
         updateQuickControls()
@@ -2084,7 +2085,10 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
         repositionScopeForVideo()
         refreshVideoButton()
-        applyCaptureExposureMode(lastPhotoExposureMode)
+        captureExposureMode = lastPhotoExposureMode
+        controller.endVideoPreview()
+        updateQuickControls()
+        updateProgramChipStates()
         refreshCaptureFormatControl()
         // Restore the stills info chips (DNG bit depth / sensor): video mode
         // overwrote them and refreshVideoSensorInfo() is a no-op once
@@ -3096,9 +3100,6 @@ class MainActivity : Activity() {
             !applyHdrPlusSettings(hdrPlusSettings.copy(enabled = target.second))) {
             return
         }
-        // The bracket resolves its own ZSL exit below; forget HDR+'s entry
-        // mode so a later HDR+ toggle-off cannot restore over it.
-        if (!target.second) modeBeforeHdrPlus = null
         hdrEnabled = target.first
         lensPreferences().edit().putBoolean(KEY_HDR_ENABLED, hdrEnabled).apply()
         if (hdrEnabled) {
@@ -3171,31 +3172,17 @@ class MainActivity : Activity() {
             // HDR+ takes the shutter from the HDR bracket: both merge one
             // shutter press into one DNG, so the bracket turns off.
             if (pair.first != hdrEnabled) turnHdrBracketOff()
-            if (enabled) {
-                // Switch modes only on success: enabling first keeps a LOCKED
-                // toggle from stranding the camera in ZSL with HDR+ still off.
-                // Remember where we came from so disabling HDR+ restores it
-                // instead of stranding the user in ZSL burst output.
-                if (captureExposureMode != CaptureExposureMode.ZSL) {
-                    modeBeforeHdrPlus = captureExposureMode
-                    applyCaptureExposureMode(CaptureExposureMode.ZSL)
-                }
-            } else {
-                // Back to the mode from before HDR+ forced ZSL. A manual
-                // mode change while HDR+ was on is the new intent, so only
-                // a still-ZSL camera moves.
-                val restore = HdrShutterExclusivity.modeAfterPlusDisabled(
-                    captureExposureMode, modeBeforeHdrPlus)
-                modeBeforeHdrPlus = null
-                if (restore != captureExposureMode) applyCaptureExposureMode(restore)
-            }
-            setStatus(if (enabled) "HDR+ • WARMING" else "HDR+ OFF")
+            setStatus(if (enabled) "HDR+ ON" else "HDR+ OFF")
         }
     }
 
-    private fun toggleMfsr() {
-        val enabled = !mfsrSettings.enabled
-        if (applyMfsrSettings(mfsrSettings.copy(enabled = enabled))) {
+    private fun toggleSharpMerge(which: MfsrEngine) {
+        // Own tile per engine: tapping an active tile turns the sharp merge off;
+        // tapping the other engine's tile switches the shared path over to it.
+        val next = if (mfsrSettings.isOn(which)) mfsrSettings.copy(enabled = false)
+        else mfsrSettings.copy(enabled = true, engine = which)
+        val enabled = next.enabled
+        if (applyMfsrSettings(next)) {
             // The sharp merger takes the shutter: HDR+ and the HDR
             // bracket both merge one press into one artifact, so they
             // turn off (same rule as HDR+ taking it from the bracket).
@@ -3204,19 +3191,8 @@ class MainActivity : Activity() {
                     applyHdrPlusSettings(hdrPlusSettings.copy(enabled = false))
                 }
                 turnHdrBracketOff()
-                if (captureExposureMode != CaptureExposureMode.ZSL) {
-                    modeBeforeMfsr = captureExposureMode
-                    applyCaptureExposureMode(CaptureExposureMode.ZSL)
-                }
-            } else {
-                val restore = modeBeforeMfsr
-                modeBeforeMfsr = null
-                if (restore != null && restore != captureExposureMode &&
-                    captureExposureMode == CaptureExposureMode.ZSL) {
-                    applyCaptureExposureMode(restore)
-                }
             }
-            setStatus(if (enabled) "MFSR • WARMING" else "MFSR OFF")
+            setStatus(if (enabled) "${next.label} ON" else "${mfsrSettings.label} OFF")
         }
     }
 
@@ -3226,7 +3202,6 @@ class MainActivity : Activity() {
         // Controller may be saving (LOCKED): keep the tile honest by
         // only clearing on success.
         if (applyMfsrSettings(mfsrSettings.copy(enabled = false))) {
-            modeBeforeMfsr = null
             Log.i(LOG_TAG, "MFSR enabled=false")
             updateQuickControls()
         }
@@ -3294,10 +3269,12 @@ class MainActivity : Activity() {
     }
 
     internal fun hdrPlusQuickText(): String {
-        val available = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
+        val available = !dualRawEnabled &&
+            (captureExposureMode != CaptureExposureMode.ZSL || rawZslStatus.state != RawZslState.FALLBACK)
         return hdrPlusSettings.quickText(
             lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
-            rawZslStatus.bufferedFrames, available, rawZslStatus.hdrPlusBusy
+            rawZslStatus.bufferedFrames, available, rawZslStatus.hdrPlusBusy,
+            zsl = captureExposureMode == CaptureExposureMode.ZSL
         )
     }
 
@@ -3461,22 +3438,14 @@ class MainActivity : Activity() {
     }
 
     internal fun applyCaptureExposureMode(mode: CaptureExposureMode) {
+        // Photo-mode editors must not activate PROGRAM/ZSL or rewrite photo preferences in video.
+        if (isVideoMode) return
         // A RAW gap holds the last scope frame until new sensor samples arrive.
         if (::histogramView.isInitialized && histogramEnabled) {
             rawScopeLive = false
             refreshScopeContentDescription()
         }
         captureExposureMode = mode
-        if (mode != CaptureExposureMode.ZSL && hdrPlusSettings.enabled) {
-            applyHdrPlusSettings(hdrPlusSettings.copy(enabled = false))
-            // An explicit mode change out of ZSL is the new intent: forget
-            // where HDR+ came from so a later toggle-off cannot yank it back.
-            modeBeforeHdrPlus = null
-        }
-        if (mode != CaptureExposureMode.ZSL && mfsrSettings.enabled) {
-            applyMfsrSettings(mfsrSettings.copy(enabled = false))
-            modeBeforeMfsr = null
-        }
         if (mode != CaptureExposureMode.ZSL && burstCrawEnabled) {
             // An explicit mode change out of ZSL is the new intent: the
             // burst switch turns off instead of stranding the shutter.
@@ -3510,7 +3479,7 @@ class MainActivity : Activity() {
 
     private fun openIsoControl() {
         // While rolling the recorder owns the sensor: same tile, live take request.
-        if (videoRecording) {
+        if (isVideoMode) {
             showManualControl(ManualControl.ISO)
             return
         }
@@ -3523,7 +3492,7 @@ class MainActivity : Activity() {
 
     private fun openShutterControl() {
         // While rolling the recorder owns the sensor: same tile, live take request.
-        if (videoRecording) {
+        if (isVideoMode) {
             showManualControl(ManualControl.SHUTTER)
             return
         }
@@ -3541,8 +3510,8 @@ class MainActivity : Activity() {
      */
     private fun toggleProgramAxisLock(isIso: Boolean) {
         // PROGRAM locks need the live preview loop; while rolling use the take request instead.
-        if (videoRecording) {
-            setStatus("STOP TO EDIT PROGRAM • TAKE IS ROLLING")
+        if (isVideoMode) {
+            setStatus("PROGRAM IS PHOTO ONLY")
             return
         }
         if (captureExposureMode != CaptureExposureMode.PROGRAM) {
@@ -3661,6 +3630,7 @@ class MainActivity : Activity() {
         demosaic = JpegDemosaic.fromPreference(
             lensPreferences().getString(KEY_JPEG_DEMOSAIC, null)
         ),
+        chromaCleanup = ChromaCleanup.read(lensPreferences()),
         agxPurityBoost = lensPreferences().getFloat(KEY_JPEG_AGX_PURITY, 1f),
         agxLook = AgxLook.fromPreference(lensPreferences().getString(AgxLook.PREFERENCE_KEY, null)),
         agxContrast = lensPreferences().getFloat(KEY_JPEG_AGX_CONTRAST, 1f),
@@ -3703,7 +3673,7 @@ class MainActivity : Activity() {
             aiStrength = prefs.getInt(KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,
             wavelet = WaveletSettings(
                 enabled = prefs.getBoolean(KEY_WAVELET_ENABLED, false),
-                strength = prefs.getInt(KEY_WAVELET_STRENGTH_PCT, 100).coerceIn(0, 800) / 100f,
+                strength = prefs.getInt(KEY_WAVELET_STRENGTH_PCT, 50).coerceIn(0, 800) / 100f,
                 detail = prefs.getInt(KEY_WAVELET_DETAIL_PCT, 100).coerceIn(0, 180) / 100f,
                 luma = prefs.getInt(KEY_WAVELET_LUMA_PCT, 25).coerceIn(0, 100) / 100f,
                 maxScale = prefs.getInt(KEY_WAVELET_SCALES, 7).coerceIn(1, 7),
@@ -3854,7 +3824,7 @@ class MainActivity : Activity() {
     }
 
     internal fun rawZslFrameCountText(frameCount: Int): String =
-        "ZSL frames saved: $frameCount\n" +
+        "Burst / merge frames: $frameCount\n" +
             "Approx. ${frameCount * 25} MB at 4080×3060; higher values need more camera memory."
 
     internal fun zslHybridTopupText(enabled: Boolean): String =
@@ -3986,7 +3956,11 @@ class MainActivity : Activity() {
         when (action) {
             PreviewPanelSwipe.Action.QUICK_CONTROLS -> showQuickControls()
             PreviewPanelSwipe.Action.SETTINGS ->
-                if (isVideoMode) showSettings(SETTINGS_VIDEO_TAB) else showSettings()
+                when {
+                    isVideoMode -> showSettings(SETTINGS_VIDEO_TAB)
+                    captureExposureMode == CaptureExposureMode.PROGRAM -> showSettings(SETTINGS_EXPOSURE_TAB)
+                    else -> showSettings()
+                }
         }
     }
 
@@ -4207,16 +4181,23 @@ class MainActivity : Activity() {
         hdr.contentDescription = "HDR bracket ${if (hdrEnabled) "on" else "off"}. Tap to toggle."
         timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
         release.text = if (dualRawEnabled) "RELEASE\nRAW HDR TEST" else "RELEASE\n${if (releaseMode == 1) "BURST 6" else "SINGLE"}"
-        val sharpAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
-        sharp.text = mfsrSettings.quickText(
-            lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
-            rawZslStatus.bufferedFrames, sharpAvailable, rawZslStatus.mfsrBusy)
-        sharp.isEnabled = sharpAvailable
-        sharp.alpha = if (sharpAvailable) 1f else 0.4f
+        val sharpAvailable = !dualRawEnabled &&
+            (captureExposureMode != CaptureExposureMode.ZSL || rawZslStatus.state != RawZslState.FALLBACK)
+        val mergeCount = lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT)
+        val zslMode = captureExposureMode == CaptureExposureMode.ZSL
+        sharp.text = mfsrSettings.quickText(MfsrEngine.MFSR, mergeCount,
+            rawZslStatus.bufferedFrames, sharpAvailable, rawZslStatus.mfsrBusy, zsl = zslMode)
+        lkrQuick.text = mfsrSettings.quickText(MfsrEngine.LKR, mergeCount,
+            rawZslStatus.bufferedFrames, sharpAvailable, rawZslStatus.mfsrBusy, zsl = zslMode)
+        lkrQuick.isEnabled = !dualRawEnabled || mfsrSettings.isOn(MfsrEngine.LKR)
+        lkrQuick.alpha = if (lkrQuick.isEnabled) 1f else 0.4f
+        // FALLBACK describes the current ZSL session, not permanent capability.
+        // Keep the switch usable so enabling can retry ZSL and disabling always works.
+        sharp.isEnabled = !dualRawEnabled || mfsrSettings.isOn(MfsrEngine.MFSR)
+        sharp.alpha = if (sharp.isEnabled) 1f else 0.4f
         hdrPlus.text = hdrPlusQuickText()
-        val hdrPlusAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
-        hdrPlus.isEnabled = hdrPlusAvailable
-        hdrPlus.alpha = if (hdrPlusAvailable) 1f else 0.4f
+        hdrPlus.isEnabled = !dualRawEnabled || hdrPlusSettings.enabled
+        hdrPlus.alpha = if (hdrPlus.isEnabled) 1f else 0.4f
         val ettrMode = controller.getEttrSettings()
         val ettrAvailable = captureExposureMode == CaptureExposureMode.AUTO
         val ettrEnabled = ettrMode.enabled && ettrAvailable
@@ -4237,7 +4218,9 @@ class MainActivity : Activity() {
         setQuickTileState(hdr, hdrEnabled)
         setQuickTileState(timer, timerSeconds > 0)
         setQuickTileState(release, releaseMode != 0)
-        setQuickTileState(sharp, mfsrSettings.enabled)
+        setQuickTileState(sharp, mfsrSettings.isOn(MfsrEngine.MFSR))
+        setQuickTileState(lkrQuick, mfsrSettings.isOn(MfsrEngine.LKR))
+        updateLkrZoomChip()
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
         // Video (RAW / Encoded Video) records continuous frames: still-only
@@ -4340,6 +4323,7 @@ class MainActivity : Activity() {
         const val PREFS_NAME = SettingsBackup.STORE_MAIN
         /** Settings sheet page index of the Video tab (keep in sync with tabPages order). */
         const val SETTINGS_VIDEO_TAB = 2
+        const val SETTINGS_EXPOSURE_TAB = 3
         const val KEY_SELECTED_LENSES = "selected_lens_ids"
         const val KEY_LENS_SETUP_COMPLETE = "lens_setup_complete"
         const val KEY_LAST_CAMERA_ID = "last_camera_id"

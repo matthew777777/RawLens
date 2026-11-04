@@ -405,6 +405,11 @@ endif()
 # identical DNG files.
 add_subdirectory("../../../../tools/sr-pipeline/src/main/cpp" srpipeline)
 
+# LK-Reloaded burst SR (tools/lkr-pipeline): links srpipeline for the shared
+# Vulkan context / DNG I/O and the vendored ncnn above for the FFDNet prior;
+# exposed to Kotlin through LkrBridge.
+add_subdirectory("../../../../tools/lkr-pipeline/src/main/cpp" lkrpipeline)
+
 # Cinematic RAW Studio (.CRAW) RAW video / burst container (vendored,
 # Apache-2.0; see third_party/craw/SOURCE.md, refresh with tools/sync_craw.sh).
 # Encoder and decoder are separate libraries: they are independent

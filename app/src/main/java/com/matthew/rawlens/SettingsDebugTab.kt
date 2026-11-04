@@ -66,7 +66,7 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
     fun sectionTitle(text: String): TextView = p.kit.sectionTitle(text)
     fun polish() = p.kit.polish()
     fun markActive(active: Button) = p.markActive(active)
-    val debugTab = p.tabs[7]
+    val debugTab = p.tabs[8]
         rawZslSettingsStatus = null
         sidecarSettingsStatus = null
         content.removeAllViews()

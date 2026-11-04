@@ -58,7 +58,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
     fun sectionTitle(text: String): TextView = p.kit.sectionTitle(text)
     fun polish() = p.kit.polish()
     fun markActive(active: Button) = p.markActive(active)
-    val denoiseTab = p.tabs[5]
+    val denoiseTab = p.tabs[6]
         rawZslSettingsStatus = null
         sidecarSettingsStatus = null
         content.removeAllViews()
@@ -153,7 +153,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             waveSubordinate += bar
         }
         addWaveSlider("Algorithm", 1, settings.wavelet.algorithm.ordinal,
-            { if (it == 0) "RAWR (exact)" else "RawLens Wiener" }
+            { if (it == 0) "RAWR" else "RawLens Wiener" }
         ) { s, v -> s.copy(algorithm = WaveletAlgorithm.fromOrdinal(v)) }
         addWaveSlider("Strength", 80, (settings.wavelet.strength * 10 + 0.5f).toInt(),
             { "%.1f".format(Locale.US, it / 10f) }) { s, v -> s.copy(strength = v / 10f) }
@@ -167,7 +167,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             { val scales = it + 1; if (scales == 1) "1 scale" else "$scales scales" }
         ) { s, v -> s.copy(maxScale = v + 1) }
         content.addView(TextView(this).apply {
-            text = "RawLens Wiener (default) removes chroma blotches while keeping colour edges, and turns luma noise into fine, even grain; Grain sets how much of that fine grain stays (RawLens only). RAWR (exact) reproduces RAWR output bit for bit. Defaults: strength 1.0, detail 1.00, luma 0.25, grain 0.45, 7 scales; chroma is fixed at 0.75. Strength supports 0–8; Detail supports 0–1.80 and controls shadow texture preservation independently of Luma. RawLens measures the noise from each photo: it falls back to that when the sensor profile is missing or implausible, and denoises luma more gently when noise is barely visible (base ISO). RAWR (exact) bypasses denoise without a valid sensor profile."
+            text = "RawLens Wiener (default) removes chroma blotches while keeping colour edges, and turns luma noise into fine, even grain; Grain sets how much of that fine grain stays (RawLens only). RAWR uses the RAWR wavelet shrinkage rule with our learned noise model. Defaults: strength 0.5, detail 1.00, luma 0.25, grain 0.00, 7 scales; chroma is fixed at 0.75. Strength supports 0–8; Detail supports 0–1.80 and controls shadow texture preservation independently of Luma. Both modes learn noise per camera and raw mode, using measurements from each photo and the sensor profile as fallbacks. RawLens also denoises luma more gently when noise is barely visible (base ISO)."
             setTextColor(getColor(R.color.text_secondary))
             textSize = 12f
             setPadding(dp(12), dp(4), dp(12), dp(4))

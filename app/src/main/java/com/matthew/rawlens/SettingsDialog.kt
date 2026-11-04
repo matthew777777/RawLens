@@ -55,8 +55,8 @@ import android.os.SystemClock
 
 /**
  * Settings sheet. [initialTab] selects the opening page (see
- * [SETTINGS_VIDEO_TAB]); every entry point except the video-mode
- * settings button uses the default General tab.
+ * [SETTINGS_VIDEO_TAB]). The settings button opens Video in video mode,
+ * Exposure in PROGRAM, and General otherwise.
  */
 internal fun MainActivity.showSettings(initialTab: Int = 0) {
     val container = LinearLayout(this).apply {
@@ -88,11 +88,12 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
     val videoTab = chipTab("Video")
     val exposureTab = chipTab("Exposure")
     val burstTab = chipTab("Burst")
+    val mergeTab = chipTab("Merge")
     val denoiseTab = chipTab("Denoise")
     val lensesTab = chipTab("Lenses")
     val debugTab = chipTab("Debug")
     val aboutTab = chipTab("About")
-    val allTabs = listOf(generalTab, jpegTab, videoTab, exposureTab, burstTab, denoiseTab, lensesTab, debugTab, aboutTab)
+    val allTabs = listOf(generalTab, jpegTab, videoTab, exposureTab, burstTab, mergeTab, denoiseTab, lensesTab, debugTab, aboutTab)
     fun markActive(active: Button) {
         allTabs.forEach {
             RawLensUi.styleTab(it, active = it === active)
@@ -153,6 +154,7 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
     fun showVideoTab() = showVideoSettings(page)
     fun showExposureTab() = showExposureSettings(page)
     fun showBurstTab() = showBurstSettings(page)
+    fun showMergeTab() = showMergeSettings(page)
     fun showDenoiseTab() = showDenoiseSettings(page)
     fun showLensesTab() = showLensesSettings(page)
     fun showDebugTab() = showDebugSettings(page)
@@ -163,6 +165,7 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
         { showVideoTab() },
         { showExposureTab() },
         { showBurstTab() },
+        { showMergeTab() },
         { showDenoiseTab() },
         { showLensesTab() },
         { showDebugTab() },
@@ -188,10 +191,11 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
     videoTab.setOnClickListener { goTab(2) }
     exposureTab.setOnClickListener { goTab(3) }
     burstTab.setOnClickListener { goTab(4) }
-    denoiseTab.setOnClickListener { goTab(5) }
-    lensesTab.setOnClickListener { goTab(6) }
-    debugTab.setOnClickListener { goTab(7) }
-    aboutTab.setOnClickListener { goTab(8) }
+    mergeTab.setOnClickListener { goTab(5) }
+    denoiseTab.setOnClickListener { goTab(6) }
+    lensesTab.setOnClickListener { goTab(7) }
+    debugTab.setOnClickListener { goTab(8) }
+    aboutTab.setOnClickListener { goTab(9) }
     // Swipe left/right anywhere on background space (tab strip, labels, gaps,
     // dialog padding) flips tabs like book pages: left goes forward, right
     // goes back. Touches that start on buttons, sliders, or checkboxes are
@@ -245,13 +249,18 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
     dialog.window?.setBackgroundDrawableResource(R.drawable.quick_panel)
     // Keep the sheet compact and floating: fixed width with side margins
     // and capped height instead of stretching edge to edge.
+    dialog.show()
     dialog.window?.let { window ->
+        // Use the same immersive bounds as the camera, so system-bar insets
+        // cannot shift the floating panel away from the screen centre.
+        ImmersiveMode.apply(window)
+        window.setGravity(Gravity.CENTER)
+        window.attributes = window.attributes.apply { x = 0; y = 0 }
         val metrics = resources.displayMetrics
         val targetWidth = (metrics.widthPixels - dp(24)).coerceAtLeast(dp(280))
         val targetHeight = (metrics.heightPixels * 0.85f).toInt()
         window.setLayout(targetWidth, targetHeight)
     }
-    dialog.show()
 }
 
 internal fun MainActivity.rawZslSettingsText(status: RawZslStatus): String {
