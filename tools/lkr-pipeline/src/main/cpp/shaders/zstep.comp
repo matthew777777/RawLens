@@ -1,0 +1,25 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// HQS z-update (paper Eq. 5): z <- z - eta [U^T(Uz - y) + mu (z - x)],
+// with U^T(...) read from the fixed-point accumulator, which is cleared for
+// the next resid_adj pass. mode 1 (power iteration): z <- acc (as float).
+#include "lkr_common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer X { float x[]; };
+layout(std430, binding = 2) buffer ACC { int acc[]; };
+
+void main() {
+  int n = 3 * pc.H * pc.W;
+  int idx = int(gl_GlobalInvocationID.x);
+  if (idx >= n) return;
+  float g = float(acc[idx]) * pc.invScale;
+  acc[idx] = 0;
+  if (pc.mode == 1) {
+    z[idx] = g;
+  } else {
+    float zi = z[idx];
+    z[idx] = zi - pc.eta * (g + pc.mu * (zi - x[idx]));
+  }
+}

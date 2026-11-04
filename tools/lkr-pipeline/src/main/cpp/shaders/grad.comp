@@ -1,0 +1,24 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// HR image gradients for the Gauss-Newton Jacobian, torch.gradient rules:
+// central (f[i+1]-f[i-1])/2 inside, one-sided differences at the borders.
+// Output planes: g[0..2] = d/dx per channel, g[3..5] = d/dy per channel.
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) writeonly buffer G { float g[]; };
+
+void main() {
+  int x = int(gl_GlobalInvocationID.x), y = int(gl_GlobalInvocationID.y);
+  int c = int(gl_GlobalInvocationID.z);
+  if (x >= pc.W || y >= pc.H) return;
+  int HW = pc.H * pc.W;
+  int o = c * HW + y * pc.W + x;
+  float dx = x == 0 ? z[o + 1] - z[o]
+           : (x == pc.W - 1 ? z[o] - z[o - 1] : 0.5 * (z[o + 1] - z[o - 1]));
+  float dy = y == 0 ? z[o + pc.W] - z[o]
+           : (y == pc.H - 1 ? z[o] - z[o - pc.W] : 0.5 * (z[o + pc.W] - z[o - pc.W]));
+  g[o] = dx;
+  g[3 * HW + o] = dy;
+}

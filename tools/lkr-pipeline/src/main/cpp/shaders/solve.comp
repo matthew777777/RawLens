@@ -1,0 +1,64 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// One Gauss-Newton step per frame (paper Eq. 7): p_k <- p_k - (J^T J)^-1 J^T r.
+// One workgroup per non-reference frame: 64 lanes sum the jac.comp partials
+// (strided, then fixed tree), lane 0 solves the 6x6 system with Jacobi
+// (diagonal) scaling + Gaussian elimination with partial pivoting. pc.f0 is
+// the Tikhonov term (python: 1e-9), pc.f1 = number of partial groups G.
+#include "lkr_common.glsl"
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer PART { float part[]; };
+layout(std430, binding = 1) buffer P { float p[]; };
+
+shared float sh[27][64];
+
+void main() {
+  uint lid = gl_LocalInvocationID.x;
+  uint k = gl_WorkGroupID.x + 1u;
+  uint G = uint(pc.f1);
+  float acc[27];
+  for (int t = 0; t < 27; ++t) acc[t] = 0.0;
+  for (uint gi = lid; gi < G; gi += 64u) {
+    uint o = ((k - 1u) * G + gi) * 27u;
+    for (int t = 0; t < 27; ++t) acc[t] += part[o + uint(t)];
+  }
+  for (int t = 0; t < 27; ++t) sh[t][lid] = acc[t];
+  barrier();
+  for (uint st = 32; st > 0; st >>= 1) {
+    if (lid < st)
+      for (int t = 0; t < 27; ++t) sh[t][lid] += sh[t][lid + st];
+    barrier();
+  }
+  if (lid != 0u) return;
+  float A[6][7];
+  int m = 0;
+  for (int a = 0; a < 6; ++a)
+    for (int b = a; b < 6; ++b) { A[a][b] = sh[m][0]; A[b][a] = sh[m][0]; ++m; }
+  for (int a = 0; a < 6; ++a) { A[a][a] += pc.f0; A[a][6] = sh[21 + a][0]; }
+  // Jacobi scaling: columns of J differ by ~W in magnitude (ux vs 1).
+  float d[6];
+  for (int a = 0; a < 6; ++a) d[a] = A[a][a] > 0.0 ? inversesqrt(A[a][a]) : 1.0;
+  for (int a = 0; a < 6; ++a) {
+    for (int b = 0; b < 6; ++b) A[a][b] *= d[a] * d[b];
+    A[a][6] *= d[a];
+  }
+  for (int col = 0; col < 6; ++col) {
+    int piv = col;
+    for (int rr = col + 1; rr < 6; ++rr) if (abs(A[rr][col]) > abs(A[piv][col])) piv = rr;
+    if (piv != col) for (int cc = 0; cc < 7; ++cc) { float t = A[col][cc]; A[col][cc] = A[piv][cc]; A[piv][cc] = t; }
+    float pv = A[col][col];
+    if (abs(pv) < 1e-20) return;                       // singular: keep p
+    for (int rr = col + 1; rr < 6; ++rr) {
+      float f = A[rr][col] / pv;
+      for (int cc = col; cc < 7; ++cc) A[rr][cc] -= f * A[col][cc];
+    }
+  }
+  float x[6];
+  for (int a = 5; a >= 0; --a) {
+    float v = A[a][6];
+    for (int b = a + 1; b < 6; ++b) v -= A[a][b] * x[b];
+    x[a] = v / A[a][a];
+  }
+  for (int a = 0; a < 6; ++a) p[k * 6u + uint(a)] -= x[a] * d[a];
+}

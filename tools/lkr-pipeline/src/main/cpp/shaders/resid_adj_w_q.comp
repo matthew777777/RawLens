@@ -1,0 +1,67 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// resid_adj_w.comp, one invocation per 2x2 Bayer quad: affine + local block
+// displacement once per quad, y / wt as vec2 row pairs. Per sample: identical
+// forward model, residual, robust weight and fixed-point scatter onto its own
+// taps (int atomics: the sum is bit-identical to the per-sample shader).
+#define LKR_LOCAL_BINDING 4
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { vec2 y[]; };
+layout(std430, binding = 2) readonly buffer P { float p[]; };
+layout(std430, binding = 3) buffer ACC { int acc[]; };
+layout(std430, binding = 5) readonly buffer WT { vec2 wt[]; };
+
+void main() {
+  int J = int(gl_GlobalInvocationID.x), I = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  int hw = pc.w / 2;
+  if (J >= hw || 2 * I >= pc.h) return;
+  float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
+  float a3 = p[k * 6 + 3], a4 = p[k * 6 + 4], a5 = p[k * 6 + 5];
+  float sf = float(pc.s);
+  float invn = 1.0 / (sf * sf);
+  vec2 d = localD(k, subPos(2 * I, 2 * J, 0, 0));
+  for (int dy = 0; dy < 2; ++dy) {
+    int i = 2 * I + dy;
+    int o2 = (k * pc.h + i) * hw + J;
+    vec2 yv2 = y[o2], wk2 = wt[o2];
+    for (int dx = 0; dx < 2; ++dx) {
+      int j = 2 * J + dx;
+      float yv = yv2[dx], wk = wk2[dx];
+      if (pc.mode == 0 && yv >= pc.f2) continue;      // clipped
+      if (wk == 0.0) continue;                         // fully rejected
+      int base = bayerChannel(i, j) * pc.H * pc.W;
+      float sum = 0.0;
+      bool ok = true;
+      for (int oy = 0; oy < pc.s && ok; ++oy)
+        for (int ox = 0; ox < pc.s; ++ox) {
+          vec2 u = subPos(i, j, ox, oy);
+          vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + d);
+          ivec2 x0; vec2 a;
+          if (!taps(q, x0, a)) { ok = false; break; }   // invalid LR pixel
+          int o = base + x0.y * pc.W + x0.x;
+          sum += (z[o] * (1.0 - a.x) + z[o + 1] * a.x) * (1.0 - a.y) +
+                 (z[o + pc.W] * (1.0 - a.x) + z[o + pc.W + 1] * a.x) * a.y;
+        }
+      if (!ok) continue;
+      float r = pc.mode == 2 ? 1.0 : sum * invn;
+      if (pc.mode == 0) r -= yv;
+      float rs = r * wk * invn * pc.scale;
+      for (int oy = 0; oy < pc.s; ++oy)
+        for (int ox = 0; ox < pc.s; ++ox) {
+          vec2 u = subPos(i, j, ox, oy);
+          vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + d);
+          ivec2 x0; vec2 a;
+          taps(q, x0, a);
+          int o = base + x0.y * pc.W + x0.x;
+          atomicAdd(acc[o], int(round(rs * (1.0 - a.x) * (1.0 - a.y))));
+          atomicAdd(acc[o + 1], int(round(rs * a.x * (1.0 - a.y))));
+          atomicAdd(acc[o + pc.W], int(round(rs * (1.0 - a.x) * a.y)));
+          atomicAdd(acc[o + pc.W + 1], int(round(rs * a.x * a.y)));
+        }
+    }
+  }
+}

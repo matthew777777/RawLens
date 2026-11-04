@@ -1,0 +1,28 @@
+DELEGATION requested=cpu non_cpu_fully_accelerated=0 setup_ms=13.250
+sample backend=litert-cpu tile=128 iteration=-2 ms=258.633
+sample backend=litert-cpu tile=128 iteration=-1 ms=258.515
+sample backend=litert-cpu tile=128 iteration=0 ms=252.160
+sample backend=litert-cpu tile=128 iteration=1 ms=250.323
+sample backend=litert-cpu tile=128 iteration=2 ms=251.629
+RESULT backend=litert-cpu tile=128 runs=3 median_ms=251.629 min_ms=250.323 max_ms=252.160 setup_ms=13.250 max_error=1.07288e-06 rmse=1.74931e-07 fully_non_cpu=0
+MAP 6ff427d000-6ff42e1000 r-xp 00000000 fe:39 1657372                        /data/local/tmp/rawlens-ffdnet-litert/libLiteRtCompilerPlugin_MediaTek.so
+MAP 6ff42e1000-6ff42e5000 r--p 00064000 fe:39 1657372                        /data/local/tmp/rawlens-ffdnet-litert/libLiteRtCompilerPlugin_MediaTek.so
+MAP 6ff42e5000-6ff42e6000 rw-p 00068000 fe:39 1657372                        /data/local/tmp/rawlens-ffdnet-litert/libLiteRtCompilerPlugin_MediaTek.so
+MAP 72adc4c000-72ae191000 r-xp 00000000 fe:39 1657477                        /data/local/tmp/rawlens-ffdnet-litert/libLiteRt.so
+MAP 72ae194000-72ae1a2000 r--p 00548000 fe:39 1657477                        /data/local/tmp/rawlens-ffdnet-litert/libLiteRt.so
+MAP 72ae1a5000-72ae1ae000 rw-p 00555000 fe:39 1657477                        /data/local/tmp/rawlens-ffdnet-litert/libLiteRt.so
+INFO: [environment.cc:36] Creating LiteRT environment with options
+INFO: [accelerator_registry.cc:54] RegisterAccelerator: ptr=0xb40000716684fb40, name=CpuAccelerator
+INFO: [cpu_registry.cc:75] XNNPACK CPU accelerator registered.
+INFO: [compiler_plugin.cc:308] Attempting to load plugin at: /data/local/tmp/rawlens-ffdnet-litert/libLiteRtCompilerPlugin_MediaTek.so
+INFO: [compiler_plugin.cc:250] Loading plugin at: /data/local/tmp/rawlens-ffdnet-litert/libLiteRtCompilerPlugin_MediaTek.so
+WARNING: linker: Warning: "/data/local/tmp/rawlens-ffdnet-litert/libLiteRtCompilerPlugin_MediaTek.so" unused DT entry: DT_RPATH (type 0xf arg 0x761) (ignoring)
+INFO: [compiler_plugin.cc:260] Loaded plugin at: /data/local/tmp/rawlens-ffdnet-litert/libLiteRtCompilerPlugin_MediaTek.so
+INFO: [compiler_plugin.cc:263] Resolved plugin api at: /data/local/tmp/rawlens-ffdnet-litert/libLiteRtCompilerPlugin_MediaTek.so
+INFO: [compiler_plugin.cc:268] Initialize plugin at: /data/local/tmp/rawlens-ffdnet-litert/libLiteRtCompilerPlugin_MediaTek.so
+INFO: [compiled_model.cc:1397] 0 compiler plugins were applied successfully: 
+INFO: [compiled_model.cc:829] Flatbuffer model initialized directly from incoming litert model.
+INFO: Initialized TensorFlow Lite runtime.
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+VERBOSE: Replacing 12 out of 12 node(s) with delegate (TfLiteXNNPackDelegate) node, yielding 1 partitions for subgraph 0 (main).
+INFO: [accelerator_registry.cc:43] DestroyAccelerator: ptr=0xb40000716684fb40, name=CpuAccelerator

@@ -1,0 +1,72 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Gauss-Newton normal equations of the LOCAL per-block translation d (on top
+// of the tile affine): one workgroup = one BxB LR block of frame k = gid.z + 1
+// (B = 16 = workgroup size). dq/dd = s I, so J = s * (sampled HR gradient),
+// the translation columns of jac.comp; same robust weights (wt) when on.
+// Writes blk[(k-1) nb + b] = {JxJx, JxJy, JyJy, Jx r, Jy r, n}.
+#define LKR_LOCAL_BINDING 6
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer G { float g[]; };
+layout(std430, binding = 2) readonly buffer Y { float y[]; };
+layout(std430, binding = 3) readonly buffer P { float p[]; };
+layout(std430, binding = 4) writeonly buffer BLK { float blk[]; };
+layout(std430, binding = 5) readonly buffer WT { float wt[]; };
+
+shared float sh[16][6];
+
+void main() {
+  int k = int(gl_WorkGroupID.z) + 1;
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  float v[6] = float[6](0, 0, 0, 0, 0, 0);
+  if (j < pc.w && i < pc.h) {
+    float yv = y[(k * pc.h + i) * pc.w + j];
+    if (yv < pc.f2) {
+      int HW = pc.H * pc.W;
+      int base = bayerChannel(i, j) * HW;
+      float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
+      float a3 = p[k * 6 + 3], a4 = p[k * 6 + 4], a5 = p[k * 6 + 5];
+      float sf = float(pc.s);
+      float invn = 1.0 / (sf * sf);
+      float sum = 0.0, Jx = 0.0, Jy = 0.0;
+      bool ok = true;
+      for (int oy = 0; oy < pc.s; ++oy)
+        for (int ox = 0; ox < pc.s; ++ox) {
+          vec2 u = subPos(i, j, ox, oy);
+          vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+          ivec2 x0; vec2 a;
+          if (!taps(q, x0, a)) ok = false;
+          if (!ok) continue;
+          int o = base + x0.y * pc.W + x0.x, og = 3 * HW + o;
+          float w00 = (1.0 - a.x) * (1.0 - a.y), w01 = a.x * (1.0 - a.y);
+          float w10 = (1.0 - a.x) * a.y, w11 = a.x * a.y;
+          sum += z[o] * w00 + z[o + 1] * w01 + z[o + pc.W] * w10 + z[o + pc.W + 1] * w11;
+          Jx += (g[o] * w00 + g[o + 1] * w01 + g[o + pc.W] * w10 + g[o + pc.W + 1] * w11) * sf;
+          Jy += (g[og] * w00 + g[og + 1] * w01 + g[og + pc.W] * w10 + g[og + pc.W + 1] * w11) * sf;
+        }
+      if (ok) {
+        float r = sum * invn - yv;
+        float sw = pc.rob_on > 0.5 ? sqrt(wt[(k * pc.h + i) * pc.w + j]) : 1.0;
+        r *= sw; Jx *= invn * sw; Jy *= invn * sw;
+        v[0] = Jx * Jx; v[1] = Jx * Jy; v[2] = Jy * Jy; v[3] = Jx * r; v[4] = Jy * r; v[5] = 1.0;
+      }
+    }
+  }
+  for (int t = 0; t < 6; ++t) v[t] = subgroupAdd(v[t]);
+  if (subgroupElect()) for (int t = 0; t < 6; ++t) sh[gl_SubgroupID][t] = v[t];
+  barrier();
+  if (gl_LocalInvocationIndex == 0u) {
+    float s6[6] = float[6](0, 0, 0, 0, 0, 0);
+    for (uint sg = 0u; sg < gl_NumSubgroups; ++sg) for (int t = 0; t < 6; ++t) s6[t] += sh[sg][t];
+    int B = pc.kOff;
+    int nbx = (pc.w + B - 1) / B, nby = (pc.h + B - 1) / B;
+    int b = int(gl_WorkGroupID.y) * nbx + int(gl_WorkGroupID.x);
+    int o = ((k - 1) * nbx * nby + b) * 6;
+    for (int t = 0; t < 6; ++t) blk[o + t] = s6[t];
+  }
+}

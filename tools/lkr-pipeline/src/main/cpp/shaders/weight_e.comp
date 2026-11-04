@@ -1,0 +1,27 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Per-sample normalised squared residual for the robust weights:
+// e = r^2 / (a y + b + (tau * same-colour gradient)^2). weight.comp then takes
+// the 3x3 mean of e (was recomputed 9x per sample: 54 loads -> 6 + 9).
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer R { float r[]; };
+layout(std430, binding = 1) readonly buffer Y { float y[]; };
+layout(std430, binding = 2) writeonly buffer E { float e[]; };
+
+void main() {
+  int jj = int(gl_GlobalInvocationID.x), ii = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (jj >= pc.w || ii >= pc.h) return;
+  int base = k * pc.h * pc.w;
+  int t = base + ii * pc.w + jj;
+  int jl = clamp(jj - 2, 0, pc.w - 1), jr = clamp(jj + 2, 0, pc.w - 1);
+  int iu = clamp(ii - 2, 0, pc.h - 1), id = clamp(ii + 2, 0, pc.h - 1);
+  float gx = (y[base + ii * pc.w + jr] - y[base + ii * pc.w + jl]) * 0.25;
+  float gy = (y[base + id * pc.w + jj] - y[base + iu * pc.w + jj]) * 0.25;
+  float edge = pc.f3 * pc.f3 * (gx * gx + gy * gy);
+  float var = max(pc.rob_a * max(y[t], 0.0) + pc.rob_b + edge, 1e-12);
+  float rv = r[t];
+  e[t] = rv * rv / var;
+}

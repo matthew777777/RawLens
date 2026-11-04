@@ -1,0 +1,63 @@
+{
+  "weights_sha256": "286f04f7e3a20254c067ba95efb5d3339f4fc8a09a365a93cd469184d4cdb279",
+  "weights_url": "https://github.com/cszn/KAIR/releases/download/v1.0/ffdnet_color.pth",
+  "checkpoint_bytes": 3411551,
+  "params": 852108,
+  "image_sha256": "8d011f75569381a814ee50982ac50e3b932ca4aecdd6209e378a9ae4b7ba7ccd",
+  "image_shape": [
+    3,
+    1024,
+    1024
+  ],
+  "domain": "gat",
+  "note": "Real reconstruction crop; illustrative noise calibration, not calibrated to source camera. Inference benchmark only.",
+  "a": 0.002,
+  "b": 2e-05,
+  "wb": [
+    1.9,
+    1.0,
+    1.5
+  ],
+  "sigma_ratio": 1.0,
+  "tiles": {
+    "128": {
+      "packed_shape": [
+        1,
+        13,
+        64,
+        64
+      ],
+      "lo": 13.813985824584961,
+      "span": 10.425928115844727,
+      "noise_sigma": 0.09591472230469894,
+      "output_min": -0.002566433511674404,
+      "output_max": 0.9640047550201416
+    },
+    "256": {
+      "packed_shape": [
+        1,
+        13,
+        128,
+        128
+      ],
+      "lo": 13.813985824584961,
+      "span": 17.026554107666016,
+      "noise_sigma": 0.058731789983844186,
+      "output_min": 0.00023705816420260817,
+      "output_max": 0.9840633869171143
+    },
+    "512": {
+      "packed_shape": [
+        1,
+        13,
+        256,
+        256
+      ],
+      "lo": 4.642919063568115,
+      "span": 26.669262409210205,
+      "noise_sigma": 0.037496350092331425,
+      "output_min": 0.018383899703621864,
+      "output_max": 0.9921348690986633
+    }
+  }
+}

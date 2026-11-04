@@ -1,0 +1,69 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// ROBUST variant: U^T W m (U z - y) with this iteration's robust weights wt
+// (binding 5), fused residual + weighted adjoint for z-steps 2..n (replaces
+// resid -> weight_apply -> scatter: three passes and two LR round trips).
+// Data-term gradient U^T m (U z - y) for all K frames (paper Eq. 5).
+//
+// One invocation per LR pixel of one frame: forward model -> residual r ->
+// exact transpose by scattering r * w_tap / s^2 back onto the SAME bilinear
+// taps. Scatter uses int32 atomicAdd on fixed point (scale 2^pc.scale-ish,
+// given as float pc.scale): integer addition is associative, so the result is
+// bit-identical across GPUs and dispatch orders (desktop/phone parity), and
+// no float-atomic extension is needed (Mali). mode 1: y ignored (power
+// iteration, r = U z); mode 2: r = 1 (coverage U^T 1, power-iteration start).
+#define LKR_LOCAL_BINDING 4
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { float y[]; };
+layout(std430, binding = 2) readonly buffer P { float p[]; };
+layout(std430, binding = 3) buffer ACC { int acc[]; };
+layout(std430, binding = 5) readonly buffer WT { float wt[]; };
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  // Clipped samples break the linear model y = U x (the true value is
+  // above white): leave them out of the data term like invalid pixels.
+  if (pc.mode == 0 && y[(k * pc.h + i) * pc.w + j] >= pc.f2) return;
+  const float wk = wt[(k * pc.h + i) * pc.w + j];
+  if (wk == 0.0) return;                             // fully rejected
+  int c = bayerChannel(i, j);
+  int base = c * pc.H * pc.W;
+  float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
+  float a3 = p[k * 6 + 3], a4 = p[k * 6 + 4], a5 = p[k * 6 + 5];
+  float sf = float(pc.s);
+  float invn = 1.0 / (sf * sf);
+  float sum = 0.0;
+  for (int oy = 0; oy < pc.s; ++oy)
+    for (int ox = 0; ox < pc.s; ++ox) {
+      vec2 u = subPos(i, j, ox, oy);
+      vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+      ivec2 x0; vec2 a;
+      if (!taps(q, x0, a)) return;                    // invalid LR pixel
+      int o = base + x0.y * pc.W + x0.x;
+      sum += (z[o] * (1.0 - a.x) + z[o + 1] * a.x) * (1.0 - a.y) +
+             (z[o + pc.W] * (1.0 - a.x) + z[o + pc.W + 1] * a.x) * a.y;
+    }
+  float r = pc.mode == 2 ? 1.0 : sum * invn;        // mode 2: U^T 1 (coverage)
+  if (pc.mode == 0) {
+    float yv = y[(k * pc.h + i) * pc.w + j];
+    r -= yv;
+  }
+  float rs = r * wk * invn * pc.scale;
+  for (int oy = 0; oy < pc.s; ++oy)
+    for (int ox = 0; ox < pc.s; ++ox) {
+      vec2 u = subPos(i, j, ox, oy);
+      vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+      ivec2 x0; vec2 a;
+      taps(q, x0, a);
+      int o = base + x0.y * pc.W + x0.x;
+      atomicAdd(acc[o], int(round(rs * (1.0 - a.x) * (1.0 - a.y))));
+      atomicAdd(acc[o + 1], int(round(rs * a.x * (1.0 - a.y))));
+      atomicAdd(acc[o + pc.W], int(round(rs * (1.0 - a.x) * a.y)));
+      atomicAdd(acc[o + pc.W + 1], int(round(rs * a.x * a.y)));
+    }
+}

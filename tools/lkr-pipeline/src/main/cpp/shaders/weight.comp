@@ -1,0 +1,44 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Robust data-term weights per LR sample from a 3x3 NEIGHBOURHOOD of residuals
+// (all colours of a Bayer area share one decision, so rejecting a moving
+// object never mixes colours from different frames -- per-sample weights left
+// magenta/green on moving cars). e = mean_3x3 (r / sigma(y))^2 with OUR noise
+// model sigma^2 = a y + b; w = 1 / (1 + e / k^2) (Cauchy). Reference frame: 1.
+// Writes rw = w r (for the scatter) and wt = w (for the Gauss-Newton step).
+// The per-sample terms come precomputed from weight_e.comp (binding 1).
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer R { float r[]; };
+layout(std430, binding = 1) readonly buffer EV { float ev[]; };   // weight_e.comp
+layout(std430, binding = 2) writeonly buffer RW { float rw[]; };
+layout(std430, binding = 3) writeonly buffer WT { float wt[]; };
+layout(std430, binding = 4) writeonly buffer WV { float wv[]; };   // valid * w: weighted coverage
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  int base = k * pc.h * pc.w;
+  int o = base + i * pc.w + j;
+  float w = 1.0;
+  if (pc.rob_on > 0.5 && k != 0) {
+    float e = 0.0;
+    float n = 0.0;
+    for (int di = -1; di <= 1; ++di)
+      for (int dj = -1; dj <= 1; ++dj) {
+        int ii = clamp(i + di, 0, pc.h - 1), jj = clamp(j + dj, 0, pc.w - 1);
+        e += ev[base + ii * pc.w + jj];   // per-sample e from weight_e.comp
+        n += 1.0;
+      }
+    // Steepness p (pc.rob_on carries it: on = >0.5, value = p >= 1): p = 1 is
+    // Cauchy; p = 2 keeps agreeing frames near 1 and drops disagreeing ones
+    // fast, instead of blending wind-moved foliage at half weight (smear).
+    float xr = (e / n) / (pc.rob_k * pc.rob_k);
+    w = 1.0 / (1.0 + pow(xr, max(pc.rob_on, 1.0)));
+  }
+  rw[o] = r[o] * w;
+  wt[o] = w;
+  wv[o] = r[o] != 0.0 ? w : 0.0;   // r == 0 exactly: invalid / clipped sample
+}

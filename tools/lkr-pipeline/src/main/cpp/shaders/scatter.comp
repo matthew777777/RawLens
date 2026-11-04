@@ -1,0 +1,38 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Exact adjoint U^T rw by scattering weighted residuals onto the SAME bilinear
+// taps as the forward model (fixed-point int32 atomics, as resid_adj.comp).
+// Used on robust iterations (resid -> weight -> scatter -> zstep).
+#define LKR_LOCAL_BINDING 3
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer RW { float rw[]; };
+layout(std430, binding = 1) readonly buffer P { float p[]; };
+layout(std430, binding = 2) buffer ACC { int acc[]; };
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  float r = rw[(k * pc.h + i) * pc.w + j];
+  if (r == 0.0) return;                              // invalid / clipped / fully rejected
+  int base = bayerChannel(i, j) * pc.H * pc.W;
+  float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
+  float a3 = p[k * 6 + 3], a4 = p[k * 6 + 4], a5 = p[k * 6 + 5];
+  float sf = float(pc.s);
+  float invn = 1.0 / (sf * sf);
+  float rs = r * invn * pc.scale;   // (mode 3: r is valid*w -> weighted coverage)
+  for (int oy = 0; oy < pc.s; ++oy)
+    for (int ox = 0; ox < pc.s; ++ox) {
+      vec2 u = subPos(i, j, ox, oy);
+      vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+      ivec2 x0; vec2 a;
+      if (!taps(q, x0, a)) continue;   // out of frame under the CURRENT motion (validity of rw may be stale)
+      int o = base + x0.y * pc.W + x0.x;
+      atomicAdd(acc[o], int(round(rs * (1.0 - a.x) * (1.0 - a.y))));
+      atomicAdd(acc[o + 1], int(round(rs * a.x * (1.0 - a.y))));
+      atomicAdd(acc[o + pc.W], int(round(rs * (1.0 - a.x) * a.y)));
+      atomicAdd(acc[o + pc.W + 1], int(round(rs * a.x * a.y)));
+    }
+}

@@ -1,0 +1,83 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Gauss-Newton normal equations per frame (paper Eq. 7), partial sums.
+//
+// r = m (U_p z - y), J = m dU_p/dp z with dU/dp from HR gradients sampled at
+// the same bilinear taps: dq/dp = s (ux, uy, 1) per axis. Frame k = gid.y + 1
+// (reference frame 0 is fixed). Mali-G615 cost model (load/store-instruction
+// bound, barriers expensive, subgroup ops cheap): each lane accumulates
+// PPT pixels in registers, then ONE subgroupAdd per term -- no shared memory,
+// no barriers. Lane 0 of every subgroup writes its 27 sums to slot
+// gl_SubgroupID of the group (SLOTS = 16 slots per group cover subgroup sizes
+// >= 4; unused slots stay zero from allocation).
+#define LKR_LOCAL_BINDING 6
+#include "lkr_common.glsl"
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer G { float g[]; };
+layout(std430, binding = 2) readonly buffer Y { float y[]; };
+layout(std430, binding = 3) readonly buffer P { float p[]; };
+layout(std430, binding = 4) writeonly buffer PART { float part[]; };
+layout(std430, binding = 5) readonly buffer WT { float wt[]; };   // weight.comp (robust iterations)
+
+const int PPT = 8;
+const int SLOTS = 16;
+
+void main() {
+  int k = int(gl_WorkGroupID.y) + 1;
+  int HW = pc.H * pc.W;
+  float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
+  float a3 = p[k * 6 + 3], a4 = p[k * 6 + 4], a5 = p[k * 6 + 5];
+  float sf = float(pc.s);
+  float invn = 1.0 / (sf * sf);
+  float acc[27];
+  for (int t = 0; t < 27; ++t) acc[t] = 0.0;
+  for (int t = 0; t < PPT; ++t) {
+    int pix = (int(gl_WorkGroupID.x) * PPT + t) * 64 + int(gl_LocalInvocationID.x);
+    if (pix >= pc.h * pc.w) break;
+    int i = pix / pc.w, j = pix - i * pc.w;
+    float yv = y[(k * pc.h + i) * pc.w + j];
+    if (yv >= pc.f2) continue;                            // clipped: no data
+    int base = bayerChannel(i, j) * HW;
+    float sum = 0.0, J0 = 0.0, J1 = 0.0, J2 = 0.0, J3 = 0.0, J4 = 0.0, J5 = 0.0;
+    bool ok = true;
+    for (int oy = 0; oy < pc.s; ++oy)
+      for (int ox = 0; ox < pc.s; ++ox) {
+        vec2 u = subPos(i, j, ox, oy);
+        vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+        ivec2 x0; vec2 a;
+        if (!taps(q, x0, a)) ok = false;
+        if (!ok) continue;
+        int o = base + x0.y * pc.W + x0.x;
+        float w00 = (1.0 - a.x) * (1.0 - a.y), w01 = a.x * (1.0 - a.y);
+        float w10 = (1.0 - a.x) * a.y, w11 = a.x * a.y;
+        sum += z[o] * w00 + z[o + 1] * w01 + z[o + pc.W] * w10 + z[o + pc.W + 1] * w11;
+        int og = 3 * HW + o;
+        float sx = (g[o] * w00 + g[o + 1] * w01 + g[o + pc.W] * w10 + g[o + pc.W + 1] * w11) * sf;
+        float sy = (g[og] * w00 + g[og + 1] * w01 + g[og + pc.W] * w10 + g[og + pc.W + 1] * w11) * sf;
+        J0 += sx * u.x; J1 += sx * u.y; J2 += sx;
+        J3 += sy * u.x; J4 += sy * u.y; J5 += sy;
+      }
+    if (!ok) continue;
+    float r = sum * invn - yv;
+    // IRLS normal equations J^T W J, J^T W r: scale J and r by sqrt(w).
+    float sw = pc.rob_on > 0.5 ? sqrt(wt[(k * pc.h + i) * pc.w + j]) : 1.0;
+    r *= sw;
+    J0 *= invn * sw; J1 *= invn * sw; J2 *= invn * sw; J3 *= invn * sw; J4 *= invn * sw; J5 *= invn * sw;
+    acc[0] += J0 * J0; acc[1] += J0 * J1; acc[2] += J0 * J2; acc[3] += J0 * J3; acc[4] += J0 * J4; acc[5] += J0 * J5;
+    acc[6] += J1 * J1; acc[7] += J1 * J2; acc[8] += J1 * J3; acc[9] += J1 * J4; acc[10] += J1 * J5;
+    acc[11] += J2 * J2; acc[12] += J2 * J3; acc[13] += J2 * J4; acc[14] += J2 * J5;
+    acc[15] += J3 * J3; acc[16] += J3 * J4; acc[17] += J3 * J5;
+    acc[18] += J4 * J4; acc[19] += J4 * J5;
+    acc[20] += J5 * J5;
+    acc[21] += J0 * r; acc[22] += J1 * r; acc[23] += J2 * r; acc[24] += J3 * r; acc[25] += J4 * r; acc[26] += J5 * r;
+  }
+  for (int t = 0; t < 27; ++t) acc[t] = subgroupAdd(acc[t]);
+  if (subgroupElect()) {
+    uint slot = (uint(k - 1) * gl_NumWorkGroups.x + gl_WorkGroupID.x) * uint(SLOTS) + gl_SubgroupID;
+    for (int t = 0; t < 27; ++t) part[slot * 27u + uint(t)] = acc[t];
+  }
+}

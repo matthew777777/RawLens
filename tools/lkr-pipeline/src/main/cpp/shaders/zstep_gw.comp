@@ -1,0 +1,70 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// ROBUST data step as a GATHER (no atomics), fused with the HQS z-update:
+//   z <- z - eta [U^T W r + mu (z - x)]
+// r = residual (resid.comp: 0 = invalid / clipped), W = robust weights wt.
+// One invocation per HR pixel; for each frame the LR pixels whose sub-sample
+// taps can reach it lie within R = |A^-1|_inf / s of u* = A^-1 (q/s - t - d)
+// (d = local block displacement at u*), widened by one LR pixel because d
+// changes between neighbouring blocks. Each candidate's taps are recomputed
+// EXACTLY as in resid.comp (affine + its own block's d), so the weights are
+// the transpose of the forward operator. Replaces scatter.comp /
+// resid_adj_w.comp, whose int32 global atomics dominated GPU time on Mali.
+#define LKR_LOCAL_BINDING 4
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer X { float x[]; };
+layout(std430, binding = 2) readonly buffer R { float r[]; };
+layout(std430, binding = 3) readonly buffer P { float p[]; };
+layout(std430, binding = 5) readonly buffer WT { float wt[]; };
+
+void main() {
+  int X0 = int(gl_GlobalInvocationID.x), Y0 = int(gl_GlobalInvocationID.y);
+  if (X0 >= pc.W || Y0 >= pc.H) return;
+  float sf = float(pc.s);
+  float invn = 1.0 / (sf * sf);
+  vec2 q0 = vec2(float(X0) + 0.5, float(Y0) + 0.5);
+  vec3 g = vec3(0.0);
+  for (int k = 0; k < pc.K; ++k) {
+    float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
+    float a3 = p[k * 6 + 3], a4 = p[k * 6 + 4], a5 = p[k * 6 + 5];
+    float det = a0 * a4 - a1 * a3;
+    mat2 Ai = mat2(a4, -a3, -a1, a0) / det;              // column-major inverse
+    vec2 us = Ai * (q0 / sf - vec2(a2, a5));
+    us = Ai * (q0 / sf - vec2(a2, a5) - localD(k, us)); // first guess -> with local d
+    float R = (max(abs(Ai[0][0]) + abs(Ai[1][0]), abs(Ai[0][1]) + abs(Ai[1][1]))) / sf + 1.0;
+    int j0 = max(int(floor(us.x - R)), 0), j1 = min(int(floor(us.x + R)), pc.w - 1);
+    int i0 = max(int(floor(us.y - R)), 0), i1 = min(int(floor(us.y + R)), pc.h - 1);
+    for (int i = i0; i <= i1; ++i)
+      for (int j = j0; j <= j1; ++j) {
+        int o = (k * pc.h + i) * pc.w + j;
+        float rv = r[o];
+        if (rv == 0.0) continue;
+        float wk = wt[o];
+        if (wk == 0.0) continue;
+        float acc = 0.0;
+        for (int oy = 0; oy < pc.s; ++oy)
+          for (int ox = 0; ox < pc.s; ++ox) {
+            vec2 u = subPos(i, j, ox, oy);
+            vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+            vec2 f = q - 0.5;
+            vec2 fl = floor(f);
+            ivec2 t0 = ivec2(fl);
+            vec2 a = f - fl;
+            float wx = t0.x == X0 ? 1.0 - a.x : (t0.x + 1 == X0 ? a.x : 0.0);
+            float wy = t0.y == Y0 ? 1.0 - a.y : (t0.y + 1 == Y0 ? a.y : 0.0);
+            acc += wx * wy;
+          }
+        g[bayerChannel(i, j)] += rv * wk * acc * invn;
+      }
+  }
+  int HW = pc.H * pc.W;
+  int o = Y0 * pc.W + X0;
+  for (int c = 0; c < 3; ++c) {
+    int idx = c * HW + o;
+    float zi = z[idx];
+    z[idx] = zi - pc.eta * (g[c] + pc.mu * (zi - x[idx]));
+  }
+}

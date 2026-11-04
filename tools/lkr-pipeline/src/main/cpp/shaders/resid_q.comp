@@ -1,0 +1,58 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// resid.comp, one invocation per 2x2 Bayer quad (ESD4D-style quad
+// processing): the frame's affine and the local block displacement are read
+// once per quad (all 4 samples lie in the same local block: B even), y / r are
+// moved as vec2 row pairs. Every sample keeps its OWN sub-pixel position and
+// taps: identical arithmetic to resid.comp per sample. Requires w even.
+#define LKR_LOCAL_BINDING 4
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { vec2 y[]; };
+layout(std430, binding = 2) readonly buffer P { float p[]; };
+layout(std430, binding = 3) writeonly buffer R { vec2 r[]; };
+
+void main() {
+  int J = int(gl_GlobalInvocationID.x), I = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  int hw = pc.w / 2;
+  if (J >= hw || 2 * I >= pc.h) return;
+  float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
+  float a3 = p[k * 6 + 3], a4 = p[k * 6 + 4], a5 = p[k * 6 + 5];
+  float sf = float(pc.s);
+  vec2 d = localD(k, subPos(2 * I, 2 * J, 0, 0));
+  for (int dy = 0; dy < 2; ++dy) {
+    int i = 2 * I + dy;
+    int o2 = (k * pc.h + i) * hw + J;
+    vec2 yv2 = y[o2];
+    vec2 out2;
+    for (int dx = 0; dx < 2; ++dx) {
+      int j = 2 * J + dx;
+      float yv = yv2[dx];
+      float rv;
+      if (pc.mode == 0 && yv >= pc.f2) {
+        rv = 0.0;                                         // clipped: no data
+      } else {
+        int base = bayerChannel(i, j) * pc.H * pc.W;
+        float sum = 0.0;
+        bool ok = true;
+        for (int oy = 0; oy < pc.s && ok; ++oy)
+          for (int ox = 0; ox < pc.s; ++ox) {
+            vec2 u = subPos(i, j, ox, oy);
+            vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + d);
+            ivec2 x0; vec2 a;
+            if (!taps(q, x0, a)) { ok = false; break; }   // invalid LR pixel
+            int t = base + x0.y * pc.W + x0.x;
+            sum += (z[t] * (1.0 - a.x) + z[t + 1] * a.x) * (1.0 - a.y) +
+                   (z[t + pc.W] * (1.0 - a.x) + z[t + pc.W + 1] * a.x) * a.y;
+          }
+        float v = sum / (sf * sf);
+        rv = !ok ? 0.0 : (pc.mode == 2 ? 1.0 : (pc.mode == 1 ? v : v - yv));
+      }
+      out2[dx] = rv;
+    }
+    r[o2] = out2;
+  }
+}

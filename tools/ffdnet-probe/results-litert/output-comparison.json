@@ -1,0 +1,20 @@
+[
+  {
+    "tile": 256,
+    "byte_identical": true,
+    "sha256_litert": "33e5644ec39f6deb173d5cd47b380fe5224bc889e6b04415779a3c515915e2ca",
+    "sha256_nnapi": "33e5644ec39f6deb173d5cd47b380fe5224bc889e6b04415779a3c515915e2ca"
+  },
+  {
+    "tile": 512,
+    "byte_identical": true,
+    "sha256_litert": "2a3c5b4da519026a3c335317916412335c4c37518a01ca02cdac954dbe862705",
+    "sha256_nnapi": "2a3c5b4da519026a3c335317916412335c4c37518a01ca02cdac954dbe862705"
+  },
+  {
+    "tile": 1024,
+    "byte_identical": true,
+    "sha256_litert": "861e71706cb872e68c0ae0a1a817b995d6da4a93c7091c8bbb2015ccfc717de3",
+    "sha256_nnapi": "861e71706cb872e68c0ae0a1a817b995d6da4a93c7091c8bbb2015ccfc717de3"
+  }
+]

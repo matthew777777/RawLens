@@ -1,0 +1,25 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Separable spread min-filter, pass 1 (rows): tmp = min over |dj| <= R of
+// min(wraw, wtr). Pass 2 (weight_min.comp) takes the column minimum.
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer WR { float wraw[]; };
+layout(std430, binding = 1) readonly buffer WTR { float wtr[]; };
+layout(std430, binding = 2) writeonly buffer TM { float tmp[]; };
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  int row = (k * pc.h + i) * pc.w;
+  int Rr = int(pc.f3);
+  float w = 1.0;
+  if (k != 0 && pc.rob_on > 0.5)
+    for (int dj = -Rr; dj <= Rr; ++dj) {
+      int t = row + clamp(j + dj, 0, pc.w - 1);
+      w = min(w, min(wraw[t], wtr[t]));
+    }
+  tmp[row + j] = w;
+}

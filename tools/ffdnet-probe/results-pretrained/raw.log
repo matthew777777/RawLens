@@ -1,0 +1,204 @@
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=128
+sample backend=cpu tile=128 iteration=-2 ms=98.400
+sample backend=cpu tile=128 iteration=-1 ms=93.579
+sample backend=cpu tile=128 iteration=0 ms=89.202
+sample backend=cpu tile=128 iteration=1 ms=89.211
+sample backend=cpu tile=128 iteration=2 ms=91.593
+sample backend=cpu tile=128 iteration=3 ms=87.817
+sample backend=cpu tile=128 iteration=4 ms=84.323
+sample backend=cpu tile=128 iteration=5 ms=89.004
+sample backend=cpu tile=128 iteration=6 ms=80.896
+RESULT backend=cpu tile=128 core=64 runs=7 median_ms=89.004 min_ms=80.896 max_ms=91.593 setup_ms=42.875 max_error=0 rmse=0
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=128
+sample backend=cpu16 tile=128 iteration=-2 ms=44.193
+sample backend=cpu16 tile=128 iteration=-1 ms=41.751
+sample backend=cpu16 tile=128 iteration=0 ms=41.518
+sample backend=cpu16 tile=128 iteration=1 ms=43.318
+sample backend=cpu16 tile=128 iteration=2 ms=41.890
+sample backend=cpu16 tile=128 iteration=3 ms=39.850
+sample backend=cpu16 tile=128 iteration=4 ms=40.189
+sample backend=cpu16 tile=128 iteration=5 ms=41.902
+sample backend=cpu16 tile=128 iteration=6 ms=42.112
+RESULT backend=cpu16 tile=128 core=64 runs=7 median_ms=41.890 min_ms=39.850 max_ms=43.318 setup_ms=34.154 max_error=0.00870556 rmse=0.00110906
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=128
+GPU count=1 name=Mali-G615 MC2
+sample backend=gpu tile=128 iteration=-2 ms=105.426
+sample backend=gpu tile=128 iteration=-1 ms=32.115
+sample backend=gpu tile=128 iteration=0 ms=31.831
+sample backend=gpu tile=128 iteration=1 ms=32.184
+sample backend=gpu tile=128 iteration=2 ms=32.769
+sample backend=gpu tile=128 iteration=3 ms=35.874
+sample backend=gpu tile=128 iteration=4 ms=39.100
+sample backend=gpu tile=128 iteration=5 ms=40.981
+sample backend=gpu tile=128 iteration=6 ms=41.831
+RESULT backend=gpu tile=128 core=64 runs=7 median_ms=35.874 min_ms=31.831 max_ms=41.831 setup_ms=966.504 max_error=0.00574261 rmse=0.00148047
+[0 Mali-G615 MC2]  queueC=0[2]  queueT=0[2]  rebar=1  r-score=9
+[0 Mali-G615 MC2]  fp16-p/s/u/a=1/1/1/1  int8-p/s/u/a=1/1/1/1  bf16-p/s=1/0
+[0 Mali-G615 MC2]  subgroup=16(16~16)  ops=1/1/1/1/1/1/1/1/0/0
+[0 Mali-G615 MC2]  fp16-cm=0  int8-cm=0  bf16-cm=0  fp8-cm=0
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=128
+NNAPI_DEVICE mtk-mdla_shim
+NNAPI_DEVICE mtk-neuron_shim
+NNAPI_DEVICE nnapi-reference
+SUPPORTED 12/12 CPU fallback excluded by createForDevices
+sample backend=mtk-mdla_shim tile=128 iteration=-2 ms=11.920 hardware_ns=10349923
+sample backend=mtk-mdla_shim tile=128 iteration=-1 ms=8.874 hardware_ns=7413462
+sample backend=mtk-mdla_shim tile=128 iteration=0 ms=8.095 hardware_ns=7177769
+sample backend=mtk-mdla_shim tile=128 iteration=1 ms=8.031 hardware_ns=7163000
+sample backend=mtk-mdla_shim tile=128 iteration=2 ms=7.904 hardware_ns=7081923
+sample backend=mtk-mdla_shim tile=128 iteration=3 ms=7.852 hardware_ns=7078461
+sample backend=mtk-mdla_shim tile=128 iteration=4 ms=8.059 hardware_ns=7233461
+sample backend=mtk-mdla_shim tile=128 iteration=5 ms=8.093 hardware_ns=7228000
+sample backend=mtk-mdla_shim tile=128 iteration=6 ms=8.024 hardware_ns=7167461
+RESULT backend=mtk-mdla_shim tile=128 core=64 runs=7 median_ms=8.031 min_ms=7.852 max_ms=8.095 setup_ms=541.317 max_error=0.000773132 rmse=0.000254643
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=128
+NNAPI_DEVICE mtk-mdla_shim
+NNAPI_DEVICE mtk-neuron_shim
+NNAPI_DEVICE nnapi-reference
+SUPPORTED 12/12 CPU fallback excluded by createForDevices
+sample backend=mtk-neuron_shim tile=128 iteration=-2 ms=8.968 hardware_ns=8163000
+sample backend=mtk-neuron_shim tile=128 iteration=-1 ms=8.025 hardware_ns=7215154
+sample backend=mtk-neuron_shim tile=128 iteration=0 ms=7.884 hardware_ns=7136000
+sample backend=mtk-neuron_shim tile=128 iteration=1 ms=7.825 hardware_ns=7039154
+sample backend=mtk-neuron_shim tile=128 iteration=2 ms=7.838 hardware_ns=7060692
+sample backend=mtk-neuron_shim tile=128 iteration=3 ms=7.849 hardware_ns=7050692
+sample backend=mtk-neuron_shim tile=128 iteration=4 ms=7.742 hardware_ns=7011154
+sample backend=mtk-neuron_shim tile=128 iteration=5 ms=7.713 hardware_ns=6994461
+sample backend=mtk-neuron_shim tile=128 iteration=6 ms=8.331 hardware_ns=7490461
+RESULT backend=mtk-neuron_shim tile=128 core=64 runs=7 median_ms=7.838 min_ms=7.713 max_ms=8.331 setup_ms=515.758 max_error=0.000773132 rmse=0.000254643
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=256
+sample backend=cpu tile=256 iteration=-2 ms=342.824
+sample backend=cpu tile=256 iteration=-1 ms=320.561
+sample backend=cpu tile=256 iteration=0 ms=322.585
+sample backend=cpu tile=256 iteration=1 ms=321.343
+sample backend=cpu tile=256 iteration=2 ms=321.268
+sample backend=cpu tile=256 iteration=3 ms=323.691
+sample backend=cpu tile=256 iteration=4 ms=319.946
+sample backend=cpu tile=256 iteration=5 ms=336.192
+sample backend=cpu tile=256 iteration=6 ms=326.751
+RESULT backend=cpu tile=256 core=128 runs=7 median_ms=322.585 min_ms=319.946 max_ms=336.192 setup_ms=44.980 max_error=0 rmse=0
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=256
+sample backend=cpu16 tile=256 iteration=-2 ms=176.162
+sample backend=cpu16 tile=256 iteration=-1 ms=163.892
+sample backend=cpu16 tile=256 iteration=0 ms=161.994
+sample backend=cpu16 tile=256 iteration=1 ms=161.854
+sample backend=cpu16 tile=256 iteration=2 ms=161.338
+sample backend=cpu16 tile=256 iteration=3 ms=160.895
+sample backend=cpu16 tile=256 iteration=4 ms=161.979
+sample backend=cpu16 tile=256 iteration=5 ms=161.544
+sample backend=cpu16 tile=256 iteration=6 ms=160.874
+RESULT backend=cpu16 tile=256 core=128 runs=7 median_ms=161.544 min_ms=160.874 max_ms=161.994 setup_ms=35.262 max_error=0.00769407 rmse=0.000992475
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=256
+GPU count=1 name=Mali-G615 MC2
+sample backend=gpu tile=256 iteration=-2 ms=196.173
+sample backend=gpu tile=256 iteration=-1 ms=117.722
+sample backend=gpu tile=256 iteration=0 ms=125.834
+sample backend=gpu tile=256 iteration=1 ms=129.731
+sample backend=gpu tile=256 iteration=2 ms=121.270
+sample backend=gpu tile=256 iteration=3 ms=130.749
+sample backend=gpu tile=256 iteration=4 ms=132.122
+sample backend=gpu tile=256 iteration=5 ms=131.376
+sample backend=gpu tile=256 iteration=6 ms=129.322
+RESULT backend=gpu tile=256 core=128 runs=7 median_ms=129.731 min_ms=121.270 max_ms=132.122 setup_ms=927.996 max_error=0.00654447 rmse=0.00132227
+[0 Mali-G615 MC2]  queueC=0[2]  queueT=0[2]  rebar=1  r-score=9
+[0 Mali-G615 MC2]  fp16-p/s/u/a=1/1/1/1  int8-p/s/u/a=1/1/1/1  bf16-p/s=1/0
+[0 Mali-G615 MC2]  subgroup=16(16~16)  ops=1/1/1/1/1/1/1/1/0/0
+[0 Mali-G615 MC2]  fp16-cm=0  int8-cm=0  bf16-cm=0  fp8-cm=0
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=256
+NNAPI_DEVICE mtk-mdla_shim
+NNAPI_DEVICE mtk-neuron_shim
+NNAPI_DEVICE nnapi-reference
+SUPPORTED 12/12 CPU fallback excluded by createForDevices
+sample backend=mtk-mdla_shim tile=256 iteration=-2 ms=30.349 hardware_ns=28659154
+sample backend=mtk-mdla_shim tile=256 iteration=-1 ms=27.460 hardware_ns=25765615
+sample backend=mtk-mdla_shim tile=256 iteration=0 ms=27.442 hardware_ns=25821308
+sample backend=mtk-mdla_shim tile=256 iteration=1 ms=27.579 hardware_ns=25942154
+sample backend=mtk-mdla_shim tile=256 iteration=2 ms=27.438 hardware_ns=25828846
+sample backend=mtk-mdla_shim tile=256 iteration=3 ms=27.513 hardware_ns=25909000
+sample backend=mtk-mdla_shim tile=256 iteration=4 ms=27.571 hardware_ns=25888231
+sample backend=mtk-mdla_shim tile=256 iteration=5 ms=27.484 hardware_ns=25799154
+sample backend=mtk-mdla_shim tile=256 iteration=6 ms=27.474 hardware_ns=25879077
+RESULT backend=mtk-mdla_shim tile=256 core=128 runs=7 median_ms=27.484 min_ms=27.438 max_ms=27.579 setup_ms=569.878 max_error=0.000793755 rmse=0.000233521
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=256
+NNAPI_DEVICE mtk-mdla_shim
+NNAPI_DEVICE mtk-neuron_shim
+NNAPI_DEVICE nnapi-reference
+SUPPORTED 12/12 CPU fallback excluded by createForDevices
+sample backend=mtk-neuron_shim tile=256 iteration=-2 ms=29.873 hardware_ns=28024615
+sample backend=mtk-neuron_shim tile=256 iteration=-1 ms=28.004 hardware_ns=26123154
+sample backend=mtk-neuron_shim tile=256 iteration=0 ms=27.968 hardware_ns=26124307
+sample backend=mtk-neuron_shim tile=256 iteration=1 ms=29.878 hardware_ns=27320307
+sample backend=mtk-neuron_shim tile=256 iteration=2 ms=28.874 hardware_ns=26552846
+sample backend=mtk-neuron_shim tile=256 iteration=3 ms=31.139 hardware_ns=27859154
+sample backend=mtk-neuron_shim tile=256 iteration=4 ms=30.474 hardware_ns=27124077
+sample backend=mtk-neuron_shim tile=256 iteration=5 ms=30.670 hardware_ns=27732077
+sample backend=mtk-neuron_shim tile=256 iteration=6 ms=30.037 hardware_ns=27018769
+RESULT backend=mtk-neuron_shim tile=256 core=128 runs=7 median_ms=30.037 min_ms=27.968 max_ms=31.139 setup_ms=590.157 max_error=0.000793755 rmse=0.000233521
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=512
+sample backend=cpu tile=512 iteration=-2 ms=1392.795
+sample backend=cpu tile=512 iteration=-1 ms=1294.034
+sample backend=cpu tile=512 iteration=0 ms=1243.870
+sample backend=cpu tile=512 iteration=1 ms=1284.892
+sample backend=cpu tile=512 iteration=2 ms=1248.977
+sample backend=cpu tile=512 iteration=3 ms=1252.130
+sample backend=cpu tile=512 iteration=4 ms=1449.713
+sample backend=cpu tile=512 iteration=5 ms=1515.736
+sample backend=cpu tile=512 iteration=6 ms=1523.054
+RESULT backend=cpu tile=512 core=256 runs=7 median_ms=1284.892 min_ms=1243.870 max_ms=1523.054 setup_ms=41.341 max_error=0 rmse=0
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=512
+sample backend=cpu16 tile=512 iteration=-2 ms=720.009
+sample backend=cpu16 tile=512 iteration=-1 ms=700.776
+sample backend=cpu16 tile=512 iteration=0 ms=700.515
+sample backend=cpu16 tile=512 iteration=1 ms=733.223
+sample backend=cpu16 tile=512 iteration=2 ms=700.080
+sample backend=cpu16 tile=512 iteration=3 ms=762.586
+sample backend=cpu16 tile=512 iteration=4 ms=702.445
+sample backend=cpu16 tile=512 iteration=5 ms=716.678
+sample backend=cpu16 tile=512 iteration=6 ms=647.156
+RESULT backend=cpu16 tile=512 core=256 runs=7 median_ms=702.445 min_ms=647.156 max_ms=762.586 setup_ms=34.093 max_error=0.0090968 rmse=0.00135623
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=512
+GPU count=1 name=Mali-G615 MC2
+sample backend=gpu tile=512 iteration=-2 ms=589.319
+sample backend=gpu tile=512 iteration=-1 ms=485.172
+sample backend=gpu tile=512 iteration=0 ms=488.839
+sample backend=gpu tile=512 iteration=1 ms=488.192
+sample backend=gpu tile=512 iteration=2 ms=493.110
+sample backend=gpu tile=512 iteration=3 ms=493.113
+sample backend=gpu tile=512 iteration=4 ms=498.810
+sample backend=gpu tile=512 iteration=5 ms=494.833
+sample backend=gpu tile=512 iteration=6 ms=487.973
+RESULT backend=gpu tile=512 core=256 runs=7 median_ms=493.110 min_ms=487.973 max_ms=498.810 setup_ms=767.470 max_error=0.00766981 rmse=0.00166764
+[0 Mali-G615 MC2]  queueC=0[2]  queueT=0[2]  rebar=1  r-score=9
+[0 Mali-G615 MC2]  fp16-p/s/u/a=1/1/1/1  int8-p/s/u/a=1/1/1/1  bf16-p/s=1/0
+[0 Mali-G615 MC2]  subgroup=16(16~16)  ops=1/1/1/1/1/1/1/1/0/0
+[0 Mali-G615 MC2]  fp16-cm=0  int8-cm=0  bf16-cm=0  fp8-cm=0
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=512
+NNAPI_DEVICE mtk-mdla_shim
+NNAPI_DEVICE mtk-neuron_shim
+NNAPI_DEVICE nnapi-reference
+SUPPORTED 12/12 CPU fallback excluded by createForDevices
+sample backend=mtk-mdla_shim tile=512 iteration=-2 ms=107.347 hardware_ns=103530538
+sample backend=mtk-mdla_shim tile=512 iteration=-1 ms=103.597 hardware_ns=99567692
+sample backend=mtk-mdla_shim tile=512 iteration=0 ms=104.150 hardware_ns=99431077
+sample backend=mtk-mdla_shim tile=512 iteration=1 ms=104.061 hardware_ns=99443693
+sample backend=mtk-mdla_shim tile=512 iteration=2 ms=104.079 hardware_ns=99482769
+sample backend=mtk-mdla_shim tile=512 iteration=3 ms=108.679 hardware_ns=102303462
+sample backend=mtk-mdla_shim tile=512 iteration=4 ms=105.865 hardware_ns=100049847
+sample backend=mtk-mdla_shim tile=512 iteration=5 ms=104.397 hardware_ns=99803923
+sample backend=mtk-mdla_shim tile=512 iteration=6 ms=104.117 hardware_ns=99541769
+RESULT backend=mtk-mdla_shim tile=512 core=256 runs=7 median_ms=104.150 min_ms=104.061 max_ms=108.679 setup_ms=755.065 max_error=0.000831008 rmse=0.000283215
+MODEL kind=pretrained-color-FFDNet layers=12 hidden=96 packed_input=13 output=12 params=852108 fp32_bytes=3408432 tile=512
+NNAPI_DEVICE mtk-mdla_shim
+NNAPI_DEVICE mtk-neuron_shim
+NNAPI_DEVICE nnapi-reference
+SUPPORTED 12/12 CPU fallback excluded by createForDevices
+sample backend=mtk-neuron_shim tile=512 iteration=-2 ms=110.120 hardware_ns=104244615
+sample backend=mtk-neuron_shim tile=512 iteration=-1 ms=104.623 hardware_ns=100197539
+sample backend=mtk-neuron_shim tile=512 iteration=0 ms=104.760 hardware_ns=99934154
+sample backend=mtk-neuron_shim tile=512 iteration=1 ms=110.378 hardware_ns=103468692
+sample backend=mtk-neuron_shim tile=512 iteration=2 ms=106.738 hardware_ns=100931308
+sample backend=mtk-neuron_shim tile=512 iteration=3 ms=114.434 hardware_ns=104507154
+sample backend=mtk-neuron_shim tile=512 iteration=4 ms=107.043 hardware_ns=102240308
+sample backend=mtk-neuron_shim tile=512 iteration=5 ms=104.024 hardware_ns=99441308
+sample backend=mtk-neuron_shim tile=512 iteration=6 ms=103.429 hardware_ns=98890154
+RESULT backend=mtk-neuron_shim tile=512 core=256 runs=7 median_ms=106.738 min_ms=103.429 max_ms=114.434 setup_ms=786.802 max_error=0.000831008 rmse=0.000283215

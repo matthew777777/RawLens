@@ -1,0 +1,20 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Bilinear-tap packing (malioc-guided: every LK-SR pass is load/store bound):
+// zq[idx] = (z[o], z[o+1], z[o+W], z[o+W+1]) per HR pixel and plane, so the
+// residual / adjoint passes read a sample's 4 taps with ONE vec4 load instead
+// of 4 scalar loads (x 8 frames per LR sample). Edge entries repeat the last
+// row / column; they are never used (taps() requires x0+1 < W, y0+1 < H).
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) writeonly buffer ZQ { vec4 zq[]; };
+
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y), c = int(gl_GlobalInvocationID.z);
+  if (X >= pc.W || Y >= pc.H) return;
+  int o = (c * pc.H + Y) * pc.W + X;
+  int dx = X + 1 < pc.W ? 1 : 0, dy = Y + 1 < pc.H ? pc.W : 0;
+  zq[o] = vec4(z[o], z[o + dx], z[o + dy], z[o + dy + dx]);
+}

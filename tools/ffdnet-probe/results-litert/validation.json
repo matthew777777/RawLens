@@ -1,0 +1,56 @@
+[
+  {
+    "tile": 256,
+    "backend": "litert-npu",
+    "max_error": 0.000793755054473877,
+    "rmse": 0.00023348283742010478,
+    "linear_max_error": 0.0003347549450869458,
+    "linear_rmse": 8.461529489140241e-05,
+    "agreement_psnr_db": 72.63490075058117
+  },
+  {
+    "tile": 256,
+    "backend": "nnapi-mdla",
+    "max_error": 0.000793755054473877,
+    "rmse": 0.00023348283742010478,
+    "linear_max_error": 0.0003347549450869458,
+    "linear_rmse": 8.461529489140241e-05,
+    "agreement_psnr_db": 72.63490075058117
+  },
+  {
+    "tile": 512,
+    "backend": "litert-npu",
+    "max_error": 0.0008310675621032715,
+    "rmse": 0.0002831604363703583,
+    "linear_max_error": 0.0005991860298303897,
+    "linear_rmse": 0.00014982702763613129,
+    "agreement_psnr_db": 70.95934854128015
+  },
+  {
+    "tile": 512,
+    "backend": "nnapi-mdla",
+    "max_error": 0.0008310675621032715,
+    "rmse": 0.0002831604363703583,
+    "linear_max_error": 0.0005991860298303897,
+    "linear_rmse": 0.00014982702763613129,
+    "agreement_psnr_db": 70.95934854128015
+  },
+  {
+    "tile": 1024,
+    "backend": "litert-npu",
+    "max_error": 0.0009162425994873047,
+    "rmse": 0.0002442551718214273,
+    "linear_max_error": 0.0006668603415602714,
+    "linear_rmse": 0.00012694794061756786,
+    "agreement_psnr_db": 72.24312463654589
+  },
+  {
+    "tile": 1024,
+    "backend": "nnapi-mdla",
+    "max_error": 0.0009162425994873047,
+    "rmse": 0.0002442551718214273,
+    "linear_max_error": 0.0006668603415602714,
+    "linear_rmse": 0.00012694794061756786,
+    "agreement_psnr_db": 72.24312463654589
+  }
+]

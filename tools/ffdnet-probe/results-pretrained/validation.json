@@ -1,0 +1,137 @@
+[
+  {
+    "tile": 128,
+    "backend": "cpu",
+    "max_error": 1.4901161193847656e-06,
+    "rmse": 2.482733852993112e-07,
+    "linear_max_error": 3.5007297249922686e-07,
+    "linear_rmse": 5.163507656578993e-08,
+    "agreement_psnr_db": 132.10139667915934
+  },
+  {
+    "tile": 128,
+    "backend": "cpu16",
+    "max_error": 0.008705556392669678,
+    "rmse": 0.0011090590162064786,
+    "linear_max_error": 0.0021686572194540843,
+    "linear_rmse": 0.00023566899850744483,
+    "agreement_psnr_db": 59.100906863655744
+  },
+  {
+    "tile": 128,
+    "backend": "gpu",
+    "max_error": 0.005742251873016357,
+    "rmse": 0.0014803496951506757,
+    "linear_max_error": 0.0013411480968184564,
+    "linear_rmse": 0.0003107320812478399,
+    "agreement_psnr_db": 56.59271362811339
+  },
+  {
+    "tile": 128,
+    "backend": "mtk-mdla_shim",
+    "max_error": 0.0007734298706054688,
+    "rmse": 0.0002545972129349144,
+    "linear_max_error": 0.00019004821663848315,
+    "linear_rmse": 5.189473516335909e-05,
+    "agreement_psnr_db": 71.88292709719892
+  },
+  {
+    "tile": 128,
+    "backend": "mtk-neuron_shim",
+    "max_error": 0.0007734298706054688,
+    "rmse": 0.0002545972129349144,
+    "linear_max_error": 0.00019004821663848315,
+    "linear_rmse": 5.189473516335909e-05,
+    "agreement_psnr_db": 71.88292709719892
+  },
+  {
+    "tile": 256,
+    "backend": "cpu",
+    "max_error": 1.2516975402832031e-06,
+    "rmse": 2.0088464052443265e-07,
+    "linear_max_error": 5.955340429686373e-07,
+    "linear_rmse": 7.473980328956149e-08,
+    "agreement_psnr_db": 133.94106535567605
+  },
+  {
+    "tile": 256,
+    "backend": "cpu16",
+    "max_error": 0.007694661617279053,
+    "rmse": 0.000992461737920287,
+    "linear_max_error": 0.003600283139844118,
+    "linear_rmse": 0.0003744991275659247,
+    "agreement_psnr_db": 60.0657245493402
+  },
+  {
+    "tile": 256,
+    "backend": "gpu",
+    "max_error": 0.006544172763824463,
+    "rmse": 0.001322198305275732,
+    "linear_max_error": 0.002877035909059966,
+    "linear_rmse": 0.0005154045295999625,
+    "agreement_psnr_db": 57.574068076610594
+  },
+  {
+    "tile": 256,
+    "backend": "mtk-mdla_shim",
+    "max_error": 0.000793755054473877,
+    "rmse": 0.00023348283742010478,
+    "linear_max_error": 0.0003347549450869458,
+    "linear_rmse": 8.461529489140241e-05,
+    "agreement_psnr_db": 72.63490075058117
+  },
+  {
+    "tile": 256,
+    "backend": "mtk-neuron_shim",
+    "max_error": 0.000793755054473877,
+    "rmse": 0.00023348283742010478,
+    "linear_max_error": 0.0003347549450869458,
+    "linear_rmse": 8.461529489140241e-05,
+    "agreement_psnr_db": 72.63490075058117
+  },
+  {
+    "tile": 512,
+    "backend": "cpu",
+    "max_error": 1.6093254089355469e-06,
+    "rmse": 2.593704087869006e-07,
+    "linear_max_error": 1.2885957378916402e-06,
+    "linear_rmse": 1.441411781147097e-07,
+    "agreement_psnr_db": 131.72159146971322
+  },
+  {
+    "tile": 512,
+    "backend": "cpu16",
+    "max_error": 0.009097814559936523,
+    "rmse": 0.0013562973300944887,
+    "linear_max_error": 0.004932285464817221,
+    "linear_rmse": 0.0007606844338355613,
+    "agreement_psnr_db": 57.35290186329692
+  },
+  {
+    "tile": 512,
+    "backend": "gpu",
+    "max_error": 0.0076694488525390625,
+    "rmse": 0.0016675098386632916,
+    "linear_max_error": 0.005615642277163657,
+    "linear_rmse": 0.0009467542569257626,
+    "agreement_psnr_db": 55.55863189947779
+  },
+  {
+    "tile": 512,
+    "backend": "mtk-mdla_shim",
+    "max_error": 0.0008310675621032715,
+    "rmse": 0.0002831604363703583,
+    "linear_max_error": 0.0005991860298303897,
+    "linear_rmse": 0.00014982702763613129,
+    "agreement_psnr_db": 70.95934854128015
+  },
+  {
+    "tile": 512,
+    "backend": "mtk-neuron_shim",
+    "max_error": 0.0008310675621032715,
+    "rmse": 0.0002831604363703583,
+    "linear_max_error": 0.0005991860298303897,
+    "linear_rmse": 0.00014982702763613129,
+    "agreement_psnr_db": 70.95934854128015
+  }
+]

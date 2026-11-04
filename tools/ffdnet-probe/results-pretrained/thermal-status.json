@@ -1,0 +1,47 @@
+{
+  "thermal-256-cpu16.txt": [
+    "0"
+  ],
+  "thermal-256-cpu.txt": [
+    "0"
+  ],
+  "thermal-128-gpu.txt": [
+    "0"
+  ],
+  "thermal-128-mtk-neuron_shim.txt": [
+    "0"
+  ],
+  "thermal-128-cpu.txt": [
+    "0"
+  ],
+  "thermal-256-gpu.txt": [
+    "0"
+  ],
+  "thermal-512-gpu.txt": [
+    "0"
+  ],
+  "thermal-256-mtk-neuron_shim.txt": [
+    "0"
+  ],
+  "thermal-512-mtk-mdla_shim.txt": [
+    "0"
+  ],
+  "thermal-512-cpu.txt": [
+    "0"
+  ],
+  "thermal-512-cpu16.txt": [
+    "0"
+  ],
+  "thermal-512-mtk-neuron_shim.txt": [
+    "0"
+  ],
+  "thermal-256-mtk-mdla_shim.txt": [
+    "0"
+  ],
+  "thermal-128-cpu16.txt": [
+    "0"
+  ],
+  "thermal-128-mtk-mdla_shim.txt": [
+    "0"
+  ]
+}

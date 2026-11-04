@@ -1,0 +1,20 @@
+{
+  "thermal-256-litert-npu.txt": [
+    "0"
+  ],
+  "thermal-1024-nnapi-mdla.txt": [
+    "0"
+  ],
+  "thermal-256-nnapi-mdla.txt": [
+    "0"
+  ],
+  "thermal-1024-litert-npu.txt": [
+    "0"
+  ],
+  "thermal-512-litert-npu.txt": [
+    "0"
+  ],
+  "thermal-512-nnapi-mdla.txt": [
+    "0"
+  ]
+}

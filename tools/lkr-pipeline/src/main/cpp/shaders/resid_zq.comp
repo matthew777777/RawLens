@@ -1,0 +1,44 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// resid.comp reading the packed taps zq (zpack.comp): one vec4 load per
+// bilinear sample instead of four scalar loads; identical arithmetic.
+// Residual r_k = m (U_k z - y_k) for all K frames (paper Eq. 5, first half).
+// Written to r[K][h][w]; invalid (out-of-frame) and clipped samples get 0, so
+// the gather adjoint (zstep_gather.comp) needs no mask of its own.
+// mode 1: r = U z (power iteration); mode 2: r = 1 on valid samples (U^T 1).
+#define LKR_LOCAL_BINDING 4
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer ZQ { vec4 zq[]; };   // packed taps (zpack.comp)
+layout(std430, binding = 1) readonly buffer Y { float y[]; };
+layout(std430, binding = 2) readonly buffer P { float p[]; };
+layout(std430, binding = 3) writeonly buffer R { float r[]; };
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  int o = (k * pc.h + i) * pc.w + j;
+  float yv = y[o];
+  if (pc.mode == 0 && yv >= pc.f2) { r[o] = 0.0; return; }   // clipped: no data
+  int c = bayerChannel(i, j);
+  int base = c * pc.H * pc.W;
+  float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
+  float a3 = p[k * 6 + 3], a4 = p[k * 6 + 4], a5 = p[k * 6 + 5];
+  float sf = float(pc.s);
+  float sum = 0.0;
+  for (int oy = 0; oy < pc.s; ++oy)
+    for (int ox = 0; ox < pc.s; ++ox) {
+      vec2 u = subPos(i, j, ox, oy);
+      vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+      ivec2 x0; vec2 a;
+      if (!taps(q, x0, a)) { r[o] = 0.0; return; }        // invalid LR pixel
+      vec4 q4 = zq[base + x0.y * pc.W + x0.x];          // 4 taps, one load (zpack.comp)
+      sum += (q4.x * (1.0 - a.x) + q4.y * a.x) * (1.0 - a.y) +
+             (q4.z * (1.0 - a.x) + q4.w * a.x) * a.y;
+    }
+  float v = sum / (sf * sf);
+  float rv = pc.mode == 2 ? 1.0 : (pc.mode == 1 ? v : v - yv);
+  r[o] = rv;
+}

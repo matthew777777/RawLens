@@ -1,0 +1,49 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Temporal consistency weight of frame k: residual r = U_k z0 - y_k against
+// the REFERENCE-only start image z0. Low-pass test: the MEAN residual over a
+// 5x5 LR neighbourhood (single-frame demosaic / aliasing error alternates in
+// sign and cancels; real motion such as water caustics is coherent and does
+// not). var(mean) = 2 (a y + b) / n (frame k + reference noise) plus a
+// misregistration term (tau * gradient)^2 that does not average out.
+// Separable: pass 2 (columns) of weight_th.comp's row sums (binding 2).
+// w = 1 / (1 + e / k^2); reference frame 1. Writes wt (binding 3) only.
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer R { float r[]; };
+layout(std430, binding = 1) readonly buffer Y { float y[]; };
+layout(std430, binding = 2) readonly buffer TM { vec4 tmp[]; };   // row sums (weight_th.comp)
+layout(std430, binding = 3) writeonly buffer WT { float wt[]; };
+layout(std430, binding = 4) writeonly buffer U1 { float unused1[]; };
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  int base = k * pc.h * pc.w;
+  float w = 1.0;
+  if (k != 0) {
+    float sr = 0.0, sv = 0.0, n = 0.0;
+    for (int di = -2; di <= 2; ++di) {   // columns over the row sums (weight_th.comp)
+      vec4 q = tmp[base + clamp(i + di, 0, pc.h - 1) * pc.w + j];
+      sr += q.x;
+      sv += q.y;
+      n += q.z;
+    }
+    if (n > 0.0) {
+      int jl = clamp(j - 2, 0, pc.w - 1), jr = clamp(j + 2, 0, pc.w - 1);
+      int iu = clamp(i - 2, 0, pc.h - 1), id = clamp(i + 2, 0, pc.h - 1);
+      float gx = (y[base + i * pc.w + jr] - y[base + i * pc.w + jl]) * 0.25;
+      float gy = (y[base + id * pc.w + j] - y[base + iu * pc.w + j]) * 0.25;
+      float m = sr / n;
+      float var = max(2.0 * sv / (n * n) + pc.f3 * pc.f3 * (gx * gx + gy * gy), 1e-12);
+      // Dead zone: exactly 1 until the disagreement exceeds k sigma (pure
+      // noise never down-weights a frame -- the spread min-filter would turn
+      // soft noisy weights into a systematic loss), then Cauchy-like falloff.
+      float e = m * m / var, k2 = pc.rob_k * pc.rob_k;
+      w = 1.0 / (1.0 + max(e - k2, 0.0) / k2);
+    }
+  }
+  wt[base + i * pc.w + j] = w;
+}
