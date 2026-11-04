@@ -68,6 +68,10 @@ bool sampledRow(int r) { return ((uint(metaWords[64+((p.width+31)>>5)+(r>>5)])>>
 bool ownsStrip(int erosion) { int c=4*lane;return c>=erosion && c+3<64-erosion; }
 #define W(a,b,c,j) ((j)<4?a[(j)&3]:(j)<8?b[(j)&3]:c[(j)&3])
 #define AT(n,j) W(n##a,n##b,n##c,j)
+// Packed-FP16 element access: two values per register; with a runtime lane
+// index the component picks become selects.
+#define HU(u,i) unpackHalf2x16((i)<2?(u).x:(u).y)[(i)&1]
+#define ATP(n,j) ((j)<4?HU(n##a,(j)&3):(j)<8?HU(n##b,(j)&3):HU(n##c,(j)&3))
 // Twelve-pixel window x0-4..x0+7 from this lane and its neighbours. Must be
 // executed in subgroup-uniform control flow.
 #define WIN(n,u) vec4 n##a=U(subgroupShuffleUp(u,1u)),n##b=U(u),n##c=U(subgroupShuffleDown(u,1u))
@@ -78,7 +82,10 @@ float refine(float c,float a,float b,float d,float e,bool cardinal) {
 }
 float rcdInterpolate(float a,float b,float c) { return a*(b-c)+c; }
 
-void guides(int y0) {
+// part 0 (stage 0): VH direction + low-pass; part 1 (stage 7): diagonal PQ.
+// One walker for both exceeded Mali's register budget (spills, 4x more
+// load/store cycles); each part alone is spill-free.
+void guides(int y0,const int part) {
     // Lags: raw r; responses q=r-3; unrefined VH/PQ v=r-4; refined/LP z=r-5.
     uvec2 R0=uvec2(0u),R1=R0,R2=R0,R3=R0,R4=R0,R5=R0,R6=R0;
     uvec2 V0=R0,V1=R0,V2=R0,H0=R0,H1=R0,E0=R0,E1=R0,E2=R0,S0=R0,S1=R0,S2=R0;
@@ -139,17 +146,20 @@ void guides(int y0) {
                     : 0.0;
             }
             if(z>=y0 && z<y0+ROWS && ownsStrip(8) && stripInside(z)) {
-                planes[planeIndex(0,z)]=P(vh);if(needPq) planes[planeIndex(1,z)]=P(pq);planes[planeIndex(2,z)]=P(lp);
+                if(part==0) { planes[planeIndex(0,z)]=P(vh);planes[planeIndex(2,z)]=P(lp); }
+                else if(needPq) planes[planeIndex(1,z)]=P(pq);
             }
         }
     }
 }
 
 void greenMissing(int y0) {
-    // Lags: raw r; green t=r-4; missing m=r-6.
+    // Green only (the missing-colour step is its own walker, stage 4: sharing
+    // one walker pushed both past Mali's register limit and spilled).
+    // Lags: raw r; green t=r-4.
     uvec2 R0=uvec2(0u),R1=R0,R2=R0,R3=R0,R4=R0,R5=R0,R6=R0,R7=R0,R8=R0,R9=R0;
     uvec2 G0=R0,G1=R0,G2=R0,G3=R0,G4=R0;
-    for(int r=y0-10;r<y0+ROWS+6;++r) {
+    for(int r=y0-4;r<y0+ROWS+4;++r) {
         R0=R1;R1=R2;R2=R3;R3=R4;R4=R5;R5=R6;R6=R7;R7=R8;R8=R9;R9=loadRaw(r);
         int t=r-4;
         {
@@ -181,7 +191,18 @@ void greenMissing(int y0) {
             G0=G1;G1=G2;G2=G3;G3=G4;G4=P(g);
             if(t>=y0 && t<y0+ROWS && ownsStrip(8) && stripInside(t)) planes[planeIndex(3,t)]=G4;
         }
-        int m=r-6;
+    }
+}
+
+// Stage 4: RCD's missing-colour step (red at blue, blue at red) as its own
+// walker over the green plane. Raw history m-3..m+3, green m-2..m+2.
+void missingWalk(int y0) {
+    uvec2 R0=uvec2(0u),R1=R0,R2=R0,R3=R0,R4=R0,R5=R0,R6=R0;
+    uvec2 G0=R0,G1=R0,G2=R0,G3=R0,G4=R0;
+    for(int r=y0-3;r<y0+ROWS+3;++r) {
+        R0=R1;R1=R2;R2=R3;R3=R4;R4=R5;R5=R6;R6=loadRaw(r);
+        G0=G1;G1=G2;G2=G3;G3=G4;G4=loadPlane(3,r-1);
+        int m=r-3;
         // Light final (word 38) reads missing colour only at its own sampled
         // pixel: skip whole unsampled rows (subgroup-uniform branch).
         if(metaWords[38]==0 || (m>=0 && m<p.height && sampledRow(m))) {
@@ -207,7 +228,7 @@ void greenMissing(int y0) {
                 }
                 out4[i]=v;
             }
-            if(m>=y0 && m<y0+ROWS && ownsStrip(8) && stripInside(m)) planes[planeIndex(4,m)]=P(out4);
+            if(m>=y0 && m<y0+ROWS && ownsStrip(4) && stripInside(m)) planes[planeIndex(4,m)]=P(out4);
         }
     }
 }
@@ -272,6 +293,23 @@ void productFast(ivec2 site,vec3 sourceRgb,int lane4) {
 }
 // Same product equations per pixel (border pass, fused mode): exact
 // bilinear LSC evaluation, as productPixel.
+// productExact with the four LSC corners supplied (shared by a P010 cell).
+vec3 productCorners(ivec2 site,vec3 sourceRgb,vec4 c00,vec4 c10,vec4 c01,vec4 c11) {
+    precise vec3 rgb=sourceRgb;
+    precise vec3 t=clamp((rgb-vec3(0.70))/vec3(0.99-0.70),0.0,1.0);
+    precise vec3 white=t*t*(vec3(3.0)-2.0*t);
+    precise float blend=max(white.r,max(white.g,white.b));
+    rgb=rgb+(vec3(pMin)/pWb-rgb)*blend;
+    if(pLsc) {
+        precise float ny=lscY(site.y),nx=lscX(site.x);
+        precise vec4 a=c00+(c10-c00)*(nx-floor(nx));
+        precise vec4 b=c01+(c11-c01)*(nx-floor(nx));
+        precise vec4 gains=a+(b-a)*(ny-floor(ny));
+        rgb*=vec3(gains.x,0.5*(gains.y+gains.z),gains.w);
+    }
+    if(any(isnan(rgb)) || any(isinf(rgb)) || any(lessThan(rgb,vec3(0.0))) || any(greaterThan(rgb,vec3(65504.0)))) atomicOr(config[12],1u);
+    return rgb;
+}
 vec3 productExact(ivec2 site,vec3 sourceRgb) {
     precise vec3 rgb=sourceRgb;
     precise vec3 t=clamp((rgb-vec3(0.70))/vec3(0.99-0.70),0.0,1.0);
@@ -371,7 +409,7 @@ const int TROWS=8,TGROUPS=16,SROWS=TROWS+6,SGROUPS=TGROUPS+2;
 // Raw and missing colour share one 16-byte slot: one shared read serves both.
 shared uvec4 sRM[SROWS][SGROUPS];
 shared uvec2 sGrn[SROWS][SGROUPS];
-void tiledFinal() {
+void tiledFinal(const bool product) {
     const int W=p.width,H=p.height,n4=W*H/4;
     int g0=int(gl_WorkGroupID.x)*TGROUPS-1,ty0=int(gl_WorkGroupID.y)*TROWS-3;
     int t=int(gl_LocalInvocationIndex);
@@ -402,42 +440,51 @@ void tiledFinal() {
     if(f>=H || x0>=W || (metaWords[16]==0 && !sampledRow(f))) return;
     uvec4 q3u=sRM[rr-3][cc],q1u=sRM[rr-1][cc],q1d=sRM[rr+1][cc],q3d=sRM[rr+3][cc];
     precision mediump float;
-    productSetup();
-    vec4 r3u=U(q3u.xy),r1u=U(q1u.xy),r1d=U(q1d.xy),r3d=U(q3d.xy);
-    vec4 m3u=U(q3u.zw),m1u=U(q1u.zw),m1d=U(q1d.zw),m3d=U(q3d.zw);
-    vec4 g2u=U(sGrn[rr-2][cc]),g1u=U(sGrn[rr-1][cc]),g1d=U(sGrn[rr+1][cc]),g2d=U(sGrn[rr+2][cc]);
-    vec4 rca=U(qa.xy),rcb=U(qc.xy),rcc=U(qz.xy);
-    vec4 mca=U(qa.zw),mcb=U(qc.zw),mcc=U(qz.zw);
-    vec4 gca=U(ga),gcb=U(gc0),gcc=U(gz);
-    vec4 vh=U(planes[(f*W+x0)>>2]);
-    productRow(x0,f);
+    if(product) productSetup();
+    // Neighbourhood stays packed FP16 (two values per register) and is
+    // unpacked per use with constant lane indices: the unpacked vec4 set
+    // spilled 500 B on Mali-G615 (malioc). Same values, same arithmetic.
+    uvec2 r3u=q3u.xy,r1u=q1u.xy,r1d=q1d.xy,r3d=q3d.xy;
+    uvec2 m3u=q3u.zw,m1u=q1u.zw,m1d=q1d.zw,m3d=q3d.zw;
+    uvec2 g2u=sGrn[rr-2][cc],g1u=sGrn[rr-1][cc],g1d=sGrn[rr+1][cc],g2d=sGrn[rr+2][cc];
+    uvec2 rca=qa.xy,rcb=qc.xy,rcc=qz.xy;
+    uvec2 mca=qa.zw,mcb=qc.zw,mcc=qz.zw;
+    uvec2 gca=ga,gcb=gc0,gcc=gz;
+    uvec2 vh=planes[(f*W+x0)>>2];
+    if(product) productRow(x0,f);
     uint colBits=metaWords[17]!=0?15u:uint(metaWords[64+(x0>>5)])>>uint(x0&31);
-        for(int i=0;i<4;++i) {
-            int x=x0+i,j=i+4;
+        // Rolled (not expanded by unroll.py): four unrolled pixels with the
+        // product step spill on Mali-G615; packed accessors take the lane
+        // index as a select.
+        [[dont_unroll]] for(int i=0; i<4; ++i) {
+            int x=x0+i; int j=i+4;
             if(x>=p.width || ((colBits>>uint(i))&1u)==0u) continue;
             int c=color(x,f);
             vec3 result;
             // Canonical border pixels come from the border pass.
             if(!domain(x,f,9)) continue;
             else if(c!=1) {
-                float mm=AT(mc,j);
-                result=c==0?vec3(AT(rc,j),AT(gc,j),mm):vec3(mm,AT(gc,j),AT(rc,j));
+                float mm=ATP(mc,j);
+                result=c==0?vec3(ATP(rc,j),ATP(gc,j),mm):vec3(mm,ATP(gc,j),ATP(rc,j));
             } else {
-                float g0=AT(gc,j);
+                float g0=ATP(gc,j);
                 result=vec3(0.0,g0,0.0);
                 for(int kk=0;kk<=2;kk+=2) {
                     bool vk=color(x,f-1)==kk,hk=color(x-1,f)==kk;
-                    float n1=vk?r1u[i]:m1u[i],n3=vk?r3u[i]:m3u[i],s1=vk?r1d[i]:m1d[i],s3=vk?r3d[i]:m3d[i];
-                    float w1=hk?AT(rc,j-1):AT(mc,j-1),w3=hk?AT(rc,j-3):AT(mc,j-3),e1=hk?AT(rc,j+1):AT(mc,j+1),e3=hk?AT(rc,j+3):AT(mc,j+3);
-                    float ng=(eps+abs(g0-g2u[i]))+abs(s1-n1)+abs(n1-n3);
-                    float sg=(eps+abs(g0-g2d[i]))+abs(n1-s1)+abs(s1-s3);
-                    float wg=(eps+abs(g0-AT(gc,j-2)))+abs(e1-w1)+abs(w1-w3);
-                    float eg=(eps+abs(g0-AT(gc,j+2)))+abs(w1-e1)+abs(e1-e3);
-                    float ne=n1-g1u[i],se=s1-g1d[i],we=w1-AT(gc,j-1),ee=e1-AT(gc,j+1);
+                    float n1=vk?HU(r1u,i):HU(m1u,i),n3=vk?HU(r3u,i):HU(m3u,i),s1=vk?HU(r1d,i):HU(m1d,i),s3=vk?HU(r3d,i):HU(m3d,i);
+                    float w1=hk?ATP(rc,j-1):ATP(mc,j-1),w3=hk?ATP(rc,j-3):ATP(mc,j-3),e1=hk?ATP(rc,j+1):ATP(mc,j+1),e3=hk?ATP(rc,j+3):ATP(mc,j+3);
+                    float ng=(eps+abs(g0-HU(g2u,i)))+abs(s1-n1)+abs(n1-n3);
+                    float sg=(eps+abs(g0-HU(g2d,i)))+abs(n1-s1)+abs(s1-s3);
+                    float wg=(eps+abs(g0-ATP(gc,j-2)))+abs(e1-w1)+abs(w1-w3);
+                    float eg=(eps+abs(g0-ATP(gc,j+2)))+abs(w1-e1)+abs(e1-e3);
+                    float ne=n1-HU(g1u,i),se=s1-HU(g1d,i),we=w1-ATP(gc,j-1),ee=e1-ATP(gc,j+1);
                     float ve=(ng*se+sg*ne)/(ng+sg),he=(eg*we+wg*ee)/(eg+wg);
-                    result[kk]=g0+rcdInterpolate(vh[i],he,ve);
+                    result[kk]=g0+rcdInterpolate(HU(vh,i),he,ve);
                 }
             }
+#ifndef IMAGE_OUTPUT
+            if(!product) { halfOutput[f*p.width+x]=uvec2(packHalf2x16(result.rg),packHalf2x16(vec2(result.b,1.0)));continue; }
+#endif
             productFast(ivec2(x,f),max(vec3(0.0),result),i);
         }
     if(productBad) atomicOr(config[12],1u);
@@ -534,29 +581,6 @@ void borderPass() {
 }
 
 #ifndef IMAGE_OUTPUT
-// P010 frames, stage 4: the final pass for sampled source rows only. Product
-// RGB of sampled columns goes to an output-resolution FP16 buffer. Grading
-// here as well crossed Mali's register cliff (2-4x slower), so it is stage 5.
-int outIndex(int c,int outN,int srcN) {
-    int num=2*outN*c-srcN,o=num<=0?0:(num+2*srcN-1)/(2*srcN);
-    return o<outN && srcOf(o,outN,srcN)==c?o:-1;
-}
-void sampledFinal() {
-    int outW=metaWords[36],outH=metaWords[37],W=p.width,H=p.height;
-    for(int i=0;i<4;++i) laneOut[i]=x0+i<W?outIndex(x0+i,outW,W):-1;
-    for(int k=0;k<FINAL_ROWS;++k) {
-        int oy=int(gl_WorkGroupID.y)*FINAL_ROWS+k;
-        if(oy>=outH) return;
-        int f=srcOf(oy,outH,H);
-        oY=vec4(0.0);oU=oY;oV=oY;
-        finalRow(f,true);
-        if(!ownsStrip(4) || !stripInside(f)) continue;
-        for(int i=0;i<4;++i) {
-            int o=laneOut[i];
-            if(o>=0) halfOutput[oy*outW+o]=uvec2(packHalf2x16(vec2(oY[i],oU[i])),packHalf2x16(vec2(oV[i],1.0)));
-        }
-    }
-}
 // Stage 5: one invocation per 2x2 P010 cell (vf_gradeyuv layout and maths).
 float planeAt(int plane,int x,int y) {
     uvec2 v=planes[plane*(p.width*p.height/4)+((y*p.width+x)>>2)];
@@ -588,14 +612,42 @@ void lightPair(int xa,int xb,int y,out vec3 ra,out vec3 rb) {
     ra=productExact(ivec2(xa,y),max(vec3(0.0),sa));
     rb=productExact(ivec2(xb,y),max(vec3(0.0),sb));
 }
+// Non-light P010 cell: four interior samples share one LSC map cell almost
+// always, so its corners are fetched once (same equations as productExact).
+// Border samples were finished by the border pass.
+vec3 rawSample(int sx,int sy) { uvec2 w=halfOutput[sy*p.width+sx];return vec3(unpackHalf2x16(w.x),unpackHalf2x16(w.y).x); }
+void cellRgb(int xa,int xb,int ya,int yb,out vec3 a0,out vec3 a1,out vec3 b0,out vec3 b1) {
+    a0=rawSample(xa,ya);a1=rawSample(xb,ya);b0=rawSample(xa,yb);b1=rawSample(xb,yb);
+    bool ia=domain(xa,ya,9),ib=domain(xb,ya,9),ic=domain(xa,yb,9),id=domain(xb,yb,9);
+    int gx0=int(lscX(xa)),gx1=int(lscX(xb)),gy0=int(lscY(ya)),gy1=int(lscY(yb));
+    if(pLsc && ia && ib && ic && id && gx0==gx1 && gy0==gy1) {
+        int gxn=min(gx0+1,pCols-1),gyn=min(gy0+1,pRows-1);
+        vec4 c00=mapCorner(gx0,gy0),c10=mapCorner(gxn,gy0),c01=mapCorner(gx0,gyn),c11=mapCorner(gxn,gyn);
+        a0=productCorners(ivec2(xa,ya),max(vec3(0.0),a0),c00,c10,c01,c11);
+        a1=productCorners(ivec2(xb,ya),max(vec3(0.0),a1),c00,c10,c01,c11);
+        b0=productCorners(ivec2(xa,yb),max(vec3(0.0),b0),c00,c10,c01,c11);
+        b1=productCorners(ivec2(xb,yb),max(vec3(0.0),b1),c00,c10,c01,c11);
+        return;
+    }
+    if(ia) a0=productExact(ivec2(xa,ya),max(vec3(0.0),a0));
+    if(ib) a1=productExact(ivec2(xb,ya),max(vec3(0.0),a1));
+    if(ic) b0=productExact(ivec2(xa,yb),max(vec3(0.0),b0));
+    if(id) b1=productExact(ivec2(xb,yb),max(vec3(0.0),b1));
+}
 vec3 sampledRgb(int ox,int oy) {
     if(metaWords[38]!=0) return lightRgb(srcOf(ox,metaWords[36],p.width)+metaWords[39],srcOf(oy,metaWords[37],p.height)+metaWords[40]);
+    int sx=srcOf(ox,metaWords[36],p.width)+metaWords[39],sy=srcOf(oy,metaWords[37],p.height)+metaWords[40];
+    uvec2 w=halfOutput[sy*p.width+sx];
+    vec3 rgb=vec3(unpackHalf2x16(w.x),unpackHalf2x16(w.y).x);
+    // Interior samples hold plain RCD RGB (stage 2); border samples were
+    // finished by the border pass.
+    return domain(sx,sy,9)?productExact(ivec2(sx,sy),max(vec3(0.0),rgb)):rgb;
     uvec2 v=halfOutput[(srcOf(oy,metaWords[37],p.height)+metaWords[40])*p.width+srcOf(ox,metaWords[36],p.width)+metaWords[39]];return vec3(unpackHalf2x16(v.x),unpackHalf2x16(v.y).x); }
 void gradePass() {
     int outW=metaWords[36],outH=metaWords[37];
     int kc=int(gl_GlobalInvocationID.x),j=int(gl_WorkGroupID.y),o0=2*kc;
     if(o0>=outW || 2*j>=outH) return;
-    if(metaWords[38]!=0) productSetup();
+    productSetup();
     vec3 a0,a1,b0,b1;
     if(metaWords[38]!=0) {
         int xa=srcOf(o0,outW,p.width)+metaWords[39],xb=srcOf(o0+1,outW,p.width)+metaWords[39];
@@ -603,8 +655,10 @@ void gradePass() {
         lightPair(xa,xb,srcOf(2*j+1,outH,p.height)+metaWords[40],b0,b1);
         a0=gradeYuvOf(a0);a1=gradeYuvOf(a1);b0=gradeYuvOf(b0);b1=gradeYuvOf(b1);
     } else {
-        a0=gradeYuvOf(sampledRgb(o0,2*j));a1=gradeYuvOf(sampledRgb(o0+1,2*j));
-        b0=gradeYuvOf(sampledRgb(o0,2*j+1));b1=gradeYuvOf(sampledRgb(o0+1,2*j+1));
+        int xa=srcOf(o0,outW,p.width)+metaWords[39],xb=srcOf(o0+1,outW,p.width)+metaWords[39];
+        int ya=srcOf(2*j,outH,p.height)+metaWords[40],yb=srcOf(2*j+1,outH,p.height)+metaWords[40];
+        cellRgb(xa,xb,ya,yb,a0,a1,b0,b1);
+        a0=gradeYuvOf(a0);a1=gradeYuvOf(a1);b0=gradeYuvOf(b0);b1=gradeYuvOf(b1);
     }
     int yStride=metaWords[21];
     uint yIdx=uint(2*j)*uint(yStride)+uint(o0);
@@ -618,7 +672,11 @@ void gradePass() {
 
 void main() {
     int stage=algorithmPass<0?p.stage:algorithmPass;
-    if(stage==6) { if(metaWords[38]==0) tiledFinal();return; }
+    // Stage 6: tiled final with the product step (RGB output). Stage 2: the
+    // same tile without it (P010 frames; stage 5 applies the product), which
+    // keeps the pass free of register spills.
+    if(stage==6) { if(metaWords[38]==0) tiledFinal(true);return; }
+    if(stage==2) { if(metaWords[38]==0) tiledFinal(false);return; }
     if(stage==3) { borderPass();return; }
 #ifndef IMAGE_OUTPUT
     if(stage==5) { gradePass();return; }
@@ -628,8 +686,8 @@ void main() {
     band0=int(gl_WorkGroupID.x)*stride-erosion;
     x0=band0+4*lane;
     int y0=int(gl_WorkGroupID.y)*ROWS;
-    if(stage==0) guides(y0); else if(stage==1) greenMissing(y0); else if(stage==2) { if(metaWords[38]!=0) return; else for(int k=0;k<FINAL_ROWS;++k) finalRow(int(gl_WorkGroupID.y)*FINAL_ROWS+k,false); }
+    if(stage==0) guides(y0,0); else if(stage==7) guides(y0,1); else if(stage==1) greenMissing(y0); else if(stage==2) { if(metaWords[38]!=0) return; else for(int k=0;k<FINAL_ROWS;++k) finalRow(int(gl_WorkGroupID.y)*FINAL_ROWS+k,false); }
 #ifndef IMAGE_OUTPUT
-    else if(stage==4) sampledFinal();
+    else if(stage==4) missingWalk(y0);
 #endif
 }

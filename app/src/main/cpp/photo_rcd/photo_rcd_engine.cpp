@@ -89,12 +89,6 @@ struct Engine::State {
   // rows are copied into the idle half while the GPU still reads the other.
   int stagingHalf = 0, recordedStagingHalf = 0;
   size_t stagingSlot() const { return (rawBytes + 255) & ~size_t(255); }
-  // Frame-global final step: tiled shared-memory pass 6 (default) or the
-  // subgroup row pass 2 (PHOTO_RCD_TILED=0, validation A/B only).
-  static int finalStage() {
-    const char *tiled = std::getenv("PHOTO_RCD_TILED");
-    return tiled && tiled[0] == '0' ? 2 : 6;
-  }
   bool frameMatches(int w, int h, uint32_t cfaPhase, bool half, size_t rawCapacity) const {
     return width == w && height == h && phase == cfaPhase && halfFrame == half &&
            rawBytes == rawCapacity && builtP010 == p010Frame;
@@ -737,8 +731,8 @@ struct Engine::State {
     if (half)
       stages.push_back(6);
     if (tileLocal && half)
-      stages = frameGlobal ? (p010Frame ? std::vector<int>{0, 1, 3, finalStage(), 5}
-                                        : std::vector<int>{0, 1, finalStage(), 3})
+      stages = frameGlobal ? (p010Frame ? std::vector<int>{0, 7, 1, 4, 3, 2, 5}
+                                        : std::vector<int>{0, 7, 1, 4, 6, 3})
                            : std::vector<int>{7, 3, 5};
     if (frameGlobal && !half)
       throw std::invalid_argument("frame-global RCD has no FP32 readback mode");
@@ -756,15 +750,15 @@ struct Engine::State {
       const int edge = tiledReconstruction ? 16 : 8;
       const int dispatchX = tileLocal ? int(coreX) : edge,
                 dispatchY = tileLocal ? int(coreY) : edge;
-      if (stage == 7 && rawInput)
+      if (stage == 7 && rawInput && !frameGlobal)
         vkCmdDispatch(command, ((w + 1) / 2 + 7) / 8, ((h + 1) / 2 + 7) / 8, 1);
-      else if (frameGlobal && stage == 4)
-        // Sampled final pass: 56-pixel bands, 8 output rows per group.
-        vkCmdDispatch(command, (w + 55) / 56, (p010H + 7) / 8, 1);
       else if (frameGlobal && stage == 5)
         // Grade + P010 pack: one invocation per 2x2 output cell.
         vkCmdDispatch(command, (p010W / 2 + 15) / 16, p010H / 2, 1);
-      else if (frameGlobal && stage == 6)
+      else if (frameGlobal && stage == 4)
+        // Missing-colour walker: 56-pixel bands (erosion 4), 128-row blocks.
+        vkCmdDispatch(command, (w + 55) / 56, (h + 127) / 128, 1);
+      else if (frameGlobal && (stage == 6 || stage == 2))
         // Tiled final: 64x8-pixel tiles, 16x8 workgroups.
         vkCmdDispatch(command, (w + 63) / 64, (h + 7) / 8, 1);
       else if (frameGlobal && stage == 3)
@@ -1284,6 +1278,7 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
               "main",
               nullptr};
   VkResult result = VK_SUCCESS;
+  int failedPass = -1;
   for (int pass = 0;
        pass < (specializePasses ? ((cacheResponses || s.rawInput) ? 8 : 7) : 1);
        ++pass) {
@@ -1291,12 +1286,13 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
       continue;
     // id 9: algorithm pass; id 12: workgroup height (8 for the tiled final
     // pass 6 of the frame-global shader; other shaders ignore it).
-    const int32_t specData[2] = {pass, pass == 6 ? 8 : 1};
+    const int32_t specData[2] = {pass, pass == 6 || (pass == 2 && s.frameGlobal) ? 8 : 1};
     const VkSpecializationMapEntry entries[2] = {{9, 0, 4}, {12, 4, 4}};
     VkSpecializationInfo specialization{2, entries, sizeof(specData), specData};
     pi.stage.pSpecializationInfo = specializePasses ? &specialization : nullptr;
     VkShaderModule baked = VK_NULL_HANDLE;
-    if (!stageShaders.empty() || (s.rawInput && pass == 7)) {
+    // Frame-global never runs the raw-pack pass: its pass 7 is the PQ walker.
+    if (!stageShaders.empty() || (s.rawInput && pass == 7 && !s.frameGlobal)) {
       const auto &program =
           (s.rawInput && pass == 7) ? rawPackShader : stageShaders[pass];
       VkShaderModuleCreateInfo info{
@@ -1313,11 +1309,14 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
                                       &s.pipelines[pass]);
     if (baked)
       vkDestroyShaderModule(s.device, baked, nullptr);
-    if (result != VK_SUCCESS)
+    if (result != VK_SUCCESS) {
+      failedPass = pass;
       break;
+    }
   }
   vkDestroyShaderModule(s.device, module, nullptr);
-  ok(result, "create RCD pipeline");
+  if (result != VK_SUCCESS)
+    ok(result, ("create RCD pipeline (pass " + std::to_string(failedPass) + ")").c_str());
   VkCommandPoolCreateInfo pc{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
   pc.queueFamilyIndex = s.family;
   ok(vkCreateCommandPool(s.device, &pc, nullptr, &s.commandPool),
