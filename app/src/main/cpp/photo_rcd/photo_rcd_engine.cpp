@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
@@ -88,6 +89,12 @@ struct Engine::State {
   // rows are copied into the idle half while the GPU still reads the other.
   int stagingHalf = 0, recordedStagingHalf = 0;
   size_t stagingSlot() const { return (rawBytes + 255) & ~size_t(255); }
+  // Frame-global final step: tiled shared-memory pass 6 (default) or the
+  // subgroup row pass 2 (PHOTO_RCD_TILED=0, validation A/B only).
+  static int finalStage() {
+    const char *tiled = std::getenv("PHOTO_RCD_TILED");
+    return tiled && tiled[0] == '0' ? 2 : 6;
+  }
   bool frameMatches(int w, int h, uint32_t cfaPhase, bool half, size_t rawCapacity) const {
     return width == w && height == h && phase == cfaPhase && halfFrame == half &&
            rawBytes == rawCapacity && builtP010 == p010Frame;
@@ -730,8 +737,8 @@ struct Engine::State {
     if (half)
       stages.push_back(6);
     if (tileLocal && half)
-      stages = frameGlobal ? (p010Frame ? std::vector<int>{0, 1, 3, 2, 5}
-                                        : std::vector<int>{0, 1, 2, 3})
+      stages = frameGlobal ? (p010Frame ? std::vector<int>{0, 1, 3, finalStage(), 5}
+                                        : std::vector<int>{0, 1, finalStage(), 3})
                            : std::vector<int>{7, 3, 5};
     if (frameGlobal && !half)
       throw std::invalid_argument("frame-global RCD has no FP32 readback mode");
@@ -757,6 +764,9 @@ struct Engine::State {
       else if (frameGlobal && stage == 5)
         // Grade + P010 pack: one invocation per 2x2 output cell.
         vkCmdDispatch(command, (p010W / 2 + 15) / 16, p010H / 2, 1);
+      else if (frameGlobal && stage == 6)
+        // Tiled final: 64x8-pixel tiles, 16x8 workgroups.
+        vkCmdDispatch(command, (w + 63) / 64, (h + 7) / 8, 1);
       else if (frameGlobal && stage == 3)
         vkCmdDispatch(command, (2 * 9 * w + 18 * (h - 18) + 15) / 16, 1, 1);
       else if (frameGlobal)
@@ -1279,8 +1289,11 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
        ++pass) {
     if (pass == 5 && !s.frameGlobal && !(s.rawInput && (cacheResponses || tileLocal)))
       continue;
-    VkSpecializationMapEntry entry{9, 0, sizeof(pass)};
-    VkSpecializationInfo specialization{1, &entry, sizeof(pass), &pass};
+    // id 9: algorithm pass; id 12: workgroup height (8 for the tiled final
+    // pass 6 of the frame-global shader; other shaders ignore it).
+    const int32_t specData[2] = {pass, pass == 6 ? 8 : 1};
+    const VkSpecializationMapEntry entries[2] = {{9, 0, 4}, {12, 4, 4}};
+    VkSpecializationInfo specialization{2, entries, sizeof(specData), specData};
     pi.stage.pSpecializationInfo = specializePasses ? &specialization : nullptr;
     VkShaderModule baked = VK_NULL_HANDLE;
     if (!stageShaders.empty() || (s.rawInput && pass == 7)) {

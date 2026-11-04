@@ -63,6 +63,19 @@ class PhotoRcdRecordingDeviceTest {
             photoRcdTrace=trace;allowThermalDegrade=false;audioEnabled=true;stabEnabled=false
             onRecordingError={ message -> report.put("recordingError",message) }
         }
+        // foreground=true: keep MainActivity on screen (camera released) for the
+        // take, so the process runs with top-app CPU/GPU priority like real use.
+        val foreground=if(args.getString("foreground")=="true") {
+            context.getSharedPreferences("rawlens_settings",android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("lens_setup_complete",true).commit()
+            val activity=instrumentation.startActivitySync(android.content.Intent(context,MainActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+            SystemClock.sleep(1500)
+            instrumentation.runOnMainSync { activity.controller.stop() }
+            SystemClock.sleep(500)
+            activity
+        } else null
+        report.put("foreground",foreground!=null)
         val power=context.getSystemService(PowerManager::class.java)
         val intervals=JSONArray();report.put("intervals",intervals)
         var started=false
@@ -95,6 +108,7 @@ class PhotoRcdRecordingDeviceTest {
             throw e
         } finally {
             if(started)runCatching { recorder.stop() }.onFailure { report.put("stopError",it.stackTraceToString()) }
+            foreground?.let { activity -> instrumentation.runOnMainSync { activity.finish() } }
             report.put("trace",trace.json()).put("endWallNs",SystemClock.elapsedRealtimeNanos())
             File(directory,"$label.json").writeText(report.toString(2))
         }

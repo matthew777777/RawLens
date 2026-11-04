@@ -18,7 +18,9 @@
 #extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_EXT_control_flow_attributes : require
-layout(local_size_x=16) in;
+// Stage 6 (tiled final) specializes a 16x8 workgroup; every other stage is
+// one 16-lane subgroup.
+layout(local_size_x=16,local_size_y_id=12) in;
 // Border pass uses the same 16-wide groups over a 1D border index.
 // RAW16 source words (binding 9); normalized in-shader, so no CFA pass.
 layout(binding=9,std430) readonly restrict buffer Source { uvec2 sourcePairs[]; };
@@ -360,6 +362,87 @@ vec4 oY,oU,oV;
 // once per invocation (integer division is slow on Mali).
 ivec4 laneOut;
 
+// Stage 6: the final step as a shared-memory tile (standard GPU stencil
+// staging). A 16x8 workgroup owns 64x8 pixels; normalized raw, green and
+// missing colour for the tile plus a 3-row / 4-pixel halo are fetched from
+// global memory once, then every neighbour read hits shared memory. The
+// per-pixel RCD arithmetic is finalRow's, unchanged.
+const int TROWS=8,TGROUPS=16,SROWS=TROWS+6,SGROUPS=TGROUPS+2;
+// Raw and missing colour share one 16-byte slot: one shared read serves both.
+shared uvec4 sRM[SROWS][SGROUPS];
+shared uvec2 sGrn[SROWS][SGROUPS];
+void tiledFinal() {
+    const int W=p.width,H=p.height,n4=W*H/4;
+    int g0=int(gl_WorkGroupID.x)*TGROUPS-1,ty0=int(gl_WorkGroupID.y)*TROWS-3;
+    int t=int(gl_LocalInvocationIndex);
+    for(int k=t;k<SROWS*SGROUPS;k+=TGROUPS*TROWS) {
+        int r=k/SGROUPS,c=k-r*SGROUPS,y=ty0+r,gx=(g0+c)*4;
+        bool ok=y>=0 && y<H && gx>=0 && gx<W;
+        uvec2 raw=uvec2(0u),mis=uvec2(0u),grn=uvec2(0u);
+        if(ok) {
+            x0=gx;
+            raw=P(normalizeCodes(sourcePairs[(uint(y+m.top)*uint(m.rowBytes)+uint(gx+m.left)*2u)>>3u],y));
+            int idx=(y*W+gx)>>2;
+            mis=planes[4*n4+idx];grn=planes[3*n4+idx];
+        }
+        sRM[r][c]=uvec4(raw,mis);sGrn[r][c]=grn;
+    }
+    barrier();
+    int lx=int(gl_LocalInvocationID.x),ly=int(gl_LocalInvocationID.y);
+    int f=ty0+3+ly,cc=lx+1,rr=ly+3;
+    x0=(g0+cc)*4;
+    // Shuffles first: every lane of the row must take part.
+    uvec4 qc=sRM[rr][cc];uvec2 gc0=sGrn[rr][cc];
+    // Horizontal neighbours: shuffles within the 16-lane row; the two edge
+    // lanes read their halo group from shared memory.
+    uvec4 qa=subgroupShuffleUp(qc,1u),qz=subgroupShuffleDown(qc,1u);
+    uvec2 ga=subgroupShuffleUp(gc0,1u),gz=subgroupShuffleDown(gc0,1u);
+    if(lx==0) { qa=sRM[rr][0];ga=sGrn[rr][0]; }
+    if(lx==TGROUPS-1) { qz=sRM[rr][SGROUPS-1];gz=sGrn[rr][SGROUPS-1]; }
+    if(f>=H || x0>=W || (metaWords[16]==0 && !sampledRow(f))) return;
+    uvec4 q3u=sRM[rr-3][cc],q1u=sRM[rr-1][cc],q1d=sRM[rr+1][cc],q3d=sRM[rr+3][cc];
+    precision mediump float;
+    productSetup();
+    vec4 r3u=U(q3u.xy),r1u=U(q1u.xy),r1d=U(q1d.xy),r3d=U(q3d.xy);
+    vec4 m3u=U(q3u.zw),m1u=U(q1u.zw),m1d=U(q1d.zw),m3d=U(q3d.zw);
+    vec4 g2u=U(sGrn[rr-2][cc]),g1u=U(sGrn[rr-1][cc]),g1d=U(sGrn[rr+1][cc]),g2d=U(sGrn[rr+2][cc]);
+    vec4 rca=U(qa.xy),rcb=U(qc.xy),rcc=U(qz.xy);
+    vec4 mca=U(qa.zw),mcb=U(qc.zw),mcc=U(qz.zw);
+    vec4 gca=U(ga),gcb=U(gc0),gcc=U(gz);
+    vec4 vh=U(planes[(f*W+x0)>>2]);
+    productRow(x0,f);
+    uint colBits=metaWords[17]!=0?15u:uint(metaWords[64+(x0>>5)])>>uint(x0&31);
+        for(int i=0;i<4;++i) {
+            int x=x0+i,j=i+4;
+            if(x>=p.width || ((colBits>>uint(i))&1u)==0u) continue;
+            int c=color(x,f);
+            vec3 result;
+            // Canonical border pixels come from the border pass.
+            if(!domain(x,f,9)) continue;
+            else if(c!=1) {
+                float mm=AT(mc,j);
+                result=c==0?vec3(AT(rc,j),AT(gc,j),mm):vec3(mm,AT(gc,j),AT(rc,j));
+            } else {
+                float g0=AT(gc,j);
+                result=vec3(0.0,g0,0.0);
+                for(int kk=0;kk<=2;kk+=2) {
+                    bool vk=color(x,f-1)==kk,hk=color(x-1,f)==kk;
+                    float n1=vk?r1u[i]:m1u[i],n3=vk?r3u[i]:m3u[i],s1=vk?r1d[i]:m1d[i],s3=vk?r3d[i]:m3d[i];
+                    float w1=hk?AT(rc,j-1):AT(mc,j-1),w3=hk?AT(rc,j-3):AT(mc,j-3),e1=hk?AT(rc,j+1):AT(mc,j+1),e3=hk?AT(rc,j+3):AT(mc,j+3);
+                    float ng=(eps+abs(g0-g2u[i]))+abs(s1-n1)+abs(n1-n3);
+                    float sg=(eps+abs(g0-g2d[i]))+abs(n1-s1)+abs(s1-s3);
+                    float wg=(eps+abs(g0-AT(gc,j-2)))+abs(e1-w1)+abs(w1-w3);
+                    float eg=(eps+abs(g0-AT(gc,j+2)))+abs(w1-e1)+abs(e1-e3);
+                    float ne=n1-g1u[i],se=s1-g1d[i],we=w1-AT(gc,j-1),ee=e1-AT(gc,j+1);
+                    float ve=(ng*se+sg*ne)/(ng+sg),he=(eg*we+wg*ee)/(eg+wg);
+                    result[kk]=g0+rcdInterpolate(vh[i],he,ve);
+                }
+            }
+            productFast(ivec2(x,f),max(vec3(0.0),result),i);
+        }
+    if(productBad) atomicOr(config[12],1u);
+}
+
 void finalRow(int f,bool fused) {
     if(!fused && (f>=p.height || (metaWords[16]==0 && !sampledRow(f)))) return;
     // FP16 arithmetic (RelaxedPrecision) for the final colour step: -3.5 ms
@@ -535,6 +618,7 @@ void gradePass() {
 
 void main() {
     int stage=algorithmPass<0?p.stage:algorithmPass;
+    if(stage==6) { if(metaWords[38]==0) tiledFinal();return; }
     if(stage==3) { borderPass();return; }
 #ifndef IMAGE_OUTPUT
     if(stage==5) { gradePass();return; }
