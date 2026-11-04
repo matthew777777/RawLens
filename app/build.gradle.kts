@@ -141,6 +141,13 @@ if (isPackagingBuild && !freezeVersion) {
 }
 
 android {
+    // LiteRT loads its vendor dispatch / compiler plugins from a real
+    // directory (nativeLibraryDir): extract native libraries on install.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
     namespace = "com.matthew.rawlens"
     compileSdk = 37
     // Pinned so local, CI, and F-Droid builds use the same NDK.
@@ -312,6 +319,7 @@ android {
             if (project.hasProperty("mhcHeadless")) applicationIdSuffix = ".mhccheck"
             if (project.hasProperty("recordingToolsAudit")) applicationIdSuffix = ".recordingcheck"
             if (project.hasProperty("waveletCheck")) applicationIdSuffix = ".waveletcheck"
+            if (project.hasProperty("lkrCheck")) applicationIdSuffix = ".lkrcheck"
             isMinifyEnabled = false
             // Resource shrinking requires code shrinking (AGP enforces
             // the pair); tests keep the full resource set instead.
@@ -441,10 +449,18 @@ tasks.matching { it.name == "processFdroidReleaseMainManifest" }.configureEach {
 
 dependencies {
     implementation("com.google.android.material:material:1.14.0")
+    // LK-Reloaded FFDNet prior on the NPU (tools/lkr-pipeline lkr_litert.cpp,
+    // dlopen'ed: devices without the MediaTek runtime fall back to ncnn).
+    // Only the AARs' native libraries are used (never the LiteRT Java API), so
+    // no transitive deps: litert pulls WorkManager + Room, whose R8-stripped
+    // WorkDatabase crashed release startup (androidx.startup provider).
+    implementation("com.google.ai.edge.litert:litert:2.3.2") { isTransitive = false }
+    implementation("com.google.ai.edge.litert:litert-npu-runtime-mediatek:2.3.2") { isTransitive = false }
     // Unified SR pipeline (Kotlin stages + SrpBridge JNI facade, single
     // truth with tools/sr-pipeline; its native half builds as
     // libsrpipeline.so from the same sources via app CMake).
     implementation(project(":tools:sr-pipeline"))
+    implementation("androidx.media3:media3-muxer:1.10.0")
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("androidx.core:core-ktx:1.19.1")
     // Installs the Baseline Profile (src/main/baseline-prof.txt) at
