@@ -120,6 +120,67 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         }
         var programSettings = programProfile()
         fun applyProgramSettings() = saveProgramProfile(programSettings)
+        val curveControls = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL }
+        content.addView(Button(this).apply {
+            fun refresh() { text = "Scene brightness: ${programSettings.brightnessTuning.label} • tap to switch" }
+            refresh()
+            setOnClickListener {
+                val modes = ProgramBrightnessTuning.values()
+                programSettings = programSettings.copy(
+                    brightnessTuning = modes[(programSettings.brightnessTuning.ordinal + 1) % modes.size]
+                )
+                applyProgramSettings()
+                curveControls.visibility = if (programSettings.brightnessTuning == ProgramBrightnessTuning.FIXED) View.GONE else View.VISIBLE
+                refresh()
+            }
+        })
+        content.addView(sectionDesc("Natural preserves darker scenes by adapting the exposure target to scene brightness. Fixed uses the same target in every scene. Protect highlights also limits bright areas. Adaptive curves are experimental. Saved per lens."))
+        content.addView(curveControls)
+        curveControls.visibility = if (programSettings.brightnessTuning == ProgramBrightnessTuning.FIXED) View.GONE else View.VISIBLE
+        curveControls.addView(sectionDesc("Exposure targets as a percentage of linear RAW brightness. Lower values keep the scene darker; higher values increase sensor exposure. Bias applies on top. The curve blends smoothly between these four scene levels."))
+        val targetSliders = mutableListOf<SettingsSlider>()
+        val targetNames = listOf("Dark scene", "Dim scene", "Normal scene", "Bright scene")
+        fun target(index: Int): Double = when (index) {
+            0 -> programSettings.darkTarget
+            1 -> programSettings.dimTarget
+            2 -> programSettings.normalTarget
+            else -> programSettings.brightTarget
+        }
+        targetNames.forEachIndexed { index, name ->
+            val label = sectionDesc("")
+            fun refreshLabel() { label.text = String.format(Locale.US, "%s target: %.0f%%", name, target(index) * 100) }
+            refreshLabel()
+            curveControls.addView(label)
+            val slider = SettingsSlider(this).apply {
+                max = 49
+                progress = Math.round(target(index) * 100).toInt() - 1
+                setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                    override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
+                        val value = (progress + 1) / 100.0
+                        programSettings = when (index) {
+                            0 -> programSettings.copy(darkTarget = value)
+                            1 -> programSettings.copy(dimTarget = value)
+                            2 -> programSettings.copy(normalTarget = value)
+                            else -> programSettings.copy(brightTarget = value)
+                        }
+                        refreshLabel()
+                        if (fromUser) applyProgramSettings()
+                    }
+                    override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                    override fun onStopTrackingTouch(seekBar: SettingsSlider) = applyProgramSettings()
+                })
+            }
+            targetSliders.add(slider)
+            curveControls.addView(slider)
+        }
+        curveControls.addView(Button(this).apply {
+            text = "Reset brightness targets"
+            setOnClickListener {
+                programSettings = programSettings.copy(darkTarget = 0.06, dimTarget = 0.10, normalTarget = 0.16, brightTarget = 0.18)
+                targetSliders.forEachIndexed { index, slider -> slider.progress = Math.round(target(index) * 100).toInt() - 1 }
+                applyProgramSettings()
+            }
+        })
         val programBalanceLabel = TextView(this).apply {
             text = programBalanceText(programSettings.balance)
             setTextColor(getColor(R.color.text_primary))

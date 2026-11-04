@@ -39,7 +39,7 @@ enum class ProgramBrightnessTuning(val label: String) {
 
     companion object {
         fun fromName(name: String?): ProgramBrightnessTuning =
-            values().firstOrNull { it.name == name } ?: FIXED
+            values().firstOrNull { it.name == name } ?: NATURAL
     }
 }
 
@@ -64,9 +64,14 @@ data class ProgramAeProfile(
     val lockedShutterNanos: Long = 0L,
     val evBias: Float = 0f,
     val metering: ProgramMetering = ProgramMetering.CENTER_WEIGHTED,
-    val brightnessTuning: ProgramBrightnessTuning = ProgramBrightnessTuning.FIXED
+    val brightnessTuning: ProgramBrightnessTuning = ProgramBrightnessTuning.NATURAL,
+    val darkTarget: Double = 0.06,
+    val dimTarget: Double = 0.10,
+    val normalTarget: Double = 0.16,
+    val brightTarget: Double = 0.18
 ) {
     fun validated(): ProgramAeProfile {
+        require(listOf(darkTarget, dimTarget, normalTarget, brightTarget).all { it.isFinite() && it in 0.01..0.50 }) { "Brightness targets must be between 1% and 50%" }
         require(balance.isFinite()) { "Balance must be finite" }
         require(evBias.isFinite()) { "EV bias must be finite" }
         if (isoMin > 0 && isoMax > 0) require(isoMin <= isoMax) { "ISO min must be <= max" }
@@ -93,6 +98,10 @@ data class ProgramAeProfile(
         append("\"evBias\":").append(evBias).append(",")
         append("\"metering\":\"").append(metering.name).append("\"")
         append(",\"brightnessTuning\":\"").append(brightnessTuning.name).append("\"")
+        append(",\"darkTarget\":").append(darkTarget)
+        append(",\"dimTarget\":").append(dimTarget)
+        append(",\"normalTarget\":").append(normalTarget)
+        append(",\"brightTarget\":").append(brightTarget)
         append("}")
     }
 
@@ -138,7 +147,11 @@ data class ProgramAeProfile(
                     lockedShutterNanos = number("lockedShutterNanos")?.toDoubleOrNull()?.toLong() ?: 0L,
                     evBias = number("evBias")?.toFloatOrNull() ?: 0f,
                     metering = ProgramMetering.fromName(text("metering")),
-                    brightnessTuning = ProgramBrightnessTuning.fromName(text("brightnessTuning"))
+                    brightnessTuning = ProgramBrightnessTuning.fromName(text("brightnessTuning")),
+                    darkTarget = number("darkTarget")?.toDoubleOrNull() ?: 0.06,
+                    dimTarget = number("dimTarget")?.toDoubleOrNull() ?: 0.10,
+                    normalTarget = number("normalTarget")?.toDoubleOrNull() ?: 0.16,
+                    brightTarget = number("brightTarget")?.toDoubleOrNull() ?: 0.18
                 ).validated()
             }.getOrNull() ?: ProgramAeProfile()
         }

@@ -91,7 +91,7 @@ internal class ProgramAeLoop {
         val subject = if (profile.metering == ProgramMetering.HIGHLIGHT_WEIGHTED)
             RawProgramMeter.meanBrightness(sample).toDouble() else metered
         val tuning = ProgramBrightnessCurve.evaluate(
-            profile.brightnessTuning, subject, currentIso, currentShutterNanos
+            profile.brightnessTuning, subject, currentIso, currentShutterNanos, profile
         )
         val constraintMode = if (profile.brightnessTuning == ProgramBrightnessTuning.HIGHLIGHTS)
             ProgramAgc.ConstraintMode.HIGHLIGHT else mode
