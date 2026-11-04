@@ -316,6 +316,14 @@ internal fun MainActivity.videoRecordLocks(): VideoRecordLocks =
 
 /** Range source follows the camera owner: recorder while rolling, controller otherwise. */
 internal fun MainActivity.manualRangeFor(control: ManualControl): ManualControlRange? {
+    if (control == ManualControl.WHITE_BALANCE && controller.wbPresetsEnabled) {
+        val options = controller.whiteBalancePresets()
+        if (options.isEmpty()) return null
+        val selected = controller.snapshotVideoManual().wbPreset
+        val index = options.indexOfFirst { it.first == selected }.coerceAtLeast(0)
+        return ManualControlRange(0, options.lastIndex.toLong(), index.toLong(),
+            selected == android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE_AUTO)
+    }
     if (videoRecording) {
         runCatching { videoRecorder?.videoControlRange(control) }.getOrNull()?.let { return it }
         runCatching { encodedVideoRecorder?.videoControlRange(control) }.getOrNull()?.let { return it }
@@ -325,6 +333,19 @@ internal fun MainActivity.manualRangeFor(control: ManualControl): ManualControlR
 }
 
 internal fun MainActivity.setManualValueFor(control: ManualControl, value: Long?, fromFocusPull: Boolean = false) {
+    if (control == ManualControl.WHITE_BALANCE && controller.wbPresetsEnabled) {
+        val options = controller.whiteBalancePresets()
+        val mode = if (value == null) android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE_AUTO
+            else options.getOrNull(value.toInt())?.first ?: return
+        controller.setWhiteBalancePreset(mode) { runOnUiThread {
+            syncRecordingWhiteBalance()
+            if (activeManualControl == ManualControl.WHITE_BALANCE) {
+                manualAuto.isEnabled = mode != android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE_AUTO
+                if (value == null) showManualControl(ManualControl.WHITE_BALANCE, allowToggle = false)
+            }
+        } }
+        return
+    }
     if (control == ManualControl.FOCUS_DISTANCE && !fromFocusPull) recordingTools.cancelFocusPull()
     if (videoRecording) {
         if (control == ManualControl.WHITE_BALANCE) controller.setManualControl(control, value)
@@ -399,7 +420,8 @@ internal fun MainActivity.showManualControl(control: ManualControl, allowToggle:
     // accessibility descriptions.
     manualLimits.visibility = View.GONE
     manualSlider.label = shortControlName(control)
-    manualSlider.max = SLIDER_STEPS
+    manualSlider.max = if (control == ManualControl.WHITE_BALANCE && controller.wbPresetsEnabled)
+        range.maximum.toInt().coerceAtLeast(1) else SLIDER_STEPS
     manualSlider.setProgressFromUser(sliderProgress(control, range), fromUser = false)
     manualAuto.text = if (control == ManualControl.EXPOSURE_COMPENSATION) "RESET" else "AUTO"
     manualAuto.isEnabled = !range.automatic
@@ -470,7 +492,9 @@ internal fun MainActivity.sliderProgress(control: ManualControl, range: ManualCo
     } else {
         (range.current - range.minimum).toDouble() / (range.maximum - range.minimum)
     }
-    return (fraction.coerceIn(0.0, 1.0) * SLIDER_STEPS).toInt()
+    val steps = if (control == ManualControl.WHITE_BALANCE && controller.wbPresetsEnabled)
+        range.maximum.toInt().coerceAtLeast(1) else SLIDER_STEPS
+    return kotlin.math.round(fraction.coerceIn(0.0, 1.0) * steps).toInt()
 }
 
 internal fun MainActivity.sliderValue(
@@ -478,14 +502,18 @@ internal fun MainActivity.sliderValue(
     range: ManualControlRange,
     progress: Int
 ): Long {
-    val fraction = progress.toDouble() / SLIDER_STEPS
+    val steps = if (control == ManualControl.WHITE_BALANCE && controller.wbPresetsEnabled)
+        range.maximum.toInt().coerceAtLeast(1) else SLIDER_STEPS
+    val fraction = progress.toDouble() / steps
     return if (control == ManualControl.SHUTTER) {
         kotlin.math.exp(
             kotlin.math.ln(range.minimum.toDouble()) + fraction *
                 (kotlin.math.ln(range.maximum.toDouble()) - kotlin.math.ln(range.minimum.toDouble()))
         ).toLong().coerceIn(range.minimum, range.maximum)
     } else {
-        (range.minimum + fraction * (range.maximum - range.minimum)).toLong()
+        val raw = range.minimum + fraction * (range.maximum - range.minimum)
+        (if (control == ManualControl.WHITE_BALANCE && controller.wbPresetsEnabled)
+            kotlin.math.round(raw).toLong() else raw.toLong())
             .coerceIn(range.minimum, range.maximum)
     }
 }
@@ -531,7 +559,9 @@ internal fun MainActivity.shortControlName(control: ManualControl): String = whe
 internal fun MainActivity.formatManualValue(control: ManualControl, value: Long): String = when (control) {
     ManualControl.ISO -> "ISO $value"
     ManualControl.SHUTTER -> formatShutter(value)
-    ManualControl.WHITE_BALANCE -> "${value} K"
+    ManualControl.WHITE_BALANCE -> if (controller.wbPresetsEnabled)
+        controller.whiteBalancePresets().getOrNull(value.toInt())?.second ?: "Auto"
+        else "${value} K"
     ManualControl.FOCUS_DISTANCE -> formatFocusDistance(value)
     ManualControl.EXPOSURE_COMPENSATION -> String.format(
         Locale.US, "%+.1f EV", controller.exposureCompensationStops(value)
@@ -562,17 +592,7 @@ internal fun MainActivity.cycleQuickDLighting() {
 }
 
 internal fun MainActivity.openWhiteBalanceControl() {
-    if (!controller.wbPresetsEnabled) {
-        showManualControl(ManualControl.WHITE_BALANCE)
-        return
-    }
-    hideManualControl()
-    val options = controller.whiteBalancePresets()
-    if (options.isEmpty()) { setStatus("WB PRESETS N/A"); return }
-    AlertDialog.Builder(this).setTitle("White balance presets")
-        .setItems(options.map { it.second }.toTypedArray()) { _, index ->
-            controller.setWhiteBalancePreset(options[index].first) { runOnUiThread { syncRecordingWhiteBalance() } }
-        }.setNegativeButton("Cancel", null).show()
+    showManualControl(ManualControl.WHITE_BALANCE)
 }
 
 internal fun MainActivity.syncRecordingWhiteBalance() {

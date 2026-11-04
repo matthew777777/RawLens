@@ -164,13 +164,17 @@ class RuleSliderView @JvmOverloads constructor(
         canvas.drawRoundRect(backgroundRect, radius, radius, borderPaint)
 
         val centerX = backgroundRect.centerX()
-        // Code + live value stacked on top, reference style. Only the glyphs
-        // rotate in landscape; the strip itself never does.
+        val quarterTurn = kotlin.math.abs(kotlin.math.sin(Math.toRadians(contentRotation.toDouble()))) > 0.5
+        val headerY = if (quarterTurn) backgroundRect.centerY() else backgroundRect.top + 20f * density
         canvas.save()
-        canvas.rotate(contentRotation, centerX, backgroundRect.top + 20f * density)
-        canvas.drawText(label, centerX, backgroundRect.top + 12f * density, codePaint)
-        if (valueText.isNotEmpty()) {
-            canvas.drawText(valueText, centerX, backgroundRect.top + 28f * density, valuePaint)
+        canvas.rotate(contentRotation, centerX, headerY)
+        if (quarterTurn) {
+            drawFittedText(canvas, "$label\n$valueText", valuePaint, centerX, headerY,
+                backgroundRect.height() - 8f * density, 64f * density)
+        } else {
+            canvas.drawText(label, centerX, backgroundRect.top + 12f * density, codePaint)
+            drawFittedText(canvas, valueText, valuePaint, centerX, backgroundRect.top + 24f * density,
+                backgroundRect.width() - 24f * density, 20f * density)
         }
         canvas.restore()
 
@@ -179,32 +183,29 @@ class RuleSliderView @JvmOverloads constructor(
         val tickCenterY = (tickTop + tickBottom) / 2f
         val minorHalf = 3f * density
         val majorHalf = 5.5f * density
-        val tickCount = 21
+        val tickCount = if (max < 21) max + 1 else 21
         val span = backgroundRect.width() - 24f * density
         val startX = backgroundRect.left + 12f * density
         for (index in 0 until tickCount) {
             val x = startX + span * index / (tickCount - 1).toFloat()
-            val isMajor = index % 5 == 0 || index == tickCount / 2
+            if (quarterTurn && kotlin.math.abs(x - centerX) < 36f * density) continue
+            val isMajor = max < 21 || index % 5 == 0 || index == tickCount / 2
             val half = if (isMajor) majorHalf else minorHalf
             canvas.drawLine(x, tickCenterY - half, x, tickCenterY + half,
                 if (isMajor) majorTickPaint else minorTickPaint)
         }
 
-        // Edge min/max hints along the bottom of the strip. Each glyph rotates
-        // around its own anchor so it stays in place in landscape, exactly
-        // like the rotating button values.
-        edgePaint.textAlign = Paint.Align.LEFT
-        if (minText.isNotEmpty()) {
+        // Center rotated edge hints inside the strip instead of rotating an edge baseline
+        // outside its bounds. Leave the ruler endpoints and needle unobstructed.
+        for ((text, x) in listOf(minText to startX, maxText to (startX + span))) {
+            if (text.isEmpty()) continue
+            val hintX = if (quarterTurn) x else if (x == startX) x + 28f * density else x - 28f * density
+            val hintY = if (quarterTurn) backgroundRect.centerY() else backgroundRect.bottom - 5f * density
             canvas.save()
-            canvas.rotate(contentRotation, startX, backgroundRect.bottom - 3f * density)
-            canvas.drawText(minText, startX, backgroundRect.bottom - 3f * density, edgePaint)
-            canvas.restore()
-        }
-        edgePaint.textAlign = Paint.Align.RIGHT
-        if (maxText.isNotEmpty()) {
-            canvas.save()
-            canvas.rotate(contentRotation, startX + span, backgroundRect.bottom - 3f * density)
-            canvas.drawText(maxText, startX + span, backgroundRect.bottom - 3f * density, edgePaint)
+            canvas.rotate(contentRotation, hintX, hintY)
+            drawFittedText(canvas, text, edgePaint, hintX, hintY,
+                if (quarterTurn) backgroundRect.height() - 8f * density else 56f * density,
+                if (quarterTurn) 20f * density else 10f * density)
             canvas.restore()
         }
 
