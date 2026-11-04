@@ -10,6 +10,7 @@
 
 #include <string>
 
+#include "noise_model.h"
 #include "wavelet_host.h"
 
 #define WAVELET_LOGI(...) __android_log_print(ANDROID_LOG_INFO, "rawLensWavelet", __VA_ARGS__)
@@ -55,7 +56,7 @@ JNIEXPORT jint JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativeProcess(
     jfloat strength, jfloat shadows, jfloat noiseA, jfloat noiseB, jfloatArray wb, jint maxScale,
     jfloat forceY, jfloat forceUv, jint tileSize, jint algorithm, jfloat grain,
     jint sharpIterations, jint sharpCfa, jobject sharpClipState, jint cfa, jint iso,
-    jstring noiseStorePath) {
+    jstring noiseStorePath, jint maxAnalogIso, jlong captureId) {
     WaveletContext* ctx = (WaveletContext*)(uintptr_t)handle;
     if (ctx == nullptr) {
         throw_runtime(env, "null wavelet context");
@@ -106,6 +107,8 @@ JNIEXPORT jint JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativeProcess(
         }
     }
     params.noiseStorePath = storePath.c_str();
+    params.maxAnalogIso = maxAnalogIso > 0 ? (float)maxAnalogIso : 0.0f;
+    params.captureId = (uint64_t)captureId;
     params.sharpIterations = 0;
     params.sharpCfa = 0;
     params.sharpClipState = nullptr;
@@ -164,4 +167,22 @@ extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_WaveletVulkan_capture
     if (capture_sharpen_process(reinterpret_cast<WaveletContext*>(handle), ptr, w, h,
                                gains, cfa, iterations, clip, error, sizeof error) != 0)
         throw_runtime(env, error);
+}
+
+// Learned per-device noise model prediction for other stages (MFSR): fit the
+// stored samples exactly as choose_noise does (rawlens_noise::fit) and return
+// {a, b, samples, isos} for green at [iso], or null when the model is not ok.
+// Read-only: does not add a sample.
+extern "C" JNIEXPORT jfloatArray JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativePredictNoise(
+        JNIEnv* env, jobject /*thiz*/, jstring storePath, jfloat iso) {
+    if (storePath == nullptr || !(iso > 0.0f)) return nullptr;
+    const char* p = env->GetStringUTFChars(storePath, nullptr);
+    std::string path(p != nullptr ? p : "");
+    if (p != nullptr) env->ReleaseStringUTFChars(storePath, p);
+    const auto model = rawlens_noise::fit(rawlens_noise::loadSamples(path));
+    if (!model.supports(iso)) return nullptr;
+    const jfloat out[4] = {model.predictA(iso), model.predictB(iso), (jfloat)model.samples, (jfloat)model.isos};
+    jfloatArray arr = env->NewFloatArray(4);
+    if (arr != nullptr) env->SetFloatArrayRegion(arr, 0, 4, out);
+    return arr;
 }

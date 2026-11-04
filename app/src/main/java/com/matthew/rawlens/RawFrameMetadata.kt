@@ -127,7 +127,9 @@ data class RawFrameMetadata(
      * platform DngCreator would write the HAL's NaN neutral, so DNG saves
      * route to TinyDNG, which writes these values.
      */
-    val whiteBalanceFallback: Boolean = false
+    val whiteBalanceFallback: Boolean = false,
+    /** Sensor limit used to distinguish analog from digital noise gain. */
+    val maxAnalogSensitivityIso: Int? = null
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null
@@ -333,6 +335,7 @@ object RawFrameMetadataFactory {
             exifOrientation = exifOrientation,
             sensorOrientationDegrees = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
             sensitivityIso = sensorKey(CaptureResult.SENSOR_SENSITIVITY),
+            maxAnalogSensitivityIso = characteristics.get(CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY),
             exposureTimeNanos = sensorKey(CaptureResult.SENSOR_EXPOSURE_TIME),
             frameDurationNanos = sensorKey(CaptureResult.SENSOR_FRAME_DURATION),
             rollingShutterSkewNanos = sensorKey(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),

@@ -12,13 +12,14 @@ import java.security.MessageDigest
 /**
  * Post-demosaic profiled-wavelet denoise (luma + chroma) via the vendored
  * wavelet core. Input/output are pre-WB camera-linear RGBA16F direct buffers
- * (W*H*8 bytes). Noise comes from SENSOR_NOISE_PROFILE's green plane,
+ * (W*H*8 bytes). Both algorithms use the learned noise model, with the
+ * frame estimate and SENSOR_NOISE_PROFILE green plane as fallbacks,
  * normalized exactly like GreenNoiseToNormalized; WB gains derive
  * from COLOR_CORRECTION_GAINS, averaging both greens as in RAWR.
  */
 class WaveletDenoiser(context: Context) {
     private val assets = context.applicationContext.assets
-    private val noiseDir = File(context.applicationContext.filesDir, "wavelet-noise")
+    private val noiseDir = noiseDir(context)
     private var handle = 0L
 
     /** Last native GPU time in ms (-1 when unavailable). */
@@ -67,9 +68,6 @@ class WaveletDenoiser(context: Context) {
         pattern: BayerPattern? = null,
         noiseSource: NoiseSource? = null
     ): Boolean {
-        require(settings.algorithm == WaveletAlgorithm.RAWLENS || noiseA > 0f || noiseB > 0f) {
-            "RAWR denoise needs a noise profile"
-        }
         if (!ensureInit()) return false
         require(wbGains.size >= 3) { "wbGains needs 3 entries" }
         val startNs = System.nanoTime()
@@ -82,7 +80,9 @@ class WaveletDenoiser(context: Context) {
             sharpen?.clipState?.directBuffer(),
             (pattern ?: sharpen?.pattern ?: BayerPattern.RGGB).ordinal,
             iso = noiseSource?.iso ?: 0,
-            noiseStorePath = noiseSource?.let { noiseStorePath(it) }
+            noiseStorePath = noiseSource?.let { noiseStorePath(it) },
+            maxAnalogIso = noiseSource?.maxAnalogIso ?: 0,
+            captureId = noiseSource?.captureId ?: 0L
         )
         lastGpuMs = try {
             WaveletVulkan.lastGpuMs(handle)
@@ -118,16 +118,26 @@ class WaveletDenoiser(context: Context) {
      * quad Bayer, raw size) and per build fingerprint, so a firmware update
      * (HAL raw NR may change) starts a fresh model.
      */
-    data class NoiseSource(val iso: Int, val rawModeKey: String)
-
-    private fun noiseStorePath(source: NoiseSource): String? {
-        if (source.iso <= 0) return null
-        if (!noiseDir.isDirectory && !noiseDir.mkdirs()) return null
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest("${source.rawModeKey}|${Build.FINGERPRINT}".toByteArray())
-        val name = digest.take(12).joinToString("") { "%02x".format(it) }
-        return File(noiseDir, "$name.txt").absolutePath
+    data class NoiseSource(
+        val iso: Int, val rawModeKey: String, val maxAnalogIso: Int = 0, val captureId: Long = 0L
+    ) {
+        companion object {
+            /** The one key builder (wavelet path and MFSR share the same store). */
+            fun of(metadata: RawFrameMetadata): NoiseSource? {
+                // A merged frame has a different noise law from one sensor
+                // exposure; it must not train or use the single-frame prior.
+                if ((metadata.compositeUsedCount ?: 1) > 1) return null
+                return metadata.sensitivityIso?.let {
+                    NoiseSource(it, "${metadata.cameraId}/${metadata.activePhysicalCameraId}/" +
+                        "${metadata.sensorPixelMode}/${metadata.quadBayer}/${metadata.rawBinningFactorUsed}/" +
+                        "${metadata.imageWidth}x${metadata.imageHeight}",
+                        metadata.maxAnalogSensitivityIso ?: 0, metadata.timestampNanos)
+                }
+            }
+        }
     }
+
+    private fun noiseStorePath(source: NoiseSource): String? = storePath(noiseDir, source)
 
     /** Capture sharpening fused into the same GPU submit as [process]. */
     class SharpenRequest(
@@ -138,6 +148,19 @@ class WaveletDenoiser(context: Context) {
 
     companion object {
         private const val TAG = "WaveletDenoiser"
+
+        /** Learned-model store file for [source] under [dir] (per raw-mode key + build fingerprint). */
+        internal fun storePath(dir: File, source: NoiseSource): String? {
+            if (source.iso <= 0) return null
+            if (!dir.isDirectory && !dir.mkdirs()) return null
+            val digest = MessageDigest.getInstance("SHA-256")
+                .digest("${source.rawModeKey}|${Build.FINGERPRINT}".toByteArray())
+            val name = digest.take(12).joinToString("") { "%02x".format(it) }
+            return File(dir, "$name.txt").absolutePath
+        }
+
+        /** Store directory (same as the instance's [noiseDir]). */
+        internal fun noiseDir(context: Context): File = File(context.applicationContext.filesDir, "wavelet-noise")
 
         /** Matches RAWR GreenNoiseToNormalized, including float operation order
          * and acceptance rules. The caller supplies the mean green black level
@@ -183,7 +206,7 @@ class WaveletDenoiser(context: Context) {
 
 /** Wavelet shrinkage rule. Ordinal is the native `algorithm` value. */
 enum class WaveletAlgorithm {
-    /** RAWR soft-threshold BayesShrink; output byte-identical to RAWR. */
+    /** RAWR soft-threshold BayesShrink with RawLens learned noise selection. */
     RAWR,
     /** RawLens local Wiener: luma-guided chroma, fine-scale grain retention. */
     RAWLENS;
@@ -194,13 +217,12 @@ enum class WaveletAlgorithm {
 }
 
 /**
- * Wavelet stage settings. Strength/detail/luma/scales/chroma defaults mirror
- * RAWR (1, 1, 0.25, 7, 0.75); RawLens Wiener is the default rule, with a
- * little fine luma grain kept. [enabled] stays false until the user opts in.
+ * Wavelet stage defaults: disabled RawLens Wiener with strength 0.5,
+ * detail 1, luma 0.25, 7 scales, chroma 0.75, and no retained grain.
  */
 data class WaveletSettings(
     val enabled: Boolean = false,
-    val strength: Float = 1.0f,
+    val strength: Float = 0.5f,
     val detail: Float = 1.0f,
     val luma: Float = 0.25f,
     val maxScale: Int = 7,
@@ -209,7 +231,7 @@ data class WaveletSettings(
     val grain: Float = DEFAULT_GRAIN
 ) {
     companion object {
-        const val DEFAULT_GRAIN = 0.45f
+        const val DEFAULT_GRAIN = 0f
     }
 
     /** RAWR: luma is independent of Detail (the VST shadow fulcrum). */

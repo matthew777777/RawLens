@@ -198,6 +198,7 @@ class RawDevelopmentCoordinator(context: Context) {
         allowOutputFusion: Boolean = true,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
+        fusedOutputSettings?.let { amaze.chromaCleanup = it.chromaCleanup }
         MemoryLeakDiagnostics.stillCapture()
         val startedAt = SystemClock.elapsedRealtime()
         if (metadata.quadBayer &&
@@ -436,14 +437,12 @@ class RawDevelopmentCoordinator(context: Context) {
             black, normalization.whiteLevel
         )
         val denoiseWb = WaveletDenoiser.rawrWhiteBalance(metadata.wbGains?.toFloatArray())
-        // RawLens estimates noise from the frame itself when the profile is
-        // missing or implausible; RAWR (exact) needs the Camera2 profile.
-        val rawLens = settings.algorithm == WaveletAlgorithm.RAWLENS
-        if (settings.enabled && settings.strength > 0f && ((noise == null && !rawLens) || denoiseWb == null)) {
-            Log.w(LOG_TAG, "Wavelet bypass: missing or invalid RAWR noise profile/WB gains " +
+        // Both rules can use the learned model or estimate without a sensor profile.
+        if (settings.enabled && settings.strength > 0f && denoiseWb == null) {
+            Log.w(LOG_TAG, "Wavelet bypass: missing or invalid WB gains " +
                 "entries=${metadata.noiseProfile?.size ?: 0}")
         }
-        val denoise = settings.enabled && settings.strength > 0f && (noise != null || rawLens) && denoiseWb != null
+        val denoise = settings.enabled && settings.strength > 0f && denoiseWb != null
         val sharpenWb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
         // Sharpening alone keeps its own call. With denoise it runs first in the
         // same GPU submit (no extra 8 B/px download/upload); the sharpening WB is
@@ -464,11 +463,7 @@ class RawDevelopmentCoordinator(context: Context) {
                 settings.bounded(), noise?.first ?: 0f, noise?.second ?: 0f, denoiseWb!!,
                 if (fused) WaveletDenoiser.SharpenRequest(sharpening, pattern, clipState) else null,
                 pattern,
-                metadata.sensitivityIso?.let {
-                    WaveletDenoiser.NoiseSource(it, "${metadata.cameraId}/${metadata.activePhysicalCameraId}/" +
-                        "${metadata.sensorPixelMode}/${metadata.quadBayer}/${metadata.rawBinningFactorUsed}/" +
-                        "${metadata.imageWidth}x${metadata.imageHeight}")
-                }
+                WaveletDenoiser.NoiseSource.of(metadata)
             )
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
@@ -751,6 +746,7 @@ class RawDevelopmentCoordinator(context: Context) {
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         outputSettings: JpegOutputSettings = JpegOutputSettings()
     ): DevelopedJpeg {
+        amaze.chromaCleanup = outputSettings.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         cfa.requireAmazeCompatible()
@@ -830,6 +826,7 @@ class RawDevelopmentCoordinator(context: Context) {
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         outputSettings: JpegOutputSettings = JpegOutputSettings()
     ): DevelopedJpeg {
+        amaze.chromaCleanup = outputSettings.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         cfa.requireAmazeCompatible()
@@ -924,6 +921,7 @@ class RawDevelopmentCoordinator(context: Context) {
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         outputSettings: JpegOutputSettings = JpegOutputSettings()
     ): DevelopedJpeg {
+        amaze.chromaCleanup = outputSettings.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         val transform = SceneLinearColorProcessor.resolve(
@@ -989,6 +987,7 @@ class RawDevelopmentCoordinator(context: Context) {
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         outputSettings: JpegOutputSettings = JpegOutputSettings()
     ): DevelopedJpeg {
+        amaze.chromaCleanup = outputSettings.chromaCleanup
         // Covers developMergedImagesJpeg too (it delegates here).
         MemoryLeakDiagnostics.stillCapture()
         return mergedDevelop.develop(input, settings, cameraLinear = settings.denoise.captureSharpening.enabled) { scene ->
@@ -1024,6 +1023,7 @@ class RawDevelopmentCoordinator(context: Context) {
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         outputSettings: JpegOutputSettings = JpegOutputSettings()
     ): DevelopedJpeg {
+        amaze.chromaCleanup = outputSettings.chromaCleanup
         val egl = mergedEgl ?: Gles31AmazeProcessor.EglComputeContext().also { mergedEgl = it }
         egl.makeCurrent()
         val mergedTex = uploadBridgeRgba(mergedImageId, width, height)

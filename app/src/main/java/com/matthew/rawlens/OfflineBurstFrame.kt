@@ -99,7 +99,11 @@ internal object OfflineBurstMetadata {
             forwardMatrix2 = doubleArray("forwardMatrix2", container),
             referenceIlluminant1 = container.optInt("referenceIlluminant1", 0).takeIf { it > 0 },
             referenceIlluminant2 = container.optInt("referenceIlluminant2", 0).takeIf { it > 0 },
-            noiseProfile = null,
+            // Per-frame Camera2 profile when the take recorded it (CrawMetadata.frame);
+            // older takes have none and the merge logs its constant fallback.
+            noiseProfile = frame.optJSONArray("noiseProfile")?.let { array ->
+                DoubleArray(array.length()) { array.getDouble(it) }
+            }?.takeIf { it.size in listOf(2, 6, 8) && it.all(Double::isFinite) }?.let(::ImmutableDoubleValues),
             sensorPixelMode = null,
             rawBinningFactorUsed = false,
             activePhysicalCameraId = null,

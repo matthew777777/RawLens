@@ -1,5 +1,10 @@
 # Profiled wavelet denoise: optimization + RawLens Wiener (2026-11-03)
 
+Update 2026-11-04: both algorithms now use the revised learned noise model.
+The parity and original step-4 behavior below are historical. See the
+[PhotonCamera model audit](noise-model-photon-audit-2026-11-04.md) for the current
+windowing, gain law, persistence schema, and measured comparison.
+
 ## RAWR parity before changes
 Re-checked against RAWR HEAD `e7c844192008e1006d48ef85d931bf298e928192`:
 all seven sources byte-identical, 10/10 GPU cases byte-identical.
@@ -330,3 +335,26 @@ every image.
   there by design. Plus night-region chroma, and Motorola flat texture/edges.
 - RAWR byte-identical 10/10; tiles 256/1536 byte-identical. The prototype has
   not been updated for steps 5d/6 (GPU only so far).
+
+## RawLens v2 (from scratch, luminance/colour split): prototype (2026-11-03)
+`tools/wavelet-parity/rawlens_v2_proto.py`; scorecard: `RL_V2=1 RL_V2_PRM='{...}'`
+(v2 replaces the RawLens column; the current GPU path shows as "RawLens v1").
+- Pipeline: WB'd linear -> L = sum q_c wb_c x_c (analytic aL, bL with WB +
+  RCD kappa) -> single-channel GAT -> B3 a-trous Wiener (leave-one-out,
+  2nd stage), per-scale noise = white model x image-measured factor (flattest
+  blocks) -> steered 5x5 -> grain = fine bands of (input - clean) -> closed-
+  form unbiased GAT inverse. Colour: 1/4-grid guided RGB-on-L model at an
+  edge-aware smooth luma, scaled to the final luma.
+- Fixed along the way: grain taken from the noisy fine band amplified
+  texture 1.45x where the Wiener kept the signal. Taking it from the residual
+  gives luma texture fidelity 0.999.
+- Status: v2 straddles ESD3D2 on the luma/texture trade-off, but is not ahead
+  yet (0-1 wins vs v1's 6). fmax 1.5 + grain 0.6 is close to ESD3D2 on flat
+  texture (0.51-0.59 vs 0.54-0.58) with equal or lower grain.
+- Open, in order:
+  (1) colour on detail crops: vivo ISO 72 detail chroma 0.28 vs 0.097, ISO
+      1442 0.317 vs 0.263; check clipped highlights / dark fallback.
+  (2) removed vs edges on flats 0.19-0.28 vs 0.13-0.16: the single-channel
+      Wiener removes edge-correlated content; try edge-aware a-trous weights
+      (as RAWR had) or a smaller steered range.
+  (3) then retune luma / grain / fmax.

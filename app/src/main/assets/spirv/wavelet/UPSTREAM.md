@@ -1,5 +1,11 @@
 # Upstream provenance: RAWR raw_denoise
 
+## Integration update (2026-11-04)
+
+Both RAWR and RawLens Wiener now share RawLens learned noise selection and
+frame/profile fallbacks. RAWR retains its shrinkage shaders and inverse; full
+capture output no longer claims upstream bit parity because noise inputs differ.
+
 ## Integration update (2026-11-02)
 
 At the user’s explicit request, RawLens now mirrors RAWR’s Camera2 noise
@@ -40,7 +46,7 @@ Noise selection averages the CFA green sites. Camera2 SENSOR_NOISE_PROFILE
 coefficients are already normalized and pass directly to the core; the
 raw-DN/black-level conversion in RAWR's helper must not be applied again.
 This Camera2 adapter deliberately differs from the pinned RAWR integration.
-Invalid/missing profiles bypass denoise.
+As of 2026-11-04, invalid/missing profiles fall back to learned/frame noise selection.
 
 Reproduce source and same-GPU byte parity:
 

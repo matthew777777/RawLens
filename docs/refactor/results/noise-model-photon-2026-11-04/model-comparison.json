@@ -1,0 +1,114 @@
+{
+  "photon_revision": "b2eff821a858033515eb2700e7292befecc95225",
+  "scope": "shared-estimate model variance prediction; no image-quality claim",
+  "cases": 396,
+  "groups": {
+    "texture": {
+      "rawlens": {
+        "mean_relative_variance_error": 0.018488454735472705,
+        "p95_relative_variance_error": 0.04309906450023249
+      },
+      "photon": {
+        "mean_relative_variance_error": 0.01848845475400033,
+        "p95_relative_variance_error": 0.043099135798544075
+      },
+      "legacy": {
+        "mean_relative_variance_error": 0.15176422096791503,
+        "p95_relative_variance_error": 0.6054933005262404
+      }
+    },
+    "heldout": {
+      "rawlens": {
+        "mean_relative_variance_error": 0.01282382103318039,
+        "p95_relative_variance_error": 0.027012280005148548
+      },
+      "photon": {
+        "mean_relative_variance_error": 0.24403745622496845,
+        "p95_relative_variance_error": 0.4708156262160621
+      },
+      "legacy": {
+        "mean_relative_variance_error": 0.14800744721744993,
+        "p95_relative_variance_error": 0.5585104100471086
+      }
+    }
+  },
+  "model_sha256": "32749655cef2c4d45675dd792e4c2fdf189d8159e1cda6e57ea55c25335f58e5",
+  "reference_java_sha256": "07a3c45ce0eb7aa47d365de12404acaffdca9546de497391e32d4d97a38626e6",
+  "invariants": "PASS: gain law, same-ISO warmup, replay, extrapolation, nonfinite input, evidence bound",
+  "blind_estimator": [
+    {
+      "cfa": 0,
+      "textured": false,
+      "a": 0.00016081836656667292,
+      "b": 4.495308076002402e-06,
+      "bins": 10.0,
+      "mean_relative_variance_error": 0.022768564642803475
+    },
+    {
+      "cfa": 0,
+      "textured": true,
+      "a": 0.00022817884746473283,
+      "b": 3.640120667114388e-06,
+      "bins": 10.0,
+      "mean_relative_variance_error": 0.20230513416845305
+    },
+    {
+      "cfa": 1,
+      "textured": false,
+      "a": 0.0001609712198842317,
+      "b": 4.379242000140948e-06,
+      "bins": 10.0,
+      "mean_relative_variance_error": 0.010608172598850893
+    },
+    {
+      "cfa": 1,
+      "textured": true,
+      "a": 0.0002274983999086544,
+      "b": 3.983226633863524e-06,
+      "bins": 10.0,
+      "mean_relative_variance_error": 0.19638834131872793
+    },
+    {
+      "cfa": 2,
+      "textured": false,
+      "a": 0.00016079556371551007,
+      "b": 4.491529125516536e-06,
+      "bins": 10.0,
+      "mean_relative_variance_error": 0.022374586904437912
+    },
+    {
+      "cfa": 2,
+      "textured": true,
+      "a": 0.00022719016124028713,
+      "b": 4.001200522907311e-06,
+      "bins": 10.0,
+      "mean_relative_variance_error": 0.19527513282797335
+    },
+    {
+      "cfa": 3,
+      "textured": false,
+      "a": 0.0001619373942958191,
+      "b": 4.160359367233468e-06,
+      "bins": 10.0,
+      "mean_relative_variance_error": 0.013703444286237725
+    },
+    {
+      "cfa": 3,
+      "textured": true,
+      "a": 0.00022781752340961248,
+      "b": 3.8356188269972336e-06,
+      "bins": 10.0,
+      "mean_relative_variance_error": 0.19901156520255106
+    }
+  ],
+  "production_estimator_then_model": {
+    "rawlens": {
+      "mean_relative_variance_error": 0.01022109470902861,
+      "p95_relative_variance_error": 0.017217753451305717
+    },
+    "photon_store_on_same_estimates": {
+      "mean_relative_variance_error": 0.24558719154850933,
+      "p95_relative_variance_error": 0.4705305160587586
+    }
+  }
+}

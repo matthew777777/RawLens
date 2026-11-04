@@ -78,11 +78,13 @@ object WaveletVulkan {
         cfa: Int = 0,
         tileSize: Int = TILE_SIZE,
         iso: Int = 0,
-        noiseStorePath: String? = null
+        noiseStorePath: String? = null,
+        maxAnalogIso: Int = 0,
+        captureId: Long = 0L
     ): Int = nativeProcess(
         handle, input, output, width, height, strength, shadows,
         noiseA, noiseB, wbGains, maxScale, forceY, forceUv, tileSize,
-        algorithm, grain, sharpIterations, sharpCfa, sharpClipState, cfa, iso, noiseStorePath
+        algorithm, grain, sharpIterations, sharpCfa, sharpClipState, cfa, iso, noiseStorePath, maxAnalogIso, captureId
     )
 
     /** Timestamp-derived GPU ms of the last [process] call (-1 unavailable). */
@@ -99,7 +101,17 @@ object WaveletVulkan {
         strength: Float, shadows: Float, noiseA: Float, noiseB: Float,
         wb: FloatArray, maxScale: Int, forceY: Float, forceUv: Float, tileSize: Int,
         algorithm: Int, grain: Float, sharpIterations: Int, sharpCfa: Int, sharpClipState: ByteBuffer?,
-        cfa: Int, iso: Int, noiseStorePath: String?
+        cfa: Int, iso: Int, noiseStorePath: String?, maxAnalogIso: Int, captureId: Long
     ): Int
     private external fun nativeLastGpuMs(handle: Long): Double
+
+    /**
+     * Learned per-device noise model (rawlens_noise::fit over the store at
+     * [storePath]) evaluated at [iso]: green (a, b) in normalized raw units
+     * plus sample/ISO counts, or null when untrained or the library is missing.
+     */
+    fun predictNoise(storePath: String, iso: Float): FloatArray? =
+        if (!ensureLoaded()) null else try { nativePredictNoise(storePath, iso) } catch (_: RuntimeException) { null }
+
+    private external fun nativePredictNoise(storePath: String, iso: Float): FloatArray?
 }

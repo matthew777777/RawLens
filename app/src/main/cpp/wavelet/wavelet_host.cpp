@@ -323,9 +323,10 @@ class WaveletHost {
         p.tileSize = params->tileSize;
         p.algorithm = params->algorithm;
         p.grain = params->grain;
-        if (p.algorithm == 1)
-            choose_noise(inHalf, w, h, params->cfa, params->iso,
-                         params->noiseStorePath ? params->noiseStorePath : "", p);
+        // Both shrinkage rules share the learned noise model.
+        choose_noise(inHalf, w, h, params->cfa, params->iso,
+                     params->noiseStorePath ? params->noiseStorePath : "",
+                     params->maxAnalogIso, params->captureId, p);
         // One tile per submit keeps each GPU job short (~0.5 s instead of ~3 s
         // for RawLens at 12 MP on Mali-G615), so the shared GPU stays responsive
         // for the viewfinder. Tiles are independent and the scratch persists
@@ -393,12 +394,13 @@ class WaveletHost {
 
     double last_gpu_ms() const { return lastGpuMs_; }
 
-    // RawLens: blind noise estimate from native green sites. Keep the Camera2
+    // Shared blind noise estimate from native green sites. Keep the Camera2
     // profile when it agrees within 2.5x (variance at the median exposure);
     // otherwise (missing, or e.g. 10x overstated at base ISO) use the estimate.
     // Then scale luma strength by noise visibility at that exposure.
     static void choose_noise(const uint8_t* in, int w, int h, int cfa, float iso,
-                             const std::string& store, raw_denoise::DenoiseParams& p) {
+                             const std::string& store, float analogIso, uint64_t captureId,
+                             raw_denoise::DenoiseParams& p) {
         const auto t0 = std::chrono::steady_clock::now();
         const auto e = rawlens_noise::estimate(in, w, h, cfa);
         const double estMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -412,7 +414,7 @@ class WaveletHost {
             auto samples = rawlens_noise::loadSamples(store);
             model = rawlens_noise::fit(samples);
             if (e.ok && e.bins >= rawlens_noise::kMinBins) {
-                samples.push_back({iso, e.a, e.b, e.bins});
+                rawlens_noise::addSample(samples, {iso, e.a, e.b, e.bins, analogIso, captureId});
                 if (!rawlens_noise::saveSamples(store, samples))
                     __android_log_print(ANDROID_LOG_WARN, "WaveletNoise", "noise store write failed");
             }
@@ -420,7 +422,7 @@ class WaveletHost {
                                 "model ok=%d samples=%d isos=%d A=%.4g B=%.4g C=%.4g D=%.4g iso=%.0f",
                                 model.ok, model.samples, model.isos, model.A, model.B, model.C, model.D, iso);
         }
-        if (model.ok) {
+        if (model.supports(iso)) {
             const auto c = rawlens_noise::combine(model, iso, e.a, e.b, e.bins, e.ok);
             p.noiseA = c.a;
             p.noiseB = c.b;
@@ -437,7 +439,7 @@ class WaveletHost {
         } else if (!haveProfile) {
             throw std::runtime_error("wavelet: no noise profile and blind estimate failed");
         }
-        if (e.ok) {
+        if (p.algorithm == 1 && e.ok) {
             p.lumaScale = rawlens_noise::lumaScaleFor(p.noiseA, p.noiseB, e.medianX);
             const auto g = rawlens_noise::gatesFor(p.noiseA, p.noiseB, e.medianX);
             // Step 5d, every noise level: guided per-pixel chroma (1/4-grid
@@ -452,7 +454,7 @@ class WaveletHost {
             p.looY = high;
             p.despeckT = high ? 3.0f : 0.0f;
         }
-        p.exactInverse = true;
+        p.exactInverse = p.algorithm == 1;
         __android_log_print(ANDROID_LOG_INFO, "WaveletNoise",
                             "noise %s: a=%.3g b=%.3g (estimate ok=%d a=%.3g b=%.3g bins=%d median=%.4f) "
                             "lumaScale=%.2f lowres=%.2f impulse=%.0f estWeight=%.2f estMs=%.1f",

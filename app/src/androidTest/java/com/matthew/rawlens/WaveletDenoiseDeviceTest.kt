@@ -107,6 +107,14 @@ class WaveletDenoiseDeviceTest {
 
     /** Learned noise model: samples accumulate per key, then the model drives the shot. */
     @Test fun learnedNoiseModelStoresSamplesAndApplies() {
+        checkLearnedNoiseModel(WaveletAlgorithm.RAWLENS)
+    }
+
+    @Test fun rawrLearnsNoiseWithoutSensorProfile() {
+        checkLearnedNoiseModel(WaveletAlgorithm.RAWR)
+    }
+
+    private fun checkLearnedNoiseModel(algorithm: WaveletAlgorithm) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val stage = WaveletDenoiser(context)
         val dir = java.io.File(context.filesDir, "wavelet-noise")
@@ -114,20 +122,54 @@ class WaveletDenoiseDeviceTest {
         val key = source(0).rawModeKey
         try {
             val w = 1024; val h = 768
-            val settings = WaveletSettings(enabled = true, algorithm = WaveletAlgorithm.RAWLENS)
+            val settings = WaveletSettings(enabled = true, algorithm = algorithm)
             val before = dir.listFiles()?.toSet() ?: emptySet()
             for ((i, iso) in listOf(100, 200, 400, 800, 1600, 3200, 1000).withIndex()) {
                 val buf = direct(frame(w, h, 20L + i, iso / 400f))
-                assertTrue(stage.process(buf, buf, w, h, settings, noiseA, noiseB, wb,
+                assertTrue(stage.process(buf, buf, w, h, settings, 0f, 0f, wb,
                     noiseSource = WaveletDenoiser.NoiseSource(iso, key)))
             }
             val created = (dir.listFiles()?.toSet() ?: emptySet()) - before
             assertTrue("one store file per key", created.size == 1)
             val lines = created.single().readLines()
             Log.i(TAG, "noise store ${lines.size} lines: ${lines.take(3)}")
-            assertTrue("header + samples", lines.first() == "rawlens-noise v1" && lines.size >= 7)
+            assertTrue("header + samples", lines.first() == "rawlens-noise v2" && lines.size >= 7)
             created.forEach { it.delete() }
         } finally {
+            stage.release()
+        }
+    }
+
+    @Test fun rawrUsesStoredPriorAndDoesNotTrainTwiceOnReplay() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val stage = WaveletDenoiser(context)
+        val dir = WaveletDenoiser.noiseDir(context)
+        val key = "noise-prior-test-${System.nanoTime()}"
+        val low = WaveletDenoiser.NoiseSource(400, "$key-low", 800, 991L)
+        val high = low.copy(rawModeKey = "$key-high")
+        val paths = listOf(low, high).map { java.io.File(WaveletDenoiser.storePath(dir, it)!!) }
+        try {
+            for ((index, path) in paths.withIndex()) {
+                val factor = if (index == 0) 1f else 4f
+                path.writeText("rawlens-noise v2\n" + (1..3).joinToString("") {
+                    "400 ${noiseA * factor} ${noiseB * factor} 8 800 $it\n"
+                })
+            }
+            val settings = WaveletSettings(enabled = true, algorithm = WaveletAlgorithm.RAWR)
+            val input = frame(1024, 768, 71L)
+            val a = direct(input)
+            val b = direct(input)
+            assertTrue(stage.process(a, a, 1024, 768, settings, 0f, 0f, wb, noiseSource = low))
+            assertTrue(stage.process(b, b, 1024, 768, settings, 0f, 0f, wb, noiseSource = high))
+            assertTrue("stored noise prior changes RAWR output", !bytes(a).contentEquals(bytes(b)))
+            val count = paths[0].readLines().size
+            val replay = direct(input)
+            assertTrue(stage.process(replay, replay, 1024, 768, settings, 0f, 0f, wb, noiseSource = low))
+            assertTrue("same capture trains once", paths[0].readLines().size == count)
+            val prediction = WaveletVulkan.predictNoise(paths[1].absolutePath, 400f)
+            assertTrue("shared read-only prediction available", prediction != null)
+        } finally {
+            paths.forEach { it.delete() }
             stage.release()
         }
     }

@@ -94,12 +94,18 @@ internal object CrawMetadata {
                 "exposureCompensationSteps" to result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION),
                 "digitalZoomRatio" to result.get(CaptureResult.CONTROL_ZOOM_RATIO),
                 "rollingShutterSkew" to result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW)
-            ), estimateNeutral)
+            ), estimateNeutral = estimateNeutral,
+            // Camera2 SENSOR_NOISE_PROFILE, flattened (S0,O0,S1,O1,...) in CFA-layout
+            // order as the HAL reports it; offline MFSR maps it like the live path.
+            noiseProfile = result.get(CaptureResult.SENSOR_NOISE_PROFILE)?.let { pairs ->
+                DoubleArray(pairs.size * 2) { if (it and 1 == 0) pairs[it / 2].first else pairs[it / 2].second }
+            })
     }
 
     internal fun frameValues(base: String, timestamp: Long?, originNs: Long,
                              halNeutral: DoubleArray?, gains: FloatArray?,
                              optional: Map<String, Any?>,
+                             noiseProfile: DoubleArray? = null,
                              estimateNeutral: () -> DoubleArray? = { null }): String {
         val json = JSONObject(base)
         require(timestamp != null && timestamp == json.getLong("timestamp")) { "Mismatched RAW capture metadata" }
@@ -108,6 +114,10 @@ internal object CrawMetadata {
         json.remove("asShotNeutral")
         neutral.neutral?.let { json.put("asShotNeutral", JSONArray(it.toList())) }
         json.put("whiteBalanceSource", neutral.source)
+        json.remove("noiseProfile")
+        if (noiseProfile != null && noiseProfile.size in listOf(2, 6, 8) && noiseProfile.all { it.isFinite() }) {
+            json.put("noiseProfile", JSONArray(noiseProfile.toList()))
+        }
         // Force the Object overload; never unbox optional nulls or write NaN.
         optional.forEach { (name, value) ->
             json.remove(name)
