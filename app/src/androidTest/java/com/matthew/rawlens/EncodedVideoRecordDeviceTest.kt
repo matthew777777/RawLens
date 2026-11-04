@@ -305,11 +305,11 @@ class EncodedVideoRecordDeviceTest {
             for (t in 0 until ext.trackCount) {
                 when (ext.getTrackFormat(t).getString(MediaFormat.KEY_MIME)) {
                     MediaFormat.MIMETYPE_VIDEO_HEVC -> videoTrack = t
-                    MediaFormat.MIMETYPE_AUDIO_AAC -> audioTrack = t
+                    MediaFormat.MIMETYPE_AUDIO_RAW -> audioTrack = t
                 }
             }
             assertTrue("[$label] no HEVC track", videoTrack >= 0)
-            assertTrue("[$label] no AAC track", audioTrack >= 0)
+            assertTrue("[$label] no PCM track", audioTrack >= 0)
             val vfmt = ext.getTrackFormat(videoTrack)
             val afmt = ext.getTrackFormat(audioTrack)
             assertEquals(InstrumentationRegistry.getArguments().getString("width")?.toInt() ?: 3840, vfmt.getInteger(MediaFormat.KEY_WIDTH))
@@ -333,6 +333,7 @@ class EncodedVideoRecordDeviceTest {
             if (colorRange >= 0) assertEquals("[$label] color range", MediaFormat.COLOR_RANGE_LIMITED, colorRange)
             assertEquals(48000, afmt.getInteger(MediaFormat.KEY_SAMPLE_RATE))
             assertEquals(2, afmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT))
+            assertEquals(android.media.AudioFormat.ENCODING_PCM_16BIT, afmt.getInteger(MediaFormat.KEY_PCM_ENCODING))
             var videoSamples = 0
             var audioSamples = 0
             val videoPts = mutableListOf<Long>()

@@ -7,7 +7,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.media.MediaMuxer
+import androidx.media3.muxer.MediaMuxerCompat as MediaMuxer
 import android.media.ImageWriter
 import android.os.Build
 import android.view.Surface
@@ -237,7 +237,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
             Log.i(TAG, "stab encoder=$encoderName input=$mode")
 
             if (output.exists()) output.delete()
-            muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer = MediaMuxer(output.absolutePath, MediaMuxer.OUTPUT_FORMAT_MP4)
             VideoLocationMetadata.copyFrom(source, muxer)
 
             val pass = VideoPass(

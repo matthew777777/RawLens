@@ -64,5 +64,13 @@
     },
     "sleep_interval_ms": 2500
   },
-  "device_evidence": "/tmp/rawlens-recording-tools-device-final"
+  "device_evidence": "/tmp/rawlens-recording-tools-device-final",
+  "focus_panel_revision": {
+    "device_test": "passed",
+    "duration_seconds": 41.565,
+    "capture_panel_bounds": "Rect(0, 1809 - 1280, 2772)",
+    "photo_video_panel_match": true,
+    "focus_controls_only_in_slider": true,
+    "evidence": "/tmp/rawlens-focus-panel-verified"
+  }
 }

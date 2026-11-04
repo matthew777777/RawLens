@@ -20,7 +20,7 @@ import android.media.ImageWriter
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
-import android.media.MediaMuxer
+import androidx.media3.muxer.MediaMuxerCompat
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -71,7 +71,7 @@ enum class VideoDemosaic(val label: String) {
  * grade moves show live). Preview is best-effort and never gates the
  * encode: every skip degrades to an older monitor frame.
  *
- * The encoder runs its input Surface + a drain thread feeding [MediaMuxer].
+ * The encoder runs its input Surface + a drain thread feeding [MediaMuxerCompat].
  * Video + audio are recorded; full-take gyro is captured when [stabEnabled]
  * for the post-record Vulkan warp pass ([StabSidecar]).
  */
@@ -143,9 +143,9 @@ class EncodedVideoRecorder(
         val audioFrames: Long,
         val audioDropped: Int,
         val hasAudio: Boolean,
-        /** AAC bytes emitted (0 = AAC wedged, check its drain). */
+        /** Legacy AAC counter; zero for uncompressed PCM recordings. */
         val aacBytes: Long,
-        /** Audio samples muxed (0 with aacBytes>0 = muxer path broken). */
+        /** PCM chunks written to the container. */
         val audioOutBufs: Int,
         val outputBuffers: Int,
         val outputBytes: Long,
@@ -296,7 +296,7 @@ class EncodedVideoRecorder(
     private var sdrQuad: java.nio.FloatBuffer? = null
     @Volatile private var sdrEglCurrent = false
     @Volatile private var sdrConvertFailed = false
-    private var muxer: MediaMuxer? = null
+    private var muxer: MediaMuxerCompat? = null
     private var videoTrack: Int = -1
     private var audioTrack: Int = -1
     @Volatile private var videoFormat: MediaFormat? = null
@@ -351,9 +351,11 @@ class EncodedVideoRecorder(
     }
 
     private var pcm: AudioPcmRecorder? = null
-    private var aac: AacAudioEncoder? = null
+    private data class PcmSample(val data: java.nio.ByteBuffer, val ptsUs: Long)
+    private var audioStartUs = Long.MIN_VALUE
+    private var audioCapturedFrames = 0L
     private val muxAudioQueue =
-        ArrayBlockingQueue<AacAudioEncoder.Encoded>(256)
+        ArrayBlockingQueue<PcmSample>(256)
     private val audioChunks = AtomicInteger(0)
     private val audioFrames = AtomicLong(0)
     private val audioDropped = AtomicInteger(0)
@@ -1156,12 +1158,12 @@ class EncodedVideoRecorder(
 
     /** Stage 6: muxer, drain thread, audio, then the camera session. */
     private fun startStreams(output: File?, c: CameraCharacteristics, size: Size) {
-        muxer = directOutput?.let { MediaMuxer(it.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4) }
-            ?: MediaMuxer(requireNotNull(output).absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        muxer = directOutput?.let { MediaMuxerCompat(it.fileDescriptor, MediaMuxerCompat.OUTPUT_FORMAT_MP4) }
+            ?: MediaMuxerCompat(requireNotNull(output).absolutePath, MediaMuxerCompat.OUTPUT_FORMAT_MP4)
         VideoLocationMetadata.writeTo(requireNotNull(muxer), captureGps)
+        startAudio()
         draining.set(true)
         drainThread = Thread(::drainLoop, "EncodedVideoDrain").apply { start() }
-        startAudio()
 
         val thread = HandlerThread("EncodedVideoCam", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }
         camThread = thread
@@ -1404,26 +1406,18 @@ class EncodedVideoRecorder(
         audioRequired = false
         hasAudioStream = false
         if (!audioEnabled) return
-        val rec = AudioPcmRecorder()
-        if (!rec.start(::onPcmChunk)) return
-        val enc = AacAudioEncoder(AudioPcmRecorder.SAMPLE_RATE, rec.channels)
-        val ok = enc.start(
-            onFormat = { fmt -> audioFormat = fmt },
-            onOutput = { encoded ->
-                // Single muxer writer lives on the drain thread; frames
-                // outrank audio under pressure (gap counters, never stalls).
-                if (!muxAudioQueue.offer(encoded)) audioDropped.incrementAndGet()
-            }
-        )
-        if (!ok) {
-            try { rec.stop() } catch (_: Exception) {}
-            return
+        audioStartUs = Long.MIN_VALUE
+        audioCapturedFrames = 0L
+        audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_RAW, 48000, 2).apply {
+            setInteger(MediaFormat.KEY_PCM_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
         }
-        pcm = rec
-        aac = enc
+        // Publish the format before capture can race the drain thread.
         audioRequired = true
+        val rec = AudioPcmRecorder()
+        if (!rec.start(::onPcmChunk)) { audioRequired = false; return }
+        pcm = rec
         hasAudioStream = true
-        Log.i(TAG, "audio AAC ${rec.channels}ch")
+        Log.i(TAG, "audio PCM16 48000 Hz ${rec.channels}ch")
     }
 
     private fun onPcmChunk(chunk: AudioPcmRecorder.Chunk) {
@@ -1439,8 +1433,10 @@ class EncodedVideoRecorder(
             audioDropped.incrementAndGet()
             return
         }
-        val enc = aac ?: run { audioDropped.incrementAndGet(); return }
-        if (enc.queue(AacAudioEncoder.Input(chunk.data, relUs))) {
+        if (audioStartUs == Long.MIN_VALUE) audioStartUs = relUs
+        val ptsUs = audioStartUs + audioCapturedFrames * 1_000_000L / AudioPcmRecorder.SAMPLE_RATE
+        audioCapturedFrames += chunk.frames
+        if (muxAudioQueue.offer(PcmSample(chunk.data, ptsUs))) {
             audioChunks.incrementAndGet()
             audioFrames.addAndGet(chunk.frames.toLong())
         } else {
@@ -1451,11 +1447,6 @@ class EncodedVideoRecorder(
     private fun stopAudio() {
         try { pcm?.stop() } catch (_: Exception) {}
         pcm = null
-        // Drains queued PCM through AAC + EOS, then joins (bounded ~seconds).
-        try {
-            aacBytesOut = aac?.stop()?.bytes ?: 0L
-        } catch (_: Exception) {}
-        aac = null
     }
 
     /**
@@ -2984,7 +2975,7 @@ class EncodedVideoRecorder(
             muxerStarted = true
             Log.i(TAG, "muxer started: ${vf.getString(MediaFormat.KEY_MIME)} " +
                 "${vf.getInteger(MediaFormat.KEY_WIDTH)}x${vf.getInteger(MediaFormat.KEY_HEIGHT)}" +
-                (if (audioRequired) " +aac fmt=${audioFormat}" else ""))
+                (if (audioRequired) " +pcm16 fmt=${audioFormat}" else ""))
         } catch (e: Exception) {
             Log.w(TAG, "muxer start failed: ${e.message}")
             failRecording(e)
@@ -2996,10 +2987,10 @@ class EncodedVideoRecorder(
         var chunk = muxAudioQueue.poll()
         while (chunk != null) {
             try {
-                // Codec-config carries the csd (already in the track format).
-                if (chunk.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && chunk.data.remaining() > 0) {
+                // PCM chunks are interleaved little-endian samples, with no codec headers.
+                if (chunk.data.remaining() > 0) {
                     val info = MediaCodec.BufferInfo()
-                    info.set(0, chunk.data.remaining(), chunk.ptsUs, chunk.flags)
+                    info.set(0, chunk.data.remaining(), chunk.ptsUs, 0)
                     muxer?.writeSampleData(audioTrack, chunk.data, info)
                     audioOutBufs.incrementAndGet()
                 }
@@ -3218,8 +3209,6 @@ class EncodedVideoRecorder(
         stopStabMotion()
         try { pcm?.stop() } catch (_: Exception) {}
         pcm = null
-        try { aac?.stop() } catch (_: Exception) {}
-        aac = null
         // Drain the camera thread first: quitSafely + join waits out any
         // in-flight onFrame so no GPU work races the teardown below.
         try { session?.close() } catch (_: Exception) {}

@@ -28,3 +28,11 @@ The timer defaults to Never. Focus marks are activity-local and reset on a lens 
 Removed the permanent second capture-panel row at the user's request. A/B marks and pull duration now share the existing focus slider header with Auto and appear only when the video focus slider is open. Preview sleep moved to the existing video Quick controls row; the settings timer remains available. Pulls leave the slider open and postpone its automatic dismissal until completion.
 
 The revised app and instrumentation APKs built successfully (`/tmp/rawlens-focus-panel-build.log`, `/tmp/rawlens-focus-panel-test-build.log`). XML hierarchy checks confirm that the capture panel contains no recording-tools row, the focus tools belong to the floating manual slider, and preview sleep belongs to Quick controls. The updated instrumentation test asserts equal photo/video capture-panel bounds, but the phone disconnected during installation, so this UI revision has not yet completed device validation. The earlier recording-continuity results above apply to the prior UI arrangement.
+
+## Device verification completed 2026-11-03
+
+Installed the revised isolated app and reran `RecordingToolsDeviceTest`. Passed (1 test, 41.565 seconds). Photo and video capture panels matched exactly at `Rect(0, 1809 - 1280, 2772)`. Focus controls were hidden outside the slider and belonged to its floating header when opened; opening it left the capture panel unchanged. RAW and encoded recording, A/B endpoints, manual interruption, preview sleep/wake, automatic sleep and finalization all passed. Revised screenshots were reviewed; evidence is at `/tmp/rawlens-focus-panel-verified`.
+
+The initial rerun exposed a test assertion issue: `getGlobalVisibleRect` can return layout bounds for a hidden view. The assertion now uses `isShown`. The app implementation needed no change for that failure.
+
+Performance observation: this run is a UI/functional pass, not a sustained-rate pass. The encoded-focus screenshot reports 50 dropped frames and 11.5 output FPS during the take; encoded frame progress during the 2.5-second sleeping interval was 189 → 233, while RAW was 218 → 293. No cause or performance regression attribution was established.

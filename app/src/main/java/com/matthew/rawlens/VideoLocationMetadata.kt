@@ -13,6 +13,23 @@ internal object VideoLocationMetadata {
         muxer.setLocation(gps.latitude.toFloat(), gps.longitude.toFloat())
     }
 
+    fun writeTo(muxer: androidx.media3.muxer.MediaMuxerCompat, gps: GpsLocation?) {
+        gps ?: return
+        muxer.setLocation(gps.latitude.toFloat(), gps.longitude.toFloat())
+    }
+
+    fun copyFrom(source: File, muxer: androidx.media3.muxer.MediaMuxerCompat) {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(source.absolutePath)
+            parse(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION))?.let {
+                muxer.setLocation(it.first, it.second)
+            }
+        } finally {
+            retriever.release()
+        }
+    }
+
     /** Preserve the source MP4/MOV position when creating a stabilized MP4. */
     fun copyFrom(source: File, muxer: MediaMuxer) {
         val retriever = MediaMetadataRetriever()

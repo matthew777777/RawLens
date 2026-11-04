@@ -196,11 +196,11 @@ class EncodedVideoUiTest {
                 for (t in 0 until ext.trackCount) {
                     when (ext.getTrackFormat(t).getString(android.media.MediaFormat.KEY_MIME)) {
                         android.media.MediaFormat.MIMETYPE_VIDEO_HEVC -> videoTrack = t
-                        android.media.MediaFormat.MIMETYPE_AUDIO_AAC -> audioTrack = t
+                        android.media.MediaFormat.MIMETYPE_AUDIO_RAW -> audioTrack = t
                     }
                 }
                 assertTrue("Published clip has no HEVC track", videoTrack >= 0)
-                assertTrue("Published clip has no AAC track", audioTrack >= 0)
+                assertTrue("Published clip has no PCM track", audioTrack >= 0)
                 val vfmt = ext.getTrackFormat(videoTrack)
                 assertEquals(3840, vfmt.getInteger(android.media.MediaFormat.KEY_WIDTH))
                 assertEquals(2160, vfmt.getInteger(android.media.MediaFormat.KEY_HEIGHT))
