@@ -21,6 +21,7 @@ struct FfdnetGatPrior::Impl {
   bool loaded = false;
   bool vulkan = false;
   float a = 0, b = 0, sig_ref = 1;
+  float range_lo = 0, range_hi = 0;
   std::array<float, 3> wb{1, 1, 1};
   std::vector<float> in, out;
   Core core;
@@ -65,6 +66,11 @@ void FfdnetGatPrior::setNoise(float a, float b, float sig_ref, const std::array<
   d_->wb = wb;
 }
 
+void FfdnetGatPrior::setNormalizationRange(float lo, float hi) {
+  d_->range_lo = lo;
+  d_->range_hi = hi;
+}
+
 std::string FfdnetGatPrior::backend() const {
   if (d_->core || d_->nhwc.lock_in) return d_->core_name;
   return d_->vulkan ? "ncnn-vulkan" : "ncnn-cpu";
@@ -99,12 +105,17 @@ bool FfdnetGatPrior::operator()(const float* z, float* x, int H, int W, float si
   const int H2 = H / 2, W2 = W / 2;
   const bool nhwc = bool(d_->nhwc.lock_in) && d_->core_h2 == H2 && d_->core_w2 == W2;
   const bool ext = !nhwc && d_->core && d_->core_h2 == H2 && d_->core_w2 == W2;
-  if ((!d_->loaded && !ext && !nhwc) || (H & 1) || (W & 1) || d_->a <= 0) return false;
+  if ((!d_->loaded && !ext && !nhwc) || !z || !x || H <= 0 || W <= 0 ||
+      (H & 1) || (W & 1) || !std::isfinite(d_->a) || d_->a <= 0 ||
+      !std::isfinite(d_->b) || d_->b < 0 || !std::isfinite(d_->sig_ref) || d_->sig_ref <= 0 ||
+      !std::isfinite(sigma) || sigma < 0) return false;
+  for (float gain : d_->wb) if (!std::isfinite(gain) || gain <= 0) return false;
   const size_t HW = size_t(H) * W, n2 = size_t(H2) * W2;
   float ac[3], bc[3];
   for (int c = 0; c < 3; ++c) {
     ac[c] = d_->a * d_->wb[c];
     bc[c] = d_->b * d_->wb[c] * d_->wb[c];
+    if (!std::isfinite(ac[c]) || ac[c] <= 0 || !std::isfinite(bc[c])) return false;
   }
   auto gat = [&](int c, float v) {
     const float xv = std::max(v * d_->wb[c], 0.0f);
@@ -118,6 +129,7 @@ bool FfdnetGatPrior::operator()(const float* z, float* x, int H, int W, float si
     lo = std::min(lo, gat(c, *mm.first));
     hi = std::max(hi, gat(c, *mm.second));
   }
+  if (d_->range_hi > d_->range_lo) { lo = d_->range_lo; hi = d_->range_hi; }
   const float span = std::max(hi - lo, 1e-6f), inv = 1.0f / span;
   const float r = sigma / d_->sig_ref;
   // Tensor views: element (channel ch, packed pixel i) at base[ch*cs + i*ps].
@@ -167,6 +179,9 @@ bool FfdnetGatPrior::operator()(const float* z, float* x, int H, int W, float si
       if (!ran) return false;
     }
   }
+  // Reject backend failures before inverse GAT can clamp -Inf to a finite
+  // shadow value. No output is written until the entire tensor is valid.
+  for (float value : tout) if (!std::isfinite(value)) return false;
   const float* out = tout.data();
   const size_t ocs = nhwc ? 1 : n2, ops = nhwc ? 12 : 1;
   const auto t2 = clk::now();
@@ -197,6 +212,11 @@ bool FfdnetGatPrior::operator()(const float* z, float* x, int H, int W, float si
     ++d_->calls;
   }
   return true;
+}
+
+FfdnetGatPrior::Timings FfdnetGatPrior::timings() const {
+  std::lock_guard<std::mutex> lock(d_->mu);
+  return {d_->t_pack, d_->t_run, d_->t_unpack, d_->t_wait, d_->calls};
 }
 
 std::string FfdnetGatPrior::timing() const {

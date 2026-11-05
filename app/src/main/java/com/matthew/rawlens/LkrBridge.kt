@@ -60,6 +60,19 @@ internal object LkrBridge {
         tuning: FloatArray?, outWidth: Int, outHeight: Int
     ): ByteBuffer?
 
+    /** Transactional standalone denoise of a direct camera-linear RGBA16F buffer. */
+    @JvmStatic external fun nativeDenoise(
+        rgba: ByteBuffer, width: Int, height: Int, cfa: IntArray, wb: FloatArray,
+        strength: Float, modelParam: String, modelBin: String, npuDir: String, npuModel: String?
+    ): Boolean
+
+    /** Device-test entry: backend 1=GPU, 2=NPU, rejects inference fallback. */
+    @JvmStatic external fun nativeBenchmarkDenoise(
+        rgba: ByteBuffer, width: Int, height: Int, cfa: IntArray, wb: FloatArray,
+        modelParam: String, modelBin: String, npuDir: String, npuModel: String?,
+        backend: Int, fp16: Boolean, stats: FloatArray
+    ): Boolean
+
     /** Native defaults of the LK-SR Lab table (index layout: lkr_tuning.h / [LkrTuning.Entry]). */
     @JvmStatic external fun nativeTuningDefaults(): FloatArray
 }

@@ -231,6 +231,11 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   *out_h = s * rh;
   rgb_out->assign(size_t(*out_w) * *out_h * 3, 0.0f);
   std::vector<float> wsum(size_t(GW) * GH, 0.0f);
+  // Diagnostics: LKR_DEBUG_MAPS=<path> -> <path> (kDebugMaps x GH x GW float32,
+  // see SolveStats::dbg), feather-blended across tiles like the image.
+  const char* dbg_path = prm.paper_parity ? nullptr : std::getenv("LKR_DEBUG_MAPS");
+  std::vector<float> dmaps;
+  if (dbg_path) dmaps.assign(size_t(kDebugMaps) * GW * GH, 0.0f);
   // Grid -> output offset (HR px): the grid starts (g.x0 - rx) sensor px in.
   const int offx = s * (g.x0 - rx), offy = s * (g.y0 - ry);
   SolveParams sp = prm.solve;
@@ -430,6 +435,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       }
       SolveStats ss;
       SolveParams spt = sp;
+      spt.debug_maps = dbg_path != nullptr;
       if (use_sub) spt.local_init = sub_field.data();   // parallax start (block search below overrides)
       // Local motion start: MFSR block search (align.comp) on affine-prewarped greys.
       if (spt.local_block == 16 && prm.block_search && !prm.paper_parity && bsearch.ok() &&
@@ -481,6 +487,9 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
           o[1] += w * x[HW + i];
           o[2] += w * x[2 * HW + i];
           wsum[size_t(s * gy + Y) * GW + s * gx + X] += w;
+          if (dbg_path && ss.dbg.size() == size_t(kDebugMaps) * HW)
+            for (int m = 0; m < kDebugMaps; ++m)
+              dmaps[size_t(m) * GW * GH + size_t(s * gy + Y) * GW + s * gx + X] += w * ss.dbg[size_t(m) * HW + i];
         }
       }
       ++ticket;
@@ -492,6 +501,17 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     for (size_t w = 1; w < gpus.size(); ++w) th.emplace_back(worker, gpus[w]);
     worker(gpus[0]);
     for (auto& t : th) t.join();
+
+  if (dbg_path && !dmaps.empty()) {
+    for (int m = 0; m < kDebugMaps; ++m)
+      for (size_t p = 0; p < wsum.size(); ++p)
+        if (wsum[p] > 0) dmaps[size_t(m) * wsum.size() + p] /= wsum[p];
+    if (FILE* f = std::fopen(dbg_path, "wb")) {
+      std::fwrite(dmaps.data(), 4, dmaps.size(), f);
+      std::fclose(f);
+      std::fprintf(stderr, "debug maps: %d x %d x %d -> %s\n", kDebugMaps, GH, GW, dbg_path);
+    }
+  }
   }
   if (failed) {
     if (err) *err = fail_msg;

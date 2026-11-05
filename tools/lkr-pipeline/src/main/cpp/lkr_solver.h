@@ -79,13 +79,18 @@ struct SolveParams {
   // harder, edge-aware -- and return grain divided by the same factor;
   // shadow_chroma blends shadow chroma toward its local mean. 0 = off.
   // Values are the DAY strengths; MergeFull's auto look fades them to 0 at night.
-  float shadow_boost = 1.5f;
+  // Luma boost default 0 (2026-11-04): raising the prior's noise map in
+  // "shadows" painted grass and foliage into brush strokes, and in HDR scenes
+  // (sky-exposed, IMG HDR+ 5a9e) the whole foreground counts as shadow. The
+  // chroma part below keeps daylight shadow colour noise below Google HDR+.
+  float shadow_boost = 0.0f;
   float shadow_chroma = 0.7f;
   // Blown highlights: near clipping one colour channel saturates (and is left
   // out of the data term) while the others do not, which leaves single red /
   // blue / magenta pixels on lamp edges. Pull colour toward neutral (luma kept)
   // where any channel nears clip, over a 2-px widened mask. Off in paper parity.
   bool highlight_desat = true;
+  bool debug_maps = false;   // fill SolveStats::dbg (LKR_DEBUG_MAPS)
   bool notch = true;           // remove Bayer-period (zipper/maze) structure from colour + grain
   float clip = 0.98f;          // normalised level at/above which a raw sample is treated as clipped
   float grain = 0.4f;          // add back grain * (removed detail), luminance only (neutral)
@@ -122,7 +127,13 @@ struct SolveStats {
   double gpu_ms = 0.0, prior_ms = 0.0, total_ms = 0.0;
   int prior_calls = 0, submits = 0, power_iters_used = 0;
   uint64_t dispatches = 0;
+  // Diagnostics (SolveParams::debug_maps): kDebugMaps planes of H x W (HR):
+  // effective frames (sum of final weights, reference 1), mean temporal weight
+  // of frames 1..K-1, noise-equalisation factor, shadow weight, max local
+  // motion |d| (LR px).
+  std::vector<float> dbg;
 };
+constexpr int kDebugMaps = 5;
 
 class Solver {
  public:

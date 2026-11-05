@@ -540,6 +540,36 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
     f = std::fopen((std::string(dd) + "_x.f32").c_str(), "wb");
     if (f) { std::fwrite(xc.as<float>(), 4, nHR, f); std::fclose(f); }
   }
+  if (prm.debug_maps) {   // diagnostics, HR planes (LR maps by nearest sample)
+    gpu_->begin(); gpu_->submit();
+    const size_t HWh = size_t(H) * W;
+    S.dbg.assign(size_t(kDebugMaps) * HWh, 0.0f);
+    const float* wt = wtb.as<float>();
+    const float* tr = wtr.as<float>();
+    const float* dl = dloc.as<float>();
+    const int LBd = prm.local_block > 0 ? prm.local_block : 16;
+    const int nbxd = (w + LBd - 1) / LBd;
+    for (int Y = 0; Y < H; ++Y)
+      for (int X = 0; X < W; ++X) {
+        const int i = std::min(Y / s, h - 1), j = std::min(X / s, w - 1);
+        float eff = 1.0f, tm = 0.0f, dm = 0.0f;
+        for (int k = 1; k < K; ++k) {
+          const size_t o = (size_t(k) * h + i) * w + j;
+          eff += prm.robust ? wt[o] : 1.0f;
+          tm += tr[o];
+          if (prm.local_block > 0) {
+            const size_t b = (size_t(k) * ((h + LBd - 1) / LBd) + i / LBd) * nbxd + j / LBd;
+            dm = std::max(dm, std::hypot(dl[2 * b], dl[2 * b + 1]));
+          }
+        }
+        const size_t p = size_t(Y) * W + X;
+        S.dbg[p] = eff;
+        S.dbg[HWh + p] = K > 1 ? tm / float(K - 1) : 1.0f;
+        S.dbg[2 * HWh + p] = nscale.empty() ? 1.0f : nscale[p];
+        S.dbg[3 * HWh + p] = shadow.empty() ? 0.0f : shadow[p];
+        S.dbg[4 * HWh + p] = dm;
+      }
+  }
   FinishLook(zc.as<float>(), x_out->data(), H, W, prm, nscale.empty() ? nullptr : nscale.data(),
              shadow.empty() ? nullptr : shadow.data());
   std::memcpy(p, pb.map, size_t(K) * 24);

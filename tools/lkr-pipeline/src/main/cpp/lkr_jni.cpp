@@ -8,6 +8,7 @@
 // contract as MfsrMerge.MfsrResult. One Gpu + prior per call: the Vulkan
 // device lives only for the merge.
 #include <jni.h>
+#include <chrono>
 
 #include <algorithm>
 #include <array>
@@ -162,6 +163,9 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
       LKR_LOG("NPU unavailable (%s): ncnn fallback", nerr.c_str());
       npu.reset();
     }
+  } else if (ff) {
+    LKR_LOG("NPU skipped (%s): ncnn fallback", npu_dir.empty()
+        ? "disabled or missing library directory" : "missing model for selected tile shape");
   }
 #endif
   lkr::PriorFactory make;
@@ -238,4 +242,63 @@ extern "C" JNIEXPORT jobject JNICALL Java_com_rawlens_lkrpipeline_LkrBridge_nati
     jboolean fp16, jstring npu_dir, jstring npu_model, jboolean paper, jfloatArray stats) {
   return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, param, bin, fp16,
                npu_dir, npu_model, paper, stats, nullptr, 0, 0);
+}
+
+#include "lkr_photo_denoise.h"
+extern "C" JNIEXPORT jboolean JNICALL Java_com_matthew_rawlens_LkrBridge_nativeDenoise(
+    JNIEnv* env, jclass, jobject buffer, jint w, jint h, jintArray cfa_j, jfloatArray wb_j,
+    jfloat strength, jstring param_j, jstring bin_j, jstring npu_dir_j, jstring npu_model_j) {
+  auto* rgba = static_cast<uint16_t*>(env->GetDirectBufferAddress(buffer));
+  if (!rgba || w < 64 || h < 64 || env->GetDirectBufferCapacity(buffer) < int64_t(w) * h * 8 ||
+      !cfa_j || env->GetArrayLength(cfa_j) != 4 || !wb_j || env->GetArrayLength(wb_j) < 3 ||
+      !param_j || !bin_j) return false;
+  int cfa[4];
+  std::array<float, 3> wb;
+  env->GetIntArrayRegion(cfa_j, 0, 4, cfa);
+  env->GetFloatArrayRegion(wb_j, 0, 3, wb.data());
+  auto str = [&](jstring j) {
+    if (!j) return std::string();
+    const char* chars = env->GetStringUTFChars(j, nullptr);
+    if (!chars) return std::string();
+    std::string value(chars);
+    env->ReleaseStringUTFChars(j, chars);
+    return value;
+  };
+  try {
+    return lkr::DenoisePhoto(rgba, w, h, cfa, wb, strength, str(param_j), str(bin_j),
+                             str(npu_dir_j), str(npu_model_j));
+  } catch (const std::exception&) { return false; }
+}
+
+// Test-only benchmark entry. Calls the production denoiser, enforces the
+// requested inference backend, and exposes measured stage totals.
+extern "C" JNIEXPORT jboolean JNICALL Java_com_matthew_rawlens_LkrBridge_nativeBenchmarkDenoise(
+    JNIEnv* env, jclass, jobject buffer, jint w, jint h, jintArray cfa_j, jfloatArray wb_j,
+    jstring param_j, jstring bin_j, jstring npu_dir_j, jstring npu_model_j,
+    jint backend, jboolean fp16, jfloatArray stats_j) {
+  auto* rgba = static_cast<uint16_t*>(env->GetDirectBufferAddress(buffer));
+  if (!rgba || w < 64 || h < 64 || env->GetDirectBufferCapacity(buffer) < int64_t(w)*h*8 ||
+      !cfa_j || env->GetArrayLength(cfa_j) != 4 || !wb_j || env->GetArrayLength(wb_j) < 3 ||
+      !param_j || !bin_j || backend < 1 || backend > 2 || !stats_j || env->GetArrayLength(stats_j) < 16) return false;
+  int cfa[4]; std::array<float,3> wb;
+  env->GetIntArrayRegion(cfa_j,0,4,cfa); env->GetFloatArrayRegion(wb_j,0,3,wb.data());
+  auto str = [&](jstring j) {
+    if (!j) return std::string();
+    const char* chars = env->GetStringUTFChars(j,nullptr);
+    if (!chars) return std::string();
+    std::string value(chars); env->ReleaseStringUTFChars(j,chars); return value;
+  };
+  try {
+    lkr::PhotoDenoiseStats stats;
+    const auto start = std::chrono::steady_clock::now();
+    const bool ok = lkr::DenoisePhoto(rgba,w,h,cfa,wb,1.f,str(param_j),str(bin_j),
+        str(npu_dir_j),str(npu_model_j),4,0.f,true,static_cast<lkr::PhotoBackend>(backend),fp16,&stats);
+    const float total = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-start).count();
+    const float values[16] = {float(stats.backend),total,float(stats.noise_ms),float(stats.model_ms),
+      float(stats.npu_open_ms),float(stats.range_ms),float(stats.primary_ms),float(stats.chroma_ms),
+      float(stats.guard_ms),float(stats.blend_ms),float(stats.pack_ms),float(stats.inference_ms),
+      float(stats.unpack_ms),float(stats.calls),float(fp16),float(ok)};
+    env->SetFloatArrayRegion(stats_j,0,16,values);
+    return ok;
+  } catch (const std::exception&) { return false; }
 }

@@ -34,7 +34,11 @@ class FfdnetGatPrior {
   bool operator()(const float* z, float* x, int H, int W, float sigma, const float* noise_scale = nullptr);
   // Only the network (packed 13 x H2 x W2 in, 12 x H2 x W2 out) for parity.
   bool runCore(const float* in, float* out, int H2, int W2);
+  // Fixed image-wide GAT range for seam-free standalone tiles; merge default is automatic.
+  void setNormalizationRange(float lo, float hi);
   std::string backend() const;
+  struct Timings { double pack_ms, run_ms, unpack_ms, wait_ms; int calls; };
+  Timings timings() const;
   std::string timing() const;   // mean per-call breakdown since load
   // External convolution core (e.g. LiteRT NPU): CHW 13 x H2 x W2 in,
   // 12 x H2 x W2 out. When set and its fixed shape matches, it replaces ncnn.

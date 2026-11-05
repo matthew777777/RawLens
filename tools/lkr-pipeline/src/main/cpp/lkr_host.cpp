@@ -138,7 +138,10 @@ void NoiseAB(const float* raw, int h, int w, float* a_out, float* b_out) {
     // Flattest 5% of blocks per level (texture is never flatter than noise);
     // 0.6045 = 5% quantile of the 8x8 block-median variance estimate under
     // pure noise (exact bias, simulated).
-    Y.push_back(quantile(sv, 0.05) / 0.6045);
+    // Quantized/constant patches can have exactly zero measured variance.
+    // The relative-error fit divides by Y: keep its weights finite at the
+    // same read-noise floor used for the returned model.
+    Y.push_back(std::max(quantile(sv, 0.05) / 0.6045, 1e-10));
     Wt.push_back(std::sqrt(double(sm.size())));
   }
   // Weighted NNLS on rows (X, 1) * (Wt/Y) = Wt: 2 unknowns, so enumerate the
