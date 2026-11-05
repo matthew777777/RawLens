@@ -52,3 +52,6 @@ codex-session-*.md
 
 # Machine-local vendor SDKs
 /.local/
+
+# Generated local benchmark and visual study output
+/artifacts/
