@@ -63,6 +63,7 @@ internal object MergeScreenSettings {
 
     fun denoise(prefs: SharedPreferences): DenoiseSettings = DenoiseSettings(
         captureSharpening = CaptureSharpeningSettings.read(prefs),
+        ffdnet = FfdnetSettings.read(prefs),
             aiEnabled = prefs.getBoolean(MainActivity.KEY_AI_DENOISE_ENABLED, false),
         saveOriginalDng = prefs.getBoolean(MainActivity.KEY_SAVE_ORIGINAL_DNG, true),
         aiStrength = prefs.getInt(MainActivity.KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,

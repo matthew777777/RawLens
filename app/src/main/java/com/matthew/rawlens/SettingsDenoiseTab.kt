@@ -94,6 +94,38 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         content.addView(sharpChoices)
         refreshSharp()
 
+        content.addView(sectionTitle("FFDNet photo denoise"))
+        content.addView(SettingsSwitch(this).apply {
+            text = "FFDNet denoise\nSingle-frame JPEG/JXL photos with colour-noise cleanup. Replaces wavelet when enabled; merged photos and DNGs are unchanged."
+            isChecked = settings.ffdnet.enabled
+            setOnCheckedChangeListener { button, enabled ->
+                val next = settings.copy(ffdnet = settings.ffdnet.copy(enabled = enabled))
+                if (persistDenoiseSettings(next)) settings = next
+                else button.isChecked = settings.ffdnet.enabled
+            }
+        })
+        val ffdnetLabel = TextView(this).apply {
+            text = "FFDNet strength: ${(settings.ffdnet.strength * 100).toInt()}%"
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(dp(12), dp(8), dp(12), 0)
+        }
+        content.addView(ffdnetLabel)
+        content.addView(SettingsSlider(this).apply {
+            max = 100
+            progress = (settings.ffdnet.strength * 100).toInt()
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
+                    ffdnetLabel.text = "FFDNet strength: $progress%"
+                }
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
+                    val next = settings.copy(ffdnet = settings.ffdnet.copy(strength = seekBar.progress / 100f))
+                    if (persistDenoiseSettings(next)) settings = next
+                    else seekBar.progress = (settings.ffdnet.strength * 100).toInt()
+                }
+            })
+        })
+
         content.addView(sectionTitle("Profiled wavelet (Vulkan)"))
         val waveSubordinate = ArrayList<View>()
         val waveMaster = SettingsSwitch(this).apply {

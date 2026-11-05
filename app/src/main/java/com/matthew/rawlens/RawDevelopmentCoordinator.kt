@@ -299,8 +299,10 @@ class RawDevelopmentCoordinator(context: Context) {
         // (the wavelet stage needs the unfused RGBA16F frame).
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        // Sharpening and wavelet share the pre-WB camera-linear tap, in that order.
-        val cameraLinearPlan = waveletPlan || (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
+        // FFDNet (when selected), sharpening and wavelet share the pre-WB tap.
+        val cameraLinearPlan = waveletPlan ||
+            (settings.denoise.ffdnet.active && !metadata.quadBayer) ||
+            (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
         val effectiveFused = if (cameraLinearPlan || !allowOutputFusion) null else fusedOutputSettings
         val consumeOutput: (AmazeGpuOutput) -> T = { output ->
             Log.i(LOG_TAG, "Demosaic done: ${SystemClock.elapsedRealtime() - transformAt}ms")
@@ -309,7 +311,7 @@ class RawDevelopmentCoordinator(context: Context) {
             ) {
                 consumeCameraLinearTail(
                     output, metadata, normalization, transform, preDemosaic,
-                    settings.denoise.wavelet, settings.denoise.captureSharpening,
+                    settings.denoise.wavelet, settings.denoise.captureSharpening, settings.denoise.ffdnet,
                     normalization.sensorPattern.shifted(
                         geometry.sensorOriginX + geometry.processingCrop.left,
                         geometry.sensorOriginY + geometry.processingCrop.top), clipState = captureClip, consume = consume
@@ -400,7 +402,7 @@ class RawDevelopmentCoordinator(context: Context) {
     }
 
     /**
-     * Post-demosaic camera-linear tail: Capture Sharpening, then profiled
+     * Post-demosaic camera-linear tail: optional FFDNet, Capture Sharpening, then profiled
      * wavelet (Vulkan), then the WB/color matrix to ACEScg. Hands a
      * standard scene-linear frame to [consume]. Any wavelet failure falls
      * back to the un-denoised readback (no re-demosaic); the JPEG never
@@ -414,6 +416,7 @@ class RawDevelopmentCoordinator(context: Context) {
         preDemosaic: PreDemosaicResult,
         settings: WaveletSettings,
         sharpening: CaptureSharpeningSettings,
+        ffdnet: FfdnetSettings,
         pattern: BayerPattern,
         clipState: CaptureSharpeningClipState? = preDemosaic.cfa?.captureSharpeningClipState,
         consume: (SceneLinearGpuFrame) -> T
@@ -442,7 +445,12 @@ class RawDevelopmentCoordinator(context: Context) {
             Log.w(LOG_TAG, "Wavelet bypass: missing or invalid WB gains " +
                 "entries=${metadata.noiseProfile?.size ?: 0}")
         }
-        val denoise = settings.enabled && settings.strength > 0f && denoiseWb != null
+        if (ffdnet.active) {
+            FfdnetDenoiser(appContext).process(camera, output.width, output.height,
+                pattern, denoiseWb ?: WaveletDenoiser.wbGainsGreen1(metadata.neutralColorPoint?.toDoubleArray()),
+                ffdnet.strength)
+        }
+        val denoise = !ffdnet.active && settings.enabled && settings.strength > 0f && denoiseWb != null
         val sharpenWb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
         // Sharpening alone keeps its own call. With denoise it runs first in the
         // same GPU submit (no extra 8 B/px download/upload); the sharpening WB is
@@ -764,7 +772,9 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        val cameraLinearPlan = waveletPlan || (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
+        val cameraLinearPlan = waveletPlan ||
+            (settings.denoise.ffdnet.active && !metadata.quadBayer) ||
+            (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
         val tapWhiteWindow = if (outputSettings.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
@@ -796,7 +806,7 @@ class RawDevelopmentCoordinator(context: Context) {
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern,
+                            settings.denoise.wavelet, settings.denoise.captureSharpening, settings.denoise.ffdnet, cfa.pattern,
                             sharpeningClipState(cfa)
                         ) { frame -> finishJpeg(frame.texture, outputSettings) }
                     }
@@ -1162,7 +1172,9 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        val cameraLinearPlan = waveletPlan || (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
+        val cameraLinearPlan = waveletPlan ||
+            (settings.denoise.ffdnet.active && !metadata.quadBayer) ||
+            (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
         val tapWhiteWindow = if (look.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
@@ -1194,7 +1206,7 @@ class RawDevelopmentCoordinator(context: Context) {
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern,
+                            settings.denoise.wavelet, settings.denoise.captureSharpening, settings.denoise.ffdnet, cfa.pattern,
                             sharpeningClipState(cfa)
                         ) { frame -> finishJxl(frame.texture, look, jxl) }
                     }

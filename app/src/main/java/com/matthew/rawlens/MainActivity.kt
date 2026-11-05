@@ -3668,6 +3668,7 @@ class MainActivity : Activity() {
         val prefs = lensPreferences()
         return DenoiseSettings(
             captureSharpening = CaptureSharpeningSettings.read(prefs),
+            ffdnet = FfdnetSettings.read(prefs),
             aiEnabled = prefs.getBoolean(KEY_AI_DENOISE_ENABLED, false),
             saveOriginalDng = prefs.getBoolean(KEY_SAVE_ORIGINAL_DNG, true),
             aiStrength = prefs.getInt(KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,
@@ -3691,6 +3692,8 @@ class MainActivity : Activity() {
         lensPreferences().edit()
             .putBoolean(CaptureSharpeningSettings.ENABLED_KEY, settings.captureSharpening.enabled)
             .putString(CaptureSharpeningSettings.LEVEL_KEY, settings.captureSharpening.level.name)
+            .putBoolean(FfdnetSettings.ENABLED_KEY, settings.ffdnet.enabled)
+            .putInt(FfdnetSettings.STRENGTH_KEY, (settings.ffdnet.strength * 100).toInt())
             .putBoolean(KEY_AI_DENOISE_ENABLED, settings.aiEnabled)
             .putBoolean(KEY_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
             .putInt(KEY_AI_STRENGTH_PCT, (settings.aiStrength * 100 + 0.5f).toInt().coerceIn(0, 100))

@@ -33,6 +33,8 @@ package com.matthew.rawlens
  * darktable denoiseprofile port). Unlike the pre-demosaic stages it feeds
  * the developed JPEG only, never the DNG. See [WaveletSettings].
  *
+ * [ffdnet] optionally replaces the post-demosaic wavelet for single-frame
+ * JPEG/JXL development. It runs before sharpening and never alters the DNG.
  * Stage arbitration lives in [resolveDenoise] (resolver parity).
  */
 data class DenoiseSettings(
@@ -40,7 +42,8 @@ data class DenoiseSettings(
     val saveOriginalDng: Boolean = true,
     val aiStrength: Float = 1f,
     val wavelet: WaveletSettings = WaveletSettings(),
-    val captureSharpening: CaptureSharpeningSettings = CaptureSharpeningSettings()
+    val captureSharpening: CaptureSharpeningSettings = CaptureSharpeningSettings(),
+    val ffdnet: FfdnetSettings = FfdnetSettings()
 ) {
     init {
         require(aiStrength.isFinite() && aiStrength in 0f..1f) {
@@ -73,7 +76,7 @@ fun resolveDenoise(
 ): ResolvedDenoise {
     if (mergedPath) return ResolvedDenoise(PreDemosaicStage.OFF, false)
     val pre = if (denoise.aiEnabled) PreDemosaicStage.AI else PreDemosaicStage.OFF
-    val wave = denoise.wavelet.enabled && denoise.wavelet.strength > 0f
+    val wave = !denoise.ffdnet.active && denoise.wavelet.enabled && denoise.wavelet.strength > 0f
     return ResolvedDenoise(pre, wave)
 }
 

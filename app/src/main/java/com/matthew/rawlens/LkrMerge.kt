@@ -49,7 +49,8 @@ internal object LkrMerge {
     }
 
     /** ncnn loads models from paths: copy the assets once to filesDir. */
-    private fun modelFile(context: Context, asset: String): File {
+    @Synchronized
+    internal fun modelFile(context: Context, asset: String): File {
         // Keyed by the APK's update time: a new build re-installs the model
         // (assets are compressed, so openFd sizes are unavailable).
         val stamp = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
