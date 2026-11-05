@@ -49,3 +49,6 @@ release-mappings/
 __pycache__/
 *.py[cod]
 codex-session-*.md
+
+# Machine-local vendor SDKs
+/.local/
