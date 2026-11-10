@@ -24,7 +24,8 @@ class JpegSaver(private val context: Context) {
              typeSuffix: String? = null,
              gps: GpsLocation? = null,
              // Burst folder grouping, mirrors DngSaver.save: null keeps flat.
-             subfolder: String? = null): String {
+             subfolder: String? = null,
+             description: String? = null): String {
         val startedAt = SystemClock.elapsedRealtime()
         val bitmap = developed.bitmap
         val displayName = CaptureFileNames.fileName(captureTimeMillis, typeSuffix, "jpg")
@@ -98,9 +99,7 @@ class JpegSaver(private val context: Context) {
                     CaptureExifAttributes.writeTo(this, metadata, captureTimeMillis)
                     setAttribute(
                         ExifInterface.TAG_IMAGE_DESCRIPTION,
-                        "RAW_SENSOR -> AMaZE -> ACEScg -> AgX ${developed.settings.agxLook.label} -> " +
-                            (if (developed.settings.displayP3) "Display P3" else "sRGB") +
-                            if (developed.settings.ultraHdr) " -> Ultra HDR gainmap (JPEG_R)" else ""
+                        jpegImageDescription(developed.settings, typeSuffix, description)
                     )
                     // A missing fix writes no GPS tags at all: an absent geotag
                     // is truthful, a stale or zeroed one is not.
@@ -142,3 +141,14 @@ class JpegSaver(private val context: Context) {
         const val LOG_TAG = "RawLensDevelop"
     }
 }
+
+internal fun jpegImageDescription(
+    settings: JpegOutputSettings,
+    typeSuffix: String?,
+    description: String?
+): String = (description?.let { "$it\nJPEG DEVELOPMENT\n" } ?: "") +
+    (if (typeSuffix == CaptureFileNames.TYPE_MFSR || typeSuffix == CaptureFileNames.TYPE_LKSR)
+        "Merged linear camera RGB -> ACEScg -> AgX " else "RAW_SENSOR -> AMaZE -> ACEScg -> AgX ") +
+    "${settings.agxLook.label} -> " +
+        (if (settings.displayP3) "Display P3" else "sRGB") +
+        if (settings.ultraHdr) " -> Ultra HDR gainmap (JPEG_R)" else ""

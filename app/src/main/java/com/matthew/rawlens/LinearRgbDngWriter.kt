@@ -64,7 +64,9 @@ data class MergeProvenance(
      * unscaled reference profile. Recorded for audit; the NoiseProfile tag
      * itself carries the scaled pairs.
      */
-    val effectiveFrames: Double = 1.0
+    val effectiveFrames: Double = 1.0,
+    val engineLabel: String = "RAW burst",
+    val details: String = ""
 ) {
     init {
         require(algorithmVersion.isNotBlank()) { "Merge algorithm version must be recorded" }
@@ -346,7 +348,7 @@ object LinearRgbDngWriter {
         val timestamp = if (provenance.referenceTimestampNs == Long.MIN_VALUE) "?"
             else provenance.referenceTimestampNs.toString()
         return "Captured with RawLens\n" +
-            "Linear RGB prime DNG from RAW burst merge\n" +
+            "${provenance.engineLabel} merge (linear camera RGB)\n" +
             "\nPARAMETERS\n" +
             "- Algorithm: ${provenance.algorithmVersion}\n" +
             "- Selected frames: ${provenance.selectedFrames}\n" +
@@ -355,6 +357,7 @@ object LinearRgbDngWriter {
             "- Output scale: ${provenance.outputScale}x\n" +
             "- Lens shading applied: ${provenance.lensShadingApplied}\n" +
             "- Effective frames: ${formatEffectiveFrames(provenance.effectiveFrames)}\n" +
+            provenance.details +
             "\nSource:\n" +
             "- Camera: ${provenance.sourceCameraId}\n" +
             "- Reference timestamp: $timestamp ns\n" +

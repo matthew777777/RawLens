@@ -72,7 +72,8 @@ internal object MfsrMerge {
          * takes, which carry no Camera2 result (the no-result [JpegSaver]
          * overload covers that tail).
          */
-        val refResult: android.hardware.camera2.CaptureResult?
+        val refResult: android.hardware.camera2.CaptureResult?,
+        val mergeDetails: String = ""
     ) {
         private val released = java.util.concurrent.atomic.AtomicBoolean(false)
 

@@ -131,7 +131,7 @@ internal fun MainActivity.setQuickTileState(tile: TextView, active: Boolean) {
 internal fun MainActivity.refreshFeatureTags(ettrEnabled: Boolean) {
     val tags = if (isVideoMode) emptyList() else listOfNotNull(
         "HDR+".takeIf { hdrPlusSettings.enabled },
-        "MFSR".takeIf { mfsrSettings.enabled },
+        mfsrSettings.label.takeIf { mfsrSettings.enabled },
         "ETTR".takeIf { ettrEnabled },
         "HDR".takeIf { hdrEnabled },
         "BURST".takeIf { releaseMode == 1 },

@@ -125,7 +125,7 @@ class LinearRgbDngWriterTest {
 
     @Test fun provenanceBlockCarriesEveryRequiredKey() {
         val block = LinearRgbDngWriter.provenanceBlock(provenance())
-        assertTrue(block, block.startsWith("Captured with RawLens\nLinear RGB prime DNG from RAW burst merge\n"))
+        assertTrue(block, block.startsWith("Captured with RawLens\nRAW burst merge (linear camera RGB)\n"))
         for (key in listOf(
             "\nPARAMETERS\n", "- Algorithm: ${LinearRgbDngWriter.ALGORITHM_VERSION}\n",
             "- Selected frames: 4\n", "- Accepted frames: 3\n",
