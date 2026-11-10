@@ -13,6 +13,7 @@
 #ifdef __ANDROID__
 #define VK_USE_PLATFORM_ANDROID_KHR
 #include <android/hardware_buffer.h>
+#include <sys/system_properties.h>
 #endif
 #include <map>
 #include <vulkan/vulkan.h>
@@ -120,7 +121,10 @@ struct Engine::State {
   VkPhysicalDeviceMemoryProperties memoryProperties{};
   VkDescriptorSetLayout descriptors = VK_NULL_HANDLE;
   VkPipelineLayout layout = VK_NULL_HANDLE;
-  std::array<VkPipeline, 8> pipelines{};
+  std::array<VkPipeline, 10> pipelines{};
+  // RCD-lite (stages 8, 9) for P010 frames; debug.rawlens.rcd_exact=1 keeps
+  // the exact frame-global passes for A/B comparison.
+  bool lite = true;
   bool cacheResponses = false;
   bool tiledReconstruction = false;
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
@@ -731,7 +735,8 @@ struct Engine::State {
     if (half)
       stages.push_back(6);
     if (tileLocal && half)
-      stages = frameGlobal ? (p010Frame ? std::vector<int>{0, 7, 1, 4, 3, 2, 5}
+      stages = frameGlobal ? (p010Frame ? (lite ? std::vector<int>{8, 9, 3, 5}
+                                                : std::vector<int>{0, 7, 1, 4, 3, 2, 5})
                                         : std::vector<int>{0, 7, 1, 4, 6, 3})
                            : std::vector<int>{7, 3, 5};
     if (frameGlobal && !half)
@@ -974,7 +979,9 @@ struct Engine::State {
         timestampBits == 64 ? ~uint64_t(0) : (uint64_t(1) << timestampBits) - 1;
     std::fill(lastGpuCosts.begin(), lastGpuCosts.end(), -1.0);
     for (size_t i = 0; i < queryStages.size(); ++i)
-      lastGpuCosts[queryStages[i]] =
+      // Lite passes report in the slots of the passes they replace (8: green,
+      // 9: final).
+      lastGpuCosts[queryStages[i] == 8 ? 1 : queryStages[i] == 9 ? 2 : queryStages[i]] =
           double((times[i * 2 + 1] - times[i * 2]) & mask) *
           properties.limits.timestampPeriod / 1e6;
   }
@@ -1068,6 +1075,11 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
     localBytes += (s.coreX + 2 * radius) * (s.coreY + 2 * radius) * 4;
   s.frameGlobal = frameGlobal;
   if (frameGlobal) {
+#ifdef __ANDROID__
+    char exact[PROP_VALUE_MAX] = {};
+    __system_property_get("debug.rawlens.rcd_exact", exact);
+    s.lite = exact[0] != '1';
+#endif
     // One 16-lane subgroup per group; no shared memory.
     s.coreX = 16;
     s.coreY = 1;
@@ -1280,7 +1292,10 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
   VkResult result = VK_SUCCESS;
   int failedPass = -1;
   for (int pass = 0;
-       pass < (specializePasses ? ((cacheResponses || s.rawInput) ? 8 : 7) : 1);
+       pass < (specializePasses
+                   ? (s.frameGlobal && !imageOutput ? 10
+                                                    : (cacheResponses || s.rawInput) ? 8 : 7)
+                   : 1);
        ++pass) {
     if (pass == 5 && !s.frameGlobal && !(s.rawInput && (cacheResponses || tileLocal)))
       continue;
@@ -1292,7 +1307,7 @@ Engine::Engine(const std::vector<uint32_t> &shader, bool specializePasses,
     pi.stage.pSpecializationInfo = specializePasses ? &specialization : nullptr;
     VkShaderModule baked = VK_NULL_HANDLE;
     // Frame-global never runs the raw-pack pass: its pass 7 is the PQ walker.
-    if (!stageShaders.empty() || (s.rawInput && pass == 7 && !s.frameGlobal)) {
+    if (pass < 8 && (!stageShaders.empty() || (s.rawInput && pass == 7 && !s.frameGlobal))) {
       const auto &program =
           (s.rawInput && pass == 7) ? rawPackShader : stageShaders[pass];
       VkShaderModuleCreateInfo info{
