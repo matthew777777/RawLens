@@ -1,0 +1,43 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Denoised opponent planes -> CFA uint16. Grain: a fraction of the removed
+// luma-plane noise is put back (constant per 2x2 cell, so it stays neutral).
+#include "rawdn_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer E { vec4 est[]; };
+layout(std430, binding = 1) readonly buffer Z { vec4 z[]; };
+layout(std430, binding = 2) writeonly buffer O { uint cfa[]; };
+layout(push_constant) uniform P {
+  int qw, qh, cw, ch;
+  int diagGreen, pad0, pad1, pad2;
+  float a, b, scale, grain;
+  vec4 black;
+  vec4 gain;
+  float white;
+} pc;
+
+vec4 inv(vec4 v) {   // closed-form exact unbiased inverse of the generalised Anscombe transform
+  vec4 t = max(v, vec4(1.0)), t2 = t * t;
+  vec4 i0 = 0.25 * t2 + 0.30618622 / t - 1.375 / t2 + 0.76546554 / (t2 * t) - 0.125;
+  return pc.a * i0 - pc.b / pc.a;
+}
+
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (q.x >= pc.qw || q.y >= pc.qh) return;
+  int n = pc.qw * pc.qh, o = q.y * pc.qw + q.x;
+  vec4 Y = est[o], Ca = est[o + n], Cb = est[o + 2 * n], D = est[o + 3 * n];
+  Y += pc.grain * (z[o] - Y);
+  vec4 r = Y + Cb + Ca, b = Y + Cb - Ca, g1 = Y - Cb + D, g2 = Y - Cb - D;
+  for (int k = 0; k < 4; k++) {
+    int cy = 2 * q.y + (k >> 1), cx = 2 * q.x + (k & 1);
+    if (cy >= pc.ch || cx >= pc.cw) continue;
+    vec4 v = vec4(r[k], g1[k], g2[k], b[k]);
+    if (pc.diagGreen != 0) v = v.yxwz;
+    vec4 raw = clamp(inv(v / pc.gain) / pc.scale + pc.black + 0.5, vec4(0.0), vec4(pc.white));
+    uvec4 u = uvec4(raw);
+    cfa[(2 * cy) * pc.cw + cx] = u.x | (u.y << 16);
+    cfa[(2 * cy + 1) * pc.cw + cx] = u.z | (u.w << 16);
+  }
+}

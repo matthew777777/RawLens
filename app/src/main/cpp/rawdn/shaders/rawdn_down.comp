@@ -1,0 +1,19 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// 2x2 box downsample of the first three planes: a fine quad is one coarse pixel.
+#include "rawdn_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer F { vec4 f[]; };
+layout(std430, binding = 1) writeonly buffer C { vec4 c[]; };
+layout(push_constant) uniform P { int fqw, fqh, cqw, cqh; } pc;
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (q.x >= pc.cqw || q.y >= pc.cqh) return;
+  int fn = pc.fqw * pc.fqh, cn = pc.cqw * pc.cqh;
+  for (int ch = 0; ch < 3; ch++) {
+    int o = ch * fn + (2 * q.y) * pc.fqw + 2 * q.x;
+    c[ch * cn + q.y * pc.cqw + q.x] = 0.25 * vec4(dot(f[o], vec4(1.0)), dot(f[o + 1], vec4(1.0)),
+                                                  dot(f[o + pc.fqw], vec4(1.0)), dot(f[o + pc.fqw + 1], vec4(1.0)));
+  }
+}

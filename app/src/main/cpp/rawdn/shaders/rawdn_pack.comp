@@ -1,0 +1,40 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// CFA (uint16 pairs) -> variance-stabilised, white-balance-equalised opponent
+// planes (Y, Ca, Cb, D) at half resolution. One thread per level-1 quad
+// (4x4 CFA pixels). Cells beyond the frame replicate the last 2x2 cell.
+#include "rawdn_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer I { uint cfa[]; };   // one uint = 2 px (lo = even x)
+layout(std430, binding = 1) writeonly buffer Z { vec4 z[]; };
+layout(push_constant) uniform P {
+  int qw, qh, cw, ch;       // level-1 quads; CFA size in 2x2 cells
+  int diagGreen, pad0, pad1, pad2;
+  float a, b, scale, pad3;  // var = a x + b, x = (raw - black) * scale
+  vec4 black;               // per site (0,0) (0,1) (1,0) (1,1)
+  vec4 gain;                // sqrt(wb) per site
+} pc;
+
+vec4 cell(int cy, int cx) {
+  cy = min(cy, pc.ch - 1); cx = min(cx, pc.cw - 1);
+  uint u0 = cfa[(2 * cy) * pc.cw + cx], u1 = cfa[(2 * cy + 1) * pc.cw + cx];
+  vec4 raw = vec4(float(u0 & 0xffffu), float(u0 >> 16), float(u1 & 0xffffu), float(u1 >> 16));
+  vec4 x = (raw - pc.black) * pc.scale;
+  vec4 v = pc.gain * (2.0 / pc.a) * sqrt(max(pc.a * x + vec4(0.375 * pc.a * pc.a + pc.b), vec4(0.0)));
+  return pc.diagGreen != 0 ? v.yxwz : v;   // -> (r, g1, g2, b) roles
+}
+
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (q.x >= pc.qw || q.y >= pc.qh) return;
+  vec4 c00 = cell(2 * q.y, 2 * q.x), c01 = cell(2 * q.y, 2 * q.x + 1);
+  vec4 c10 = cell(2 * q.y + 1, 2 * q.x), c11 = cell(2 * q.y + 1, 2 * q.x + 1);
+  vec4 r = vec4(c00.x, c01.x, c10.x, c11.x), g1 = vec4(c00.y, c01.y, c10.y, c11.y);
+  vec4 g2 = vec4(c00.z, c01.z, c10.z, c11.z), b = vec4(c00.w, c01.w, c10.w, c11.w);
+  int n = pc.qw * pc.qh, o = q.y * pc.qw + q.x;
+  z[o] = 0.25 * (r + g1 + g2 + b);
+  z[o + n] = 0.5 * (r - b);
+  z[o + 2 * n] = 0.25 * (r + b - g1 - g2);
+  z[o + 3 * n] = 0.5 * (g1 - g2);
+}

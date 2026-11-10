@@ -1,0 +1,20 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Coarse correction: d = coarse estimate - box_down(fine estimate = num / den).
+#include "rawdn_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer CO { vec4 co[]; };   // coarse estimate planes
+layout(std430, binding = 1) readonly buffer NUM { vec4 num[]; }; // fine accumulators (one plane)
+layout(std430, binding = 2) readonly buffer DEN { float den[]; };
+layout(std430, binding = 3) writeonly buffer D { vec4 d[]; };    // coarse scratch (one plane)
+layout(push_constant) uniform P { int fqw, fqh, cqw, cqh, cbase; } pc;
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (q.x >= pc.cqw || q.y >= pc.cqh) return;
+  int o = (2 * q.y) * pc.fqw + 2 * q.x;
+  vec4 m = 0.25 * vec4(dot(num[o], vec4(1.0)) / den[o], dot(num[o + 1], vec4(1.0)) / den[o + 1],
+                       dot(num[o + pc.fqw], vec4(1.0)) / den[o + pc.fqw], dot(num[o + pc.fqw + 1], vec4(1.0)) / den[o + pc.fqw + 1]);
+  int c = q.y * pc.cqw + q.x;
+  d[c] = co[pc.cbase + c] - m;
+}

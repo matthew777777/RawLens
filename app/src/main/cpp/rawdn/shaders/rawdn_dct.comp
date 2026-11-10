@@ -1,0 +1,127 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Sliding 8x8 orthonormal DCT, stride 2, one plane per dispatch.
+// mode 0: hard-threshold pilot. mode 1: empirical Wiener with the pilot.
+// Blocks of one phase (block origin mod 4 quads) never overlap, so num/den
+// accumulate with plain read-modify-write. Block weight is 1 / kept
+// coefficients (pilot) or 1 / sum W^2 (Wiener).
+#include "rawdn_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer Z { vec4 z[]; };
+layout(std430, binding = 1) readonly buffer PL { vec4 pil[]; };
+layout(std430, binding = 2) buffer NUM { vec4 num[]; };
+layout(std430, binding = 3) buffer DEN { float den[]; };
+layout(push_constant) uniform P {
+  int qw, qh, base, mode;   // base = plane offset in z / pil
+  int py, px, pad0, pad1;
+  float thr;                // mode 0: lam^2 * var. mode 1: strength * var
+} pc;
+
+const float C4 = 0.35355339, C1 = 0.98078528, C2 = 0.92387953, C3 = 0.83146961,
+            C5 = 0.55557023, C6 = 0.38268343, C7 = 0.19509032;
+
+void fdct(inout vec4 v0, inout vec4 v1, inout vec4 v2, inout vec4 v3,
+          inout vec4 v4, inout vec4 v5, inout vec4 v6, inout vec4 v7) {
+  vec4 s07 = v0 + v7, d07 = v0 - v7, s16 = v1 + v6, d16 = v1 - v6;
+  vec4 s25 = v2 + v5, d25 = v2 - v5, s34 = v3 + v4, d34 = v3 - v4;
+  vec4 a = s07 + s34, b = s16 + s25, c = s16 - s25, d = s07 - s34;
+  v0 = C4 * (a + b);
+  v4 = C4 * (a - b);
+  v2 = 0.5 * (C2 * d + C6 * c);
+  v6 = 0.5 * (C6 * d - C2 * c);
+  v1 = 0.5 * (C1 * d07 + C3 * d16 + C5 * d25 + C7 * d34);
+  v3 = 0.5 * (C3 * d07 - C7 * d16 - C1 * d25 - C5 * d34);
+  v5 = 0.5 * (C5 * d07 - C1 * d16 + C7 * d25 + C3 * d34);
+  v7 = 0.5 * (C7 * d07 - C5 * d16 + C3 * d25 - C1 * d34);
+}
+
+void idct(inout vec4 v0, inout vec4 v1, inout vec4 v2, inout vec4 v3,
+          inout vec4 v4, inout vec4 v5, inout vec4 v6, inout vec4 v7) {
+  vec4 o0 = 0.5 * (C1 * v1 + C3 * v3 + C5 * v5 + C7 * v7);
+  vec4 o1 = 0.5 * (C3 * v1 - C7 * v3 - C1 * v5 - C5 * v7);
+  vec4 o2 = 0.5 * (C5 * v1 - C1 * v3 + C7 * v5 + C3 * v7);
+  vec4 o3 = 0.5 * (C7 * v1 - C5 * v3 + C3 * v5 - C1 * v7);
+  vec4 p = C4 * (v0 + v4), q = C4 * (v0 - v4);
+  vec4 r = 0.5 * (C2 * v2 + C6 * v6), s = 0.5 * (C6 * v2 - C2 * v6);
+  vec4 e0 = p + r, e3 = p - r, e1 = q + s, e2 = q - s;
+  v0 = e0 + o0; v7 = e0 - o0;
+  v1 = e1 + o1; v6 = e1 - o1;
+  v2 = e2 + o2; v5 = e2 - o2;
+  v3 = e3 + o3; v4 = e3 - o3;
+}
+
+// a0/a1: rows 0-3 / 4-7 of columns 0-3; b0/b1: columns 4-7.
+// After: p0[k] = (horizontal freq k, vertical 0-3), p1: horizontal 4+k,
+// q0/q1: vertical 4-7.
+void fwd(mat4 a0, mat4 a1, mat4 b0, mat4 b1, out mat4 p0, out mat4 q0, out mat4 p1, out mat4 q1) {
+  fdct(a0[0], a0[1], a0[2], a0[3], a1[0], a1[1], a1[2], a1[3]);
+  fdct(b0[0], b0[1], b0[2], b0[3], b1[0], b1[1], b1[2], b1[3]);
+  p0 = transpose(a0); q0 = transpose(a1); p1 = transpose(b0); q1 = transpose(b1);
+  fdct(p0[0], p0[1], p0[2], p0[3], p1[0], p1[1], p1[2], p1[3]);
+  fdct(q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3]);
+}
+
+#define LOADBLK(BUF, A0, A1, B0, B1)                                                     \
+  for (int j = 0; j < 4; j++) {                                                          \
+    vec4 q0_ = BUF[quadIndex(by + j, bx, pc.qw, pc.qh, pc.base)];                        \
+    vec4 q1_ = BUF[quadIndex(by + j, bx + 1, pc.qw, pc.qh, pc.base)];                    \
+    vec4 q2_ = BUF[quadIndex(by + j, bx + 2, pc.qw, pc.qh, pc.base)];                    \
+    vec4 q3_ = BUF[quadIndex(by + j, bx + 3, pc.qw, pc.qh, pc.base)];                    \
+    vec4 ra = vec4(q0_.xy, q1_.xy), rb = vec4(q2_.xy, q3_.xy);                           \
+    vec4 sa = vec4(q0_.zw, q1_.zw), sb = vec4(q2_.zw, q3_.zw);                           \
+    if (j == 0) { A0[0] = ra; A0[1] = sa; B0[0] = rb; B0[1] = sb; }                      \
+    else if (j == 1) { A0[2] = ra; A0[3] = sa; B0[2] = rb; B0[3] = sb; }                 \
+    else if (j == 2) { A1[0] = ra; A1[1] = sa; B1[0] = rb; B1[1] = sb; }                 \
+    else { A1[2] = ra; A1[3] = sa; B1[2] = rb; B1[3] = sb; }                             \
+  }
+
+void main() {
+  int by = int(gl_GlobalInvocationID.y) * 4 + pc.py - 3, bx = int(gl_GlobalInvocationID.x) * 4 + pc.px - 3;
+  if (by >= pc.qh || bx >= pc.qw) return;
+  mat4 a0, a1, b0, b1, p0, q0, p1, q1;
+  LOADBLK(z, a0, a1, b0, b1)
+  fwd(a0, a1, b0, b1, p0, q0, p1, q1);
+  float w;
+  if (pc.mode == 0) {
+    float dc = p0[0].x, cnt = 0.0;
+    vec4 t = vec4(pc.thr);
+#define HT(M, K) { vec4 k = step(t, M[K] * M[K]); M[K] *= k; cnt += dot(k, vec4(1.0)); }
+    float kdc = step(pc.thr, dc * dc);
+    HT(p0, 0) HT(p0, 1) HT(p0, 2) HT(p0, 3) HT(p1, 0) HT(p1, 1) HT(p1, 2) HT(p1, 3)
+    HT(q0, 0) HT(q0, 1) HT(q0, 2) HT(q0, 3) HT(q1, 0) HT(q1, 1) HT(q1, 2) HT(q1, 3)
+    p0[0].x = dc;
+    w = 1.0 / max(cnt - kdc + 1.0, 1.0);
+  } else {
+    mat4 c0, c1, d0, d1, e0, f0, e1, f1;
+    LOADBLK(pil, c0, c1, d0, d1)
+    fwd(c0, c1, d0, d1, e0, f0, e1, f1);
+    float dc = p0[0].x, s2 = 0.0;
+    vec4 t = vec4(pc.thr);
+#define WN(M, E, K) { vec4 e2 = E[K] * E[K]; vec4 g = e2 / (e2 + t); M[K] *= g; s2 += dot(g, g); }
+    { float e2 = e0[0].x * e0[0].x; float g = e2 / (e2 + pc.thr); s2 -= g * g; }
+    WN(p0, e0, 0) WN(p0, e0, 1) WN(p0, e0, 2) WN(p0, e0, 3) WN(p1, e1, 0) WN(p1, e1, 1) WN(p1, e1, 2) WN(p1, e1, 3)
+    WN(q0, f0, 0) WN(q0, f0, 1) WN(q0, f0, 2) WN(q0, f0, 3) WN(q1, f1, 0) WN(q1, f1, 1) WN(q1, f1, 2) WN(q1, f1, 3)
+    p0[0].x = dc;
+    w = 1.0 / max(s2 + 1.0, 1e-6);
+  }
+  idct(p0[0], p0[1], p0[2], p0[3], p1[0], p1[1], p1[2], p1[3]);
+  idct(q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3]);
+  a0 = transpose(p0); a1 = transpose(q0); b0 = transpose(p1); b1 = transpose(q1);
+  idct(a0[0], a0[1], a0[2], a0[3], a1[0], a1[1], a1[2], a1[3]);
+  idct(b0[0], b0[1], b0[2], b0[3], b1[0], b1[1], b1[2], b1[3]);
+  for (int j = 0; j < 4; j++) {
+    int qy = by + j;
+    if (qy < 0 || qy >= pc.qh) continue;
+    vec4 ra, rb, sa, sb;
+    if (j == 0) { ra = a0[0]; sa = a0[1]; rb = b0[0]; sb = b0[1]; }
+    else if (j == 1) { ra = a0[2]; sa = a0[3]; rb = b0[2]; sb = b0[3]; }
+    else if (j == 2) { ra = a1[0]; sa = a1[1]; rb = b1[0]; sb = b1[1]; }
+    else { ra = a1[2]; sa = a1[3]; rb = b1[2]; sb = b1[3]; }
+    int o = qy * pc.qw + bx;
+    if (bx >= 0) { num[o] += w * vec4(ra.xy, sa.xy); den[o] += w; }
+    if (bx + 1 >= 0 && bx + 1 < pc.qw) { num[o + 1] += w * vec4(ra.zw, sa.zw); den[o + 1] += w; }
+    if (bx + 2 >= 0 && bx + 2 < pc.qw) { num[o + 2] += w * vec4(rb.xy, sb.xy); den[o + 2] += w; }
+    if (bx + 3 >= 0 && bx + 3 < pc.qw) { num[o + 3] += w * vec4(rb.zw, sb.zw); den[o + 3] += w; }
+  }
+}

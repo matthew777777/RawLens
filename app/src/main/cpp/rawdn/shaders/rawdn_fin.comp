@@ -1,0 +1,49 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Estimate = num / den (+ bilinear 2x upsample of the coarse correction).
+// One thread per coarse quad = 2x2 fine quads.
+#include "rawdn_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer NUM { vec4 num[]; };
+layout(std430, binding = 1) readonly buffer DEN { float den[]; };
+layout(std430, binding = 2) readonly buffer D { vec4 d[]; };
+layout(std430, binding = 3) writeonly buffer O { vec4 o[]; };
+layout(push_constant) uniform P { int fqw, fqh, cqw, cqh, obase, fold; } pc;
+
+vec4 upq(float m, float n, float s, float w, float e, float nw, float ne, float sw, float se) {
+  return 0.5625 * m + 0.1875 * vec4(n + w, n + e, s + w, s + e) + 0.0625 * vec4(nw, ne, sw, se);
+}
+
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);   // coarse quad
+  if (q.x >= pc.cqw || q.y >= pc.cqh) return;
+  int f = (2 * q.y) * pc.fqw + 2 * q.x;
+  vec4 e00 = num[f] / den[f], e01 = num[f + 1] / den[f + 1];
+  vec4 e10 = num[f + pc.fqw] / den[f + pc.fqw], e11 = num[f + pc.fqw + 1] / den[f + pc.fqw + 1];
+  if (pc.fold != 0) {
+    // 4x4 coarse pixels around this coarse quad: rows/cols -1..2
+    vec4 qm = d[quadIndex(q.y, q.x, pc.cqw, pc.cqh, 0)];
+    vec4 qn = d[quadIndex(q.y - 1, q.x, pc.cqw, pc.cqh, 0)], qs = d[quadIndex(q.y + 1, q.x, pc.cqw, pc.cqh, 0)];
+    vec4 qw_ = d[quadIndex(q.y, q.x - 1, pc.cqw, pc.cqh, 0)], qe = d[quadIndex(q.y, q.x + 1, pc.cqw, pc.cqh, 0)];
+    vec4 qnw = d[quadIndex(q.y - 1, q.x - 1, pc.cqw, pc.cqh, 0)], qne = d[quadIndex(q.y - 1, q.x + 1, pc.cqw, pc.cqh, 0)];
+    vec4 qsw = d[quadIndex(q.y + 1, q.x - 1, pc.cqw, pc.cqh, 0)], qse = d[quadIndex(q.y + 1, q.x + 1, pc.cqw, pc.cqh, 0)];
+    bool top = q.y == 0, bot = q.y == pc.cqh - 1, lef = q.x == 0, rig = q.x == pc.cqw - 1;
+    // c[r][c], r, c in 0..3  <->  coarse pixel rows 2qy-1 .. 2qy+2
+    float c11 = qm.x, c12 = qm.y, c21 = qm.z, c22 = qm.w;
+    float c01 = top ? c11 : qn.z, c02 = top ? c12 : qn.w;
+    float c31 = bot ? c21 : qs.x, c32 = bot ? c22 : qs.y;
+    float c10 = lef ? c11 : qw_.y, c20 = lef ? c21 : qw_.w;
+    float c13 = rig ? c12 : qe.x, c23 = rig ? c22 : qe.z;
+    float c00 = top ? c10 : (lef ? c01 : qnw.w);
+    float c03 = top ? c13 : (rig ? c02 : qne.z);
+    float c30 = bot ? c20 : (lef ? c31 : qsw.y);
+    float c33 = bot ? c23 : (rig ? c32 : qse.x);
+    e00 += upq(c11, c01, c21, c10, c12, c00, c02, c20, c22);
+    e01 += upq(c12, c02, c22, c11, c13, c01, c03, c21, c23);
+    e10 += upq(c21, c11, c31, c20, c22, c10, c12, c30, c32);
+    e11 += upq(c22, c12, c32, c21, c23, c11, c13, c31, c33);
+  }
+  int ob = pc.obase + f;
+  o[ob] = e00; o[ob + 1] = e01; o[ob + pc.fqw] = e10; o[ob + pc.fqw + 1] = e11;
+}
