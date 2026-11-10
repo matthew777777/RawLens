@@ -42,7 +42,7 @@ class VideoCameraRouteTest {
     // Framework Key constants are null in local Android stubs; inject capabilities
     // while exercising the real route selection and output binding.
     private fun resolve(identity: String, lookup: (String) -> CameraCharacteristics): VideoCameraRoute? =
-        resolveVideoCameraRoute(identity, isFront = { false }, hasRaw = { it in rawCameras }, lookup = lookup)
+        resolveVideoCameraRoute(identity, hasRaw = { it in rawCameras }, lookup = lookup)
 
     @Test fun logicalRouteOpensParentAndBindsPhysicalOutput() {
         for (identity in listOf("6/5", "6-5")) {

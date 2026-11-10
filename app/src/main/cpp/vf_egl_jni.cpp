@@ -15,7 +15,9 @@
 #include <android/hardware_buffer.h>
 #include <android/hardware_buffer_jni.h>
 #include <android/log.h>
+#include <atomic>
 #include <cstring>
+#include <mutex>
 #include <cerrno>
 #include <chrono>
 #include <poll.h>
@@ -804,9 +806,8 @@ static double copyP010Bulk(const uint8_t* base, uint8_t* yPtr, int yDstStride, u
     // 4M scalar stores (~25ms -> ~2ms at 4K). Anything else keeps the loop.
     const bool uvFast =
         uDstPxB == 4 && vDstPxB == 4 && vPtr == uPtr + 2 && uDstStride == vDstStride;
-    static bool copyPathLogged = false;
-    if (!copyPathLogged) {
-        copyPathLogged = true;
+    static std::atomic<bool> copyPathLogged{false};
+    if (!copyPathLogged.exchange(true)) {
         LOGI("vf-egl: p010 copy yTight=%d uvFast=%d uPx=%d vPx=%d vMinusU=%td",
              yTight, uvFast, uDstPxB, vDstPxB, vPtr - uPtr);
     }
@@ -868,6 +869,30 @@ Java_com_matthew_rawlens_VfEglImport_copyP010ToCodec(
     uint8_t* uPtr = static_cast<uint8_t*>(env->GetDirectBufferAddress(uDst));
     uint8_t* vPtr = static_cast<uint8_t*>(env->GetDirectBufferAddress(vDst));
     if (!yPtr || !uPtr || !vPtr) return -3;
+    // Every row written below must lie inside its plane buffer and every row
+    // read inside the staging blob: strides come from codec plane metadata,
+    // so a layout this copy does not expect must fail, not scribble.
+    if ((width & 1) || (height & 1) || yDstStride <= 0 || uDstStride <= 0 || vDstStride <= 0 ||
+        uDstPxB < 2 || vDstPxB < 2 || srcYStrideB < width * 2 || srcUvStrideB < width * 2) return -5;
+    {
+        const int64_t yCap = env->GetDirectBufferCapacity(yDst);
+        const int64_t uCap = env->GetDirectBufferCapacity(uDst);
+        const int64_t vCap = env->GetDirectBufferCapacity(vDst);
+        const int64_t pairs = width / 2, uvRows = height / 2;
+        const int64_t yNeed = (int64_t)(height - 1) * yDstStride + (int64_t)width * 2;
+        const int64_t uNeed = (uvRows - 1) * uDstStride + (pairs - 1) * uDstPxB + 2;
+        const int64_t vNeed = (uvRows - 1) * vDstStride + (pairs - 1) * vDstPxB + 2;
+        if (yCap < yNeed || uCap < uNeed || vCap < vNeed) return -5;
+        // Interleaved fast path: one row memcpy through the U view covers
+        // both components; its last two bytes belong to the V view (U + 2).
+        if (uDstPxB == 4 && vDstPxB == 4 && vPtr == uPtr + 2 && uDstStride == vDstStride &&
+            vCap + 2 < (uvRows - 1) * (int64_t)uDstStride + pairs * 4) return -5;
+        AHardwareBuffer_Desc srcDesc{};
+        AHardwareBuffer_describe(src, &srcDesc);
+        const int64_t srcNeed = (int64_t)srcYStrideB * height +
+                                (uvRows - 1) * (int64_t)srcUvStrideB + pairs * 4;
+        if (srcDesc.format != AHARDWAREBUFFER_FORMAT_BLOB || (int64_t)srcDesc.width < srcNeed) return -5;
+    }
     void* srcPtr = nullptr;
     struct timespec tsA, tsB;
     clock_gettime(CLOCK_MONOTONIC, &tsA);
@@ -886,15 +911,21 @@ Java_com_matthew_rawlens_VfEglImport_copyP010ToCodec(
     clock_gettime(CLOCK_MONOTONIC, &tsB);
     const double unlockMs =
         (tsB.tv_sec - tsA.tv_sec) * 1000.0 + (tsB.tv_nsec - tsA.tv_nsec) / 1e6;
+    // Two copy workers call this concurrently: the running split is shared.
+    static std::mutex accMutex;
     static double accLock = 0, accBulk = 0, accUnlock = 0;
     static int accN = 0;
-    accLock += lockMs;
-    accBulk += bulkMs;
-    accUnlock += unlockMs;
-    if (++accN % 30 == 0) {
-        LOGI("vf-egl: copy-split n=%d lock=%.2f bulk=%.2f unlock=%.2f total=%.2f",
-             accN, accLock / accN, accBulk / accN, accUnlock / accN,
-             (accLock + accBulk + accUnlock) / accN);
+    {
+        std::lock_guard<std::mutex> guard(accMutex);
+        accLock += lockMs;
+        accBulk += bulkMs;
+        accUnlock += unlockMs;
+        // Once every ~10 s of recording is enough for a running average.
+        if (++accN % 300 == 0) {
+            LOGI("vf-egl: copy-split n=%d lock=%.2f bulk=%.2f unlock=%.2f total=%.2f",
+                 accN, accLock / accN, accBulk / accN, accUnlock / accN,
+                 (accLock + accBulk + accUnlock) / accN);
+        }
     }
     return 0;
 }

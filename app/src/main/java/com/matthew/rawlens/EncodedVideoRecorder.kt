@@ -300,6 +300,8 @@ class EncodedVideoRecorder(
     private var videoTrack: Int = -1
     private var audioTrack: Int = -1
     @Volatile private var videoFormat: MediaFormat? = null
+    /** Drain thread: the encoder's output format carries csd-0 (parameter sets). */
+    private val videoFormatHasCsd get() = videoFormat?.containsKey("csd-0") == true
     @Volatile private var audioFormat: MediaFormat? = null
     private var muxerStarted = false
     /** True when this take carries an audio track (decided at start). */
@@ -402,20 +404,24 @@ class EncodedVideoRecorder(
     private var ourYStrideB: Int = 0
     private var ourUvStrideB: Int = 0
     // Codec input layout (plane metadata, CPU-visible; no AHB needed).
-    private var yStrideB: Int = 0
+    // Published last by discovery (volatile): a non-zero value means every
+    // codec layout field below and p010Size are already visible to the other
+    // copy worker.
+    @Volatile private var yStrideB: Int = 0
     private var uvStrideB: Int = 0
     private var vStrideB: Int = 0
     private var yPxStrideB: Int = 0
     private var uvPxStrideB: Int = 0
     private var vPxStrideB: Int = 0
     // ImageWriter input layout (writer path only; discovered from the first writer image).
-    private var wyStrideB: Int = 0
+    @Volatile private var wyStrideB: Int = 0 // published last, like yStrideB
     private var wuvStrideB: Int = 0
     private var wvStrideB: Int = 0
     private var wyPxStrideB: Int = 0
     private var wuvPxStrideB: Int = 0
     private var wvPxStrideB: Int = 0
     private var p010Size: Int = 0
+    private val layoutLock = Any()
     private var frameCounter: Long = 0L
     private var lastQueuedPts: Long = Long.MIN_VALUE
     private var queues: Int = 0
@@ -1570,6 +1576,11 @@ class EncodedVideoRecorder(
         accepting = false
         try { session?.stopRepeating() } catch (_: Exception) {}
         try { session?.abortCaptures() } catch (_: Exception) {}
+        // A frame already inside processFrame still enqueues its copy job.
+        // Wait for the camera thread to pass it (accepting is false, so
+        // nothing new starts) before the workers drain: a job enqueued after
+        // they exit would leak its fence fd and RAW lease and lose the frame.
+        quiesceCameraThread()
         // Audio flushes first so its tail lands before the video EOS.
         stopAudio()
         // Copy worker drains the tail (every graded frame already has a
@@ -1584,9 +1595,22 @@ class EncodedVideoRecorder(
                     // Surface input has no ByteBuffer pool: EOS is signaled.
                     mcEOS.signalEndOfInputStream()
                 } else {
-                    val eosIdx = mcEOS.dequeueInputBuffer(5000)
+                    // The encoder can hold every input for a few frames at the
+                    // end of a take. A single 5 ms attempt that missed left the
+                    // stream without EOS: stop() then sat out the 12 s EOS wait
+                    // plus the 8 s fallback drain. Retry within a bounded window.
+                    val deadline = SystemClock.elapsedRealtime() + 3_000L
+                    var eosIdx = -1
+                    while (eosIdx < 0 && SystemClock.elapsedRealtime() < deadline) {
+                        eosIdx = mcEOS.dequeueInputBuffer(50_000L)
+                    }
                     if (eosIdx >= 0) {
-                        mcEOS.queueInputBuffer(eosIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        // After the last frame on the grid, never before it.
+                        mcEOS.queueInputBuffer(eosIdx, 0, 0,
+                            if (lastQueuedPts == Long.MIN_VALUE) 0L else lastQueuedPts + 1,
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    } else {
+                        Log.w(TAG, "no codec input for EOS; relying on the fallback drain")
                     }
                 }
             } catch (_: Exception) {}
@@ -1668,6 +1692,17 @@ class EncodedVideoRecorder(
             hasStabGyro = stabSamples > 0,
             stabGyroSamples = stabSamples,
         )
+    }
+
+    /** Blocks until the camera thread has finished whatever it was running (bounded). */
+    private fun quiesceCameraThread() {
+        val handler = camHandler ?: return
+        if (camThread?.isAlive != true || Thread.currentThread() === camThread) return
+        val passed = CountDownLatch(1)
+        if (!handler.postAtFrontOfQueue { passed.countDown() }) return
+        try {
+            if (!passed.await(3, TimeUnit.SECONDS)) Log.w(TAG, "camera thread busy at stop; continuing")
+        } catch (_: InterruptedException) {}
     }
 
     // ---- frame path (camera thread) ----
@@ -2281,13 +2316,14 @@ class EncodedVideoRecorder(
     private fun discoverCodecStrides(image: Image) {
         val planes = image.planes
         require(planes.size >= 3) { "codec input is not P010" }
-        yStrideB = planes[0].rowStride
+        val yStride = planes[0].rowStride
+        require(yStride > 0 && planes[1].rowStride > 0 && planes[2].rowStride > 0) { "bad codec strides" }
         uvStrideB = planes[1].rowStride
         vStrideB = planes[2].rowStride
         yPxStrideB = planes[0].pixelStride
         uvPxStrideB = planes[1].pixelStride
         vPxStrideB = planes[2].pixelStride
-        require(yStrideB > 0 && uvStrideB > 0 && vStrideB > 0) { "bad codec strides" }
+        yStrideB = yStride // last: publishes the layout
         // Flexible-YUV U/V are comps of ONE interleaved plane (pxStride 4,
         // V base = U base + 2 — visible as remaining differing by 2), not
         // two planes: Y+U+V double-counts chroma. Queue size comes from
@@ -2396,11 +2432,30 @@ class EncodedVideoRecorder(
         try {
             copyThread2?.join(if(gpuWriterMode) 120_000 else 10_000)
         } catch (_: InterruptedException) {}
-        if (copyThread?.isAlive == true || copyThread2?.isAlive == true) {
-            Log.w(TAG, "copy worker stuck; tail frames lost")
-        }
+        val stuck = copyThread?.isAlive == true || copyThread2?.isAlive == true
+        if (stuck) Log.w(TAG, "copy worker stuck; tail frames lost")
         copyThread = null
         copyThread2 = null
+        // Jobs nobody will run (enqueued after the workers left): release what
+        // they own. With a stuck worker the queue is still its to drain.
+        if (!stuck) {
+            while (true) {
+                val orphan = copyQueue.poll() ?: break
+                Log.w(TAG, "copy job seq=${orphan.seq} arrived after the workers stopped; frame lost")
+                dropped.incrementAndGet()
+                // The GPU may still be reading the RAW import: prove completion
+                // before the lease returns the buffer to the camera.
+                if (orphan.fd >= 0) {
+                    try { VfEglImport.awaitSyncFd(orphan.fd, 1_000) } catch (_: Exception) {}
+                    if (slots[orphan.slot].fd == orphan.fd) slots[orphan.slot].fd = -1
+                    try { VfEglImport.closeSyncFd(orphan.fd) } catch (_: Exception) {}
+                }
+                try { orphan.rawLease.close() } catch (_: Exception) {}
+                try { orphan.writerImage?.close() } catch (_: Exception) {}
+                if (orphan.writerImage != null) orphan.p010.close()
+                orphan.done.countDown()
+            }
+        }
     }
 
     private fun copyLoop() {
@@ -2481,7 +2536,12 @@ class EncodedVideoRecorder(
         val fenceStartNs = android.os.SystemClock.elapsedRealtimeNanos()
         // Fused photo RCD keeps two frames in flight: completion can trail
         // submission by two GPU frames (>100 ms at 1440p/4K).
-        if (!VfEglImport.awaitSyncFd(job.fd, if(job.writerImage != null) 30_000 else if (validatePhotoRcdFusedGrade) 1_000 else 100)) {
+        // A timeout releases this job's RAW buffer and P010 slot (job finally),
+        // so it must mean a wedged GPU, not a busy one: 100 ms was shorter than
+        // an ordinary backlog (three slots in flight, GPU sharing with the UI),
+        // and giving up then recycled buffers the dispatch was still using.
+        // Waiting costs only slot slack; the camera thread sheds beyond it.
+        if (!VfEglImport.awaitSyncFd(job.fd, if (job.writerImage != null) 30_000 else GPU_FENCE_TIMEOUT_MS)) {
             if (job.writerImage != null) {
                 job.retainGpuResources=true
                 // Preserve this fd/RAW lease/image/AHB across teardown; a later
@@ -2544,18 +2604,21 @@ class EncodedVideoRecorder(
             dropped.incrementAndGet()
             return null
         }
-        if (yStrideB == 0) {
+        // Both copy workers can reach their first input together: one
+        // discovers the layout under the lock, the other waits for it.
+        val discover = yStrideB == 0
+        var cap = 0
+        if (discover) {
             // Capacity from the raw buffer BEFORE wrapping an image:
             // getInputBuffer() after getInputImage() orphans the MediaImage
             // on C2 (the next planes access throws "already closed",
             // killing the discovery frame + leaking its index). Order is
             // load-bearing; the stride probe below then owns the image.
-            val cap = try { mc.getInputBuffer(inIdx)?.capacity() ?: 0 } catch (_: Exception) { 0 }
+            cap = try { mc.getInputBuffer(inIdx)?.capacity() ?: 0 } catch (_: Exception) { 0 }
             if (cap <= 0) {
                 degradedFrames.incrementAndGet()
                 return ReadyQueue(inIdx, null, 0)
             }
-            p010Size = cap
         }
         val inImage = try {
             mc.getInputImage(inIdx)
@@ -2566,10 +2629,15 @@ class EncodedVideoRecorder(
             degradedFrames.incrementAndGet()
             return ReadyQueue(inIdx, null, 0)
         }
-        if (yStrideB == 0) {
+        if (discover) {
             try {
-                discoverCodecStrides(inImage)
-                Log.i(TAG, "codec input queue size=$p010Size (capacity, not Y+U+V)")
+                synchronized(layoutLock) {
+                    if (yStrideB == 0) {
+                        p010Size = cap
+                        discoverCodecStrides(inImage)
+                        Log.i(TAG, "codec input queue size=$p010Size (capacity, not Y+U+V)")
+                    }
+                }
             } catch (e: Exception) {
                 degradedFrames.incrementAndGet()
                 return ReadyQueue(inIdx, inImage, 0)
@@ -2732,13 +2800,14 @@ class EncodedVideoRecorder(
     private fun discoverWriterStrides(image: Image) {
         val planes = image.planes
         require(planes.size >= 3) { "writer input is not P010" }
-        wyStrideB = planes[0].rowStride
+        val yStride = planes[0].rowStride
+        require(yStride > 0 && planes[1].rowStride > 0 && planes[2].rowStride > 0) { "bad writer strides" }
         wuvStrideB = planes[1].rowStride
         wvStrideB = planes[2].rowStride
         wyPxStrideB = planes[0].pixelStride
         wuvPxStrideB = planes[1].pixelStride
         wvPxStrideB = planes[2].pixelStride
-        require(wyStrideB > 0 && wuvStrideB > 0 && wvStrideB > 0) { "bad writer strides" }
+        wyStrideB = yStride // last: publishes the layout
         val uRem = planes[1].buffer.remaining()
         val vRem = planes[2].buffer.remaining()
         Log.i(TAG, "writer P010 yStride=$wyStrideB(${wyPxStrideB}Bpx) " +
@@ -2769,7 +2838,7 @@ class EncodedVideoRecorder(
         }
         if (wyStrideB == 0) {
             try {
-                discoverWriterStrides(wImage)
+                synchronized(layoutLock) { if (wyStrideB == 0) discoverWriterStrides(wImage) }
             } catch (e: Exception) {
                 degradedFrames.incrementAndGet()
                 try { wImage.close() } catch (_: Exception) {}
@@ -2853,10 +2922,14 @@ class EncodedVideoRecorder(
             try { ready.image?.close() } catch (_: Exception) {}
             return
         }
+        // queuedOk = a frame the encoder will emit. An empty input (failed
+        // copy, or the recycle below) only returns the buffer to the pool and
+        // yields no sample: counting it put an extra row in the stab frame
+        // table, shifting every later frame's gyro match by one.
         var queuedOk = false
         try {
             mc.queueInputBuffer(ready.inIdx, 0, ready.size, job.ptsUs, 0)
-            queuedOk = true
+            queuedOk = ready.size > 0
         } catch (e: Exception) {
             Log.w(TAG, "input queue failed: ${e.message}")
             // A failed queue does NOT recycle the index: re-queue empty so
@@ -2864,7 +2937,6 @@ class EncodedVideoRecorder(
             // pool wedges the whole take with inputStarved).
             try {
                 mc.queueInputBuffer(ready.inIdx, 0, 0, job.ptsUs, 0)
-                queuedOk = true
             } catch (_: Exception) {}
             degradedFrames.incrementAndGet()
         } finally {
@@ -3018,7 +3090,10 @@ class EncodedVideoRecorder(
                 } catch (e: Exception) { failRecording(e) }
             }
             val idx = try {
-                mc.dequeueOutputBuffer(info, 2000)
+                // Returns as soon as output exists; the timeout only bounds the
+                // idle wake-up (audio rides this loop: 10 ms is well inside its
+                // 256-chunk queue). 2 ms was 500 wake-ups a second for nothing.
+                mc.dequeueOutputBuffer(info, 10_000)
             } catch (e: Exception) {
                 Log.w(TAG, "drain dequeue failed: ${e.message}")
                 break
@@ -3036,7 +3111,13 @@ class EncodedVideoRecorder(
                 }
                 idx >= 0 -> {
                     try {
-                        if (info.size > 0 && muxerStarted && videoTrack >= 0) {
+                        // Parameter sets already travel in the track format (csd):
+                        // muxing the config buffer too adds a non-frame sample at
+                        // PTS 0 and inflates the output-frame statistics. Only
+                        // skipped when the format really carries them, so an
+                        // encoder that delivers them in-band alone is unaffected.
+                        val config = videoFormatHasCsd && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                        if (info.size > 0 && !config && muxerStarted && videoTrack >= 0) {
                             val w0 = android.os.SystemClock.elapsedRealtimeNanos()
                             muxer?.writeSampleData(videoTrack, mc.getOutputBuffer(idx)!!, info)
                             val w1 = android.os.SystemClock.elapsedRealtimeNanos()
@@ -3091,7 +3172,8 @@ class EncodedVideoRecorder(
                     }
                     idx >= 0 -> {
                         try {
-                            if (info.size > 0 && muxerStarted && videoTrack >= 0) {
+                            val config = videoFormatHasCsd && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                            if (info.size > 0 && !config && muxerStarted && videoTrack >= 0) {
                                 muxer?.writeSampleData(videoTrack, mc.getOutputBuffer(idx)!!, info)
                                 if (firstOutNs == 0L) firstOutNs = android.os.SystemClock.elapsedRealtimeNanos()
                                 outBufs.incrementAndGet()
@@ -3326,6 +3408,9 @@ class EncodedVideoRecorder(
          * slots leave headroom for stalls mid-catch-up.
          */
         private const val QUEUE_DEPTH = 6
+
+        /** Copy-worker wait for a frame's GPU completion; beyond this the GPU is treated as wedged. */
+        private const val GPU_FENCE_TIMEOUT_MS = 1_000
 
         /** Recording-relative presentation time in microseconds. */
         fun relativeUs(sensorTsNs: Long, originNs: Long): Long = (sensorTsNs - originNs) / 1000L

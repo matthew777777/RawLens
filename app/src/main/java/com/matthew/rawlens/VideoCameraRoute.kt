@@ -42,9 +42,6 @@ internal fun resolveVideoCameraRoute(manager: CameraManager, identity: String): 
 /** Match the photo route convention, including hidden vendor memberships and hyphens. */
 internal fun resolveVideoCameraRoute(
     identity: String,
-    isFront: (CameraCharacteristics) -> Boolean = {
-        it.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-    },
     hasRaw: (CameraCharacteristics) -> Boolean = {
         it.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
             ?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW) == true ||
@@ -60,8 +57,7 @@ internal fun resolveVideoCameraRoute(
         val logicalId = identity.substring(0, index)
         val physicalId = identity.substring(index + 1)
         if (logicalId.isBlank() || physicalId.isBlank()) continue
-        val logical = read(logicalId) ?: continue
-        if (isFront(logical)) continue
+        read(logicalId) ?: continue
         val sensor = read(identity)?.takeIf(hasRaw) ?: read(physicalId)?.takeIf(hasRaw) ?: continue
         return VideoCameraRoute(logicalId, physicalId, sensor)
     }

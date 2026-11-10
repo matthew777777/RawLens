@@ -222,6 +222,13 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         })
         content.addView(sectionTitle("RAW Video"))
         content.addView(Button(this).apply {
+            isEnabled = !videoRecording && videoRecorder == null && encodedVideoRecorder == null
+            fun refresh() { text = "RAW frame rate: ${rawVideoFrameRateLabel()}" }
+            refresh()
+            setOnClickListener { chooseRawVideoFrameRate { refresh() } }
+        })
+        content.addView(sectionDesc("Sets the per-lens RAW AE frame-rate range shared with Vendor keys and restarts the camera immediately. Fixed ranges such as 30,30 or 60,60 are preferred when advertised. Actual cadence depends on sensor readout and exposure."))
+        content.addView(Button(this).apply {
             isEnabled = !videoRecording
             fun refresh() {
                 text = "Compression: " + CrawWriter.codecDisplayName(
