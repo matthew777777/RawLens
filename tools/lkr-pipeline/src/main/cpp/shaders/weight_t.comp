@@ -44,7 +44,10 @@ void main() {
       // Dead zone: exactly 1 until the disagreement exceeds k sigma (pure
       // ordinary noise rarely down-weights a frame -- the spread min-filter
       // amplifies noisy rejections), then Cauchy-like falloff.
-      float e = m * m / var, k2 = pc.rob_k * pc.rob_k;
+      // Stricter in deep shadow (pc.f1 < 1): local mean signal from the summed noise model a y + b.
+      float level = max((sv / n - pc.rob_b) / max(pc.rob_a, 1e-12), 0.0);
+      float kk = pc.f1 == 1.0 ? pc.rob_k : pc.rob_k * mix(pc.f1, 1.0, smoothstep(0.25 * pc.f2, pc.f2, level));
+      float e = m * m / var, k2 = kk * kk;
       w = 1.0 / (1.0 + max(e - k2, 0.0) / k2);
       // Energy cannot cancel. For independent Gaussian residuals its
       // normalised mean is 1 with standard deviation sqrt(2/n), rather than
@@ -54,7 +57,7 @@ void main() {
       // visible ghost. Keep the existing edge tolerance and noise dead zone.
       float energyVar = max(2.0 * sv / n + pc.f3 * pc.f3 * (gx * gx + gy * gy) + pc.f0 * sd / n, 1e-12);
       float energy = ss / n / energyVar;
-      float limit = 1.0 + pc.rob_k * sqrt(2.0 / n);
+      float limit = 1.0 + kk * sqrt(2.0 / n);
       float support = clamp(2.0 - energy / limit, 0.0, 1.0);
       w = min(w, support * support);
     }

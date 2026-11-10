@@ -37,7 +37,10 @@ struct SolveParams {
   std::vector<int> prior_at;   // empty = every iteration
   // Non-learned x-step on the prior iterations (shaders/dct_x.comp). H and W must be multiples of 4.
   bool dct_prior = false;
-  float dct_luma = 1.0f, dct_chroma = 8.0f;   // shrinkage thresholds, multiples of the noise level
+  float dct_luma = 2.0f, dct_chroma = 16.0f;   // sweep 2026-11-10: luma 1 left almost all grain   // shrinkage thresholds, multiples of the noise level
+  // Dark blocks (mean luma below dct_dark_level, full effect below a quarter) use their measured
+  // AC energy as the noise level when it exceeds the model, up to dct_dark_cap x (1 = off).
+  float dct_dark_level = 0.02f, dct_dark_cap = 8.0f;
   float L = 0.0f;              // >0 given; 0 = Schur bound max(U^T 1); <0 = power iteration
   // Look controls (not in the paper; PSNR-tuned values give a waxy look):
   float prior_gain = 0.4f;     // sigma handed to the prior = gain * sigma_t (0.4: DSLR look, user-picked)
@@ -56,6 +59,11 @@ struct SolveParams {
   // the average of e.g. moving water). 0 = off.
   float temporal_k = 3.0f;
   float temporal_tau = 0.6f;
+  // Dark-area motion test: in deep shadow a moving dark object differs from a dark background by
+  // about the noise, so the threshold temporal_k is scaled by temporal_dark_k (1 = off) where the
+  // local mean signal is below temporal_dark_level (full effect below a quarter of it).
+  float temporal_dark_k = 0.667f;   // 3 -> 2 sigma in deep shadow (33TJ walking-person veils)
+  float temporal_dark_level = 0.02f;
   // Energy test tolerance for single-frame model error, as a fraction of the
   // local detail energy common to the frame and its prediction. 0 = off.
   float temporal_detail = 4.0f;

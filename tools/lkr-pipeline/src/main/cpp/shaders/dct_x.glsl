@@ -20,6 +20,9 @@ layout(std430, binding = 4) buffer B { float nv[]; };
 layout(push_constant) uniform P {
   int H, W, ny, nx, py, px, ixo, has_ns;
   float sigma2, lv_a, lv_b, k_y2, k_c2, wb_r, wb_g, wb_b;
+  // Deep shadow: the noise model under-predicts merged shadow noise, so dark blocks may raise
+  // their noise level to the block's measured AC energy, up to dark_cap x the model.
+  float dark_level, dark_cap;
 } pc;
 
 const float C4 = 0.35355339, C1 = 0.98078528, C2 = 0.92387953, C3 = 0.83146961,
@@ -63,13 +66,25 @@ vec4 shrink(vec4 c, float t) {
 }
 
 // a[r] = rows 0..7 of columns 0..3, b[r] = columns 4..7. Filtered in place.
-void filt(inout mat4 a0, inout mat4 a1, inout mat4 b0, inout mat4 b1, float t) {
+// gate > 0 (luma only): raise t towards the block's measured AC energy (see pc.dark_cap);
+// returns the factor applied, which the colour passes reuse through nv.
+float filt(inout mat4 a0, inout mat4 a1, inout mat4 b0, inout mat4 b1, float t, float sm2, float gate) {
   fdct(a0[0], a0[1], a0[2], a0[3], a1[0], a1[1], a1[2], a1[3]);
   fdct(b0[0], b0[1], b0[2], b0[3], b1[0], b1[1], b1[2], b1[3]);
   mat4 p0 = transpose(a0), q0 = transpose(a1), p1 = transpose(b0), q1 = transpose(b1);
   fdct(p0[0], p0[1], p0[2], p0[3], p1[0], p1[1], p1[2], p1[3]);
   fdct(q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3]);
   float dc = p0[0].x;
+  float boost = 1.0;
+  if (gate > 0.0 && sm2 > 0.0) {
+    vec4 e = p0[0] * p0[0] + p0[1] * p0[1] + p0[2] * p0[2] + p0[3] * p0[3] +
+             p1[0] * p1[0] + p1[1] * p1[1] + p1[2] * p1[2] + p1[3] * p1[3] +
+             q0[0] * q0[0] + q0[1] * q0[1] + q0[2] * q0[2] + q0[3] * q0[3] +
+             q1[0] * q1[0] + q1[1] * q1[1] + q1[2] * q1[2] + q1[3] * q1[3];
+    float ac = (dot(e, vec4(1.0)) - dc * dc) / 63.0;
+    boost = mix(1.0, clamp(ac / sm2, 1.0, pc.dark_cap), gate);
+    t *= boost;
+  }
   p0[0] = shrink(p0[0], t); p0[1] = shrink(p0[1], t); p0[2] = shrink(p0[2], t); p0[3] = shrink(p0[3], t);
   p1[0] = shrink(p1[0], t); p1[1] = shrink(p1[1], t); p1[2] = shrink(p1[2], t); p1[3] = shrink(p1[3], t);
   q0[0] = shrink(q0[0], t); q0[1] = shrink(q0[1], t); q0[2] = shrink(q0[2], t); q0[3] = shrink(q0[3], t);
@@ -80,6 +95,7 @@ void filt(inout mat4 a0, inout mat4 a1, inout mat4 b0, inout mat4 b1, float t) {
   a0 = transpose(p0); a1 = transpose(q0); b0 = transpose(p1); b1 = transpose(q1);
   idct(a0[0], a0[1], a0[2], a0[3], a1[0], a1[1], a1[2], a1[3]);
   idct(b0[0], b0[1], b0[2], b0[3], b1[0], b1[1], b1[2], b1[3]);
+  return boost;
 }
 
 void main() {
@@ -116,10 +132,14 @@ void main() {
   LOAD(1, 0, 4) LOAD(1, 1, 5) LOAD(1, 2, 6) LOAD(1, 3, 7)
 #if CH == 0
   float level = acc / 64.0;
-  nv[iy * pc.nx + ix] = level;
-  filt(a0, a1, b0, b1, pc.k_y2 * pc.sigma2 * level);
+  float ymean = (dot(a0[0] + a0[1] + a0[2] + a0[3] + a1[0] + a1[1] + a1[2] + a1[3], vec4(1.0)) +
+                 dot(b0[0] + b0[1] + b0[2] + b0[3] + b1[0] + b1[1] + b1[2] + b1[3], vec4(1.0))) / 64.0;
+  float gate = pc.dark_cap > 1.0 ? 1.0 - smoothstep(0.25 * pc.dark_level, pc.dark_level, ymean) : 0.0;
+  float sm2 = pc.sigma2 * level;
+  float boost = filt(a0, a1, b0, b1, pc.k_y2 * sm2, sm2, gate);
+  nv[iy * pc.nx + ix] = level * boost;
 #else
-  filt(a0, a1, b0, b1, pc.k_c2 * pc.sigma2 * nv[iy * pc.nx + ix]);
+  filt(a0, a1, b0, b1, pc.k_c2 * pc.sigma2 * nv[iy * pc.nx + ix], 0.0, 0.0);
 #endif
   vec4 wxa = iw[pc.ixo + ix] * WIN_A, wxb = iw[pc.ixo + ix + 1] * WIN_B;
   vec4 wya = iw[iy] * WIN_A, wyb = iw[iy + 1] * WIN_B;

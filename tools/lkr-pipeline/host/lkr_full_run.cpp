@@ -37,6 +37,8 @@ int main(int argc, char** argv) {
     else if (k == "--prior") dct_prior = nx() != 0;   // 0 none (default), 1 DCT x-step
     else if (k == "--dluma") prm.solve.dct_luma = float(std::atof(argv[++i]));
     else if (k == "--dchroma") prm.solve.dct_chroma = float(std::atof(argv[++i]));
+    else if (k == "--ddark") prm.solve.dct_dark_cap = float(std::atof(argv[++i]));
+    else if (k == "--ddl") prm.solve.dct_dark_level = float(std::atof(argv[++i]));
     else if (k == "--iterations") {
       prm.solve.T = nx(); if (prm.solve.T < 2) return 2;
       prm.solve.prior_at.clear();
@@ -57,6 +59,8 @@ int main(int argc, char** argv) {
     else if (k == "--tau") prm.solve.robust_tau = float(std::atof(argv[++i]));
     else if (k == "--tk") prm.solve.temporal_k = float(std::atof(argv[++i]));
     else if (k == "--tdet") prm.solve.temporal_detail = float(std::atof(argv[++i]));
+    else if (k == "--tdk") prm.solve.temporal_dark_k = float(std::atof(argv[++i]));
+    else if (k == "--tdl") prm.solve.temporal_dark_level = float(std::atof(argv[++i]));
     else if (k == "--sb") prm.solve.shadow_boost = float(std::atof(argv[++i]));
     else if (k == "--rgather") prm.solve.robust_gather = std::atoi(argv[++i]) != 0;
     else if (k == "--quad") prm.solve.quad = std::atoi(argv[++i]) != 0;
