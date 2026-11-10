@@ -67,6 +67,12 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     return nullptr;
   }
   lkr::FullParams prm = lkr::AppDefaults();
+  // x2 buffers are large and a third worker gains about 3 % on Mali (measured); debug.lkr.workers still overrides.
+  if (s >= 2) {
+    prm.workers = std::min(prm.workers, 2);
+    prm.min_workers = 2;
+  }
+  prm.solver_budget_mb = 768;   // fewer workers for long bursts; output and frames are on top of this
 #ifdef __ANDROID__
   {
     char v[PROP_VALUE_MAX] = {0};
@@ -114,6 +120,11 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
 #endif
 
   const float backend = dct ? 4.f : 0.f;
+  float* direct = nullptr;
+  prm.out_alloc = [&](int oww, int ohh) -> float* {
+    if (out_w_req > 0 && out_h_req > 0 && (out_w_req != oww || out_h_req != ohh)) return nullptr;   // 1.5x resamples
+    return direct = static_cast<float*>(std::calloc(size_t(oww) * ohh * 3, sizeof(float)));
+  };
   const lkr::PriorFactory make;
   std::vector<float> rgb;
   int ow = 0, oh = 0;
@@ -122,6 +133,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   if (!lkr::MergeFull(&gpu, fr, w, h, cfa, black, white, {wbv[0], wbv[1], wbv[2]}, prm, make, &rgb, &ow, &oh,
                       &st, &err)) {
     LKR_LOG("merge failed: %s", err.c_str());
+    std::free(direct);
     return nullptr;
   }
   // Zoom 1.5x: the x2 solve of the crop is larger than the requested output
@@ -134,10 +146,14 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     ow = out_w_req;
     oh = out_h_req;
   }
-  const size_t bytes = rgb.size() * 4;
-  void* out = std::malloc(bytes);
-  if (!out) return nullptr;
-  std::memcpy(out, rgb.data(), bytes);
+  const size_t bytes = direct ? size_t(ow) * oh * 12 : rgb.size() * 4;
+  void* out = direct;
+  if (!out) {
+    out = std::malloc(bytes);
+    if (!out) return nullptr;
+    std::memcpy(out, rgb.data(), bytes);
+    std::vector<float>().swap(rgb);
+  }
   if (stats_j && env->GetArrayLength(stats_j) >= 14) {
     const float sv[14] = {float(st.tiles), st.sigma, st.a, st.b, float(st.ms_noise), float(st.ms_coarse),
                           float(st.ms_tiles), float(st.ms_gpu), float(st.ms_prior), float(st.ms_total),

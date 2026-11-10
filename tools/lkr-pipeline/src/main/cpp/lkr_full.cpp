@@ -245,8 +245,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   const int GW = s * g.w, GH = s * g.h;
   *out_w = s * rw;
   *out_h = s * rh;
-  rgb_out->assign(size_t(*out_w) * *out_h * 3, 0.0f);
-  std::vector<float> wsum(size_t(GW) * GH, 0.0f);
+  // A caller-owned output (the app hands this straight to Java) avoids a final full-image copy.
+  float* const rgb = prm.out_alloc ? prm.out_alloc(*out_w, *out_h) : nullptr;
+  if (rgb) rgb_out->clear(); else rgb_out->assign(size_t(*out_w) * *out_h * 3, 0.0f);
+  float* const rgb_data = rgb ? rgb : rgb_out->data();
   // Diagnostics: LKR_DEBUG_MAPS=<path> -> <path> (kDebugMaps x GH x GW float32,
   // see SolveStats::dbg), feather-blended across tiles like the image.
   const char* dbg_path = std::getenv("LKR_DEBUG_MAPS");
@@ -312,11 +314,31 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   for (size_t yi = 0; yi < ys.size(); ++yi)
     for (size_t xi = 0; xi < xs.size(); ++xi)
       jobs.push_back({xs[xi], ys[yi], xi > 0, xi + 1 < xs.size(), yi > 0, yi + 1 < ys.size()});
+  // Feather weights are a row factor times a column factor on a regular tile
+  // grid, so their per-pixel sum is (sum over tile rows) x (sum over tile
+  // columns): two small tables instead of a full-resolution weight map.
+  auto wgt = [&](int v, bool lo, bool hi) {
+    float w = 1.0f;
+    if (lo && ovh > 0) w = std::min(w, (v + 0.5f) / ovh);
+    if (hi && ovh > 0) w = std::min(w, (HN - v - 0.5f) / ovh);
+    return std::max(w, 1e-4f);
+  };
+  std::vector<float> wrow(size_t(GH), 0.0f), wcol(size_t(GW), 0.0f);
+  for (size_t yi = 0; yi < ys.size(); ++yi)
+    for (int Y = 0; Y < HN; ++Y) wrow[size_t(s * ys[yi] + Y)] += wgt(Y, yi > 0, yi + 1 < ys.size());
+  for (size_t xi = 0; xi < xs.size(); ++xi)
+    for (int X = 0; X < HN; ++X) wcol[size_t(s * xs[xi] + X)] += wgt(X, xi > 0, xi + 1 < xs.size());
 
   // Two workers, each with its own Vulkan context and solver buffers: while
   // one waits on the prior, the other keeps the GPU busy. Tiles are
   // blended strictly in job order (ticket), so the output is deterministic.
-  const int nwork = std::max(1, std::min<int>(prm.workers, int(jobs.size())));
+  int nwork = std::max(1, std::min<int>(prm.workers, int(jobs.size())));
+  if (prm.solver_budget_mb > 0) {
+    // ~14 HR float planes x 3 colours + ~17 LR float buffers per frame (lkr_solver.cpp cache).
+    const double hr = 3.0 * HN * HN, lr = double(K) * n * n;
+    const double per_mb = (hr * 56.0 + lr * 68.0) / (1024.0 * 1024.0);
+    nwork = std::clamp(int(prm.solver_budget_mb / per_mb), std::min(std::max(prm.min_workers, 1), nwork), nwork);
+  }
   std::vector<std::unique_ptr<Gpu>> own;
   std::vector<Gpu*> gpus{gpu};
   for (int w = 1; w < nwork; ++w) {
@@ -486,12 +508,6 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       S.prior_calls += ss.prior_calls;
       ++S.tiles;
       // Feather only on sides shared with a neighbour tile.
-      auto wgt = [&](int v, bool lo, bool hi) {
-        float w = 1.0f;
-        if (lo && ovh > 0) w = std::min(w, (v + 0.5f) / ovh);
-        if (hi && ovh > 0) w = std::min(w, (HN - v - 0.5f) / ovh);
-        return std::max(w, 1e-4f);
-      };
       const size_t HW = size_t(HN) * HN;
       for (int Y = 0; Y < HN; ++Y) {
         const float wy = wgt(Y, jb.T, jb.B);
@@ -501,12 +517,11 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
           const int oxx = s * gx + X + offx;
           if (oxx < 0 || oxx >= *out_w) continue;
           const float w = wy * wgt(X, jb.L, jb.R);
-          float* o = rgb_out->data() + (size_t(oyy) * *out_w + oxx) * 3;
+          float* o = rgb_data + (size_t(oyy) * *out_w + oxx) * 3;
           const size_t i = size_t(Y) * HN + X;
           o[0] += w * x[i];
           o[1] += w * x[HW + i];
           o[2] += w * x[2 * HW + i];
-          wsum[size_t(s * gy + Y) * GW + s * gx + X] += w;
           if (dbg_path && ss.dbg.size() == size_t(kDebugMaps) * HW)
             for (int m = 0; m < kDebugMaps; ++m)
               dmaps[size_t(m) * GW * GH + size_t(s * gy + Y) * GW + s * gx + X] += w * ss.dbg[size_t(m) * HW + i];
@@ -524,8 +539,11 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
 
   if (dbg_path && !dmaps.empty()) {
     for (int m = 0; m < kDebugMaps; ++m)
-      for (size_t p = 0; p < wsum.size(); ++p)
-        if (wsum[p] > 0) dmaps[size_t(m) * wsum.size() + p] /= wsum[p];
+      for (int Y = 0; Y < GH; ++Y)
+        for (int X = 0; X < GW; ++X) {
+          const float ws = wrow[size_t(Y)] * wcol[size_t(X)];
+          if (ws > 0) dmaps[size_t(m) * GW * GH + size_t(Y) * GW + X] /= ws;
+        }
     if (FILE* f = std::fopen(dbg_path, "wb")) {
       std::fwrite(dmaps.data(), 4, dmaps.size(), f);
       std::fclose(f);
@@ -542,8 +560,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     for (int X = 0; X < *out_w; ++X) {
       const int gxp = std::clamp(X - offx, 0, GW - 1), gyp = std::clamp(Y - offy, 0, GH - 1);
       const int sx = gxp + offx, sy = gyp + offy;
-      float* o = rgb_out->data() + (size_t(Y) * *out_w + X) * 3;
-      const float ws = wsum[size_t(gyp) * GW + gxp];
+      float* o = rgb_data + (size_t(Y) * *out_w + X) * 3;
+      const float ws = wrow[size_t(gyp)] * wcol[size_t(gxp)];
       if (sx == X && sy == Y) {
         const float inv = ws > 0 ? 1.0f / ws : 0.0f;
         o[0] *= inv; o[1] *= inv; o[2] *= inv;
@@ -553,8 +571,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     for (int X = 0; X < *out_w; ++X) {
       const int sx = std::clamp(X - offx, 0, GW - 1) + offx, sy = std::clamp(Y - offy, 0, GH - 1) + offy;
       if (sx == X && sy == Y) continue;
-      float* o = rgb_out->data() + (size_t(Y) * *out_w + X) * 3;
-      const float* src = rgb_out->data() + (size_t(sy) * *out_w + sx) * 3;
+      float* o = rgb_data + (size_t(Y) * *out_w + X) * 3;
+      const float* src = rgb_data + (size_t(sy) * *out_w + sx) * 3;
       o[0] = src[0]; o[1] = src[1]; o[2] = src[2];
     }
   S.ms_tiles = now_ms() - t;

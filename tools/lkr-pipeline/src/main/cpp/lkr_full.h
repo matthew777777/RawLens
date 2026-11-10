@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -27,7 +28,13 @@ struct FullParams {
   int s = 1;               // output scale (1 or 2)
   int tile = 512;          // LR tile edge incl. overlap (even)
   int overlap = 32;        // LR overlap between tiles (even)
-  int workers = 3;         // concurrent tile solvers: GPU + CPU work of some overlaps the prior of another (3 measured best on MT6878)
+  // Optional zero-initialised caller allocation for (w, h, 3) floats; null or a null result uses rgb_out.
+  std::function<float*(int, int)> out_alloc;
+  int workers = 3;
+  // Cap on the summed per-worker solver buffers (MB, estimated from K, tile and s); 0 = no cap.
+  // Each worker holds its own buffers, so large bursts drop to fewer workers instead of running out of memory.
+  int solver_budget_mb = 0;
+  int min_workers = 1;   // the budget never drops below this (x2 keeps 2: 1 worker is ~15-40 % slower)         // concurrent tile solvers: GPU + CPU work of some overlaps the prior of another (3 measured best on MT6878)
   int crop_x = -1, crop_y = -1, crop_w = 0, crop_h = 0;   // optional sub-rectangle (sensor px)
   SolveParams solve;       // T, z_steps, prior_at, step_scale (sigma_* filled here)
   float smax_x = 10.0f, end_x = 1.0f;   // schedule in multiples of our noise sigma

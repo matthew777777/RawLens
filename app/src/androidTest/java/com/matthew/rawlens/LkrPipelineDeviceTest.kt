@@ -51,6 +51,7 @@ class LkrPipelineDeviceTest {
             Case("crop1", 1, intArrayOf(1425, 1224, 1024, 1024)),
             Case("crop2x", 2, intArrayOf(1425, 1224, 512, 512)),
             Case("full", 1, null),
+            Case("full2x", 2, null),
             // LK-SR zoom exactly as LkrMerge computes it: centre crop at x2, output = sensor size.
             Case("zoom2", 2, LkrZoom.X2.crop(w, h), w, h),
             Case("zoom15", 2, LkrZoom.X1_5.crop(w, h), w, h)

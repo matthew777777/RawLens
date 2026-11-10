@@ -88,8 +88,12 @@ internal object LkrMerge {
     ): MfsrMerge.MfsrResult? {
         // Zoom: centre crop solved at x2; the native side area-resamples the
         // solve to the sensor size (1.5x), 2x already lands on it.
-        val zoomed = requested.zoom != LkrZoom.X1
-        val settings = if (zoomed) requested.copy(scale = 2, crop = requested.zoom.crop(w, h)) else requested
+        val zoomed = requested.zoom == LkrZoom.X1_5 || requested.zoom == LkrZoom.X2
+        val settings = when {
+            zoomed -> requested.copy(scale = 2, crop = requested.zoom.crop(w, h))
+            requested.zoom == LkrZoom.FULL_2X -> requested.copy(scale = 2, crop = null)
+            else -> requested
+        }
         val outW = if (zoomed) w else 0
         val outH = if (zoomed) h else 0
         val cfa = MfsrMerge.dngCodesFor(norm.sensorPattern)

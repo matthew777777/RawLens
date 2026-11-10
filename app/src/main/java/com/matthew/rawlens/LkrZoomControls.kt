@@ -11,7 +11,7 @@ import android.widget.TextView
  * LK-SR zoom chip (viewfinder bottom-right corner, opposite the scope;
  * independent of the lens count) and matching preview zoom. The chip shows only
  * while LK-SR is the active sharp merge in photo mode; tapping cycles
- * 1x -> 1.5x -> 2x. The preview is a centre scale of the viewfinder views
+ * 1x -> 1.5x -> 2x -> full 2x. The preview is a centre scale of the viewfinder views
  * (no capture change: every frame is still full sensor), so what you frame
  * is the crop the merge solves at x2. Output stays the sensor resolution.
  */
@@ -33,7 +33,7 @@ internal fun MainActivity.updateLkrZoomChip() {
     (chip as? RotatingContent)?.contentRotation = controlRotationDegrees
     val zoom = if (shown) mfsrSettings.lkrZoom else LkrZoom.X1
     chip.text = "SR ${zoom.label}"
-    chip.contentDescription = "LK-SR zoom ${zoom.label}. Tap to cycle 1×, 1.5×, 2×."
+    chip.contentDescription = "LK-SR zoom ${zoom.label}. Tap to cycle 1×, 1.5×, 2×, full 2×."
     val active = zoom != LkrZoom.X1
     chip.setBackgroundResource(if (active) R.drawable.control_chip_active else R.drawable.control_chip)
     chip.setTextColor(getColor(if (active) R.color.accent_dark else R.color.text_primary))

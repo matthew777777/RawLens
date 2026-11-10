@@ -33,6 +33,15 @@ class MfsrSettingsTest {
         assertEquals(16, settings.activeFrameCount(30))
     }
 
+    @Test fun lkrFollowsTheFullBurstRange() {
+        val settings = MfsrSettings(enabled = true, engine = MfsrEngine.LKR)
+        for (count in 2..59) assertEquals(count, settings.activeFrameCount(count))
+        assertEquals(59, settings.activeFrameCount(80))
+        assertEquals("LK-SR\n×40", settings.quickText(MfsrEngine.LKR, 40, 40, true, false))
+        for (z in listOf(LkrZoom.X1_5, LkrZoom.X2, LkrZoom.FULL_2X))
+            assertEquals(24, settings.copy(lkrZoom = z).activeFrameCount(40))
+    }
+
     @Test fun quickTextUsesConfiguredCountAndWaitsForFullSelection() {
         val on = MfsrSettings(enabled = true)
         val m = MfsrEngine.MFSR
@@ -62,7 +71,9 @@ class MfsrSettingsTest {
         assertArrayEquals(intArrayOf(680, 510, 2720, 2040), LkrZoom.X1_5.crop(4080, 3060))
         for (z in LkrZoom.entries) z.crop(4080, 3060)?.forEach { assertEquals(0, it % 2) }   // Bayer phase
         assertEquals(LkrZoom.X1_5, LkrZoom.X1.next())
-        assertEquals(LkrZoom.X1, LkrZoom.X2.next())
+        assertEquals(LkrZoom.FULL_2X, LkrZoom.X2.next())
+        assertEquals(LkrZoom.X1, LkrZoom.FULL_2X.next())
+        assertEquals(null, LkrZoom.FULL_2X.crop(4080, 3060))
         val z = MfsrSettings(lkrZoom = LkrZoom.X2)
         assertEquals(LkrZoom.X2, MfsrSettings.fromPreferences(z.toPreferences()).lkrZoom)
     }

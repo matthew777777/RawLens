@@ -459,7 +459,8 @@ class MergesActivity : Activity() {
     }
 
     private fun frameLimit(): Int = when (method) {
-        BurstMergeRunner.Method.MFSR, BurstMergeRunner.Method.LKR -> MfsrSettings.MAX_MERGE_FRAMES
+        BurstMergeRunner.Method.MFSR -> MfsrSettings.MAX_MERGE_FRAMES
+        BurstMergeRunner.Method.LKR -> MfsrSettings.maxFrames(MfsrEngine.LKR, lkrZoom)
         BurstMergeRunner.Method.HDRPLUS -> minOf(HdrPlusSettings.MAX_MERGE_FRAMES, HdrPlusMerge.MAX_NATIVE_FRAMES)
     }
 

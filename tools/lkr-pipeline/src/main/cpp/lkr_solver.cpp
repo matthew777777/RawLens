@@ -202,7 +202,9 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
   // rwt2: vec4 row sums of the temporal test (weight_th); ebuf: per-sample robust terms (weight_e)
   Buffer& rwt2 = cached(nLR * 16), &wvt2 = cached(nLR * 4), &wmtmp = cached(nLR * 4);
   Buffer& ebuf = cached(nLR * 4);
-  Buffer& zq = cached(nHR * 16), &z0q = cached(nHR * 16);   // packed 2x2 taps of z / z0 (zpack.comp)
+  // Packed 2x2 taps of z / z0 (zpack.comp); only the off-by-default pack_taps path reads them.
+  const size_t zq_bytes = prm.pack_taps ? nHR * 16 : 16;
+  Buffer& zq = cached(zq_bytes), &z0q = cached(zq_bytes);
   { float* f = wtr.as<float>(); for (size_t i = 0; i < nLR; ++i) f[i] = 1.0f; }
   // Local motion field: K x nby x nbx vec2 (+ Jacobi scratch, block normal eqs).
   const int LB = prm.local_block > 0 ? prm.local_block : 16;

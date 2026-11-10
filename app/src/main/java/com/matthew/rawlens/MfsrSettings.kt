@@ -70,9 +70,9 @@ data class MfsrSettings(
 ) {
     /** Quick-tile / status label of the active engine. */
     val label: String get() = if (engine == MfsrEngine.LKR) "LK-SR" else "MFSR"
-    /** Follow the shared burst / ZSL frame count, with an MFSR-only ceiling. */
+    /** Follow the shared burst / ZSL frame count, up to the active engine's ceiling. */
     fun activeFrameCount(configuredCount: Int): Int =
-        configuredCount.coerceIn(MIN_MERGE_FRAMES, MAX_MERGE_FRAMES)
+        configuredCount.coerceIn(MIN_MERGE_FRAMES, maxFrames(engine, lkrZoom))
 
     fun toPreferences(): Map<String, Any> = mapOf(
         "mfsr_enabled" to enabled,
@@ -115,6 +115,19 @@ data class MfsrSettings(
 
         const val MIN_MERGE_FRAMES = 2
         const val MAX_MERGE_FRAMES = 16
+        /** LK-SR at x1 follows the largest burst the app captures. */
+        const val MAX_LKR_FRAMES = 59
+        /**
+         * LK-SR x2 modes (1.5x, 2x, full 2x): per-frame solver buffers are 4x larger, so one
+         * worker at 24 frames already needs ~600 MB of native memory next to the frames and output.
+         */
+        const val MAX_LKR_FRAMES_X2 = 24
+
+        fun maxFrames(engine: MfsrEngine, zoom: LkrZoom = LkrZoom.X1): Int = when {
+            engine != MfsrEngine.LKR -> MAX_MERGE_FRAMES
+            zoom == LkrZoom.X1 -> MAX_LKR_FRAMES
+            else -> MAX_LKR_FRAMES_X2
+        }
     }
 }
 
@@ -128,13 +141,15 @@ enum class MfsrKernel { KERNELNET, WRONSKI }
  * sensor resolution with real super-resolved detail.
  */
 enum class LkrZoom(val factor: Float, val label: String) {
-    X1(1f, "1×"), X1_5(1.5f, "1.5×"), X2(2f, "2×");
+    X1(1f, "1×"), X1_5(1.5f, "1.5×"), X2(2f, "2×"),
+    /** Whole frame solved at x2: no crop, output is twice the sensor size on each side. */
+    FULL_2X(1f, "Full 2×");
 
     fun next(): LkrZoom = entries[(ordinal + 1) % entries.size]
 
     /** Centre crop `[x, y, w, h]` (even) of a [w]x[h] sensor, or null at 1x. */
     fun crop(w: Int, h: Int): IntArray? {
-        if (this == X1) return null
+        if (factor == 1f) return null
         val cw = (Math.round(w / factor / 2f) * 2).coerceAtMost(w)
         val ch = (Math.round(h / factor / 2f) * 2).coerceAtMost(h)
         return intArrayOf(((w - cw) / 2) and 1.inv(), ((h - ch) / 2) and 1.inv(), cw, ch)
