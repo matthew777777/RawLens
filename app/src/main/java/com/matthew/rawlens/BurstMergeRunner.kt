@@ -53,7 +53,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
         val denoise: DenoiseSettings = DenoiseSettings(),
         /** Shared AgX look lives in [jpeg]; this owns only the JXL container options. */
         val jxl: JxlOutputSettings = JxlOutputSettings(),
-        val developedFormat: DevelopedFormat = DevelopedFormat.JPEG
+        val developedFormat: DevelopedFormat = DevelopedFormat.JPEG,
+        val frameSelection: OfflineFrameSelection = OfflineFrameSelection()
     )
 
     fun interface Listener {
@@ -85,7 +86,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
                     HdrPlusMerge.MAX_NATIVE_FRAMES
                 )
             }
-            val pool = BurstMergeTakes.evenSampleIndices(timestamps.size, poolCap)
+            val sourceIndices = inputs.frameSelection.resolve(timestamps.size, poolCap)
+            val pool = sourceIndices
                 .map { timestamps[it] }
             require(pool.size >= 2) { "Take holds fewer than 2 frames" }
             val frames = pool.mapIndexed { i, ts ->
@@ -103,7 +105,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 val written = CrawReader.decodeFrame(handle, ts, buf, off, buf.remaining())
                 if (written < 0) throw IllegalStateException("Decode failed ts=$ts code=$written")
                 buf.position(off + written)
-                val metadata = OfflineBurstMetadata.synthesize(containerJson, meta, i)
+                val metadata = OfflineBurstMetadata.synthesize(containerJson, meta, sourceIndices[i])
                 val norm = OfflineBurstMetadata.normalizationFor(metadata)
                 listener.onProgress(Progress(Stage.DECODE, i + 1, pool.size,
                     SystemClock.elapsedRealtime() - t0,

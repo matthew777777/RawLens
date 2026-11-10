@@ -58,6 +58,9 @@ class MergesActivity : Activity() {
 
     private lateinit var selectionLine: TextView
     private lateinit var methodHint: TextView
+    private lateinit var framesButton: Button
+    private var frameSelection = OfflineFrameSelection()
+    private var inspectingFrames = false
     private lateinit var tuningButton: Button
     private lateinit var progressBar: ProgressBar
     private lateinit var controls: LinearLayout
@@ -111,7 +114,7 @@ class MergesActivity : Activity() {
         }, LinearLayout.LayoutParams(0, -2, 1f))
         header.addView(optionButton("↻").apply {
             contentDescription = "Refresh burst takes"
-            setOnClickListener { if (!mergeRunning.get()) reloadTakes() }
+            setOnClickListener { if (!mergeRunning.get() && !inspectingFrames) reloadTakes() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         root.addView(header)
         val body = column()
@@ -164,6 +167,9 @@ class MergesActivity : Activity() {
             }
         }
         controls.addView(zoomRow)
+        controls.addView(title("Source frames"))
+        framesButton = optionButton("Frames · Auto  ›").apply { setOnClickListener { showFramePicker() } }
+        controls.addView(framesButton, LinearLayout.LayoutParams(-1, -2))
         controls.addView(title("Save as"))
         val outRow = LinearLayout(this)
         outDng = optionButton("DNG").also { button ->
@@ -284,9 +290,9 @@ class MergesActivity : Activity() {
             isClickable = true
             isFocusable = true
             contentDescription = "$name, $metadata${if (active) ", selected" else ""}"
-            setOnClickListener { if (!mergeRunning.get()) { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); select() } }
+            setOnClickListener { if (!mergeRunning.get() && !inspectingFrames) { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); select() } }
             setOnLongClickListener {
-                if (!mergeRunning.get()) { performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); actions(this) }
+                if (!mergeRunning.get() && !inspectingFrames) { performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); actions(this) }
                 true
             }
         }
@@ -329,6 +335,11 @@ class MergesActivity : Activity() {
         lkrZoom = LkrZoom.entries.firstOrNull { it.name == values[KEY_MERGE_LKR_ZOOM] } ?: LkrZoom.X1
         tuningMfsr = MfsrSettings.fromPreferences(prefs().all + values)
         tuningHdr = HdrPlusSettings.fromPreferences(prefs().all + values)
+        frameSelection = OfflineFrameSelection(
+            (values["frame_count"] as? Int)?.takeIf { it >= 2 },
+            (values["frame_indices"] as? String)?.let { encoded ->
+                encoded.split(',').mapNotNull { it.toIntOrNull() }
+            })
         saveTakeOptions()
         renderList()
         controls.post {
@@ -339,6 +350,8 @@ class MergesActivity : Activity() {
     private fun saveTakeOptions() {
         val name = selected?.name ?: selectedPublished?.displayName ?: return
         takePrefs(name).edit()
+            .putInt("frame_count", frameSelection.count ?: 0)
+            .putString("frame_indices", frameSelection.manualIndices?.joinToString(","))
             .putString(KEY_MERGE_METHOD, method.name)
             .putString(KEY_MERGE_OUTPUT_FORMAT, format.name)
             .putString(MainActivity.KEY_DEVELOPED_FORMAT, developedFormat.name)
@@ -357,7 +370,7 @@ class MergesActivity : Activity() {
     }
 
     private fun showActions(anchor: View, row: BurstTakeRow?, pub: PublishedTake?) {
-        if (mergeRunning.get()) return
+        if (mergeRunning.get() || inspectingFrames) return
         val name = row?.file?.name ?: requireNotNull(pub).displayName
         val menu = column().apply { background = panel(); setPadding(dp(8), dp(8), dp(8), dp(8)) }
         val popup = PopupWindow(menu, dp(240), -2, true).apply {
@@ -375,6 +388,7 @@ class MergesActivity : Activity() {
         action("Merge options") {
             choose(row?.file, pub)
         }
+        action("Choose frames") { choose(row?.file, pub); showFramePicker() }
         action("Fine-tune method") { choose(row?.file, pub); showTuning() }
         action("Reset merge options") {
             takePrefs(name).edit().clear().apply()
@@ -442,6 +456,137 @@ class MergesActivity : Activity() {
             }
         }
         if (requestCode == 41 || requestCode == 42) reloadTakes()
+    }
+
+    private fun frameLimit(): Int = when (method) {
+        BurstMergeRunner.Method.MFSR, BurstMergeRunner.Method.LKR -> MfsrSettings.MAX_MERGE_FRAMES
+        BurstMergeRunner.Method.HDRPLUS -> minOf(HdrPlusSettings.MAX_MERGE_FRAMES, HdrPlusMerge.MAX_NATIVE_FRAMES)
+    }
+
+    private fun showFramePicker() {
+        if (mergeRunning.get() || inspectingFrames) return
+        val file = selected
+        val published = selectedPublished
+        if (file == null && published == null) return
+        inspectingFrames = true
+        refreshOptions()
+        statusLine.text = if (published != null) "Preparing saved take for frame selection…" else "Reading frame index…"
+        Thread({
+            try {
+                val take = file ?: BurstMergeTakes.restage(contentResolver, requireNotNull(published), stageDir())
+                val handle = CrawReader.open(take.absolutePath)
+                val timestamps: LongArray
+                val labels: List<String>
+                try {
+                    timestamps = CrawReader.frameTimestamps(handle) ?: error("Could not read frame index")
+                    require(timestamps.size >= 2) { "This take has fewer than 2 frames" }
+                    labels = timestamps.mapIndexed { index, timestamp ->
+                        val meta = runCatching { org.json.JSONObject(CrawReader.frameMetadata(handle, timestamp) ?: "{}") }.getOrNull()
+                        val iso = meta?.optInt("sensitivityIso", 0) ?: 0
+                        val elapsed = (timestamp - timestamps.first()) / 1_000_000.0
+                        "Frame ${index + 1} · +${"%.1f".format(elapsed)} ms" + if (iso > 0) " · ISO $iso" else ""
+                    }
+                } finally { CrawReader.closeReader(handle) }
+                runOnUiThread {
+                    inspectingFrames = false
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    refreshOptions()
+                    statusLine.text = ""
+                    framePickerDialog(timestamps.size, labels)
+                }
+            } catch (failure: Exception) {
+                runOnUiThread {
+                    inspectingFrames = false
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    refreshOptions()
+                    statusLine.text = failure.message ?: "Could not read source frames"
+                }
+            }
+        }, "BurstFrameIndex").start()
+    }
+
+    private fun framePickerDialog(total: Int, labels: List<String>) {
+        val maximum = minOf(total, frameLimit())
+        val content = column()
+        content.addView(desc("$total source frames · ${methodLabel()} supports 2–$maximum. Frame numbers follow capture order. The engine may reject blurred or moving frames."))
+        val summary = desc("")
+        content.addView(summary)
+        var manual = frameSelection.manualIndices != null
+        var count = (frameSelection.count ?: maximum).coerceIn(2, maximum)
+        val selectedIndices = (frameSelection.manualIndices?.filter { it in 0 until total }
+            ?: BurstMergeTakes.evenSampleIndices(total, count)).toMutableSet()
+        val modeRow = LinearLayout(this)
+        val autoButton = optionButton("Evenly spaced")
+        val manualButton = optionButton("Choose frames")
+        modeRow.addView(autoButton, rowParams()); modeRow.addView(manualButton, rowParams())
+        content.addView(modeRow)
+        val countLabel = desc("")
+        content.addView(countLabel)
+        val slider = SeekBar(this).apply {
+            max = maximum - 2; progress = count - 2
+            contentDescription = "Number of source frames"
+        }
+        content.addView(slider)
+        val grid = android.widget.GridLayout(this).apply { columnCount = 4 }
+        content.addView(grid)
+        val error = desc("").apply { setTextColor(getColor(R.color.danger)) }
+        content.addView(error)
+        val buttons = mutableListOf<Button>()
+        fun update() {
+            stylePick(autoButton, !manual); stylePick(manualButton, manual)
+            slider.visibility = if (manual) View.GONE else View.VISIBLE
+            countLabel.text = if (manual) "Tap to include or exclude · Hold for capture timing" else "$count frames · evenly spaced across the take"
+            val chosen = if (manual) selectedIndices else BurstMergeTakes.evenSampleIndices(total, count).toSet()
+            summary.text = "${chosen.size} of $total frames selected"
+            buttons.forEachIndexed { index, button ->
+                stylePick(button, index in chosen)
+                button.isEnabled = manual
+                button.contentDescription = labels[index] + if (index in chosen) ", included" else ", excluded"
+            }
+            error.text = if (manual && selectedIndices.size !in 2..maximum) "Choose 2–$maximum frames to continue" else ""
+        }
+        repeat(total) { index ->
+            val button = optionButton("${index + 1}").apply {
+                setOnClickListener {
+                    if (index in selectedIndices) selectedIndices.remove(index)
+                    else if (selectedIndices.size < maximum) selectedIndices.add(index)
+                    else { error.text = "This method supports up to $maximum frames"; return@setOnClickListener }
+                    update()
+                }
+                setOnLongClickListener {
+                    android.widget.Toast.makeText(this@MergesActivity, labels[index], android.widget.Toast.LENGTH_LONG).show()
+                    true
+                }
+            }
+            buttons += button
+            grid.addView(button, android.widget.GridLayout.LayoutParams().apply {
+                width = 0; height = dp(48)
+                columnSpec = android.widget.GridLayout.spec(index % 4, 1f)
+                setMargins(dp(2), dp(2), dp(2), dp(2))
+            })
+        }
+        autoButton.setOnClickListener { manual = false; update() }
+        manualButton.setOnClickListener {
+            if (!manual) { selectedIndices.clear(); selectedIndices.addAll(BurstMergeTakes.evenSampleIndices(total, count)) }
+            manual = true; update()
+        }
+        slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) { count = value + 2; update() }
+            override fun onStartTrackingTouch(bar: SeekBar?) {}
+            override fun onStopTrackingTouch(bar: SeekBar?) {}
+        })
+        update()
+        val dialog = RawLensDialogBuilder(this).setTitle("Source frames")
+            .setView(ScrollView(this).apply { addView(content) })
+            .setNegativeButton("Cancel", null).setPositiveButton("Apply", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (manual && selectedIndices.size !in 2..maximum) { error.text = "Choose 2–$maximum frames to continue"; return@setOnClickListener }
+                frameSelection = if (manual) OfflineFrameSelection(manualIndices = selectedIndices.sorted()) else OfflineFrameSelection(count = count)
+                saveTakeOptions(); refreshOptions(); dialog.dismiss()
+            }
+        }
+        dialog.show()
     }
 
     private fun showTuning() {
@@ -555,7 +700,7 @@ class MergesActivity : Activity() {
     private fun refreshOptions() {
         if (!::methodMfsr.isInitialized) return
         val hasSelection = selected != null || selectedPublished != null
-        val busy = mergeRunning.get()
+        val busy = mergeRunning.get() || inspectingFrames
         fun enable(view: View) {
             view.isEnabled = hasSelection && !busy
             if (view is ViewGroup) for (i in 0 until view.childCount) enable(view.getChildAt(i))
@@ -568,8 +713,15 @@ class MergesActivity : Activity() {
             BurstMergeRunner.Method.HDRPLUS -> "Noise reduction with motion-aware alignment."
             BurstMergeRunner.Method.LKR -> "Iterative reconstruction with optional crop zoom."
         }
-        runButton.isEnabled = hasSelection && !busy
+        val validFrames = frameSelection.manualIndices?.size?.let { it in 2..frameLimit() } ?: true
+        runButton.isEnabled = hasSelection && !busy && validFrames
+        if (!validFrames) methodHint.text = "Choose 2–${frameLimit()} source frames for ${methodLabel()}."
         runButton.text = if (busy) "Merging…" else if (hasSelection) "Merge with ${methodLabel()}" else "Select a burst"
+        framesButton.text = when {
+            frameSelection.manualIndices != null -> "Frames · ${frameSelection.manualIndices!!.size} selected  ›"
+            frameSelection.count != null -> "Frames · ${minOf(frameSelection.count!!, frameLimit())} evenly spaced  ›"
+            else -> "Frames · Auto  ›"
+        }
         val developed = developedFormat.label
         outJpeg.text = developed
         outBoth.text = "$developed+DNG"
@@ -608,7 +760,8 @@ class MergesActivity : Activity() {
             jpeg = MergeScreenSettings.jpeg(prefs),
             denoise = MergeScreenSettings.denoise(prefs),
             jxl = MergeScreenSettings.jxl(prefs),
-            developedFormat = developedFormat
+            developedFormat = developedFormat,
+            frameSelection = frameSelection.copy(manualIndices = frameSelection.manualIndices?.toList())
         )
         val workContext = applicationContext
         val selectedMethod = method
