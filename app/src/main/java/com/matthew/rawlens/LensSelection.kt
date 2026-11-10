@@ -85,7 +85,7 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean) {
                 setPadding(0, dp(16), 0, dp(8))
             })
             addView(TextView(this@showLensDiscovery).apply {
-                text = "Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…"
+                text = "Checking every Camera2 ID for RAW support (rear and front).\nThis usually takes a few seconds…"
                 setTextColor(getColor(R.color.text_secondary))
                 textSize = 13f
                 gravity = Gravity.CENTER
@@ -102,7 +102,7 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean) {
     } else {
         progressDialog = RawLensDialogBuilder(this)
             .setTitle("Finding RAW lenses")
-            .setMessage("Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…")
+            .setMessage("Checking every Camera2 ID for RAW support (rear and front).\nThis usually takes a few seconds…")
             .setCancelable(true)
             .show()
     }

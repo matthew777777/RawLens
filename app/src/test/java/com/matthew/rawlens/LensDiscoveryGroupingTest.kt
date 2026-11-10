@@ -42,6 +42,14 @@ class LensDiscoveryGroupingTest {
     )
 
     @Test
+    fun frontAndRearWithMatchingOpticsRemainSeparate() {
+        val rear = opticLens("0", LensRouteKind.STANDALONE)
+        val front = rear.copy(id = "1", role = LensRole.FRONT, title = "Front")
+        assertEquals(2, groupByOptic(listOf(rear, front)).size)
+        assertEquals(setOf("0", "1"), recommendedLensIds(listOf(rear, front)))
+    }
+
+    @Test
     fun groupsAreOrderedDirectThenLogicalThenVendorThenUnavailable() {
         val lenses = listOf(
             lens("3/2", LensRouteKind.VENDOR_COMPOSITE, 1f),

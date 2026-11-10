@@ -152,7 +152,8 @@
         android:visibility="gone" />
 
     <!-- LK-SR zoom chip: floats on the viewfinder's bottom-right corner,
-         mirroring the scope (bottom-left: 8dp side, 248dp bottom), independent
+         mirroring the scope (bottom-left), seated above the measured panel by
+         seatScopeSlot; 248dp below is only the initial fallback, independent
          of how many lenses the lens row holds.
          1x / 1.5x / 2x centre crop solved at x2; output stays sensor size.
          Shown only while LK-SR is the active merge in photo mode. -->

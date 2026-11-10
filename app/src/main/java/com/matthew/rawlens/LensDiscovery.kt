@@ -25,6 +25,7 @@ enum class LensRole(val displayName: String) {
     NORMAL("Normal"),
     TELE("Tele"),
     SUPER_TELE("Super-tele"),
+    FRONT("Front"),
     UNKNOWN("Lens");
 
     companion object {
@@ -165,10 +166,10 @@ class LensDiscovery(context: Context) {
 
             // A) Every queryable standalone RAW camera. Hidden numeric IDs are deliberately
             // included: on affected Xiaomi/MediaTek devices getCameraCharacteristics succeeds
-            // for rear RAW cameras omitted from cameraIdList.
+            // for RAW cameras omitted from cameraIdList.
             queryableIds.forEach { id ->
                 val c = characteristics(id) ?: return@forEach
-                if (runCatching { isRearRaw(c) }.getOrDefault(false)) {
+                if (runCatching { isRaw(c) }.getOrDefault(false)) {
                     runCatching { discovered(id, c, "standalone") }
                         .onSuccess { found[id] = it }
                         .onFailure { Log.w(LOG_TAG, "Skipping standalone $id", it) }
@@ -188,7 +189,7 @@ class LensDiscovery(context: Context) {
                     // API 29+ (below the RawLens minSdk 30) explicitly permits querying characteristics
                     // for physical IDs that are hidden from cameraIdList.
                     val physical = characteristics(physicalId) ?: return@physicalLoop
-                    if (runCatching { isRearRaw(physical, logical) }.getOrDefault(false)) {
+                    if (runCatching { isRaw(physical) }.getOrDefault(false)) {
                         runCatching {
                             discovered(
                                 id = "$logicalId/$physicalId",
@@ -232,8 +233,8 @@ class LensDiscovery(context: Context) {
                     val logicalId = composite.substringBefore('/').substringBefore('-')
                     val logical = characteristics(logicalId)
                     val usable = when {
-                        isRearRaw(compositeCharacteristics, logical) -> compositeCharacteristics
-                        else -> characteristics(physicalId)?.takeIf { isRearRaw(it, logical) }
+                        isRaw(compositeCharacteristics) -> compositeCharacteristics
+                        else -> characteristics(physicalId)?.takeIf { isRaw(it) }
                     } ?: return@runCatching null
                     discovered(composite, usable, "vendor route", logicalFallback = logical)
                 }.onSuccess { lens ->
@@ -292,26 +293,17 @@ class LensDiscovery(context: Context) {
         false
     }
 
-    private fun isRearRaw(
-        c: CameraCharacteristics,
-        logicalFallback: CameraCharacteristics? = null
-    ): Boolean {
+    private fun isRaw(c: CameraCharacteristics): Boolean {
         return try {
-            val facing = safeGet(c, CameraCharacteristics.LENS_FACING)
-                ?: logicalFallback?.let { safeGet(it, CameraCharacteristics.LENS_FACING) }
-            if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
-                false
+            val capabilities =
+                safeGet(c, CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+            if (capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) {
+                true
             } else {
-                val capabilities =
-                    safeGet(c, CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-                if (capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) {
-                    true
-                } else {
-                    // Some physical-camera characteristic blocks omit the RAW capability bit even though the
-                    // physical stream configuration explicitly exposes RAW_SENSOR. Accept that authoritative
-                    // stream declaration as well.
-                    hasRawStreamConfig(c)
-                }
+                // Some physical-camera characteristic blocks omit the RAW capability bit even though the
+                // physical stream configuration explicitly exposes RAW_SENSOR. Accept that authoritative
+                // stream declaration as well.
+                hasRawStreamConfig(c)
             }
         } catch (_: Throwable) {
             false
@@ -332,7 +324,10 @@ class LensDiscovery(context: Context) {
         } else null
         val megapixels = if (pixels != null) pixels.width * pixels.height / 1_000_000f else null
         val resolutionLabel = pixels?.let { "${it.width}×${it.height}" }
-        val role = LensRole.forEquivalentMm(equivalent)
+        val frontFacing = (safeGet(c, CameraCharacteristics.LENS_FACING)
+            ?: logicalFallback?.let { safeGet(it, CameraCharacteristics.LENS_FACING) }) ==
+            CameraCharacteristics.LENS_FACING_FRONT
+        val role = if (frontFacing) LensRole.FRONT else LensRole.forEquivalentMm(equivalent)
         val isoRange = safeGet(c, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
             ?.let { "${it.lower}–${it.upper}" }
         val maxExposureMs = safeGet(c, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
@@ -582,7 +577,7 @@ fun opticFingerprint(lens: DiscoveredLens): String {
     if (focal == null && equivalent == null && lens.resolutionLabel == null && mega == null) {
         return "id:${lens.id}"
     }
-    return "f${focal ?: "?"}|eq${equivalent ?: "?"}|${lens.resolutionLabel ?: "?"}|mp${mega ?: "?"}"
+    return "${if (lens.role == LensRole.FRONT) "front|" else ""}f${focal ?: "?"}|eq${equivalent ?: "?"}|${lens.resolutionLabel ?: "?"}|mp${mega ?: "?"}"
 }
 
 /** One physical lens with every route that reaches it. First lens is recommended. */

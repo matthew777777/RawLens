@@ -37,6 +37,7 @@ internal fun MainActivity.updateLkrZoomChip() {
     val active = zoom != LkrZoom.X1
     chip.setBackgroundResource(if (active) R.drawable.control_chip_active else R.drawable.control_chip)
     chip.setTextColor(getColor(if (active) R.color.accent_dark else R.color.text_primary))
+    if (shown) seatScopeSlot()
     applyLkrPreviewZoom(zoom.factor)
 }
 

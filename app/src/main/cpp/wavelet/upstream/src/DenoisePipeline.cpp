@@ -562,7 +562,15 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
     for (int i = 0; i < 3; i++) p[i] = std::max(params.shadows + 0.1f * std::log(1.0f / wb[i]), 0.0f);
     const float fulcrum = 0.05f;
     const float compensateP = fulcrum / std::pow(fulcrum, params.shadows);
-    const float a = params.noiseA * compensateP;
+    // The blind estimator can legitimately fit pure read noise (A == 0,
+    // B > 0). The power VST would divide by sqrt(0), poisoning the half-float
+    // tiles. For constant variance use a linear VST: p=0, a=B gives
+    // (rgb+B)/sqrt(B), with the existing inverse subtracting B again.
+    const bool gaussian = params.noiseA == 0.0f && params.noiseB > 0.0f;
+    if (gaussian) for (float& exponent : p) exponent = 0.0f;
+    const float a = gaussian ? params.noiseB : params.noiseA * compensateP;
+    if (!(a > 0.0f) || !std::isfinite(a) || !std::isfinite(params.noiseB))
+        throw std::runtime_error("denoise: invalid noise variance");
     const float b = params.noiseB;
     // WB-adaptive Y0U0V0 rows then strength scaling (mirrors set_up_conversion_matrices).
     float m[9] = {1.0f / 3, 1.0f / 3, 1.0f / 3, 0.5f, 0.0f, -0.5f, 0.25f, -0.5f, 0.25f};
