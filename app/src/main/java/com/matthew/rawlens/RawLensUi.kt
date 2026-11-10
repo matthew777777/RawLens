@@ -52,6 +52,8 @@ internal object RawLensUi {
         val context = dialog.context
         val window = dialog.window ?: return
         window.setBackgroundDrawableResource(R.drawable.quick_panel)
+        // Dialogs rely on platform resize behavior when the keyboard opens.
+        @Suppress("DEPRECATION")
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         val metrics = context.resources.displayMetrics
         val width = minOf(metrics.widthPixels - dp(context, 24), dp(context, 560))

@@ -141,7 +141,7 @@ class Gles31MergedDevelopProcessor(context: Context) {
         it.readText()
     }
     private var program = 0
-    private var programThreadId: Long? = null
+    private var programThread: Thread? = null
 
     /** Develops the merged frame; the RGBA16F output is live only inside [consume]. */
     fun <T> develop(
@@ -228,13 +228,13 @@ class Gles31MergedDevelopProcessor(context: Context) {
     /** Must be called by the owning thread while its EGL context is current. */
     fun close() {
         if (program != 0) {
-            check(programThreadId == Thread.currentThread().id) {
+            check(programThread == Thread.currentThread()) {
                 "Merged develop program must be closed by its owning thread"
             }
             GLES31.glDeleteProgram(program)
             MemoryLeakDiagnostics.glProgramReleased()
             program = 0
-            programThreadId = null
+            programThread = null
         }
     }
 
@@ -260,9 +260,9 @@ class Gles31MergedDevelopProcessor(context: Context) {
     }
 
     private fun developProgram(): Int {
-        val threadId = Thread.currentThread().id
-        val previous = programThreadId
-        check(previous == null || previous == threadId) {
+        val thread = Thread.currentThread()
+        val previous = programThread
+        check(previous == null || previous == thread) {
             "Merged develop program must stay on its owning thread"
         }
         if (program == 0) {
@@ -289,7 +289,7 @@ class Gles31MergedDevelopProcessor(context: Context) {
                 error("Merged develop shader link failed: $log")
             }
             MemoryLeakDiagnostics.glProgramAllocated()
-            programThreadId = threadId
+            programThread = thread
         }
         return program
     }

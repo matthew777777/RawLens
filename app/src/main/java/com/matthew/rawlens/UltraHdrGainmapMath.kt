@@ -41,11 +41,11 @@ object UltraHdrGainmapMath {
         val satW = resolved.satProtect * smoothstep(0.5f, 0.9f, sdrMax) * sdrSat.coerceIn(0f, 1f)
 
         val logGain3 = FloatArray(3) {
-            log2(max((hdr[it] + offH) / (sdr[it] + offS), 1e-9f)).toFloat()
+            log2(max((hdr[it] + offH) / (sdr[it] + offS), 1e-9f))
         }
         val lumaHdr = dot709(hdr)
         val lumaSdr = dot709(sdr)
-        val logGainLuma = log2(max((lumaHdr + offH) / (lumaSdr + offS), 1e-9f)).toFloat()
+        val logGainLuma = log2(max((lumaHdr + offH) / (lumaSdr + offS), 1e-9f))
         val toneScale = smoothstep(0.03f, 0.50f, lumaSdr) * (1f - satW)
 
         val hdrMax = max(hdr[0], max(hdr[1], hdr[2]))

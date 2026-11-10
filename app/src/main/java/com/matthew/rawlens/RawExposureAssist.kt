@@ -141,12 +141,12 @@ internal object RawExposureAssistSampler {
         if (!settings.enabled || width < 2 || height < 2 || pattern !in 0..3 || black.size != 4 || black.any { !it.isFinite() || it < 0 || it >= white }) return null
         if (focus != null && (!focus.first.isFinite() || !focus.second.isFinite())) return null
         val channels = RawEttrSampler.phaseChannelLut(pattern)
-        val oneCode = 1.0 / (white - black.min()).toDouble()
+        val oneCode = 1.0 / (white - black.min())
         val underNoise = dynamicRangeEv.isFinite() && dynamicRangeEv > 0
         val under = if (underNoise) MagicLanternRawExposure.evToLevel(-dynamicRangeEv) else 0.0
         fun level(x: Int, y: Int): Double {
             val b = black[(y and 1) * 2 + (x and 1)]
-            return ((code.codeAt(x, y) - b).toDouble() / (white - b)).coerceIn(0.0, 1.0)
+            return ((code.codeAt(x, y) - b) / (white - b)).coerceIn(0.0, 1.0)
         }
         val target = if (settings.overlay == RawExposureOverlayMode.FALSE_COLOR) 512 else 256
         val cols = minOf(target, width / 2)

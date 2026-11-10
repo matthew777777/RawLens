@@ -424,7 +424,7 @@ object HlReconstructionStage {
      * the stage stays unit-testable on the JVM (android.util.Half returns
      * stub zeros there). Matches Half.toHalf bit-for-bit on finite inputs.
      */
-    internal inline fun packHalf(value: Float): Short {
+    internal fun packHalf(value: Float): Short {
         val bits = value.toBits()
         val sign = (bits ushr 16) and 0x8000
         val exp = (bits ushr 23) and 0xff
@@ -461,7 +461,7 @@ object HlReconstructionStage {
     }
 
     /** Exact IEEE-754 binary16 unpack. */
-    internal inline fun unpackHalf(half: Int): Float {
+    internal fun unpackHalf(half: Int): Float {
         val sign = (half ushr 15) and 1
         val exp = (half ushr 10) and 0x1f
         val mant = half and 0x3ff

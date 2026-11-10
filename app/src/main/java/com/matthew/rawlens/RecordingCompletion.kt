@@ -10,7 +10,7 @@ internal object RecordingCompletion {
         var failure: Exception? = null
         fun attempt(action: () -> Unit) {
             try { action() } catch (e: Exception) {
-                if (failure == null) failure = e else failure?.addSuppressed(e)
+                if (failure == null) failure = e else failure.addSuppressed(e)
             }
         }
         if (valid && bytes != 0L) attempt(sync)

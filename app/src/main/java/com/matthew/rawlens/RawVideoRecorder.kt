@@ -258,6 +258,8 @@ internal class RawVideoRecorder(
     private var reader: ImageReader? = null
     private var encodeThreads: Array<Thread?> = emptyArray()
     private var commitThread: Thread? = null
+    // Java monitors expose wait/notifyAll used by the recording workers.
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
     private val resultLock = java.lang.Object()
     private val captureResults = java.util.TreeMap<Long, CaptureResult>()
     private var audio: AudioPcmRecorder? = null
@@ -339,6 +341,7 @@ internal class RawVideoRecorder(
         ArrayBlockingQueue<AudioPcmRecorder.Chunk>(AUDIO_QUEUE_CAP)
     private lateinit var payloadPool: LazyResourcePool<java.nio.ByteBuffer>
     private val reorder = java.util.TreeMap<Long, PendingFrame>()
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
     private val reorderLock = Object()
     private val workersAlive = AtomicInteger(0)
     private var workerCount = 2
@@ -1451,7 +1454,7 @@ internal class RawVideoRecorder(
         }, handler)
         check(latch.await(10, TimeUnit.SECONDS)) { "Camera open timed out" }
         if (opened == null) throw IllegalStateException("Camera open failed: $error")
-        return opened!!
+        return opened
     }
 
     private fun createSession(handler: Handler): CameraCaptureSession {
@@ -1498,7 +1501,7 @@ internal class RawVideoRecorder(
         if (config != null) device!!.createCaptureSession(config)
         check(latch.await(10, TimeUnit.SECONDS)) { "Session configure timed out" }
         if (configured == null) throw IllegalStateException("Session failed: $error")
-        return configured!!
+        return configured
     }
 
     private fun teardown() {

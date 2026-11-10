@@ -281,7 +281,7 @@ class LensDiscovery(context: Context) {
         }
 
     private fun safePhysicalIds(c: CameraCharacteristics): Set<String> = try {
-        c.physicalCameraIds ?: emptySet()
+        c.physicalCameraIds
     } catch (_: Throwable) {
         emptySet()
     }

@@ -53,7 +53,7 @@ class HistogramView @JvmOverloads constructor(
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = ScopeStyle.BORDER_WIDTH_DP * dp
-        color = ScopeStyle.BORDER.toInt()
+        color = ScopeStyle.BORDER
     }
     private val clipPath = Path()
     private val plotClip = Path()

@@ -296,7 +296,7 @@ object MemoryLeakDiagnostics {
         val glGrowth = values.last().textureBytes - values.first().textureBytes
         val bufGrowth = values.last().nativeBufBytes - values.first().nativeBufBytes
         val imageGrowth = values.last().images - values.first().images
-        val firing = (rising { it.pssKb.toLong() } && pssGrowthKb >= PSS_GROWTH_WARNING_KB) ||
+        val firing = (rising { it.pssKb } && pssGrowthKb >= PSS_GROWTH_WARNING_KB) ||
             (rising { it.nativeBytes } && nativeGrowth >= NATIVE_GROWTH_WARNING_BYTES) ||
             glGrowth > GL_GROWTH_WARNING_BYTES ||
             bufGrowth > NATIVE_GROWTH_WARNING_BYTES ||

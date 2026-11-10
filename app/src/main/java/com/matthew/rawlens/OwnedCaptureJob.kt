@@ -18,7 +18,7 @@ internal class CloseOnceOwner<T>(items: Collection<T>, private val release: (T) 
             try {
                 release(item)
             } catch (failure: Throwable) {
-                if (firstFailure == null) firstFailure = failure else firstFailure!!.addSuppressed(failure)
+                if (firstFailure == null) firstFailure = failure else firstFailure.addSuppressed(failure)
             }
         }
         firstFailure?.let { throw it }

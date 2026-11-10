@@ -426,7 +426,7 @@ object DeviceImpactProbe {
     }
 
     private fun primeCpuBaseline() {
-        runCatching { parseStatTicks(File("/proc/self/stat").readText()) }?.getOrNull()?.let {
+        runCatching { parseStatTicks(File("/proc/self/stat").readText()) }.getOrNull()?.let {
             lastSelfTicks = it
             lastHeartbeatMs = SystemClock.elapsedRealtime()
         }
@@ -481,7 +481,7 @@ object DeviceImpactProbe {
             val active = Thread.activeCount().coerceAtLeast(8) + 8
             Array(active) { Thread() }.let { buf ->
                 val n = Thread.enumerate(buf)
-                buf.take(n).mapNotNull { it.name?.takeUnless { name -> name.isEmpty() } }
+                buf.take(n).mapNotNull { it.name.takeUnless { name -> name.isEmpty() } }
             }
         }.getOrDefault(emptyList())
         // Framework noise out; app + worker threads stay (sorted for stable diffing).

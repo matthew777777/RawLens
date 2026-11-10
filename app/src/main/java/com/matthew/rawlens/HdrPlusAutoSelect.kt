@@ -35,7 +35,7 @@ data class HdrPlusAutoDecision(
         else " dropped=[" + droppedIndices.joinToString(",") { "F${it + 1}" } + "]"
         val nonUniform = frameStrengths != null && frameStrengths.toSet().size > 1
         val fm = if (nonUniform)
-            " fm=[" + frameStrengths!!.joinToString(",") {
+            " fm=[" + frameStrengths.joinToString(",") {
                 String.format(Locale.US, "%.1f", it)
             } + "]"
         else ""

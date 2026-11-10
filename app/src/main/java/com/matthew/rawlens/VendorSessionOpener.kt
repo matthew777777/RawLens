@@ -61,6 +61,8 @@ internal class VendorSessionOpener(
         }
         try {
             log("Submitting vendor session: $attempt legacy=$legacy")
+            // This fallback deliberately exercises the legacy vendor session API.
+            @Suppress("DEPRECATION")
             if (legacy) device.createCaptureSession(legacySurfaces, callback, handler)
             else device.createCaptureSession(makeConfiguration(base, attempt, callback))
         } catch (failure: IllegalArgumentException) {

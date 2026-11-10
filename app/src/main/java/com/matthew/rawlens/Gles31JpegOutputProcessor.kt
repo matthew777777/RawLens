@@ -29,7 +29,7 @@ class Gles31JpegOutputProcessor(context: Context) {
     // This processor is invoked inside Gles31AmazeProcessor.process(), on its persistent writer
     // EGL context. Compile once per context instead of once per saved JPEG.
     private var program = 0
-    private var programThreadId: Long? = null
+    private var programThread: Thread? = null
     private var framebuffer = 0
     private var baseReadback: ByteBuffer? = null
     private var gainReadback: ByteBuffer? = null
@@ -191,13 +191,13 @@ class Gles31JpegOutputProcessor(context: Context) {
     /** Must be called while AMaZE's persistent EGL context is current on its worker thread. */
     fun close() {
         if (program != 0) {
-            check(programThreadId == Thread.currentThread().id) {
+            check(programThread == Thread.currentThread()) {
                 "JPEG output program must be closed by its owning worker thread"
             }
             GLES31.glDeleteProgram(program)
             MemoryLeakDiagnostics.glProgramReleased()
             program = 0
-            programThreadId = null
+            programThread = null
         }
         if (framebuffer != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(framebuffer), 0)
@@ -315,14 +315,14 @@ class Gles31JpegOutputProcessor(context: Context) {
     }
 
     private fun outputProgram(): Int {
-        val threadId = Thread.currentThread().id
-        val previousThreadId = programThreadId
-        check(previousThreadId == null || previousThreadId == threadId) {
+        val thread = Thread.currentThread()
+        val previousThread = programThread
+        check(previousThread == null || previousThread == thread) {
             "JPEG output program must stay on AMaZE's owning worker thread"
         }
         if (program == 0) {
             program = compile(shaderSource)
-            programThreadId = threadId
+            programThread = thread
         }
         return program
     }

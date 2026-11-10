@@ -123,7 +123,7 @@ object VulkanEncoderBridge {
             )
             surface = codec.createInputSurface()
             egl = EglPusher(surface)
-            val push = egl ?: return BridgeReport(codecName = name, error = "egl init failed")
+            val push = egl
             codec.start()
             // Ping-pong sensor + export buffers (the efficiency core of Phase A:
             // frame N+1 fills/computes while frame N drains through the encoder).

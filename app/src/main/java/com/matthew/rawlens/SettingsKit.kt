@@ -128,7 +128,10 @@ internal class SettingsKit(
                     val label = (if (index > 0) content.getChildAt(index - 1) else null) as? TextView
                     if (label != null) {
                         child.contentDescription = label.text.toString().substringBefore(":")
-                        child.setLabelFormatter { label.text.toString().substringAfter(": ", label.text.toString()) }
+                        child.setLabelFormatter {
+                            val firstLine = label.text.toString().substringBefore('\n')
+                            firstLine.substringAfter(": ", firstLine)
+                        }
                     }
                 }
                 is android.widget.CompoundButton -> {

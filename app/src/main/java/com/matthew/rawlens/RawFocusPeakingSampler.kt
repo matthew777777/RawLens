@@ -79,7 +79,7 @@ object RawFocusPeakingSampler {
                     ShortBufferCompat.getBulk(shorts, start, band[dy], 0, image.width)
                 } else for (x in 0 until image.width) {
                     // Decode packed rows in row order, once, instead of thrashing the row cache.
-                    val value = if (packed != null) packed.codeAt(x, y) ?: return null else {
+                    val value = if (packed != null) packed.codeAt(x, y) else {
                         val offset = y.toLong() * plane.rowStride + x.toLong() * plane.pixelStride
                         if (offset < 0 || offset + 2 > buffer.limit()) return null
                         buffer.getShort(offset.toInt()).toInt() and 0xffff

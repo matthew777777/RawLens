@@ -81,7 +81,7 @@ internal object VfVideoGrade {
     fun workingLog(x: Float): Float {
         val c = x.coerceAtLeast(0f)
         return if (c >= LOG_CUT) {
-            (420.0 + Math.log10(((c + 0.01) / 0.4625).toDouble()) * 261.5).toFloat() / 1023f
+            (420.0 + Math.log10(((c + 0.01) / 0.4625)) * 261.5).toFloat() / 1023f
         } else {
             // Linear toe through the cut point: continuous by construction.
             c * workingLog(LOG_CUT) / LOG_CUT
@@ -116,7 +116,7 @@ internal object VfVideoGrade {
     fun inverseWorkingLog(y: Float): Float {
         val cutY = workingLog(LOG_CUT)
         return if (y >= cutY) {
-            (0.4625 * 10.0.pow(((y * 1023.0 - 420.0) / 261.5).toDouble()) - 0.01).toFloat()
+            (0.4625 * 10.0.pow(((y * 1023.0 - 420.0) / 261.5)) - 0.01).toFloat()
                 .coerceAtLeast(0f)
         } else {
             y * LOG_CUT / cutY
@@ -203,7 +203,7 @@ internal object VfVideoGrade {
     fun sonySlog3(x: Float): Float {
         val c = x
         return if (c >= SLOG3_CUT) {
-            (420.0 + Math.log10(((c + 0.01) / 0.19).toDouble()) * 261.5).toFloat() / 1023f
+            (420.0 + Math.log10(((c + 0.01) / 0.19)) * 261.5).toFloat() / 1023f
         } else {
             // Linear toe through (0, 95) and the cut point: continuous by construction.
             (SLOG3_BLACK_CODE + c * (sonySlog3(SLOG3_CUT) * 1023f - SLOG3_BLACK_CODE) / SLOG3_CUT) / 1023f
@@ -215,7 +215,7 @@ internal object VfVideoGrade {
         val cutY = sonySlog3(SLOG3_CUT)
         val blackY = SLOG3_BLACK_CODE / 1023f
         return if (y >= cutY) {
-            (0.19 * 10.0.pow(((y * 1023.0 - 420.0) / 261.5).toDouble()) - 0.01).toFloat()
+            (0.19 * 10.0.pow(((y * 1023.0 - 420.0) / 261.5)) - 0.01).toFloat()
                 .coerceAtLeast(0f)
         } else {
             ((y - blackY) * SLOG3_CUT / (cutY - blackY))

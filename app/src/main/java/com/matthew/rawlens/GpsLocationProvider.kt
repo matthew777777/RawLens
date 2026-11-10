@@ -126,6 +126,7 @@ class GpsLocationProvider(context: Context) : AutoCloseable {
                 }
                 override fun onProviderDisabled(provider: String) = accessChanged()
                 override fun onProviderEnabled(provider: String) = accessChanged()
+                @Deprecated("Deprecated by the Android location API")
                 override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
             }
             listener = next

@@ -92,7 +92,7 @@ internal object EncodedVideoColor {
         val t2 = c.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2) ?: return null
         val ill1 = c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1) ?: return null
         val ill2 = c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2) ?: return null
-        return ForwardPair(ingest(t1), ingest(t2), ill1.toInt(), ill2.toInt())
+        return ForwardPair(ingest(t1), ingest(t2), ill1, ill2.toInt())
     }
 
     private fun ingest(t: ColorSpaceTransform) =

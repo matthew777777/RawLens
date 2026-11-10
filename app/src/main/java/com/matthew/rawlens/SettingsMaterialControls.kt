@@ -6,6 +6,7 @@ import android.view.ContextThemeWrapper
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.slider.Slider
+import com.google.android.material.slider.TickVisibilityMode
 import kotlin.math.roundToInt
 
 /** Material 3 controls with RawLens colors, without changing the camera activity theme. */
@@ -47,7 +48,7 @@ internal class SettingsSlider(context: Context) : Slider(
         valueFrom = 0f
         valueTo = 100f
         stepSize = 1f
-        isTickVisible = false
+        tickVisibilityMode = TickVisibilityMode.TICK_VISIBILITY_HIDDEN
         addOnChangeListener { _, value, fromUser ->
             settingsListener?.onProgressChanged(this, value.roundToInt(), fromUser)
             // Keyboard and accessibility changes have no touch-release event.

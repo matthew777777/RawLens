@@ -556,7 +556,7 @@ internal object LogcatFileWriter {
                     throw failure
                 }
             } else {
-                val target = uri ?: return "query returned null"
+                val target = uri
                 resolver.openOutputStream(target, "w")?.use { out ->
                     source.inputStream().use { input -> input.copyTo(out) }
                 } ?: return "open stream failed"
