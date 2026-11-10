@@ -5,10 +5,17 @@
 RawLens vendors the C11 v3 writer from
 https://github.com/matthew777777/tinydng. All 13 shared files in
 `app/src/main/cpp/deps/tinydng/UPSTREAM.json` match TinyDNG commit `4df281b`
-byte-for-byte. That manifest intentionally retains the original `1f18169`
+except for the fractional BlackLevel reader extension documented below.
+That manifest intentionally retains the original `1f18169`
 base hashes; `rawlens.patch` reproduces the updated header/writer from that
 base. Vendor-only provenance files and Android/JNI code are separate.
 The checked-in TinyDNG source build needs no fetch or research checkout.
+
+The reader additionally retains DNG BlackLevel rational values in
+`raw.black_level_precise`, in CFA cell order, alongside the integer compatibility
+field. A scalar BlackLevel is replicated to all four cells. LK-SR desktop
+normalization consumes the precise values; truncating/averaging them introduced
+magenta near-black shadows in HDR+ burst `0009_20160702_154921_383`.
 
 The shared writer now supports checked serialized TIFF/DNG fields, sorted
 EXIF/GPS directories, all three opaque opcode lists, sequential uncompressed

@@ -6,7 +6,6 @@ package com.matthew.rawlens
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
-import java.io.File
 import java.nio.ByteOrder
 
 /**
@@ -20,19 +19,13 @@ import java.nio.ByteOrder
  */
 internal object LkrMerge {
     private const val LOG_TAG = "RawLensLkr"
-    private const val MODEL_PARAM = "models/lkr_ffdnet.ncnn.param"
-    private const val MODEL_BIN = "models/lkr_ffdnet.ncnn.bin"
 
     data class Settings(
         val scale: Int = 1,
         val tile: Int = 512,
         val overlap: Int = 32,
-        val fp16: Boolean = true,
-        val usePrior: Boolean = true,
-        /** Prior on the NPU through LiteRT when available (ncnn otherwise). */
-        val npu: Boolean = true,
-        /** Paper as published (Settings -> Burst); false = RawLens improvements. */
-        val paperParity: Boolean = false,
+        /** Regularise with the Vulkan sliding-DCT x-step; false = no prior. */
+        val dctPrior: Boolean = false,
         /** Sensor sub-rectangle `[x, y, w, h]`, or null for full frame. */
         val crop: IntArray? = null,
         /** LK-SR Lab overrides (Settings -> Merge), NaN = code default; null = all defaults. */
@@ -40,30 +33,6 @@ internal object LkrMerge {
         /** Zoom: 1.5x / 2x solve the centre crop at x2; output stays the sensor size. Overrides scale / crop. */
         val zoom: LkrZoom = LkrZoom.X1
     )
-
-    /** Fixed-shape NPU model for the packed tile (s * tile HR); null if not shipped. */
-    private fun npuModel(context: Context, settings: Settings): File? {
-        val hr = settings.scale * settings.tile
-        val asset = "models/lkr_ffdnet_$hr.tflite"
-        return runCatching { modelFile(context, asset) }.getOrNull()
-    }
-
-    /** ncnn loads models from paths: copy the assets once to filesDir. */
-    @Synchronized
-    internal fun modelFile(context: Context, asset: String): File {
-        // Keyed by the APK's update time: a new build re-installs the model
-        // (assets are compressed, so openFd sizes are unavailable).
-        val stamp = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
-        val out = File(context.filesDir, "lkr/$stamp-" + asset.substringAfterLast('/'))
-        if (!out.exists() || out.length() == 0L) {
-            out.parentFile?.listFiles()?.filter { it.name.endsWith(asset.substringAfterLast('/')) }?.forEach { it.delete() }
-            out.parentFile?.mkdirs()
-            val tmp = File(out.path + ".tmp")
-            context.assets.open(asset).use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
-            check(tmp.renameTo(out)) { "cannot install $asset" }
-        }
-        return out
-    }
 
     fun mergeDecoded(
         context: Context,
@@ -128,17 +97,11 @@ internal object LkrMerge {
         val wb = if (neutral != null && neutral.size == 3 && neutral[0] > 0 && neutral[2] > 0)
             floatArrayOf((neutral[1] / neutral[0]).toFloat(), 1f, (neutral[1] / neutral[2]).toFloat())
         else floatArrayOf(1f, 1f, 1f)
-        val (param, bin) = if (settings.usePrior)
-            modelFile(context, MODEL_PARAM).path to modelFile(context, MODEL_BIN).path
-        else null to null
         val t0 = SystemClock.elapsedRealtime()
         val rgb = LkrBridge.nativeMerge(
             buffers.toTypedArray(), w, h, rowStrideBytes / 2, cfa, norm.blackLevels.toFloatArray(),
             norm.whiteLevel, wb, settings.scale, settings.tile, settings.overlap, settings.crop,
-            param, bin, settings.fp16,
-            if (settings.usePrior && settings.npu) context.applicationInfo.nativeLibraryDir else null,
-            if (settings.usePrior && settings.npu) npuModel(context, settings)?.path else null,
-            settings.paperParity,
+            settings.dctPrior,
             stats,
             settings.tuning,
             outW, outH
@@ -162,6 +125,17 @@ internal object LkrMerge {
             "sigma=%.5f merge %d ms (coarse %.0f tiles %.0f gpu %.0f prior %.0f)".format(
                 stats[LkrBridge.STAT_SIGMA], mergeMs, stats[LkrBridge.STAT_MS_COARSE],
                 stats[LkrBridge.STAT_MS_TILES], stats[LkrBridge.STAT_MS_GPU], stats[LkrBridge.STAT_MS_PRIOR]))
-        return MfsrMerge.MfsrResult(rgb, ow, oh, buffers.size, mergeMs, metadata, result)
+        return MfsrMerge.MfsrResult(rgb, ow, oh, buffers.size, mergeMs, metadata, result,
+            buildString {
+                append("- Tile size: ${settings.tile}, overlap: ${settings.overlap}\n")
+                append("- Tiles: ${stats[LkrBridge.STAT_TILES].toInt()}\n")
+                append("- Prior: ${if (settings.dctPrior) "Sliding DCT" else "None"}\n")
+                append("- Crop (x, y, width, height): ${region.joinToString()}\n")
+                append("- Noise sigma: ${stats[LkrBridge.STAT_SIGMA]}\n")
+                append("- Coarse alignment: ${stats[LkrBridge.STAT_MS_COARSE]} ms\n")
+                append("- Tile processing: ${stats[LkrBridge.STAT_MS_TILES]} ms\n")
+                append("- GPU: ${stats[LkrBridge.STAT_MS_GPU]} ms\n")
+                append("- Prior time: ${stats[LkrBridge.STAT_MS_PRIOR]} ms\n")
+            })
     }
 }

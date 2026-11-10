@@ -12,7 +12,7 @@ import android.content.SharedPreferences
  * (tools/lkr-pipeline). Defaults are NOT duplicated here: the sliders show
  * [LkrBridge.nativeTuningDefaults], the native code's own values, and only
  * values the user changed are stored (prefs `lkr_lab_<key>`) and sent; every
- * other entry goes over as NaN = "keep the code default". Paper parity still
+ * other entry goes over as NaN = "keep the code default". The LK baseline still
  * overrides all of them.
  */
 internal object LkrTuning {
@@ -30,7 +30,7 @@ internal object LkrTuning {
     ) {
         ITERATIONS(0, "Iterations", "Solver iterations. Fewer = faster, less fine detail.", Kind.INT, 4f, 24f),
         Z_STEPS(1, "Data steps per iteration", "Gradient steps on the data term per iteration.", Kind.INT, 1f, 5f),
-        PRIOR_EVERY(2, "Denoiser every n-th iteration", "How often the FFDNet prior runs (NPU calls).", Kind.INT, 1f, 4f),
+        PRIOR_EVERY(2, "Denoiser every n-th iteration", "How often the DCT denoiser runs, when enabled.", Kind.INT, 1f, 4f),
         LOOK_DAY_PRIOR(3, "Look: day denoise", "Prior strength at clean daylight noise (DSLR look).", Kind.FLOAT, 0f, 1f, .01f),
         LOOK_NIGHT_PRIOR(4, "Look: night denoise", "Prior strength at night noise.", Kind.FLOAT, 0f, 1f, .01f),
         LOOK_DAY_GRAIN(5, "Look: day grain", "Fine grain returned in daylight.", Kind.FLOAT, 0f, 1f, .01f),
@@ -54,7 +54,7 @@ internal object LkrTuning {
         MHC_INIT(23, "Video demosaic start", "Start from the encoded-video demosaic (off = bilinear).", Kind.SWITCH),
         STEP_SCALE(24, "Step size", "Data step size; above 1.95 can diverge.", Kind.FLOAT, .5f, 1.95f, .05f),
         OVERLAP(25, "Tile overlap", "Overlap between tiles (px).", Kind.INT, 16f, 96f, 2f),
-        WORKERS(26, "Parallel tiles", "Tiles solved at once (GPU/NPU overlap).", Kind.INT, 1f, 4f),
+        WORKERS(26, "Parallel tiles", "Tiles solved at once (GPU/CPU overlap).", Kind.INT, 1f, 4f),
         SIGMA_MAX(27, "Schedule start", "First denoise level, in multiples of the noise.", Kind.FLOAT, 2f, 20f, .5f);
 
         val key: String get() = "lkr_lab_" + name.lowercase()

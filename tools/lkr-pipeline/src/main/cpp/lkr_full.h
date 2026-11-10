@@ -27,7 +27,7 @@ struct FullParams {
   int s = 1;               // output scale (1 or 2)
   int tile = 512;          // LR tile edge incl. overlap (even)
   int overlap = 32;        // LR overlap between tiles (even)
-  int workers = 3;         // concurrent tile solvers: GPU + CPU work of some overlaps the NPU prior of another (3 measured best on MT6878)
+  int workers = 3;         // concurrent tile solvers: GPU + CPU work of some overlaps the prior of another (3 measured best on MT6878)
   int crop_x = -1, crop_y = -1, crop_w = 0, crop_h = 0;   // optional sub-rectangle (sensor px)
   SolveParams solve;       // T, z_steps, prior_at, step_scale (sigma_* filled here)
   float smax_x = 10.0f, end_x = 1.0f;   // schedule in multiples of our noise sigma
@@ -45,7 +45,7 @@ struct FullParams {
   // night keeps Cauchy at k 3 (steep at night over-smoothed the building 20 %).
   float robust_k_day = 2.0f, robust_k_night = 3.0f;
   float robust_pow_day = 2.0f, robust_pow_night = 1.0f;   // noise-equalisation strength, blended like the look
-  // LK baseline with FFDNet (not a reproduction of the trained paper model):
+  // LK baseline (not a reproduction of the trained paper model):
   // turns OFF every RawLens addition -- DSLR look (prior gain / grain / auto),
   // Bayer notch, clip masking, robust weights + noise equalisation, local
   // motion + block search. Noise estimation, schedule and prior stay.

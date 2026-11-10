@@ -43,11 +43,7 @@ internal object LkrBridge {
      * @param black per CFA cell in the same order; [white] the white level.
      * @param wb R, G, B gains with G = 1 (1 / AsShotNeutral).
      * @param crop `[x, y, w, h]` sensor sub-rectangle, or null for full frame.
-     * @param modelParam ncnn FFDNet `.param` path; null = no prior (L2 only).
-     * @param npuLibDir directory holding libLiteRt.so + vendor plugins (nativeLibraryDir);
-     *   with [npuModel] (a `.tflite` for the packed tile shape) the prior runs on the NPU,
-     *   null or failure = ncnn.
-     * @param paperParity the paper as published (learned parts substituted), every RawLens addition off.
+     * @param dctPrior regularise with the Vulkan sliding-DCT x-step; false = no prior.
      * @param tuning LK-SR Lab overrides ([LkrTuning.overrides]): NaN = code default; null = all defaults.
      * @param outWidth / [outHeight] requested output size (area-resampled if the solve differs), 0 = as solved.
      */
@@ -55,23 +51,9 @@ internal object LkrBridge {
         frames: Array<ByteBuffer>, width: Int, height: Int, rowStridePx: Int,
         cfa: IntArray, black: FloatArray, white: Float, wb: FloatArray,
         scale: Int, tile: Int, overlap: Int, crop: IntArray?,
-        modelParam: String?, modelBin: String?, fp16: Boolean,
-        npuLibDir: String?, npuModel: String?, paperParity: Boolean, stats: FloatArray,
+        dctPrior: Boolean, stats: FloatArray,
         tuning: FloatArray?, outWidth: Int, outHeight: Int
     ): ByteBuffer?
-
-    /** Transactional standalone denoise of a direct camera-linear RGBA16F buffer. */
-    @JvmStatic external fun nativeDenoise(
-        rgba: ByteBuffer, width: Int, height: Int, cfa: IntArray, wb: FloatArray,
-        strength: Float, modelParam: String, modelBin: String, npuDir: String, npuModel: String?
-    ): Boolean
-
-    /** Device-test entry: backend 1=GPU, 2=NPU, rejects inference fallback. */
-    @JvmStatic external fun nativeBenchmarkDenoise(
-        rgba: ByteBuffer, width: Int, height: Int, cfa: IntArray, wb: FloatArray,
-        modelParam: String, modelBin: String, npuDir: String, npuModel: String?,
-        backend: Int, fp16: Boolean, stats: FloatArray
-    ): Boolean
 
     /** Native defaults of the LK-SR Lab table (index layout: lkr_tuning.h / [LkrTuning.Entry]). */
     @JvmStatic external fun nativeTuningDefaults(): FloatArray

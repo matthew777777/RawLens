@@ -7,6 +7,18 @@
 
 namespace lkr {
 namespace spv {
+static const uint32_t dct_x_y[] = {
+#include "dct_x_y.inc"
+};
+static const uint32_t dct_x_u[] = {
+#include "dct_x_u.inc"
+};
+static const uint32_t dct_x_v[] = {
+#include "dct_x_v.inc"
+};
+static const uint32_t dct_yuv[] = {
+#include "dct_yuv.inc"
+};
 static const uint32_t resid_adj[] = {
 #include "resid_adj.inc"
 };

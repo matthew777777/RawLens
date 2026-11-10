@@ -59,12 +59,8 @@ data class MfsrSettings(
      * switches the shared sharp-merge path to that engine.
      */
     val engine: MfsrEngine = MfsrEngine.MFSR,
-    /**
-     * LK-SR only: the paper as published (Lecouat et al. 2021, learned parts
-     * substituted) instead of the RawLens improvements (DSLR look, motion
-     * robustness, local motion, Bayer notch). Default off = improvements.
-     */
-    val lkrPaperParity: Boolean = false,
+    /** LK-SR: regularise with the Vulkan sliding-DCT x-step; false (default) = no prior. */
+    val lkrDctPrior: Boolean = false,
     /**
      * LK-SR zoom (viewfinder chip): 1x full frame at x1; 1.5x / 2x solve the
      * centre crop at x2 (1.5x then area-downsampled). Output is always the
@@ -86,7 +82,7 @@ data class MfsrSettings(
         "mfsr_learned_noise" to learnedNoise,
         "mfsr_zipper_fix" to zipperFix,
         "mfsr_engine" to engine.name,
-        KEY_LKR_PAPER_PARITY to lkrPaperParity,
+        "lkr_dct_prior" to lkrDctPrior,
         "lkr_zoom" to lkrZoom.name
     )
 
@@ -113,16 +109,10 @@ data class MfsrSettings(
             learnedNoise = values["mfsr_learned_noise"] as? Boolean ?: true,
             zipperFix = values["mfsr_zipper_fix"] as? Boolean ?: true,
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,
-            lkrPaperParity = values[KEY_LKR_PAPER_PARITY] as? Boolean ?: false,
+            lkrDctPrior = values["lkr_dct_prior"] as? Boolean ?: false,
             lkrZoom = LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1
         )
 
-        /**
-         * The app's LK-SR default is the tuned RawLens version. v2 key (2026-11-04):
-         * a paper-parity value saved by the earlier switch (testing, backups) is
-         * ignored once, so every install starts on the tuned path.
-         */
-        const val KEY_LKR_PAPER_PARITY = "lkr_paper_parity_v2"
         const val MIN_MERGE_FRAMES = 2
         const val MAX_MERGE_FRAMES = 16
     }

@@ -68,24 +68,18 @@ class LkrPipelineDeviceTest {
                 bufs += b
             }
             Log.i(TAG, "loaded $n frames ${w}x$h in ${SystemClock.elapsedRealtime() - tLoad} ms")
-            val model = installModel(context)
-            val npu = (args.getString("lkrNpu") ?: "1") == "1"
-            val npuModels = mapOf(1 to copyAsset(context, "models/lkr_ffdnet_512.tflite"),
-                2 to copyAsset(context, "models/lkr_ffdnet_1024.tflite"))
+            val dct = (args.getString("lkrDct") ?: "0") == "1"
             for (c in cases) {
                 val stats = FloatArray(LkrBridge.STATS_SIZE)
                 val t0 = SystemClock.elapsedRealtime()
                 val rgb = LkrBridge.nativeMerge(bufs.toTypedArray(), w, h, w, cfa, black, white, wb,
-                    c.scale, 512, 32, c.crop, model.first, model.second, true,
-                    if (npu) context.applicationInfo.nativeLibraryDir else null,
-                    if (npu) npuModels.getValue(c.scale) else null,
-                    (args.getString("lkrPaper") ?: "0") == "1", stats, null, c.outW, c.outH)
+                    c.scale, 512, 32, c.crop, dct, stats, null, c.outW, c.outH)
                 val ms = SystemClock.elapsedRealtime() - t0
                 assertNotNull("merge ${c.name} failed", rgb)
                 if (c.outW > 0) org.junit.Assert.assertEquals("${c.name} output size", c.outW.toLong() * c.outH * 12, rgb!!.capacity().toLong())
                 val ow = stats[LkrBridge.STAT_OUT_W].toInt()
                 val oh = stats[LkrBridge.STAT_OUT_H].toInt()
-                Log.i(TAG, "[npu=$npu] %s: %dx%d s=%d tiles %d | total %d ms (native %.0f: noise %.0f coarse %.0f tiles %.0f = gpu %.0f + prior %.0f [%d calls, backend %d]) sigma %.5f".format(
+                Log.i(TAG, "[dct=$dct] %s: %dx%d s=%d tiles %d | total %d ms (native %.0f: noise %.0f coarse %.0f tiles %.0f = gpu %.0f + prior %.0f [%d calls, backend %d]) sigma %.5f".format(
                     c.name, ow, oh, c.scale, stats[LkrBridge.STAT_TILES].toInt(), ms,
                     stats[LkrBridge.STAT_MS_TOTAL], stats[LkrBridge.STAT_MS_NOISE], stats[LkrBridge.STAT_MS_COARSE],
                     stats[LkrBridge.STAT_MS_TILES], stats[LkrBridge.STAT_MS_GPU], stats[LkrBridge.STAT_MS_PRIOR],
@@ -102,22 +96,6 @@ class LkrPipelineDeviceTest {
         } finally {
             bufs.forEach { runCatching { HdrPlusVulkan.freeBuffer(it) } }
         }
-    }
-
-    private fun copyAsset(context: android.content.Context, asset: String): String {
-        val f = File(File(context.filesDir, "lkr-test").apply { mkdirs() }, asset.substringAfterLast('/'))
-        context.assets.open(asset).use { i -> f.outputStream().use { o -> i.copyTo(o) } }
-        return f.absolutePath
-    }
-
-    private fun installModel(context: android.content.Context): Pair<String, String> {
-        val dir = File(context.filesDir, "lkr-test").apply { mkdirs() }
-        fun copy(asset: String): String {
-            val f = File(dir, asset.substringAfterLast('/'))
-            context.assets.open(asset).use { i -> f.outputStream().use { o -> i.copyTo(o) } }
-            return f.absolutePath
-        }
-        return copy("models/lkr_ffdnet.ncnn.param") to copy("models/lkr_ffdnet.ncnn.bin")
     }
 
     private companion object {

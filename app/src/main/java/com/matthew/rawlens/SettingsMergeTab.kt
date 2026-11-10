@@ -86,18 +86,17 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 "improvements: DSLR look, motion and water rejection, local motion, " +
                 "shadow cleanup. Own quick tile; same shutter, ZSL and save path as MFSR."
         ))
-        content.addView(settingsCheck("Paper parity (off = RawLens improvements)", mfsrSettings.lkrPaperParity).apply {
+        content.addView(settingsCheck("LK-SR denoise: sliding DCT", mfsrSettings.lkrDctPrior).apply {
             setOnCheckedChangeListener { _, checked ->
-                if (checked != mfsrSettings.lkrPaperParity) {
-                    if (!applyMfsrSettings(mfsrSettings.copy(lkrPaperParity = checked))) {
-                        isChecked = mfsrSettings.lkrPaperParity
-                    }
+                if (checked != mfsrSettings.lkrDctPrior &&
+                    !applyMfsrSettings(mfsrSettings.copy(lkrDctPrior = checked))) {
+                    isChecked = mfsrSettings.lkrDctPrior
                 }
             }
         })
         content.addView(sectionDesc(
-            "Paper parity runs the method as published (learned parts substituted) " +
-                "and ignores LK-SR Lab."
+            "Off (default): no denoiser, the most organic result. On: a fast GPU denoiser " +
+                "removes colour noise and a little luma noise during reconstruction."
         ))
         val labPrefs = LkrTuning.prefs(this)
         val labBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -118,7 +117,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 "${HdrPlusSettings.MIN_STRENGTH.toInt()}–${HdrPlusSettings.MAX_STRENGTH.toInt()}. " +
                 "Higher merges harder: cleaner stills, more ghosting on motion. " +
                 "AUTO picks ${HdrPlusAutoTuning.AUTO_STRENGTH_MIN.toInt()}–" +
-                "${HdrPlusAutoTuning.AUTO_STRENGTH_MAX.toInt()} from scene motion " +
+                "${HdrPlusAutoTuning.AUTO_STRENGTH_MAX.toInt()} from measured noise and motion " +
                 "and ignores the slider."
         ))
         fun strengthRowText(value: Float): String =

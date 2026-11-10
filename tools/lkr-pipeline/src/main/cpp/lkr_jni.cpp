@@ -23,10 +23,6 @@
 #include "lkr_resample.h"
 
 #include <cmath>
-#include "lkr_prior.h"
-#ifdef __ANDROID__
-#include "lkr_litert.h"
-#endif
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -41,11 +37,10 @@ namespace {
 
 // stats layout (float[16]): tiles, sigma, a, b, ms_noise, ms_coarse, ms_tiles,
 // ms_gpu, ms_prior, ms_total, prior_calls, out_w, out_h, backend (0 none,
-// 1 ncnn-cpu, 2 ncnn-vulkan, 3 litert-npu), reserved...
+// 4 DCT x-step), reserved...
 jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_px, jintArray cfa_j,
               jfloatArray black_j, jfloat white, jfloatArray wb_j, jint s, jint tile, jint overlap,
-              jintArray crop_j, jstring param_j, jstring bin_j, jboolean fp16, jstring npu_dir_j,
-              jstring npu_model_j, jboolean paper, jfloatArray stats_j, jfloatArray tuning_j, jint out_w_req,
+              jintArray crop_j, jboolean dct, jfloatArray stats_j, jfloatArray tuning_j, jint out_w_req,
               jint out_h_req) {
   const jsize K = env->GetArrayLength(frames);
   std::vector<lkr::RawFrame> fr;
@@ -66,18 +61,6 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   env->GetFloatArrayRegion(black_j, 0, 4, black);
   env->GetFloatArrayRegion(wb_j, 0, 3, wbv);
   if (crop_j && env->GetArrayLength(crop_j) >= 4) env->GetIntArrayRegion(crop_j, 0, 4, crop);
-  const char* pp = param_j ? env->GetStringUTFChars(param_j, nullptr) : nullptr;
-  const char* bp = bin_j ? env->GetStringUTFChars(bin_j, nullptr) : nullptr;
-  const std::string param = pp ? pp : "", bin = bp ? bp : "";
-  if (pp) env->ReleaseStringUTFChars(param_j, pp);
-  if (bp) env->ReleaseStringUTFChars(bin_j, bp);
-  auto str = [&](jstring j) {
-    std::string v;
-    if (j) { const char* c = env->GetStringUTFChars(j, nullptr); v = c; env->ReleaseStringUTFChars(j, c); }
-    return v;
-  };
-  const std::string npu_dir = str(npu_dir_j), npu_model = str(npu_model_j);
-
   lkr::Gpu gpu;
   if (!gpu.ok()) {
     LKR_LOG("no Vulkan device");
@@ -92,7 +75,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   }
 #endif
   prm.s = s;
-  prm.paper_parity = paper;
+  prm.solve.dct_prior = dct;
   prm.tile = tile;
   prm.overlap = overlap;
   prm.crop_x = crop[0];
@@ -130,50 +113,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   }
 #endif
 
-  std::unique_ptr<lkr::FfdnetGatPrior> ff;
-  float backend = 0;
-  if (!param.empty()) {
-    ff.reset(new lkr::FfdnetGatPrior);
-    lkr::FfdnetGatPrior::Options o;
-    o.fp16 = fp16;
-    if (!ff->load(param, bin, o)) {
-      LKR_LOG("FFDNet load failed (%s)", param.c_str());
-      return nullptr;
-    }
-    backend = ff->backend() == "ncnn-vulkan" ? 2 : 1;
-  }
-#ifdef __ANDROID__
-  // NPU core (LiteRT, fixed tile shape); ncnn above stays the fallback.
-  std::unique_ptr<lkr::LiteRtCore> npu;
-  if (ff && !npu_dir.empty() && !npu_model.empty()) {
-    const int H2 = s * std::min(tile, std::min(w, h)) / 2;
-    npu.reset(new lkr::LiteRtCore);
-    std::string nerr;
-    if (npu->open(npu_dir, npu_model, H2, H2, &nerr)) {
-      lkr::LiteRtCore* core = npu.get();
-      lkr::FfdnetGatPrior::NhwcCore nc;
-      nc.lock_in = [core] { return core->lockInput(); };
-      nc.run = [core] { return core->unlockAndRun(); };
-      nc.lock_out = [core] { return core->lockOutput(); };
-      nc.unlock_out = [core] { core->unlockOutput(); };
-      ff->setNhwcCore(std::move(nc), H2, H2, "litert-npu");
-      backend = 3;
-      LKR_LOG("prior on NPU (LiteRT, %dx%d packed)", H2, H2);
-    } else {
-      LKR_LOG("NPU unavailable (%s): ncnn fallback", nerr.c_str());
-      npu.reset();
-    }
-  } else if (ff) {
-    LKR_LOG("NPU skipped (%s): ncnn fallback", npu_dir.empty()
-        ? "disabled or missing library directory" : "missing model for selected tile shape");
-  }
-#endif
-  lkr::PriorFactory make;
-  if (ff)
-    make = [&](float a, float b, float sig, const std::array<float, 3>& wb) -> lkr::PriorFn {
-      ff->setNoise(a, b, sig, wb);
-      return [&](const float* z, float* x, int H, int W, float sg, const float* ns) { return (*ff)(z, x, H, W, sg, ns); };
-    };
+  const float backend = dct ? 4.f : 0.f;
+  const lkr::PriorFactory make;
   std::vector<float> rgb;
   int ow = 0, oh = 0;
   lkr::FullStats st;
@@ -204,8 +145,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     env->SetFloatArrayRegion(stats_j, 0, 14, sv);
   }
   if (!st.gpu_profile.empty()) LKR_LOG("gpu profile: %s", st.gpu_profile.c_str());
-  if (ff) LKR_LOG("%s", ff->timing().c_str());
-  LKR_LOG("mode: %s", paper ? "paper parity" : "RawLens improvements");
+  LKR_LOG("mode: %s", dct ? "DCT x-step" : "no prior");
   LKR_LOG("look: prior %.2f grain %.2f (sigma %.5f)", st.prior_gain, st.grain, st.sigma);
   LKR_LOG("merge %dx%d s=%d K=%d tiles %d: noise %.0f coarse %.0f tiles %.0f (gpu %.0f prior %.0f) total %.0f ms",
           ow, oh, s, int(K), st.tiles, st.ms_noise, st.ms_coarse, st.ms_tiles, st.ms_gpu, st.ms_prior, st.ms_total);
@@ -220,11 +160,11 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
 
 extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMerge(
     JNIEnv* env, jclass, jobjectArray frames, jint w, jint h, jint row_stride_px, jintArray cfa, jfloatArray black,
-    jfloat white, jfloatArray wb, jint s, jint tile, jint overlap, jintArray crop, jstring param, jstring bin,
-    jboolean fp16, jstring npu_dir, jstring npu_model, jboolean paper, jfloatArray stats, jfloatArray tuning,
+    jfloat white, jfloatArray wb, jint s, jint tile, jint overlap, jintArray crop, jboolean dct,
+    jfloatArray stats, jfloatArray tuning,
     jint out_w, jint out_h) {
-  return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, param, bin, fp16,
-               npu_dir, npu_model, paper, stats, tuning, out_w, out_h);
+  return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, dct, stats, tuning, out_w,
+               out_h);
 }
 
 // Native defaults of the LK-SR Lab table (lkr_tuning.h), shown by the app's sliders.
@@ -238,67 +178,8 @@ extern "C" JNIEXPORT jfloatArray JNICALL Java_com_matthew_rawlens_LkrBridge_nati
 // Desktop Kotlin CLI (tools/lkr-pipeline, com.rawlens.lkrpipeline.LkrBridge): same entry.
 extern "C" JNIEXPORT jobject JNICALL Java_com_rawlens_lkrpipeline_LkrBridge_nativeMerge(
     JNIEnv* env, jclass, jobjectArray frames, jint w, jint h, jint row_stride_px, jintArray cfa, jfloatArray black,
-    jfloat white, jfloatArray wb, jint s, jint tile, jint overlap, jintArray crop, jstring param, jstring bin,
-    jboolean fp16, jstring npu_dir, jstring npu_model, jboolean paper, jfloatArray stats) {
-  return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, param, bin, fp16,
-               npu_dir, npu_model, paper, stats, nullptr, 0, 0);
+    jfloat white, jfloatArray wb, jint s, jint tile, jint overlap, jintArray crop, jboolean dct,
+    jfloatArray stats) {
+  return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, dct, stats, nullptr, 0, 0);
 }
 
-#include "lkr_photo_denoise.h"
-extern "C" JNIEXPORT jboolean JNICALL Java_com_matthew_rawlens_LkrBridge_nativeDenoise(
-    JNIEnv* env, jclass, jobject buffer, jint w, jint h, jintArray cfa_j, jfloatArray wb_j,
-    jfloat strength, jstring param_j, jstring bin_j, jstring npu_dir_j, jstring npu_model_j) {
-  auto* rgba = static_cast<uint16_t*>(env->GetDirectBufferAddress(buffer));
-  if (!rgba || w < 64 || h < 64 || env->GetDirectBufferCapacity(buffer) < int64_t(w) * h * 8 ||
-      !cfa_j || env->GetArrayLength(cfa_j) != 4 || !wb_j || env->GetArrayLength(wb_j) < 3 ||
-      !param_j || !bin_j) return false;
-  int cfa[4];
-  std::array<float, 3> wb;
-  env->GetIntArrayRegion(cfa_j, 0, 4, cfa);
-  env->GetFloatArrayRegion(wb_j, 0, 3, wb.data());
-  auto str = [&](jstring j) {
-    if (!j) return std::string();
-    const char* chars = env->GetStringUTFChars(j, nullptr);
-    if (!chars) return std::string();
-    std::string value(chars);
-    env->ReleaseStringUTFChars(j, chars);
-    return value;
-  };
-  try {
-    return lkr::DenoisePhoto(rgba, w, h, cfa, wb, strength, str(param_j), str(bin_j),
-                             str(npu_dir_j), str(npu_model_j));
-  } catch (const std::exception&) { return false; }
-}
-
-// Test-only benchmark entry. Calls the production denoiser, enforces the
-// requested inference backend, and exposes measured stage totals.
-extern "C" JNIEXPORT jboolean JNICALL Java_com_matthew_rawlens_LkrBridge_nativeBenchmarkDenoise(
-    JNIEnv* env, jclass, jobject buffer, jint w, jint h, jintArray cfa_j, jfloatArray wb_j,
-    jstring param_j, jstring bin_j, jstring npu_dir_j, jstring npu_model_j,
-    jint backend, jboolean fp16, jfloatArray stats_j) {
-  auto* rgba = static_cast<uint16_t*>(env->GetDirectBufferAddress(buffer));
-  if (!rgba || w < 64 || h < 64 || env->GetDirectBufferCapacity(buffer) < int64_t(w)*h*8 ||
-      !cfa_j || env->GetArrayLength(cfa_j) != 4 || !wb_j || env->GetArrayLength(wb_j) < 3 ||
-      !param_j || !bin_j || backend < 1 || backend > 2 || !stats_j || env->GetArrayLength(stats_j) < 16) return false;
-  int cfa[4]; std::array<float,3> wb;
-  env->GetIntArrayRegion(cfa_j,0,4,cfa); env->GetFloatArrayRegion(wb_j,0,3,wb.data());
-  auto str = [&](jstring j) {
-    if (!j) return std::string();
-    const char* chars = env->GetStringUTFChars(j,nullptr);
-    if (!chars) return std::string();
-    std::string value(chars); env->ReleaseStringUTFChars(j,chars); return value;
-  };
-  try {
-    lkr::PhotoDenoiseStats stats;
-    const auto start = std::chrono::steady_clock::now();
-    const bool ok = lkr::DenoisePhoto(rgba,w,h,cfa,wb,1.f,str(param_j),str(bin_j),
-        str(npu_dir_j),str(npu_model_j),4,0.f,true,static_cast<lkr::PhotoBackend>(backend),fp16,&stats);
-    const float total = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-start).count();
-    const float values[16] = {float(stats.backend),total,float(stats.noise_ms),float(stats.model_ms),
-      float(stats.npu_open_ms),float(stats.range_ms),float(stats.primary_ms),float(stats.chroma_ms),
-      float(stats.guard_ms),float(stats.blend_ms),float(stats.pack_ms),float(stats.inference_ms),
-      float(stats.unpack_ms),float(stats.calls),float(fp16),float(ok)};
-    env->SetFloatArrayRegion(stats_j,0,16,values);
-    return ok;
-  } catch (const std::exception&) { return false; }
-}

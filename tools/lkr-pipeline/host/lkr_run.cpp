@@ -17,9 +17,6 @@
 
 #include "lkr_host.h"
 #include "lkr_solver.h"
-#ifdef LKR_WITH_NCNN
-#include "lkr_prior.h"
-#endif
 #include "srp_dng.h"
 
 namespace {
@@ -59,8 +56,7 @@ int main(int argc, char** argv) {
   const std::string in = argv[1], out = argv[2];
   int cx = -1, cy = -1, crop = 512, s = 2, T = 16, zs = 3, every = 2, frames = 0;
   float smax = 10, end = 1;
-  std::string prior_kind = "ffdnet", model = "build/models";
-  bool fp16 = false;
+  std::string prior_kind = "none";
   for (int i = 3; i + 1 < argc; i += 2) {
     const std::string k = argv[i];
     const double v = std::atof(argv[i + 1]);
@@ -69,8 +65,7 @@ int main(int argc, char** argv) {
     else if (k == "--T") T = int(v); else if (k == "--zs") zs = int(v);
     else if (k == "--every") every = int(v); else if (k == "--smax") smax = float(v);
     else if (k == "--end") end = float(v); else if (k == "--frames") frames = int(v);
-    else if (k == "--prior") prior_kind = argv[i + 1]; else if (k == "--model") model = argv[i + 1];
-    else if (k == "--fp16") fp16 = v != 0;
+    else if (k == "--prior") prior_kind = argv[i + 1];
   }
   std::vector<std::string> paths;
   if (DIR* d = opendir(in.c_str())) {
@@ -118,19 +113,6 @@ int main(int argc, char** argv) {
   prm.sigma_noise = sig; prm.sigma_max = smax * sig; prm.sigma_end = end * sig;
   if (every > 1) for (int t = every - 1; t < T; t += every) prm.prior_at.push_back(t);
   lkr::PriorFn prior;
-#ifdef LKR_WITH_NCNN
-  lkr::FfdnetGatPrior ff;
-  if (prior_kind == "ffdnet") {
-    lkr::FfdnetGatPrior::Options o;
-    o.fp16 = fp16;
-    if (!ff.load(model + "/ffdnet.param", model + "/ffdnet.bin", o)) {
-      std::fprintf(stderr, "cannot load FFDNet from %s\n", model.c_str());
-      return 1;
-    }
-    ff.setNoise(na, nb, sig, b.wb);
-    prior = [&](const float* z, float* xo, int Hh, int Ww, float sg, const float* ns) { return ff(z, xo, Hh, Ww, sg, ns); };
-  }
-#endif
   if (prior_kind != "none" && !prior) {
     std::fprintf(stderr, "prior '%s' unavailable in this build\n", prior_kind.c_str());
     return 1;
@@ -163,7 +145,7 @@ int main(int argc, char** argv) {
   SaveNpy(out + "/p_init.npy", {uint64_t(b.K), 6}, p_init.data());
   const float nn[3] = {sig, na, nb};
   SaveNpy(out + "/noise.npy", {3}, nn);
-  std::printf("device %s  prior %s%s\n", gpu.info().c_str(), prior_kind.c_str(), fp16 ? " fp16" : "");
+  std::printf("device %s  prior %s%s\n", gpu.info().c_str(), prior_kind.c_str(), "");
   std::printf("burst %d x %dx%d at (%d,%d) s=%d -> %dx%d  sigma %.5f  a %.3g b %.3g  L %.4f\n", b.K, b.w, b.h,
               b.x0, b.y0, s, W, H, sig, na, nb, st.L);
   std::printf("ms: load %.1f  noise %.1f  coarseLK %.1f  gpu-init %.1f  solve %.1f (gpu %.1f prior %.1f, %d submits)  save %.1f  TOTAL %.1f\n",

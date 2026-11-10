@@ -13,9 +13,6 @@
 #include <vector>
 
 #include "lkr_solver.h"
-#ifdef LKR_WITH_NCNN
-#include "lkr_prior.h"
-#endif
 #include "npy.h"
 
 static bool SaveNpy(const std::string& path, const std::vector<uint64_t>& shape, const float* d) {
@@ -83,19 +80,6 @@ int main(int argc, char** argv) {
   std::vector<float> p(pi.data), x;
   lkr::SolveStats st;
   lkr::PriorFn prior;   // empty = 'none'
-#ifdef LKR_WITH_NCNN
-  lkr::FfdnetGatPrior ff;
-  srp_proof::NpyArray pn;
-  const char* model = std::getenv("LKR_MODEL");
-  if (model && srp_proof::LoadNpy((dir + "/prior.npy").c_str(), &pn)) {
-    lkr::FfdnetGatPrior::Options o;
-    o.fp16 = std::getenv("LKR_FP16") != nullptr;
-    if (!ff.load(std::string(model) + "/ffdnet.param", std::string(model) + "/ffdnet.bin", o)) return 1;
-    ff.setNoise(pn.data[0], pn.data[1], pn.data[2], {pn.data[3], pn.data[4], pn.data[5]});
-    prior = [&](const float* z, float* xo, int Hh, int Ww, float sg, const float* ns) { return ff(z, xo, Hh, Ww, sg, ns); };
-    std::printf("prior: ffdnet-gat (%s%s)\n", ff.backend().c_str(), o.fp16 ? ", fp16" : "");
-  }
-#endif
   if (!solver.solve(fr.data.data(), K, h, w, p.data(), prm, prior, &x, &st)) {
     std::fprintf(stderr, "solve failed\n");
     return 1;

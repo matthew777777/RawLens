@@ -81,6 +81,11 @@ void ShadowWeight(const float* z, int H, int W, const SolveParams& prm, std::vec
 
 namespace {
 
+struct DctPush {
+  int32_t H, W, ny, nx, py, px, ixo, has_ns;
+  float sigma2, lv_a, lv_b, k_y2, k_c2, wb_r, wb_g, wb_b;
+};
+
 struct Push {
   int32_t h, w, s, K;
   int32_t H, W, kOff, mode;
@@ -105,6 +110,10 @@ double now_ms() {
 
 Solver::Solver(Gpu* gpu) : gpu_(gpu) {
   if (!gpu_ || !gpu_->ok()) return;
+  dct_y_ = gpu_->pipeline(spv::dct_x_y, sizeof(spv::dct_x_y), 5, sizeof(DctPush));
+  dct_u_ = gpu_->pipeline(spv::dct_x_u, sizeof(spv::dct_x_u), 5, sizeof(DctPush));
+  dct_v_ = gpu_->pipeline(spv::dct_x_v, sizeof(spv::dct_x_v), 5, sizeof(DctPush));
+  dct_yuv_ = gpu_->pipeline(spv::dct_yuv, sizeof(spv::dct_yuv), 1, sizeof(DctPush));
   resid_ = gpu_->pipeline(spv::resid_adj, sizeof(spv::resid_adj), 5, sizeof(Push));
   zstep_ = gpu_->pipeline(spv::zstep, sizeof(spv::zstep), 3, sizeof(Push));
   grad_ = gpu_->pipeline(spv::grad, sizeof(spv::grad), 2, sizeof(Push));
@@ -129,7 +138,7 @@ Solver::Solver(Gpu* gpu) : gpu_(gpu) {
   residzq_ = gpu_->pipeline(spv::resid_zq, sizeof(spv::resid_zq), 5, sizeof(Push));
   radjwzq_ = gpu_->pipeline(spv::resid_adj_w_zq, sizeof(spv::resid_adj_w_zq), 6, sizeof(Push));
   wtemp_ = gpu_->pipeline(spv::weight_t, sizeof(spv::weight_t), 5, sizeof(Push));
-  ok_ = resid_.pipe && zstep_.pipe && grad_.pipe && jac_.pipe && solve_.pipe && residg_.pipe && zgather_.pipe &&
+  ok_ = dct_y_.pipe && dct_u_.pipe && dct_v_.pipe && dct_yuv_.pipe && resid_.pipe && zstep_.pipe && grad_.pipe && jac_.pipe && solve_.pipe && residg_.pipe && zgather_.pipe &&
         weight_.pipe && scatter_.pipe && jacblk_.pipe && solveblk_.pipe && wmin_.pipe && wtemp_.pipe && wminh_.pipe && radjw_.pipe && wexp_.pipe && wth_.pipe && zgw_.pipe && residq_.pipe && radjwq_.pipe && scatq_.pipe && zpack_.pipe && residzq_.pipe && radjwzq_.pipe;
 }
 
@@ -156,7 +165,7 @@ Buffer& Solver::Cached(int slot, size_t bytes, bool host_read) {
 Solver::~Solver() {
   if (gpu_) for (Entry& e : cache_) gpu_->free(e.buf);
   if (!gpu_ || !gpu_->ok()) return;
-  for (Pipeline* p : {&resid_, &zstep_, &grad_, &jac_, &solve_, &residg_, &zgather_, &weight_, &scatter_, &jacblk_, &solveblk_, &wmin_, &wtemp_, &wminh_, &radjw_, &wexp_, &wth_, &zgw_, &residq_, &radjwq_, &scatq_, &zpack_, &residzq_, &radjwzq_})
+  for (Pipeline* p : {&dct_y_, &dct_u_, &dct_v_, &dct_yuv_, &resid_, &zstep_, &grad_, &jac_, &solve_, &residg_, &zgather_, &weight_, &scatter_, &jacblk_, &solveblk_, &wmin_, &wtemp_, &wminh_, &radjw_, &wexp_, &wth_, &zgw_, &residq_, &radjwq_, &scatq_, &zpack_, &residzq_, &radjwzq_})
     gpu_->destroy(*p);
 }
 
@@ -226,7 +235,33 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
     std::memcpy(z0.map, up.data(), nHR * 4);
   }
 
+  const bool dct = prm.dct_prior && !prior;
+  if (dct && ((H & 3) || (W & 3))) return LKR_FAIL("dct x-step needs H, W % 4 == 0");
+  const int dct_ny = dct ? (H - 8) / 4 + 1 : 0, dct_nx = dct ? (W - 8) / 4 + 1 : 0;
+  Buffer& dct_ns = cached(dct ? size_t(H) * W * 4 : 16), &dct_iw = cached(dct ? size_t(H + W + 8) * 4 : 16),
+         &dct_nv = cached(dct ? size_t(dct_ny) * dct_nx * 4 : 16);
+  if (dct) {   // inverse Hann overlap sum, per row then per column (vec4 slots)
+    static const float win[8] = {0.03806023f, 0.30865828f, 0.69134172f, 0.96193977f,
+                                 0.96193977f, 0.69134172f, 0.30865828f, 0.03806023f};
+    float* iw = dct_iw.as<float>();
+    auto axis = [&](int n, int blocks, float* out) {
+      std::vector<float> sum(size_t(n), 0.0f);
+      for (int b = 0; b < blocks; ++b)
+        for (int i = 0; i < 8; ++i) sum[size_t(b * 4 + i)] += win[i];
+      for (int i = 0; i < n; ++i) out[i] = 1.0f / sum[size_t(i)];
+    };
+    axis(H, dct_ny, iw);
+    axis(W, dct_nx, iw + H);
+  }
+
   gpu_->resetSets();
+  VkDescriptorSet sDctY = VK_NULL_HANDLE, sDctU = VK_NULL_HANDLE, sDctV = VK_NULL_HANDLE, sDctC = VK_NULL_HANDLE;
+  if (dct) {
+    sDctY = gpu_->set(dct_y_, {&z, &x, &dct_ns, &dct_iw, &dct_nv});
+    sDctU = gpu_->set(dct_u_, {&z, &x, &dct_ns, &dct_iw, &dct_nv});
+    sDctV = gpu_->set(dct_v_, {&z, &x, &dct_ns, &dct_iw, &dct_nv});
+    sDctC = gpu_->set(dct_yuv_, {&x});
+  }
   VkDescriptorSet sResid = gpu_->set(resid_, {&z, &y, &pb, &acc, &dloc});
   VkDescriptorSet sZ = gpu_->set(zstep_, {&z, &x, &acc});
   VkDescriptorSet sGrad = gpu_->set(grad_, {&z, &g});
@@ -474,8 +509,8 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
       }
     }
     const bool use_prior = prior_here(t);
-    if (use_prior && !prior) gpu_->copy(z, x, nHR * 4);            // 'none': x = z
-    if (use_prior && prior) gpu_->copy(z, zc, nHR * 4);            // prior input to the CPU side
+    if (use_prior && !prior && !dct) gpu_->copy(z, x, nHR * 4);    // 'none': x = z
+    if (use_prior && (prior || dct)) gpu_->copy(z, zc, nHR * 4);            // prior input to the CPU side
     if (use_prior && eq && q.rob_on > 0.5f) {             // weighted coverage of this iteration
       d_scatter(sSW, sSWq, q);
       Push q1 = q; q1.mode = 1;
@@ -519,7 +554,7 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
         }
       }
     }
-    if (use_prior && prior) {                                      // PnP x-step
+    if (use_prior && (prior || dct)) {                             // PnP x-step
       const double tp = now_ms();
       const float* ns = nullptr;
       if (!nscale.empty()) ns = nscale.data();
@@ -542,7 +577,28 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
         }
       }
       trace("iter" + std::to_string(t) + "_z", zc.as<float>(), nHR);
-      if (!prior(zc.as<float>(), xc.as<float>(), H, W, sig[t] * prm.prior_gain, ns)) return LKR_FAIL("prior");
+      if (dct) {
+        if (ns) std::memcpy(dct_ns.map, ns, size_t(H) * W * 4);
+        const float sg = sig[t] * prm.prior_gain;
+        const float denom = prm.noise_a * 0.18f + prm.noise_b;
+        DctPush d{H, W, dct_ny, dct_nx, 0, 0, H / 4, ns ? 1 : 0, sg * sg,
+                  denom > 0 ? prm.noise_a / denom : 0.0f, denom > 0 ? prm.noise_b / denom : 1.0f,
+                  prm.dct_luma * prm.dct_luma, prm.dct_chroma * prm.dct_chroma,
+                  prm.wb[0], prm.wb[1], prm.wb[2]};
+        gpu_->begin();
+        gpu_->fill(x, 0);
+        const std::pair<const Pipeline*, VkDescriptorSet> chans[3] = {{&dct_y_, sDctY}, {&dct_u_, sDctU}, {&dct_v_, sDctV}};
+        for (const auto& c : chans)
+          for (d.py = 0; d.py < 2; ++d.py)
+            for (d.px = 0; d.px < 2; ++d.px)
+              gpu_->dispatch(*c.first, c.second, &d, uint32_t((dct_nx + 1) / 2 + 3) / 4, uint32_t((dct_ny + 1) / 2 + 3) / 4);
+        gpu_->dispatch(dct_yuv_, sDctC, &d, uint32_t(W / 4 + 15) / 16, uint32_t(H + 15) / 16);
+        gpu_->copy(x, xc, nHR * 4);
+        if (!gpu_->submit()) return LKR_FAIL("dct x-step");
+        ++S.submits;
+      } else if (!prior(zc.as<float>(), xc.as<float>(), H, W, sig[t] * prm.prior_gain, ns)) {
+        return LKR_FAIL("prior");
+      }
       trace("iter" + std::to_string(t) + "_network", xc.as<float>(), nHR);
       if (prm.mean_preserve > 0) MeanPreserve(zc.as<float>(), xc.as<float>(), H, W, prm.mean_preserve);
       trace("iter" + std::to_string(t) + "_x", xc.as<float>(), nHR);

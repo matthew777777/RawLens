@@ -23,14 +23,14 @@ else()
 endif()
 set(LKR_GEN "${CMAKE_CURRENT_BINARY_DIR}/lkr_gen")
 file(MAKE_DIRECTORY "${LKR_GEN}")
-set(LKR_SHADERS resid_adj zstep resid zstep_gather weight weight_e weight_th weight_min weight_minh resid_adj_w zstep_gw resid_q resid_adj_w_q scatter_q zpack resid_zq resid_adj_w_zq weight_t scatter grad jac solve jacblk solveblk)
+set(LKR_SHADERS dct_x_y dct_x_u dct_x_v dct_yuv resid_adj zstep resid zstep_gather weight weight_e weight_th weight_min weight_minh resid_adj_w zstep_gw resid_q resid_adj_w_q scatter_q zpack resid_zq resid_adj_w_zq weight_t scatter grad jac solve jacblk solveblk)
 set(LKR_INCS "")
 foreach(sh ${LKR_SHADERS})
   add_custom_command(
       OUTPUT "${LKR_GEN}/${sh}.inc"
       COMMAND "${LKR_GLSLC}" --target-env=vulkan1.1 -fshader-stage=compute -O -mfmt=num
               -I "${LKR_DIR}/shaders" -o "${LKR_GEN}/${sh}.inc" "${LKR_DIR}/shaders/${sh}.comp"
-      DEPENDS "${LKR_DIR}/shaders/${sh}.comp" "${LKR_DIR}/shaders/lkr_common.glsl"
+      DEPENDS "${LKR_DIR}/shaders/${sh}.comp" "${LKR_DIR}/shaders/lkr_common.glsl" "${LKR_DIR}/shaders/dct_x.glsl"
       VERBATIM)
   list(APPEND LKR_INCS "${LKR_GEN}/${sh}.inc")
 endforeach()
@@ -76,56 +76,15 @@ if(NOT ANDROID)
   target_link_libraries(lkr_run PRIVATE lkr_core)
 endif()
 
-# ---- FFDNet prior (ncnn) ----------------------------------------------------
-# Android: the app's vendored ncnn (app/src/main/cpp/ncnn/<abi>), wired by the
-# app CMake. Desktop: ncnn macOS-vulkan release frameworks in
-# tools/lkr-pipeline/build/deps/ncnn (see README; not committed).
-if(NOT ANDROID)
-  set(LKR_NCNN_DIR "${LKR_DIR}/../../../build/deps/ncnn" CACHE PATH "ncnn macOS frameworks")
-  if(EXISTS "${LKR_NCNN_DIR}/ncnn.framework")
-    add_library(lkr_prior STATIC lkr_prior.cpp)
-    target_include_directories(lkr_prior PUBLIC "${LKR_DIR}" "${LKR_NCNN_DIR}/ncnn.framework/Headers/ncnn")
-    target_compile_features(lkr_prior PUBLIC cxx_std_17)
-    target_compile_options(lkr_prior PRIVATE -O3 -Wall)
-    target_link_options(lkr_prior PUBLIC "-F${LKR_NCNN_DIR}")
-    target_link_libraries(lkr_prior PUBLIC "-framework ncnn" "-framework glslang" "-framework openmp" ${LKR_VULKAN_LIB})
-    target_compile_definitions(lkr_core PUBLIC LKR_WITH_NCNN=1)
-    target_link_libraries(lkr_run PRIVATE lkr_prior)
-    target_link_libraries(lkr_parity PRIVATE lkr_prior)
-    add_executable(lkr_full_run "${LKR_DIR}/../../../host/lkr_full_run.cpp")
-    target_link_libraries(lkr_full_run PRIVATE lkr_core lkr_prior)
-    add_executable(lkr_denoise_check "${LKR_DIR}/../../../host/lkr_denoise_check.cpp")
-    target_link_libraries(lkr_denoise_check PRIVATE lkr_prior)
-    add_executable(lkr_photo_check "${LKR_DIR}/../../../host/lkr_photo_check.cpp" lkr_photo_denoise.cpp)
-    target_link_libraries(lkr_photo_check PRIVATE lkr_core lkr_prior)
-    add_executable(lkr_denoise_run "${LKR_DIR}/../../../host/lkr_denoise_run.cpp" lkr_photo_denoise.cpp)
-    target_link_libraries(lkr_denoise_run PRIVATE lkr_core lkr_prior)
-    add_executable(lkr_prior_check "${LKR_DIR}/../../../host/lkr_prior_check.cpp")
-    add_executable(lkr_noise_check "${LKR_DIR}/../../../host/lkr_noise_check.cpp")
-    target_link_libraries(lkr_noise_check PRIVATE lkr_core lkr_prior)
-    target_include_directories(lkr_prior_check PRIVATE "${LKR_DIR}/../../../../sr-pipeline/host")
-    target_link_libraries(lkr_prior_check PRIVATE lkr_prior)
-  else()
-    message(STATUS "lkr: ncnn frameworks not found, prior disabled (${LKR_NCNN_DIR})")
-  endif()
-endif()
-
-# ---- Android: liblkrpipeline.so (JNI + FFDNet prior on the app's ncnn) ------
+# ---- Android JNI ---------------------------------------------------------
 if(ANDROID)
-  set(LKR_NCNN_DIR "${LKR_DIR}/../../../../../app/src/main/cpp/ncnn/${ANDROID_ABI}")
-  add_library(lkrpipeline SHARED lkr_jni.cpp lkr_prior.cpp lkr_litert.cpp lkr_photo_denoise.cpp)
-  target_include_directories(lkrpipeline PRIVATE "${LKR_NCNN_DIR}/include/ncnn")
+  add_library(lkrpipeline SHARED lkr_jni.cpp)
   target_compile_options(lkrpipeline PRIVATE -O3 -Wall -fno-rtti)
-  set(LKR_NCNN_LIBS "${LKR_NCNN_DIR}/lib/libncnn.a")
-  foreach(gl glslang MachineIndependent GenericCodeGen glslang-default-resource-limits OSDependent SPIRV)
-    if(EXISTS "${LKR_NCNN_DIR}/lib/lib${gl}.a")
-      list(APPEND LKR_NCNN_LIBS "${LKR_NCNN_DIR}/lib/lib${gl}.a")
-    endif()
-  endforeach()
   find_library(LKR_LOG_LIB log REQUIRED)
-  target_link_libraries(lkrpipeline PRIVATE lkr_core ${LKR_NCNN_LIBS} android ${LKR_LOG_LIB} dl)
-  # ncnn is also statically inside libncnnMl.so: keep ours private.
-  target_link_options(lkrpipeline PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,--exclude-libs,ALL"
-                      -fopenmp -static-openmp)
+  target_link_libraries(lkrpipeline PRIVATE lkr_core android ${LKR_LOG_LIB})
+  target_link_options(lkrpipeline PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,--exclude-libs,ALL")
   set_target_properties(lkrpipeline PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+else()
+  add_executable(lkr_full_run "${LKR_DIR}/../../../host/lkr_full_run.cpp")
+  target_link_libraries(lkr_full_run PRIVATE lkr_core)
 endif()

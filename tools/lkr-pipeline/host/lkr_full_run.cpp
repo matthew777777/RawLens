@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Desktop full-frame / region run through the same MergeFull path the app uses.
-//   lkr_full_run BURST_DIR OUT.dng [--s 1 --tile 512 --overlap 32 --crop W H --fp16 0 --frames K --model DIR]
+//   lkr_full_run BURST_DIR OUT.dng [--s 1 --tile 512 --overlap 32 --crop W H --frames K]
 #include <dirent.h>
 
 #include <algorithm>
@@ -13,15 +13,13 @@
 
 #include "lkr_full.h"
 #include "lkr_tuning.h"
-#include "lkr_prior.h"
 #include "srp_dng.h"
 
 int main(int argc, char** argv) {
   if (argc < 3) return 2;
-  std::string in = argv[1], outp = argv[2], model = "build/models";
+  std::string in = argv[1], outp = argv[2];
   lkr::FullParams prm = lkr::AppDefaults();
-  bool fp16 = false;
-  bool use_prior = true;
+  bool dct_prior = false;
   bool repeat_reference = false;
   int frames_max = 0;
   int reference = 0;
@@ -29,14 +27,16 @@ int main(int argc, char** argv) {
     std::string k = argv[i];
     auto nx = [&] { return std::atoi(argv[++i]); };
     if (k == "--s") prm.s = nx(); else if (k == "--tile") prm.tile = nx();
-    else if (k == "--overlap") prm.overlap = nx(); else if (k == "--fp16") fp16 = nx() != 0;
-    else if (k == "--frames") frames_max = nx(); else if (k == "--model") model = argv[++i];
+    else if (k == "--overlap") prm.overlap = nx();
+    else if (k == "--frames") frames_max = nx();
     else if (k == "--crop") { prm.crop_w = nx(); prm.crop_h = nx(); }
     else if (k == "--at") { prm.crop_x = nx(); prm.crop_y = nx(); }
     else if (k == "--pgain") { prm.solve.prior_gain = float(std::atof(argv[++i])); prm.auto_look = false; }
     else if (k == "--grain") { prm.solve.grain = float(std::atof(argv[++i])); prm.auto_look = false; }
     else if (k == "--repeat-reference") repeat_reference = nx() != 0;
-    else if (k == "--prior") use_prior = nx() != 0;
+    else if (k == "--prior") dct_prior = nx() != 0;   // 0 none (default), 1 DCT x-step
+    else if (k == "--dluma") prm.solve.dct_luma = float(std::atof(argv[++i]));
+    else if (k == "--dchroma") prm.solve.dct_chroma = float(std::atof(argv[++i]));
     else if (k == "--iterations") {
       prm.solve.T = nx(); if (prm.solve.T < 2) return 2;
       prm.solve.prior_at.clear();
@@ -107,15 +107,8 @@ int main(int argc, char** argv) {
   if (m.has_as_shot_neutral) wb = {float(m.as_shot_neutral[1] / m.as_shot_neutral[0]), 1.0f, float(m.as_shot_neutral[1] / m.as_shot_neutral[2])};
   lkr::Gpu gpu;
   if (!gpu.ok()) return 1;
-  lkr::FfdnetGatPrior ff;
-  lkr::FfdnetGatPrior::Options o;
-  o.fp16 = fp16;
-  if (!ff.load(model + "/ffdnet.param", model + "/ffdnet.bin", o)) return 1;
-  lkr::PriorFactory make = [&](float a, float b, float sig, const std::array<float, 3>& w) -> lkr::PriorFn {
-    if (!use_prior) return {};
-    ff.setNoise(a, b, sig, w);
-    return [&](const float* z, float* x, int H, int W, float sg, const float* ns) { return ff(z, x, H, W, sg, ns); };
-  };
+  prm.solve.dct_prior = dct_prior;
+  const lkr::PriorFactory make;
   std::vector<float> rgb;
   int ow = 0, oh = 0;
   lkr::FullStats st;
@@ -155,7 +148,7 @@ int main(int argc, char** argv) {
   std::fwrite(rgb.data(), 4, rgb.size(), f);
   std::fclose(f);
   std::printf("%zu frames %ux%u -> %dx%d s=%d tiles %d  sigma %.5f a %.3g b %.3g  prior %s%s\n", fr.size(), m.width,
-              m.height, ow, oh, prm.s, st.tiles, st.sigma, st.a, st.b, ff.backend().c_str(), fp16 ? " fp16" : "");
+              m.height, ow, oh, prm.s, st.tiles, st.sigma, st.a, st.b, dct_prior ? "dct" : "none", "");
   std::printf("reference frame %d (sharpest)\n", st.ref_index);
   std::printf("look: prior %.2f grain %.2f%s  local lambda %.2f\n", st.prior_gain, st.grain,
               prm.auto_look ? " (auto from noise)" : "", st.local_lambda);

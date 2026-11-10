@@ -116,7 +116,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   }
   Grid g;
   // Phase-align by stepping LEFT/UP one sample when needed, so the grid keeps
-  // the full even size of the region (fixed tile shapes, e.g. NPU models,
+  // the full even size of the region (fixed tile shapes,
   // stay exact); step right only at the sensor edge.
   g.x0 = rx - ((rx - ox) & 1);
   g.y0 = ry - ((ry - oy) & 1);
@@ -230,7 +230,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // 3) Overlapping tiles, feathered accumulation into the interleaved output.
   t = now_ms();
   const PriorFn prior = make_prior ? make_prior(S.a, S.b, S.sigma, wb) : PriorFn();
-  const int tile = std::min({prm.tile, g.w, g.h}) & ~1;
+  // The DCT x-step needs the solved tile (s * tile) to be a multiple of 4.
+  const int tile = std::min({prm.tile, g.w, g.h}) & ((prm.solve.dct_prior && prm.s == 1) ? ~3 : ~1);
   const int ov = std::min(prm.overlap, tile / 4) & ~1;
   const int step = tile - ov;
   auto starts = [&](int len) {
@@ -313,7 +314,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       jobs.push_back({xs[xi], ys[yi], xi > 0, xi + 1 < xs.size(), yi > 0, yi + 1 < ys.size()});
 
   // Two workers, each with its own Vulkan context and solver buffers: while
-  // one waits on the prior (NPU), the other keeps the GPU busy. Tiles are
+  // one waits on the prior, the other keeps the GPU busy. Tiles are
   // blended strictly in job order (ticket), so the output is deterministic.
   const int nwork = std::max(1, std::min<int>(prm.workers, int(jobs.size())));
   std::vector<std::unique_ptr<Gpu>> own;
@@ -383,7 +384,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       if (use_sub) sub_field.assign(size_t(K) * sub_nbx * sub_nby * 2, 0.0f);
       // Frames are independent: the worker plus up to 2 helper threads (3
       // workers x 3 <= 9 threads on the 8-core phone; the solver threads mostly
-      // wait on the GPU / NPU meanwhile). Per-frame results are identical.
+      // wait on the GPU meanwhile). Per-frame results are identical.
       auto align_frame = [&](int k, std::vector<float>& gm) {
         const auto& q = P[k];
         std::array<double, 6> pt{q[0], q[1], q[0] * gx + q[1] * gy + q[2] - gx,

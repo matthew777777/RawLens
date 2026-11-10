@@ -35,6 +35,9 @@ struct SolveParams {
   float step_scale = 1.8f;     // eta = c/(L+mu); c < 2 is stable with the L bound
   bool refine_motion = true;
   std::vector<int> prior_at;   // empty = every iteration
+  // Non-learned x-step on the prior iterations (shaders/dct_x.comp). H and W must be multiples of 4.
+  bool dct_prior = false;
+  float dct_luma = 1.0f, dct_chroma = 8.0f;   // shrinkage thresholds, multiples of the noise level
   float L = 0.0f;              // >0 given; 0 = Schur bound max(U^T 1); <0 = power iteration
   // Look controls (not in the paper; PSNR-tuned values give a waxy look):
   float prior_gain = 0.4f;     // sigma handed to the prior = gain * sigma_t (0.4: DSLR look, user-picked)
@@ -55,7 +58,7 @@ struct SolveParams {
   float temporal_tau = 0.6f;
   // Energy test tolerance for single-frame model error, as a fraction of the
   // local detail energy common to the frame and its prediction. 0 = off.
-  float temporal_detail = 1.0f;
+  float temporal_detail = 4.0f;
   int robust_spread = 3;        // min-filter radius (LR px) on the robust weights (Wronski robustness); 0 = off
   bool mhc_init = true;         // start from the encoded-video coherent MHC (lkr_mhc, = MhcReference); false = bilinear (paper)   // prior noise map / grain follow the contributing-frame count
   float robust_k = 3.0f;
@@ -155,7 +158,7 @@ class Solver {
   std::deque<Entry> cache_;   // deque: references stay valid while it grows
   Gpu* gpu_;
   bool ok_ = false;
-  Pipeline resid_, zstep_, grad_, jac_, solve_, residg_, zgather_, weight_, scatter_, jacblk_, solveblk_, wmin_, wtemp_, wminh_, radjw_, wexp_, wth_, zgw_, residq_, radjwq_, scatq_, zpack_, residzq_, radjwzq_;
+  Pipeline dct_y_, dct_u_, dct_v_, dct_yuv_, resid_, zstep_, grad_, jac_, solve_, residg_, zgather_, weight_, scatter_, jacblk_, solveblk_, wmin_, wtemp_, wminh_, radjw_, wexp_, wth_, zgw_, residq_, radjwq_, scatq_, zpack_, residzq_, radjwzq_;
 };
 
 // CPU helpers (exact mirrors of the python reference).

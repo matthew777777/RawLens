@@ -45,14 +45,13 @@ class MfsrSettingsTest {
         assertEquals("MFSR\n×16", on.quickText(m, 30, 16, true, false))
     }
 
-    @Test fun lkrDefaultsToTunedVersionNotPaperParity() {
-        assertFalse(MfsrSettings().lkrPaperParity)
-        assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).lkrPaperParity)
-        // A value saved under the earlier key (testing, backups) must not turn parity on.
-        assertFalse(MfsrSettings.fromPreferences(mapOf("lkr_paper_parity" to true)).lkrPaperParity)
-        // The switch itself still works and survives a reload.
-        val on = MfsrSettings(lkrPaperParity = true)
-        assertTrue(MfsrSettings.fromPreferences(on.toPreferences()).lkrPaperParity)
+    @Test fun lkrDefaultsToNoPrior() {
+        assertFalse(MfsrSettings().lkrDctPrior)
+        assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).lkrDctPrior)
+        // Settings saved for the removed legacy switches are ignored.
+        assertFalse(MfsrSettings.fromPreferences(mapOf("lkr_use_prior" to true, "lkr_paper_parity_v2" to true)).lkrDctPrior)
+        val on = MfsrSettings(lkrDctPrior = true)
+        assertTrue(MfsrSettings.fromPreferences(on.toPreferences()).lkrDctPrior)
     }
 
     @Test fun lkrZoomCropsTheCentreAndKeepsSensorOutput() {
