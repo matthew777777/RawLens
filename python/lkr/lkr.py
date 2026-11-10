@@ -3,7 +3,7 @@
 Lucas-Kanade Reloaded (Lecouat, Ponce, Mairal, ICCV 2021, arXiv:2104.06191)
 -- numpy reference for RawLens, third burst method next to MFSR and HDR+.
 
-Followed exactly from the paper:
+Implemented from the paper equations (implementation conventions below):
   Eq. (1)  y_k = D B W_{p_k} x + eps_k, p_k = 6-param affine, B = box average
            over the LR pixel (Sec 3.4 "simple averaging"), D = spatial +
            Bayer decimation.
@@ -15,7 +15,7 @@ Followed exactly from the paper:
   init     forward-additive LK on bilinear-grey frames to the reference
            (Sec 3.4 "Initialization by coarse alignment")
 
-Substituted (the authors released no code/weights):
+Substituted (the authors’ linked repository is currently unavailable):
   f_theta  learned ResUNet  -> pluggable prior: 'none' (paper's "multiframe
            L2 only" ablation), 'tv' (paper's "L2 + TV" ablation), 'drunet'
            (DPIR DRUNet: the same ResUNet architecture of [48], public
@@ -107,13 +107,14 @@ class FrameOp:
     def jacobian(self, z):
         """J = (dU_p/dp) z, shape (h*w, 6), from HR image gradients."""
         s = self.s
-        gy, gx = np.gradient(z, axis=(1, 2))
-        gxf, gyf = gx.ravel(), gy.ravel()
+        flat = z.ravel()
         J = np.zeros((self.h * self.w, 6))
-        for ux, uy, idx, wts, _ in self.sub:
-            sx = (gxf[idx] * wts).sum(0) * s   # dq/d(r) = s
-            sy = (gyf[idx] * wts).sum(0) * s
-            J += np.stack([sx * ux, sx * uy, sx, sy * ux, sy * uy, sy], 1)
+        for ux, uy, idx, wts, valid in self.sub:
+            v00, v01, v10, v11 = flat[idx]
+            ax, ay = wts[1] + wts[3], wts[2] + wts[3]
+            sx = ((v01-v00)*(1-ay)+(v11-v10)*ay)*valid*s
+            sy = ((v10-v00)*(1-ax)+(v11-v01)*ax)*valid*s
+            J += np.stack([sx*ux,sx*uy,sx,sy*ux,sy*uy,sy],1)
         return J / self.n
 
 
@@ -216,7 +217,7 @@ class Prior:
                  domain='gamma', ab=None, sig_ref=None, wav_prm=None):
         """domain='gat': nets see the generalized-Anscombe image of OUR fitted
         noise model ab=(a,b) (var = a x + b, raw units), where noise is unit
-        Gaussian everywhere -- the AWGN FFDNet/DRUNet were trained on. The
+        Gaussian everywhere -- the AWGN DRUNet were trained on. The
         schedule's sigma is read as a multiple sigma/sig_ref of the sensor noise."""
         self.noise_map, self.domain, self.ab, self.sig_ref = noise_map, domain, ab, sig_ref
         self.wav_prm = wav_prm or {}
@@ -225,9 +226,6 @@ class Prior:
         if kind == 'drunet':
             from drunet import load_drunet
             self.net = load_drunet(drunet_path, device)
-        elif kind == 'ffdnet':
-            from drunet import load_ffdnet
-            self.net = load_ffdnet(drunet_path, device)
         elif kind == 'wavelet':
             import sys, os
             sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -291,7 +289,7 @@ class Prior:
         # Linear sigma -> gamma domain through the slope of x^(1/2.2):
         # sigma_g = sigma / 2.2 * x^(1/2.2 - 1). 'pixel' (default) evaluates the
         # slope at each pixel's smoothed luminance (a spatial noise map, which
-        # FFDNet/DRUNet accept); 'median' is the old single level, which at
+        # DRUNet accept); 'median' is the old single level, which at
         # night (median ~ black) over-smooths every lit area.
         if self.noise_map == 'median':
             level = float(lin.median().clamp(1e-3, 1))

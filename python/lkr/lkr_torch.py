@@ -55,11 +55,36 @@ class Ops:
         b = F.avg_pool2d(self._sample(z), self.s)
         return (b * self.mask).sum(1)
 
+    def adj(self, residual):
+        """Exact differentiable fixed-grid transpose, including validity mask."""
+        H, W = self.s*self.h, self.s*self.w
+        u=((self.grid[...,0]+1)*W/2-.5).clamp(0,W-1)
+        v=((self.grid[...,1]+1)*H/2-.5).clamp(0,H-1)
+        x0,y0=u.floor().long(),v.floor().long()
+        x1,y1=(x0+1).clamp(max=W-1),(y0+1).clamp(max=H-1)
+        ax,ay=u-x0,v-y0
+        values=((residual*self.valid)[:,None]*self.mask[None]).repeat_interleave(self.s,-2).repeat_interleave(self.s,-1)/(self.s*self.s)
+        offsets=(torch.arange(3,device=self.dev)*H*W)[None,:,None,None]
+        out=residual.new_zeros(3*H*W)
+        for ix,iy,weight in ((x0,y0,(1-ax)*(1-ay)),(x1,y0,ax*(1-ay)),(x0,y1,(1-ax)*ay),(x1,y1,ax*ay)):
+            out=out.scatter_add(0,(iy[:,None]*W+ix[:,None]+offsets).reshape(-1),(values*weight[:,None]).reshape(-1))
+        return out.reshape(3,H,W)
+
     def jacobian(self, z):
         """(K, h*w, 6): d(U_p z)/dp from sampled HR gradients."""
-        gy, gx = torch.gradient(z, dim=(1, 2))
-        sx = self._sample(gx) * self.s
-        sy = self._sample(gy) * self.s
+        # Differentiate the bilinear samples themselves, rather than sampling
+        # central image gradients (which gives a different Jacobian).
+        H, W = z.shape[-2:]
+        u = ((self.grid[..., 0] + 1) * W / 2 - .5).clamp(0, W - 1)
+        v = ((self.grid[..., 1] + 1) * H / 2 - .5).clamp(0, H - 1)
+        x0, y0 = u.floor().long(), v.floor().long()
+        x1, y1 = (x0 + 1).clamp(max=W - 1), (y0 + 1).clamp(max=H - 1)
+        ax, ay = u - x0, v - y0
+        flat = z.flatten(1)
+        z00, z01, z10, z11 = [flat[:, iy * W + ix].permute(1, 0, 2, 3)
+                              for iy, ix in ((y0,x0),(y0,x1),(y1,x0),(y1,x1))]
+        sx = ((z01-z00)*(1-ay[:,None])+(z11-z10)*ay[:,None])*self.s
+        sy = ((z10-z00)*(1-ax[:,None])+(z11-z01)*ax[:,None])*self.s
         cols = []
         for g in (sx, sy):
             for f in (self.ux, self.uy, None):
@@ -145,3 +170,33 @@ def lk_reloaded(frames, s, prior, T=8, sigma_noise=0.01, sigma_max=0.1, lam=1.0,
         log(f't={t} sigma={sigmas[t]:.4f} mu={mu:.3g} eta={eta:.3g} '
             f'rmse={np.sqrt(res / (K * h * w)):.5f}')
     return x.cpu().double().numpy(), p.cpu().double().numpy()
+
+
+def unrolled(y, p, z0, prior, scale, mu, eta, refine_motion=True):
+    """Differentiable research reference: paper equations 5/7 and CNN x-step.
+
+    Explicit positive schedules may be learned; no pretrained paper weights
+    are implied. Caller supplies initialization and a direct RGB prior.
+    """
+    if len(mu) != len(eta) or not len(mu):
+        raise ValueError('mu/eta must have equal nonzero length')
+    if bool((mu <= 0).any()) or bool((eta <= 0).any()):
+        raise ValueError('positive schedules required')
+    ops=Ops(y.shape[-2],y.shape[-1],scale,y.device)
+    z,x=z0,z0
+    trace={'reference_rgb':z0}
+    for t in range(len(mu)):
+        ops.setup(p)
+        residual=(ops.fwd(z)-y)*ops.valid
+        gradient=ops.adj(residual)
+        z=z-eta[t]*(gradient+mu[t]*(z-x))
+        if refine_motion and len(p)>1:
+            J=ops.jacobian(z)*ops.valid.flatten(1)[...,None]
+            r=((ops.fwd(z)-y)*ops.valid).flatten(1)[...,None]
+            A=J.transpose(1,2)@J; b=J.transpose(1,2)@r
+            dp=torch.linalg.solve(A.double()+1e-9*torch.eye(6,device=y.device,dtype=torch.float64),b.double())[...,0].to(p.dtype)
+            mask=torch.cat([p.new_zeros(1),p.new_ones(len(p)-1)])[:,None]
+            p=p-dp*mask
+        x=prior(z[None])[0]
+        trace.update({f'iter{t}_z':z,f'iter{t}_x':x,f'iter{t}_motion':p,f'iter{t}_residual':residual,f'iter{t}_gradient':gradient})
+    return x,p,trace

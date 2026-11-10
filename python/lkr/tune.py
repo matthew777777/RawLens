@@ -79,16 +79,12 @@ def main():
     ap.add_argument('--cy', type=int)
     ap.add_argument('--gt', type=int, default=384, help='GT (HR) size')
     ap.add_argument('--weights', required=True, help='drunet_color.pth')
-    ap.add_argument('--ffdnet', help='ffdnet_color.pth: enables --priors mode')
     ap.add_argument('--threads', type=int, default=2)
     ap.add_argument('--device', default='mps')
     ap.add_argument('--quick', action='store_true')
     ap.add_argument('--grid', help='JSON dict overriding the sweep grid')
-    ap.add_argument('--sweep-prior', default='drunet', choices=['drunet', 'ffdnet', 'ffdnet-gat'])
     ap.add_argument('--gt-mode', default='bin', choices=['bin', 'temporal'])
     ap.add_argument('--relative', action='store_true', help='grid smax/end as multiples of sigma_n')
-    ap.add_argument('--budget', action='store_true', help='FFDNet-GAT quality vs number of prior calls')
-    ap.add_argument('--lmode', action='store_true', help='with --budget: operator-norm rule comparison')
     a = ap.parse_args()
     torch.set_num_threads(a.threads)
     s, K = 2, 8
@@ -120,66 +116,12 @@ def main():
         print(f'{label:46s} PSNR {ps:.2f} tex {tx:.2f} motion {perr:.3f} ({time.time() - t0:.1f}s)', flush=True)
         return ps, tx
 
-    if a.budget:
-        pr = lkr.Prior('ffdnet', wb, a.ffdnet, a.device, domain='gat', ab=(a_n, b_n), sig_ref=sig)
-        base = dict(sigma_max=10 * sig, sigma_end=1 * sig, z_steps=3)
-        cfgs = [('T16 all (16 calls)', dict(T=16)),
-                ('T8 all (8)', dict(T=8)), ('T6 all (6)', dict(T=6)), ('T4 all (4)', dict(T=4)),
-                ('T16 last 8 (8)', dict(T=16, prior_at=set(range(8, 16)))),
-                ('T16 last 6 (6)', dict(T=16, prior_at=set(range(10, 16)))),
-                ('T16 last 4 (4)', dict(T=16, prior_at=set(range(12, 16)))),
-                ('T16 every 2nd (8)', dict(T=16, prior_at=set(range(1, 16, 2)))),
-                ('T16 every 4th (4)', dict(T=16, prior_at=set(range(3, 16, 4)))),
-                ('T8 zs6 all (8)', dict(T=8, z_steps=6)),
-                ('T6 zs8 all (6)', dict(T=6, z_steps=8)),
-                ('T4 zs12 all (4)', dict(T=4, z_steps=12))]
-        if a.lmode:
-            cfgs = [('T16 e2 L=power15 c=1.0', dict(T=16, prior_at=set(range(1, 16, 2)))),
-                    ('T16 e2 L=bound c=1.0', dict(T=16, prior_at=set(range(1, 16, 2)), L='bound')),
-                    ('T16 e2 L=bound c=1.5', dict(T=16, prior_at=set(range(1, 16, 2)), L='bound', step_scale=1.5)),
-                    ('T16 e2 L=bound c=1.8', dict(T=16, prior_at=set(range(1, 16, 2)), L='bound', step_scale=1.8))]
-        for label, kw in cfgs:
-            run(pr, label, **{**base, **kw})
-        return
-    if a.ffdnet and not a.relative:
-        AB = dict(ab=(a_n, b_n), sig_ref=sig)
-        priors = [('none', none),
-                  ('wavelet-old', lkr.Prior('wavelet', wb)),
-                  ('ffdnet-gamma', lkr.Prior('ffdnet', wb, a.ffdnet, a.device)),
-                  ('ffdnet-gat', lkr.Prior('ffdnet', wb, a.ffdnet, a.device, domain='gat', **AB)),
-                  ('drunet-gamma', drunet),
-                  ('drunet-gat', lkr.Prior('drunet', wb, a.weights, a.device, domain='gat', **AB))]
-        for luma in (0.25, 0.5, 1.0):
-            for steer in (False,):
-                for cr in (1, 2):
-                    priors.append((f'wav l{luma} s{int(steer)} c{cr}',
-                                   lkr.Prior('wavelet', wb, domain='gat', wav_prm=dict(luma=luma, steer=steer, cr=cr), **AB)))
-        sched = {'tuned T=16 smax=10x end=2x zs=3': dict(T=16, sigma_max=10 * sig, sigma_end=2 * sig, z_steps=3)}
-        z = torch.rand(3, gt.shape[1], gt.shape[2], device=a.device)
-        for name, pr in priors:
-            if name != 'none':
-                for _ in range(2):
-                    pr.torch(z, 0.01)                         # warm-up
-                if a.device == 'mps':
-                    torch.mps.synchronize()
-                t0 = time.time()
-                for _ in range(3):
-                    pr.torch(z, 0.01)
-                if a.device == 'mps':
-                    torch.mps.synchronize()
-                print(f'{name:13s} prior call {1000 * (time.time() - t0) / 3:.0f} ms at {gt.shape[1]}^2')
-            for sl, kw in sched.items():
-                run(pr, f'{name:13s} {sl}', **kw)
-        return
     run(none, 'L2 only (paper ablation) T=8', T=8)
     run(drunet, 'drunet T=8 oracle motion', T=8, refine_motion=False, p_init=p_true)
     grid = dict(T=[4, 8, 16], sigma_max=[0.01, 0.03, 0.1], end=[0.5, 1.0, 2.0], z_steps=[1, 3])
     if a.relative:
         grid = dict(T=[8, 16, 24], sigma_max=[3, 10, 30], end=[0.25, 0.5, 1.0, 2.0, 3.0], z_steps=[3])
-    sweep = {'drunet': lambda: drunet,
-             'ffdnet': lambda: lkr.Prior('ffdnet', wb, a.ffdnet, a.device),
-             'ffdnet-gat': lambda: lkr.Prior('ffdnet', wb, a.ffdnet, a.device, domain='gat',
-                                             ab=(a_n, b_n), sig_ref=sig)}[a.sweep_prior]()
+    sweep = drunet
     if a.grid:
         import json
         grid = {**grid, **json.loads(a.grid)}

@@ -38,11 +38,7 @@ def dump(a):
     ops = lkr_torch.Ops(h, w, a.s, 'cpu').setup(torch.tensor(pc, dtype=torch.float32))
     L = 'bound' if a.bound else lkr_torch._power_norm(ops, (3, a.s * h, a.s * w), it=30)
     prior_at = None if a.every <= 1 else set(range(a.every - 1, a.T, a.every))
-    if a.ffdnet:
-        na, nb = noise_ab(frames[0])
-        prior = lkr.Prior('ffdnet', wb, a.ffdnet, 'cpu', domain='gat', ab=(na, nb), sig_ref=sig)
-    else:
-        prior = lkr.Prior('none', wb)
+    prior = lkr.Prior('none', wb)
     x, p = lkr_torch.lk_reloaded(frames, a.s, prior, T=a.T, sigma_noise=sig,
                                  sigma_max=a.smax * sig, sigma_end=a.end * sig, z_steps=a.z_steps,
                                  p_init=pc, L=L, prior_at=prior_at, step_scale=a.step, log=lambda *_: None)
@@ -52,9 +48,7 @@ def dump(a):
     np.save(os.path.join(a.out, 'params.npy'), np.array(
         [a.s, a.T, a.z_steps, sig, a.smax * sig, a.end * sig, 0.0 if a.bound else L, 1, a.every, a.step],
         np.float32))
-    if a.ffdnet:
-        np.save(os.path.join(a.out, 'prior.npy'), np.array([na, nb, sig, *wb], np.float32))
-    elif os.path.exists(os.path.join(a.out, 'prior.npy')):
+    if os.path.exists(os.path.join(a.out, 'prior.npy')):
         os.remove(os.path.join(a.out, 'prior.npy'))
     np.save(os.path.join(a.out, 'x_ref.npy'), x.astype(np.float32))
     np.save(os.path.join(a.out, 'p_ref.npy'), p.astype(np.float32))
@@ -92,7 +86,6 @@ if __name__ == '__main__':
     d.add_argument('--end', type=float, default=1.0)
     d.add_argument('--every', type=int, default=2)
     d.add_argument('--step', type=float, default=1.8)
-    d.add_argument('--ffdnet', help='ffdnet_color.pth: FFDNet-GAT prior (else none)')
     d.add_argument('--power', dest='bound', action='store_false', help='torch power-iteration L instead of the bound')
     c = sub.add_parser('check')
     c.add_argument('out')

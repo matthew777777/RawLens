@@ -168,7 +168,7 @@ if __name__ == '__main__':
     sub = ap.add_subparsers(dest='cmd', required=True)
     for name in ('synth', 'burst'):
         sp = sub.add_parser(name)
-        sp.add_argument('--prior', default='none', choices=['none', 'tv', 'wavelet', 'ffdnet', 'drunet'])
+        sp.add_argument('--prior', default='none', choices=['none', 'tv', 'wavelet', 'drunet'])
         sp.add_argument('--weights', default=None)
         sp.add_argument('--T', type=int, default=8)
         sp.add_argument('--z-steps', type=int, default=1)
