@@ -11,6 +11,33 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BurstMergesTest {
+    @Test fun decodedPixelsRemainReadableForHdrPlusPacking() {
+        val buffer = java.nio.ByteBuffer.allocateDirect(32).order(java.nio.ByteOrder.nativeOrder())
+        repeat(8) { buffer.putShort((it + 1).toShort()) }
+        BurstMergeRunner.prepareDecodedPixels(buffer, 0, 16, 16L)
+        val hdrInput = buffer.duplicate().order(java.nio.ByteOrder.nativeOrder())
+        val lastPixelByte = (2 - 1) * 8 + (4 - 1) * 2
+        assertTrue(lastPixelByte + 2 <= hdrInput.limit() - hdrInput.position())
+        assertEquals(16, hdrInput.remaining())
+        assertEquals(1, hdrInput.getShort().toInt())
+        assertEquals(8, hdrInput.getShort(lastPixelByte).toInt())
+        assertEquals(0, buffer.position())
+    }
+
+    @Test fun decodedPixelsRespectOffsetAndExcludeUnwrittenTail() {
+        val buffer = java.nio.ByteBuffer.allocateDirect(32)
+        BurstMergeRunner.prepareDecodedPixels(buffer, 4, 16, 16L)
+        assertEquals(4, buffer.position())
+        assertEquals(20, buffer.limit())
+        assertEquals(16, buffer.remaining())
+    }
+
+    @Test fun incompleteDecodedPixelsAreRejectedBeforeMerge() {
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            BurstMergeRunner.prepareDecodedPixels(java.nio.ByteBuffer.allocateDirect(16), 0, 14, 16L)
+        }
+    }
+
     @Test fun evenSampleKeepsAllWhenFitting() {
         assertEquals((0 until 8).toList(), BurstMergeTakes.evenSampleIndices(8, 8))
         assertEquals((0 until 5).toList(), BurstMergeTakes.evenSampleIndices(5, 15))

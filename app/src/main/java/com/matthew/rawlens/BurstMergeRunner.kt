@@ -80,7 +80,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
             val containerJson = CrawReader.containerMetadata(handle)
                 ?: throw IllegalStateException("Container metadata unreadable: ${take.name}")
             val poolCap = when (method) {
-                Method.MFSR, Method.LKR -> inputs.mfsr.activeFrameCount(timestamps.size)
+                Method.MFSR -> inputs.mfsr.copy(engine = MfsrEngine.MFSR).activeFrameCount(timestamps.size)
+                Method.LKR -> inputs.mfsr.copy(engine = MfsrEngine.LKR).activeFrameCount(timestamps.size)
                 Method.HDRPLUS -> minOf(
                     inputs.hdrPlus.activeFrameCount(timestamps.size),
                     HdrPlusMerge.MAX_NATIVE_FRAMES
@@ -104,7 +105,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 val off = buf.position()
                 val written = CrawReader.decodeFrame(handle, ts, buf, off, buf.remaining())
                 if (written < 0) throw IllegalStateException("Decode failed ts=$ts code=$written")
-                buf.position(off + written)
+                prepareDecodedPixels(buf, off, written, need)
                 val metadata = OfflineBurstMetadata.synthesize(containerJson, meta, sourceIndices[i])
                 val norm = OfflineBurstMetadata.normalizationFor(metadata)
                 listener.onProgress(Progress(Stage.DECODE, i + 1, pool.size,
@@ -119,13 +120,17 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 SystemClock.elapsedRealtime() - t0, null, inBytes, null))
             val completed = when (method) {
                 Method.MFSR -> runMfsr(take, frames, format, inputs, t0)
-                Method.HDRPLUS -> runHdrPlus(take, frames, containerJson, format, inputs, t0)
+                Method.HDRPLUS -> runHdrPlus(take, frames, format, inputs, t0, listener)
                 Method.LKR -> runLkr(take, frames, format, inputs)
             }
             listener.onProgress(Progress(Stage.SAVE, 1, 1,
                 SystemClock.elapsedRealtime() - t0, 0L, inBytes,
                 estimateOutBytes(completed.width, completed.height, format, method)))
             return completed
+        } catch (failure: Exception) {
+            Log.e("BurstMergeRunner", "Offline merge failed: method=$method output=$format " +
+                "developed=${inputs.developedFormat} take=${take.name}", failure)
+            throw failure
         } finally {
             nativeBufs.forEach { runCatching { HdrPlusVulkan.freeBuffer(it) } }
             runCatching { CrawReader.closeReader(handle) }
@@ -249,16 +254,12 @@ internal class BurstMergeRunner(private val appContext: Context) {
     private fun runHdrPlus(
         take: File,
         frames: List<OfflineBurstFrame>,
-        containerJson: String,
         format: CaptureFormat,
         inputs: Inputs,
-        t0: Long
+        t0: Long,
+        listener: Listener
     ): Completed {
         val captureId = take.lastModified()
-        val cameraId = runCatching {
-            org.json.JSONObject(containerJson).optString("UniqueCameraModel", "")
-                .takeIf { it.isNotEmpty() } ?: "unknown"
-        }.getOrDefault("unknown")
         val processor = HdrPlusMerge(appContext)
         val mergedInputs = frames.map { frame ->
             HdrPlusMerge.FrameInput(
@@ -291,6 +292,10 @@ internal class BurstMergeRunner(private val appContext: Context) {
             )
         val keptFrames = decision.keepIndices.map { frames[it] }
         val refMeta = keptFrames[decision.refIndex].metadata
+        listener.onProgress(Progress(Stage.SAVE, 0, 1,
+            SystemClock.elapsedRealtime() - t0, null, take.length(),
+            estimateOutBytes(mergedRaw.width, mergedRaw.height, format, Method.HDRPLUS)))
+        Log.i("BurstMergeRunner", "Offline HDR+ preprocessing ${mergedRaw.width}x${mergedRaw.height}")
         val merged = requireNotNull(
             RawPreDemosaicPipeline.process(mergedRaw, refMeta, PreDemosaicSettings()).cfa
         )
@@ -298,37 +303,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
             RawDevelopmentCoordinator(appContext).denoiseCfa(merged, refMeta) ?: merged
         } else merged
         val outputs = ArrayList<String>()
-        val timings = processor.lastTimings
-        val motion = processor.lastMotion
-        val frameStrengths = if (decision.strengthMaps != null) null
-        else decision.frameStrengths?.takeIf { it.toSet().size > 1 }
-        val provenance = HdrPlusProvenance(
-            mergedFrames = keptFrames.size, selectedFrames = frames.size,
-            rejectedFrames = decision.droppedIndices.size,
-            highQuality = decision.highQuality,
-            strength = decision.strength,
-            tileSize = HdrPlusSettings.TILE_SIZE,
-            searchDistance = HdrPlusSettings.SEARCH_DISTANCE,
-            referenceIndex = decision.refIndex,
-            referenceTimestampNs = refMeta.timestampNanos,
-            referenceFrameNumber = refMeta.frameNumber,
-            sourceWidth = refMeta.imageWidth, sourceHeight = refMeta.imageHeight,
-            sourceCameraId = cameraId,
-            mergeMs = mergeMs,
-            packMs = timings.packMs, gpuMs = timings.gpuMs, unpackMs = timings.unpackMs,
-            mapsActive = decision.strengthMaps != null,
-            frames = keptFrames.mapIndexed { keptPos, input ->
-                val origIndex = decision.keepIndices[keptPos]
-                val delta = motion?.pairDeltas?.getOrNull(origIndex - 1)
-                    ?.takeIf { it.isFinite() }?.toFloat()
-                HdrPlusFrameInfo(
-                    input.metadata.exposureTimeNanos, input.metadata.sensitivityIso,
-                    deltaVsPrev = delta,
-                    gyroRadiansPerSecond = null,
-                    mergeStrength = frameStrengths?.getOrNull(keptPos)
-                )
-            }
-        )
+        val provenance = offlineHdrPlusProvenance(frames.map { it.metadata }, decision,
+            processor.lastTimings, processor.lastMotion, mergeMs)
         if (format.includesDng) {
             // Same store MainActivity's DNG toggle writes (single shared
             // preferences file): offline merges honor the user's choice.
@@ -336,6 +312,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 appContext.getSharedPreferences(SettingsBackup.STORE_MAIN, Context.MODE_PRIVATE)
                     .getString(MainActivity.KEY_DNG_COMPRESSION, null)
             )
+            Log.i("BurstMergeRunner", "Offline HDR+ saving DNG: compression=$dngCompression camera=${refMeta.cameraId}")
             outputs += DngSaver(appContext).saveMerged(
                 effective, refMeta, captureId, gps = null,
                 displayName = CaptureFileNames.hdrPlusDng(captureId),
@@ -345,6 +322,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
             )
         }
         if (format.includesJpeg) {
+            Log.i("BurstMergeRunner", "Offline HDR+ developing ${inputs.developedFormat}")
             val developer = RawDevelopmentCoordinator(appContext)
             if (inputs.developedFormat == DevelopedFormat.JXL) {
                 val developed = developer.developMergedJxl(effective, refMeta,
@@ -371,6 +349,59 @@ internal class BurstMergeRunner(private val appContext: Context) {
     }
 
     companion object {
+        /** Derive every source identity from the same kept reference used by the DNG writer. */
+        internal fun offlineHdrPlusProvenance(
+            metadata: List<RawFrameMetadata>,
+            decision: HdrPlusAutoDecision,
+            timings: HdrPlusMerge.Timings,
+            motion: HdrPlusMotionMeter.MotionSummary?,
+            mergeMs: Long
+        ): HdrPlusProvenance {
+            val keptFrames = decision.keepIndices.map { metadata[it] }
+            val refMeta = keptFrames[decision.refIndex]
+            val frameStrengths = if (decision.strengthMaps != null) null
+            else decision.frameStrengths?.takeIf { it.toSet().size > 1 }
+            return HdrPlusProvenance(
+                mergedFrames = keptFrames.size, selectedFrames = metadata.size,
+                rejectedFrames = decision.droppedIndices.size,
+                highQuality = decision.highQuality,
+                strength = decision.strength,
+                tileSize = HdrPlusSettings.TILE_SIZE,
+                searchDistance = HdrPlusSettings.SEARCH_DISTANCE,
+                referenceIndex = decision.refIndex,
+                referenceTimestampNs = refMeta.timestampNanos,
+                referenceFrameNumber = refMeta.frameNumber,
+                sourceWidth = refMeta.imageWidth, sourceHeight = refMeta.imageHeight,
+                sourceCameraId = refMeta.cameraId,
+                mergeMs = mergeMs,
+                packMs = timings.packMs, gpuMs = timings.gpuMs, unpackMs = timings.unpackMs,
+                mapsActive = decision.strengthMaps != null,
+                frames = keptFrames.mapIndexed { keptPos, input ->
+                    val origIndex = decision.keepIndices[keptPos]
+                    val delta = motion?.pairDeltas?.getOrNull(origIndex - 1)
+                        ?.takeIf { it.isFinite() }?.toFloat()
+                    HdrPlusFrameInfo(
+                        input.exposureTimeNanos, input.sensitivityIso,
+                        deltaVsPrev = delta,
+                        gyroRadiansPerSecond = null,
+                        mergeStrength = frameStrengths?.getOrNull(keptPos)
+                    )
+                }
+            )
+        }
+
+        /** JNI writes at [offset] without moving the Java cursor. Publish only complete pixels. */
+        internal fun prepareDecodedPixels(buffer: ByteBuffer, offset: Int, written: Int, expected: Long) {
+            require(expected > 0 && written.toLong() == expected) {
+                "Decoded frame is incomplete ($written/$expected bytes)"
+            }
+            require(offset >= 0 && offset.toLong() + written <= buffer.capacity().toLong()) {
+                "Decoded frame exceeds its pixel buffer"
+            }
+            buffer.limit(offset + written)
+            buffer.position(offset)
+        }
+
         /** Remaining-time estimate from linear progress, or null before the first unit. */
         fun etaRemaining(elapsedMs: Long, done: Int, total: Int): Long? {
             if (done <= 0 || total <= 0 || done > total) return null
