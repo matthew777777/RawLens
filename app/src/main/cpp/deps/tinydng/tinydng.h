@@ -242,6 +242,8 @@ typedef struct tinydng_vignette_radial {
 
 typedef struct tinydng_raw_info {
   int32_t black_level[4];
+  /* Preserve fractional DNG BlackLevel values in CFA cell order. */
+  double black_level_precise[4];
   uint8_t black_level_present;
   int32_t white_level[4];
   uint8_t white_level_present;

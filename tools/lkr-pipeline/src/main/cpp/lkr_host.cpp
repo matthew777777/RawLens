@@ -40,8 +40,6 @@ bool LoadBurstCrop(const std::vector<std::string>& paths, int crop, int cx, int 
   y0 = std::clamp(y0, oy, H - crop - 2 + oy);
   // Even-aligned region one cell larger, then the parity offset.
   const int rx = x0 - ox, ry = y0 - oy, rw = crop + 2, rh = crop + 2;
-  const double black = (m.black_level[0] + m.black_level[1] + m.black_level[2] + m.black_level[3]) / 4.0;
-  const double scale = 1.0 / (double(m.white_level) - black);
   out->K = int(paths.size());
   out->h = out->w = crop;
   out->x0 = x0;
@@ -55,8 +53,12 @@ bool LoadBurstCrop(const std::vector<std::string>& paths, int crop, int cx, int 
     }
     float* f = out->frames.data() + size_t(k) * crop * crop;
     for (int i = 0; i < crop; ++i)
-      for (int j = 0; j < crop; ++j)
-        f[size_t(i) * crop + j] = float((double(px[size_t(i + oy) * rw + j + ox]) - black) * scale);
+      for (int j = 0; j < crop; ++j) {
+        const int cell = (((i + y0) & 1) << 1) | ((j + x0) & 1);
+        const double black = m.black_level_precise[cell];
+        f[size_t(i) * crop + j] = float((double(px[size_t(i + oy) * rw + j + ox]) - black) /
+                                       (double(m.white_level) - black));
+      }
   }
   if (m.has_as_shot_neutral && m.as_shot_neutral[0] > 0 && m.as_shot_neutral[2] > 0) {
     const double g = m.as_shot_neutral[1];
@@ -98,7 +100,7 @@ float NoiseSigma(const float* raw, int h, int w) {
 }
 
 void NoiseAB(const float* raw, int h, int w, float* a_out, float* b_out) {
-  constexpr int B = 8, BINS = 16;
+  constexpr int B = 8;
   std::vector<double> ms, vs;
   for (int plane = 0; plane < 2; ++plane) {          // greens at (0,1) and (1,0)
     const int py = plane, px = 1 - plane;
@@ -111,21 +113,34 @@ void NoiseAB(const float* raw, int h, int w, float* a_out, float* b_out) {
       for (int bj = 0; bj < Wb; ++bj) {
         double sum = 0;
         int n = 0;
+        double peak = 0;
         for (int y = 0; y < B; ++y)
           for (int x = 0; x < B; ++x) {
             const int i = 1 + bi * B + y, j = 1 + bj * B + x;
             const double d = (4 * g(i, j) - g(i - 1, j) - g(i + 1, j) - g(i, j - 1) - g(i, j + 1)) / std::sqrt(20.0);
             d2[n++] = d * d;
             sum += g(i, j);
+            peak = std::max({peak, g(i, j), g(i - 1, j), g(i + 1, j), g(i, j - 1), g(i, j + 1)});
           }
-        ms.push_back(sum / (B * B));
-        vs.push_back(median(d2) / 0.4549);
+        // A block touching the white level has its variance clipped away (burst
+        // 0039 sky: 27 % clipped, fit collapsed to a=0 b=1e-10 and the robust
+        // term then rejected every frame). Mark it unusable.
+        ms.push_back(peak > 0.97 ? -1.0 : sum / (B * B));
+        // Use energy, not the median of squared quantised differences. Near
+        // black the latter locks to a handful of code values; selecting its
+        // lower tail can collapse the fitted read-noise intercept to zero.
+        double energy = 0;
+        for (double v : d2) energy += v;
+        vs.push_back(energy / (B * B));
       }
   }
   std::vector<double> m, v;
   for (size_t i = 0; i < ms.size(); ++i)
     if (ms[i] > 0.002 && ms[i] < 0.9) { m.push_back(ms[i]); v.push_back(vs[i]); }
   if (m.size() < 40) { *a_out = 0; *b_out = 1e-6f; return; }
+  // Small crops (zoom, sweep tiles) have too few blocks for 16 levels of
+  // >= 20 blocks each: every bin was dropped and the fit returned zero noise.
+  const int BINS = int(std::clamp<size_t>(m.size() / 40, 2, 16));
   std::vector<double> edges(BINS + 1);
   for (int e = 0; e <= BINS; ++e) edges[e] = quantile(m, double(e) / BINS);
   std::vector<double> X, Y, Wt;
@@ -136,12 +151,12 @@ void NoiseAB(const float* raw, int h, int w, float* a_out, float* b_out) {
     if (sm.size() < 20) continue;
     X.push_back(median(sm));
     // Flattest 5% of blocks per level (texture is never flatter than noise);
-    // 0.6045 = 5% quantile of the 8x8 block-median variance estimate under
-    // pure noise (exact bias, simulated).
+    // 0.67 approximates the 5% quantile of 8x8 mean Laplacian energy under
+    // white Gaussian noise, including adjacent-filter correlations.
     // Quantized/constant patches can have exactly zero measured variance.
     // The relative-error fit divides by Y: keep its weights finite at the
     // same read-noise floor used for the returned model.
-    Y.push_back(std::max(quantile(sv, 0.05) / 0.6045, 1e-10));
+    Y.push_back(std::max(quantile(sv, 0.05) / 0.67, 1e-10));
     Wt.push_back(std::sqrt(double(sm.size())));
   }
   // Weighted NNLS on rows (X, 1) * (Wt/Y) = Wt: 2 unknowns, so enumerate the

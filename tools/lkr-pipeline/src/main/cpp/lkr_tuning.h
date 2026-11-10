@@ -49,9 +49,9 @@ enum Tuning : int {
 // The app's default parameter set (what Merge() used before tuning existed).
 inline FullParams AppDefaults() {
   FullParams prm;
-  prm.solve.T = 16;
+  prm.solve.T = 8;
   prm.solve.z_steps = 3;
-  for (int t = 1; t < 16; t += 2) prm.solve.prior_at.push_back(t);   // every 2nd (tuned)
+  for (int t = 1; t < prm.solve.T; t += 2) prm.solve.prior_at.push_back(t);
   return prm;
 }
 

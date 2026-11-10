@@ -863,3 +863,23 @@
 -  io.close(&io);
 -  return st;
 -}
+
+diff --git a/tinydng.h b/tinydng.h
+index c8a90a3..4f684e0 100644
+--- a/tinydng.h
++++ b/tinydng.h
+@@ -244,0 +245,2 @@ typedef struct tinydng_raw_info {
++  /* Preserve fractional DNG BlackLevel values in CFA cell order. */
++  double black_level_precise[4];
+diff --git a/tinydng_dng.c b/tinydng_dng.c
+index ba4a6bc..bf5bf3e 100644
+--- a/tinydng_dng.c
++++ b/tinydng_dng.c
+@@ -549,0 +550,7 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
++        img->raw.black_level_precise[i] = v[i];
++      }
++      if (n == 1) {
++        for (i = 1; i < 4; ++i) {
++          img->raw.black_level[i] = img->raw.black_level[0];
++          img->raw.black_level_precise[i] = v[0];
++        }

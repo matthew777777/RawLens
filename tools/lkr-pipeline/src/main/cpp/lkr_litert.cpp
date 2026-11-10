@@ -10,6 +10,9 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace lkr {
 
@@ -157,15 +160,31 @@ bool LiteRtCore::open(const std::string& lib_dir, const std::string& model, int 
 
 float* LiteRtCore::lockInput() {
   void* p = nullptr;
-  return d_->api.Lock(d_->ib, &p, kLockWrite) == 0 ? static_cast<float*>(p) : nullptr;
+  const auto status = d_->api.Lock(d_->ib, &p, kLockWrite);
+#ifdef __ANDROID__
+  if (status) __android_log_print(ANDROID_LOG_WARN, "RawLensFfdnet", "NPU input lock failed: %d", status);
+#endif
+  return status == 0 ? static_cast<float*>(p) : nullptr;
 }
 bool LiteRtCore::unlockAndRun() {
-  d_->api.Unlock(d_->ib);
-  return d_->api.Run(d_->cm, 0, 1, &d_->ib, 1, &d_->ob) == 0;
+  const auto unlock = d_->api.Unlock(d_->ib);
+#ifdef __ANDROID__
+  if (unlock) __android_log_print(ANDROID_LOG_WARN, "RawLensFfdnet", "NPU input unlock failed: %d", unlock);
+#endif
+  if (unlock) return false;
+  const auto status = d_->api.Run(d_->cm, 0, 1, &d_->ib, 1, &d_->ob);
+#ifdef __ANDROID__
+  if (status) __android_log_print(ANDROID_LOG_WARN, "RawLensFfdnet", "NPU execution failed: %d", status);
+#endif
+  return status == 0;
 }
 const float* LiteRtCore::lockOutput() {
   void* p = nullptr;
-  return d_->api.Lock(d_->ob, &p, kLockRead) == 0 ? static_cast<const float*>(p) : nullptr;
+  const auto status = d_->api.Lock(d_->ob, &p, kLockRead);
+#ifdef __ANDROID__
+  if (status) __android_log_print(ANDROID_LOG_WARN, "RawLensFfdnet", "NPU output lock failed: %d", status);
+#endif
+  return status == 0 ? static_cast<const float*>(p) : nullptr;
 }
 void LiteRtCore::unlockOutput() { d_->api.Unlock(d_->ob); }
 

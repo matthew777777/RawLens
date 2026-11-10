@@ -3,8 +3,8 @@
 
 // FFDNet plug-and-play prior in the generalized-Anscombe domain of OUR fitted
 // noise model (python lkr.Prior(domain='gat')._gat_net, exact mirror):
-//   x_c = max(z_c * wb_c, 0); a_c = a wb_c, b_c = b wb_c^2
-//   D = 2/a_c sqrt(a_c x + 3/8 a_c^2 + b_c)       (unit-variance noise)
+//   x_c = z_c * wb_c; a_c = a wb_c, b_c = b wb_c^2
+//   D = 2/a_c sqrt(max(a_c x + 3/8 a_c^2 + b_c, 0)) (unit-variance noise)
 //   Dn = (D - lo)/span, noise level r/span with r = sigma / sig_ref
 //   FFDNet(pixel_unshuffle(Dn) ++ noise) -> pixel_shuffle -> * span + lo
 //   closed-form unbiased inverse GAT (Makitalo-Foi), / wb

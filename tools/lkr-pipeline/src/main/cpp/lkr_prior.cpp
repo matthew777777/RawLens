@@ -118,8 +118,10 @@ bool FfdnetGatPrior::operator()(const float* z, float* x, int H, int W, float si
     if (!std::isfinite(ac[c]) || ac[c] <= 0 || !std::isfinite(bc[c])) return false;
   }
   auto gat = [&](int c, float v) {
-    const float xv = std::max(v * d_->wb[c], 0.0f);
-    return 2.0f / ac[c] * std::sqrt(ac[c] * xv + 0.375f * ac[c] * ac[c] + bc[c]);
+    // Black-subtracted read noise is signed. Clamp the radicand, not the
+    // signal: clipping negative samples first rectifies shadow noise.
+    const float xv = v * d_->wb[c];
+    return 2.0f / ac[c] * std::sqrt(std::max(ac[c] * xv + 0.375f * ac[c] * ac[c] + bc[c], 0.0f));
   };
   // GAT is monotonic in x: the normalisation range comes from per-channel
   // min/max of z, so no full GAT image is stored (one fused pack pass).

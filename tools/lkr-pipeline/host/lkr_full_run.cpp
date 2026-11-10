@@ -12,18 +12,19 @@
 #include <vector>
 
 #include "lkr_full.h"
+#include "lkr_tuning.h"
 #include "lkr_prior.h"
 #include "srp_dng.h"
 
 int main(int argc, char** argv) {
   if (argc < 3) return 2;
   std::string in = argv[1], outp = argv[2], model = "build/models";
-  lkr::FullParams prm;
-  prm.solve.T = 16;
-  prm.solve.z_steps = 3;
-  for (int t = 1; t < 16; t += 2) prm.solve.prior_at.push_back(t);
+  lkr::FullParams prm = lkr::AppDefaults();
   bool fp16 = false;
+  bool use_prior = true;
+  bool repeat_reference = false;
   int frames_max = 0;
+  int reference = 0;
   for (int i = 3; i < argc; ++i) {
     std::string k = argv[i];
     auto nx = [&] { return std::atoi(argv[++i]); };
@@ -34,6 +35,19 @@ int main(int argc, char** argv) {
     else if (k == "--at") { prm.crop_x = nx(); prm.crop_y = nx(); }
     else if (k == "--pgain") { prm.solve.prior_gain = float(std::atof(argv[++i])); prm.auto_look = false; }
     else if (k == "--grain") { prm.solve.grain = float(std::atof(argv[++i])); prm.auto_look = false; }
+    else if (k == "--repeat-reference") repeat_reference = nx() != 0;
+    else if (k == "--prior") use_prior = nx() != 0;
+    else if (k == "--iterations") {
+      prm.solve.T = nx(); if (prm.solve.T < 2) return 2;
+      prm.solve.prior_at.clear();
+      for (int t = 1; t < prm.solve.T; t += 2) prm.solve.prior_at.push_back(t);
+    }
+    else if (k == "--auto-grain") prm.look_day_grain = prm.look_night_grain = float(std::atof(argv[++i]));
+    else if (k == "--auto-prior") prm.look_day_prior = prm.look_night_prior = float(std::atof(argv[++i]));
+    else if (k == "--refine") prm.solve.refine_motion = nx() != 0;
+    else if (k == "--mean") prm.solve.mean_preserve = nx();
+    else if (k == "--reference") reference = nx();
+    else if (k == "--smax") prm.smax_x = float(std::atof(argv[++i]));
     else if (k == "--notch") prm.solve.notch = nx() != 0;
     else if (k == "--workers") prm.workers = nx();
     else if (k == "--robust") prm.solve.robust = nx() != 0;
@@ -42,6 +56,7 @@ int main(int argc, char** argv) {
     else if (k == "--rstart") prm.solve.robust_start = nx();
     else if (k == "--tau") prm.solve.robust_tau = float(std::atof(argv[++i]));
     else if (k == "--tk") prm.solve.temporal_k = float(std::atof(argv[++i]));
+    else if (k == "--tdet") prm.solve.temporal_detail = float(std::atof(argv[++i]));
     else if (k == "--sb") prm.solve.shadow_boost = float(std::atof(argv[++i]));
     else if (k == "--rgather") prm.solve.robust_gather = std::atoi(argv[++i]) != 0;
     else if (k == "--quad") prm.solve.quad = std::atoi(argv[++i]) != 0;
@@ -69,7 +84,10 @@ int main(int argc, char** argv) {
     closedir(d);
   }
   std::sort(paths.begin(), paths.end());
+  if (reference < 0 || reference >= int(paths.size())) return 2;
+  std::rotate(paths.begin(), paths.begin() + reference, paths.begin() + reference + 1);
   if (frames_max > 0 && int(paths.size()) > frames_max) paths.resize(frames_max);
+  if (repeat_reference && !paths.empty()) std::fill(paths.begin(), paths.end(), paths.front());
   auto t0 = std::chrono::steady_clock::now();
   srp::SrpDngMeta m;
   if (paths.empty() || srp::SrpReadDngMeta(paths[0].c_str(), &m) != srp::DngReadStatus::kOk) return 1;
@@ -81,9 +99,10 @@ int main(int argc, char** argv) {
   }
   const double ms_load = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   const int cfa[4] = {m.cfa[0], m.cfa[1], m.cfa[2], m.cfa[3]};
-  // srp black_level is R,G1,B,G2 plane order; MergeFull wants per CFA cell (row-major).
+  // DNG BlackLevel is in CFA cell order, already what MergeFull expects.
+  // Averaging or rounding fractional offsets leaves a shadow colour cast.
   float black[4];
-  for (int c = 0; c < 4; ++c) black[c] = float(m.black_level[0] + m.black_level[1] + m.black_level[2] + m.black_level[3]) / 4.0f;
+  for (int c = 0; c < 4; ++c) black[c] = float(m.black_level_precise[c]);
   std::array<float, 3> wb{1, 1, 1};
   if (m.has_as_shot_neutral) wb = {float(m.as_shot_neutral[1] / m.as_shot_neutral[0]), 1.0f, float(m.as_shot_neutral[1] / m.as_shot_neutral[2])};
   lkr::Gpu gpu;
@@ -93,6 +112,7 @@ int main(int argc, char** argv) {
   o.fp16 = fp16;
   if (!ff.load(model + "/ffdnet.param", model + "/ffdnet.bin", o)) return 1;
   lkr::PriorFactory make = [&](float a, float b, float sig, const std::array<float, 3>& w) -> lkr::PriorFn {
+    if (!use_prior) return {};
     ff.setNoise(a, b, sig, w);
     return [&](const float* z, float* x, int H, int W, float sg, const float* ns) { return ff(z, x, H, W, sg, ns); };
   };

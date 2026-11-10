@@ -47,7 +47,7 @@ void main() {
     for (int oy = 0; oy < pc.s; ++oy)
       for (int ox = 0; ox < pc.s; ++ox) {
         vec2 u = subPos(i, j, ox, oy);
-        vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+        precise vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
         ivec2 x0; vec2 a;
         if (!taps(q, x0, a)) ok = false;
         if (!ok) continue;
@@ -55,9 +55,9 @@ void main() {
         float w00 = (1.0 - a.x) * (1.0 - a.y), w01 = a.x * (1.0 - a.y);
         float w10 = (1.0 - a.x) * a.y, w11 = a.x * a.y;
         sum += z[o] * w00 + z[o + 1] * w01 + z[o + pc.W] * w10 + z[o + pc.W + 1] * w11;
-        int og = 3 * HW + o;
-        float sx = (g[o] * w00 + g[o + 1] * w01 + g[o + pc.W] * w10 + g[o + pc.W + 1] * w11) * sf;
-        float sy = (g[og] * w00 + g[og + 1] * w01 + g[og + pc.W] * w10 + g[og + pc.W + 1] * w11) * sf;
+        // Exact derivative of the bilinear warp, using the same four taps.
+        float sx = ((z[o + 1] - z[o]) * (1.0 - a.y) + (z[o + pc.W + 1] - z[o + pc.W]) * a.y) * sf;
+        float sy = ((z[o + pc.W] - z[o]) * (1.0 - a.x) + (z[o + pc.W + 1] - z[o + 1]) * a.x) * sf;
         J0 += sx * u.x; J1 += sx * u.y; J2 += sx;
         J3 += sy * u.x; J4 += sy * u.y; J5 += sy;
       }

@@ -42,7 +42,7 @@ struct DngField {
 };
 
 // Writes row-major chunky float32 RGB in [0,1] as an uncompressed 16-bit
-// linear-RGB DNG (photometric auto => RGB, one strip, DNGVersion 1.4 +
+// linear-RGB DNG (PhotometricInterpretation = 34892 (LinearRaw), one strip, DNGVersion 1.4 +
 // black/white level + color tags via as_dng). Quantizes with clamp +
 // round-to-nearest: u16 = round(clamp(x,0,1) * 65535).
 // `fields`/`field_count` carry optional extra TIFF tags (may be null/0;
@@ -60,7 +60,8 @@ DngStatus DngWriteLinearRgb16(const char* path, uint32_t width,
 // region) to uint16.
 //
 // Metadata mirrors rawpy/LibRaw where the pipeline reads it:
-// black_level[4] in R,G1,B,G2 plane order (DNG BlackLevel tag order),
+// black_level[4] in DNG CFA cell order (integer compatibility values),
+// black_level_precise[4] retains the fractional values in that same order,
 // white_level the single white level, cfa[4] the CFAPattern values in
 // row-major order with G2 remapped 3 -> 1 (LibRaw convention), and
 // noise[8] the NoiseProfile (S,O) pairs in R,G1,B,G2 plane order with
@@ -77,6 +78,7 @@ struct SrpDngMeta {
   uint32_t width = 0;
   uint32_t height = 0;
   int32_t black_level[4] = {0, 0, 0, 0};
+  double black_level_precise[4] = {0, 0, 0, 0}; // CFA cell order, fractional DN retained
   uint32_t white_level = 0;
   uint8_t cfa[4] = {0, 0, 0, 0};
   double noise[8] = {0, 0, 0, 0, 0, 0, 0, 0};

@@ -59,6 +59,16 @@ DngStatus DngWriteLinearRgb16(const char* path, uint32_t width,
     }
   }
 
+  // TIFF defaults to chunky when omitted; write it explicitly for LinearRaw.
+  uint16_t chunky = 1;
+  tags.erase(std::remove_if(tags.begin(), tags.end(),
+      [](const tinydng_field& tag) { return tag.tag == 284; }), tags.end());
+  tinydng_field planar{};
+  planar.tag = 284; planar.type = 3; planar.count = 1;
+  planar.data = reinterpret_cast<uint8_t*>(&chunky);
+  planar.size = sizeof(chunky);
+  tags.push_back(planar);
+
   std::vector<uint16_t> u16(static_cast<size_t>(count) * 3);
   for (size_t i = 0; i < u16.size(); ++i) {
     const float x = rgb[i];
@@ -106,7 +116,7 @@ DngStatus DngWriteLinearRgb16(const char* path, uint32_t width,
   image.samples_per_pixel = 3;
   image.bits_per_sample = 16;
   image.sample_format = 0;  // UINT
-  image.photometric = 0;    // auto => RGB for 3 samples
+  image.photometric = 34892;  // DNG LinearRaw: camera-linear RGB, not rendered RGB
   image.data = reinterpret_cast<const uint8_t*>(u16.data());
   image.data_size = u16.size() * sizeof(uint16_t);
   image.raw = &raw;
@@ -209,6 +219,7 @@ DngReadStatus SrpReadDngMeta(const char* path, SrpDngMeta* out) {
   out->height = img->height;
   for (int i = 0; i < 4; ++i) {
     out->black_level[i] = img->raw.black_level[i];
+    out->black_level_precise[i] = img->raw.black_level_precise[i];
     uint8_t v = 0;
     if (i < img->cfa.pattern_size) v = img->cfa.pattern[i];
     out->cfa[i] = (v == 3) ? 1 : v;  // LibRaw G2 convention

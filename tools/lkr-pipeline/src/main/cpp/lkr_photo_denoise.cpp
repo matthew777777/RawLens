@@ -119,18 +119,37 @@ bool DenoisePhoto(uint16_t* rgba, int w, int h, const int* cfa, std::array<float
     const auto infer = [&](const float* in, float* out, int th, int tw) {
       return prior(in, out, th, tw, 1.f);
     };
-    bool ok = lkr::DenoiseRgbaHalf(result.data(), w, h, 1.f, infer);
-    stats->primary_ms = elapsed(stage);
-    if (ok && chroma_stride) {
-      std::vector<uint16_t> reference;
-      if (colour_guard) reference = result;
+    const auto process = [&] {
+      bool ok = lkr::DenoiseRgbaHalf(result.data(), w, h, 1.f, infer);
+      stats->primary_ms = elapsed(stage);
+      if (!ok) LKR_LOG("FFDNet primary pass failed on %s", prior.backend().c_str());
+      if (ok && chroma_stride) {
+        std::vector<uint16_t> reference;
+        if (colour_guard) reference = result;
+        stage = Clock::now();
+        ok = lkr::DenoiseChromaRgbaHalf(rgba, result.data(), w, h, wb, infer, chroma_stride, 512, luma);
+        stats->chroma_ms = elapsed(stage);
+        if (!ok) LKR_LOG("FFDNet chroma pass failed on %s", prior.backend().c_str());
+        stage = Clock::now();
+        if (ok && colour_guard)
+          ok = lkr::GuardPhotoChroma(reference.data(), result.data(), w, h, wb, a, b);
+        stats->guard_ms = elapsed(stage);
+      }
+      return ok;
+    };
+    bool ok = process();
+    if (!ok && requested_backend == PhotoBackend::Auto && stats->backend == 3) {
+      // A compiled NPU model can still fail when locking tensors or running
+      // its first tile. Discard the entire partial result and retry ALL
+      // passes on the already-loaded ncnn model, using the original source.
+      prior.setNhwcCore({}, 0, 0, "");
+      stats->backend = prior.backend() == "ncnn-vulkan" ? 2 : 1;
+      LKR_LOG("FFDNet NPU processing failed; retrying source on %s", prior.backend().c_str());
+      result.assign(rgba, rgba + size_t(w) * h * 4);
+      stats->chroma_ms = stats->guard_ms = 0;
       stage = Clock::now();
-      ok = lkr::DenoiseChromaRgbaHalf(rgba, result.data(), w, h, wb, infer, chroma_stride, 512, luma);
-      stats->chroma_ms = elapsed(stage);
-      stage = Clock::now();
-      if (ok && colour_guard)
-        ok = lkr::GuardPhotoChroma(reference.data(), result.data(), w, h, wb, a, b);
-      stats->guard_ms = elapsed(stage);
+      ok = process();
+      LKR_LOG("FFDNet ncnn retry success=%d", int(ok));
     }
     stage = Clock::now();
     if (ok) {

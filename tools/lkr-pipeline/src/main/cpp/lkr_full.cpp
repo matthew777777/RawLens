@@ -162,6 +162,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     LoadTile(frames[0], g, 0, 0, g.w, g.h, black, white, c.data());
     S.sigma = NoiseSigma(c.data(), g.h, g.w);
     NoiseAB(c.data(), g.h, g.w, &S.a, &S.b);
+    // Degenerate fit (too few unclipped flat blocks): a zero noise model makes
+    // every robust / temporal test reject all frames. Fall back to the
+    // level-independent MAD sigma as read noise.
+    if (S.a <= 0 && S.b < 0.25f * S.sigma * S.sigma) S.b = S.sigma * S.sigma;
   }
   S.ms_noise = now_ms() - t;
 
@@ -181,9 +185,19 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     std::nth_element(u.begin(), u.begin() + u.size() / 2, u.end());
     return u[u.size() / 2];
   };
+  auto alignmentGrey = [&](const RawFrame& frame, int* bw, int* bh) {
+    if (!prm.paper_parity) return BinnedGrey(frame, g, bin, black, white, bw, bh);
+    // Paper section 3.4: coarse forward-additive LK on bilinear-demosaiced
+    // grayscale, rather than averaging Bayer cells before demosaicking.
+    *bw = g.w; *bh = g.h;
+    std::vector<float> raw(size_t(g.w)*g.h), grey(raw.size());
+    LoadTile(frame, g, 0, 0, g.w, g.h, black, white, raw.data());
+    Grey(raw.data(), g.h, g.w, grey.data());
+    return grey;
+  };
   {
     int bw = 0, bh = 0;
-    std::vector<float> ref = BinnedGrey(frames[0], g, bin, black, white, &bw, &bh);
+    std::vector<float> ref = alignmentGrey(frames[0], &bw, &bh);
     const float mref = median_of(ref);
     const int nthr = std::max(1, std::min(K - 1, int(std::thread::hardware_concurrency()) / 2));
     std::vector<std::thread> pool;
@@ -191,7 +205,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       pool.emplace_back([&, tt] {
         for (int k = 1 + tt; k < K; k += nthr) {
           int w2, h2;
-          std::vector<float> mov = BinnedGrey(frames[k], g, bin, black, white, &w2, &h2);
+          std::vector<float> mov = alignmentGrey(frames[k], &w2, &h2);
           if (!prm.paper_parity) {
             const float mm = median_of(mov);
             if (mref > 0 && mm > 0) {
@@ -203,8 +217,9 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
             }
           }
           std::array<double, 6> q = LkAffine(ref.data(), mov.data(), bh, bw, 40, 3);
-          q[2] *= bin;
-          q[5] *= bin;
+          const int alignment_scale = prm.paper_parity ? 1 : bin;
+          q[2] *= alignment_scale;
+          q[5] *= alignment_scale;
           P[k] = q;
         }
       });
@@ -233,7 +248,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   std::vector<float> wsum(size_t(GW) * GH, 0.0f);
   // Diagnostics: LKR_DEBUG_MAPS=<path> -> <path> (kDebugMaps x GH x GW float32,
   // see SolveStats::dbg), feather-blended across tiles like the image.
-  const char* dbg_path = prm.paper_parity ? nullptr : std::getenv("LKR_DEBUG_MAPS");
+  const char* dbg_path = std::getenv("LKR_DEBUG_MAPS");
   std::vector<float> dmaps;
   if (dbg_path) dmaps.assign(size_t(kDebugMaps) * GW * GH, 0.0f);
   // Grid -> output offset (HR px): the grid starts (g.x0 - rx) sensor px in.
@@ -436,6 +451,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       SolveStats ss;
       SolveParams spt = sp;
       spt.debug_maps = dbg_path != nullptr;
+      if (const char* trace = std::getenv("LKR_TRACE_PREFIX"); trace &&
+          ji == size_t(std::getenv("LKR_TRACE_TILE") ? std::atoi(std::getenv("LKR_TRACE_TILE")) : 0))
+        spt.debug_prefix = std::string(trace) + "_tile_" + std::to_string(gx) + "_" + std::to_string(gy);
+
       if (use_sub) spt.local_init = sub_field.data();   // parallax start (block search below overrides)
       // Local motion start: MFSR block search (align.comp) on affine-prewarped greys.
       if (spt.local_block == 16 && prm.block_search && !prm.paper_parity && bsearch.ok() &&

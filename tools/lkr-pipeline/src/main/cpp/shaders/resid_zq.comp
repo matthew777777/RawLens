@@ -31,7 +31,7 @@ void main() {
   for (int oy = 0; oy < pc.s; ++oy)
     for (int ox = 0; ox < pc.s; ++ox) {
       vec2 u = subPos(i, j, ox, oy);
-      vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+      precise vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
       ivec2 x0; vec2 a;
       if (!taps(q, x0, a)) { r[o] = 0.0; return; }        // invalid LR pixel
       vec4 q4 = zq[base + x0.y * pc.W + x0.x];          // 4 taps, one load (zpack.comp)

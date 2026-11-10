@@ -83,3 +83,30 @@ then `lkr_parity OUT` (with `LKR_MODEL=build/models` for the prior), then
 
 fp16 vs fp32 final image: 57.1 dB, max |d| 0.029 (highlights) -- quality
 against ground truth still to be checked before fp16 becomes the default.
+
+## Shadow and motion diagnostics
+
+`LKR_DEBUG_MAPS=/tmp/result.maps` writes five planar float32 maps: effective
+frame weight, temporal acceptance, prior noise factor, shadow mask, maximum
+local displacement. These are diagnostic source-grid summaries, not a warped
+per-pixel ground truth.
+
+For the actual residuals and the data/prior split at each denoiser call:
+
+```sh
+LKR_TRACE_PREFIX=/tmp/hair LKR_TRACE_TILE=4 lkr_full_run BURST OUT.dng --model MODEL_DIR
+python tools/lkr-pipeline/inspect_trace.py /tmp/hair_tile_480_480_meta.txt --frame 9
+```
+
+The tile suffix uses its crop-relative origin; choose the emitted metadata file.
+Tracing is off by default. Dumps include input frames, initial/final motion,
+prior input/output, temporal residuals and row moments from the same GPU pass,
+and final output before/after finishing. RGB dumps are planar camera-linear;
+weights and residuals are `K × h × w` in source-frame coordinates. `temporal_rows`
+is `K × h × w × 4` (sum residual, sum variance, count, sum squared residual).
+The renderer requires NumPy and Pillow and applies one exposure to all stages.
+
+`lkr_robust_check` runs Vulkan regression checks for signed-residual cancellation,
+static-noise acceptance, reference preservation, independent shadow chroma and
+luminance preservation. Build it with the desktop CMake project, then run with
+the same Vulkan library path as `lkr_full_run`.

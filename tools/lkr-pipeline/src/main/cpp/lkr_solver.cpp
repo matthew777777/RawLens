@@ -120,7 +120,7 @@ Solver::Solver(Gpu* gpu) : gpu_(gpu) {
   wminh_ = gpu_->pipeline(spv::weight_minh, sizeof(spv::weight_minh), 3, sizeof(Push));
   radjw_ = gpu_->pipeline(spv::resid_adj_w, sizeof(spv::resid_adj_w), 6, sizeof(Push));
   wexp_ = gpu_->pipeline(spv::weight_e, sizeof(spv::weight_e), 3, sizeof(Push));
-  wth_ = gpu_->pipeline(spv::weight_th, sizeof(spv::weight_th), 3, sizeof(Push));
+  wth_ = gpu_->pipeline(spv::weight_th, sizeof(spv::weight_th), 4, sizeof(Push));
   zgw_ = gpu_->pipeline(spv::zstep_gw, sizeof(spv::zstep_gw), 6, sizeof(Push));
   residq_ = gpu_->pipeline(spv::resid_q, sizeof(spv::resid_q), 5, sizeof(Push));
   radjwq_ = gpu_->pipeline(spv::resid_adj_w_q, sizeof(spv::resid_adj_w_q), 6, sizeof(Push));
@@ -255,7 +255,7 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
   VkDescriptorSet sRW = gpu_->set(radjw_, {&z, &y, &pb, &acc, &dloc, &wtb});
   VkDescriptorSet sZGW = gpu_->set(zgw_, {&z, &x, &rr, &pb, &dloc, &wtb});
   VkDescriptorSet sRT = gpu_->set(residg_, {&z0, &y, &pb, &rrt, &dloc});
-  VkDescriptorSet sTH = gpu_->set(wth_, {&rrt, &y, &rwt2});
+  VkDescriptorSet sTH = gpu_->set(wth_, {&rrt, &y, &rwt2, &wvt2});
   VkDescriptorSet sWT = gpu_->set(wtemp_, {&rrt, &y, &rwt2, &wtr, &wvt2});
   const bool temporal = prm.temporal_k > 0.0f && prm.robust_spread > 0;
   VkDescriptorSet sS = gpu_->set(scatter_, {&rwb, &pb, &acc, &dloc});
@@ -400,6 +400,25 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
   std::vector<float> nscale;   // per-HR-pixel noise factor for the prior / grain
   std::vector<float> shadow;   // 0..1 shadow weight of the last prior call (shadow cleanup)
 
+  auto trace = [&](const std::string& stage, const float* data, size_t count) {
+    if (prm.debug_prefix.empty()) return;
+    FILE* f = std::fopen((prm.debug_prefix + "_" + stage + ".f32").c_str(), "wb");
+    if (f) { std::fwrite(data, sizeof(float), count, f); std::fclose(f); }
+  };
+  if (!prm.debug_prefix.empty()) {
+    trace("frames", frames, nLR);
+    trace("reference_rgb", z0.as<float>(), nHR);
+    trace("local_initial", dloc.as<float>(), size_t(K) * nb * 2);
+    trace("motion_initial", p, size_t(K) * 6);
+    FILE* f = std::fopen((prm.debug_prefix + "_meta.txt").c_str(), "w");
+    if (f) {
+      std::fprintf(f, "H=%d W=%d h=%d w=%d K=%d a=%.9g b=%.9g sigma=%.9g gain=%.9g grain=%.9g wb=%.9g,%.9g,%.9g\n",
+          H, W, h, w, K, prm.noise_a, prm.noise_b, prm.sigma_noise, prm.prior_gain, prm.grain,
+          prm.wb[0], prm.wb[1], prm.wb[2]);
+      std::fclose(f);
+    }
+  }
+
   // Schedule (DPIR-style): sigma_t geometric from sigma_max to sigma_end.
   std::vector<float> sig(prm.T);
   for (int t = 0; t < prm.T; ++t)
@@ -434,8 +453,9 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
       Push qt = q; qt.rob_k = prm.temporal_k; qt.f3 = prm.temporal_tau;
       if (packz && !z0_packed) { d_pack(sZ0P, qt); z0_packed = true; }   // z0 is fixed: pack once
       d_resid(sRT, sRTq, qt, sRTzq);
-      gpu_->dispatch(wth_, sTH, &qt, gxLR, gyLR, K);
-      gpu_->dispatch(wtemp_, sWT, &qt, gxLR, gyLR, K);
+      Push qd = qt; qd.f0 = prm.temporal_detail;
+      gpu_->dispatch(wth_, sTH, &qd, gxLR, gyLR, K);
+      gpu_->dispatch(wtemp_, sWT, &qd, gxLR, gyLR, K);
     }
     for (int zs = 0; zs < prm.z_steps; ++zs) data_step(q, false, zs == 0);  // Eq. (5)
     const bool refine_now = prm.motion_every <= 1 || t < prm.motion_warmup ||
@@ -456,7 +476,7 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
     const bool use_prior = prior_here(t);
     if (use_prior && !prior) gpu_->copy(z, x, nHR * 4);            // 'none': x = z
     if (use_prior && prior) gpu_->copy(z, zc, nHR * 4);            // prior input to the CPU side
-    if (use_prior && prior && eq && q.rob_on > 0.5f) {             // weighted coverage of this iteration
+    if (use_prior && eq && q.rob_on > 0.5f) {             // weighted coverage of this iteration
       d_scatter(sSW, sSWq, q);
       Push q1 = q; q1.mode = 1;
       gpu_->dispatch(zstep_, sZW, &q1, gHR1);
@@ -469,9 +489,8 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
     }
     ++S.submits;
     S.gpu_ms += now_ms() - tg;
-    if (use_prior && prior) {                                      // PnP x-step
-      const double tp = now_ms();
-      const float* ns = nullptr;
+    // Coverage is also needed by no-prior motion-region Bayer cleanup.
+    if (use_prior) {
       if (eq && q.rob_on > 0.5f) {
         // f = sqrt(cov / cov_w) over the three planes: 1 where every frame
         // contributed, sqrt(K) where only the reference did.
@@ -487,7 +506,6 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
           const float rho = a > 0 ? std::min(b / a, 1.0f) : 1.0f;
           nscale[i] = std::min(std::sqrt(std::max(0.8f / std::max(rho, 1e-3f), 1.0f)), std::sqrt(float(K)));
         }
-        ns = nscale.data();
         if (const char* dump = std::getenv("LKR_DUMP_NS")) {
           FILE* f = std::fopen(dump, "wb");
           if (f) { std::fwrite(nscale.data(), 4, nscale.size(), f); std::fclose(f); }
@@ -500,6 +518,11 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
                        100.0 * over / nscale.size());
         }
       }
+    }
+    if (use_prior && prior) {                                      // PnP x-step
+      const double tp = now_ms();
+      const float* ns = nullptr;
+      if (!nscale.empty()) ns = nscale.data();
       std::vector<float> nse;
       if (ns && prm.equalize_strength < 1.0f) {   // noise-level-aware equalisation strength
         nse.resize(size_t(H) * W);
@@ -507,14 +530,27 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
         ns = nse.data();
       }
       std::vector<float> nsh;
-      if (prm.shadow_boost > 0.0f && prm.noise_b > 0.0f) {   // shadow cleanup (see SolveParams)
+      // Chroma cleanup needs its mask even when the independent luma boost
+      // is disabled (the default, to preserve grass / foliage texture).
+      if ((prm.shadow_boost > 0.0f || prm.shadow_chroma > 0.0f) &&
+          (prm.noise_a > 0.0f || prm.noise_b > 0.0f)) {
         ShadowWeight(zc.as<float>(), H, W, prm, &shadow);
-        nsh.resize(shadow.size());
-        for (size_t i = 0; i < nsh.size(); ++i) nsh[i] = (ns ? ns[i] : 1.0f) * (1.0f + prm.shadow_boost * shadow[i]);
-        ns = nsh.data();
+        if (prm.shadow_boost > 0.0f) {
+          nsh.resize(shadow.size());
+          for (size_t i = 0; i < nsh.size(); ++i) nsh[i] = (ns ? ns[i] : 1.0f) * (1.0f + prm.shadow_boost * shadow[i]);
+          ns = nsh.data();
+        }
       }
+      trace("iter" + std::to_string(t) + "_z", zc.as<float>(), nHR);
       if (!prior(zc.as<float>(), xc.as<float>(), H, W, sig[t] * prm.prior_gain, ns)) return LKR_FAIL("prior");
+      trace("iter" + std::to_string(t) + "_network", xc.as<float>(), nHR);
       if (prm.mean_preserve > 0) MeanPreserve(zc.as<float>(), xc.as<float>(), H, W, prm.mean_preserve);
+      trace("iter" + std::to_string(t) + "_x", xc.as<float>(), nHR);
+      trace("iter" + std::to_string(t) + "_weights", wtb.as<float>(), nLR);
+      trace("iter" + std::to_string(t) + "_temporal", wtr.as<float>(), nLR);
+      trace("iter" + std::to_string(t) + "_temporal_residual", rrt.as<float>(), nLR);
+      trace("iter" + std::to_string(t) + "_temporal_rows", rwt2.as<float>(), nLR * 4);
+      trace("iter" + std::to_string(t) + "_motion", pb.as<float>(), size_t(K) * 6);
       x_from_staging = true;
       S.prior_ms += now_ms() - tp;
       ++S.prior_calls;
@@ -570,8 +606,12 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
         S.dbg[4 * HWh + p] = dm;
       }
   }
+  trace("local_final", dloc.as<float>(), size_t(K) * nb * 2);
+  trace("final_z", zc.as<float>(), nHR);
+  trace("final_x", x_out->data(), nHR);
   FinishLook(zc.as<float>(), x_out->data(), H, W, prm, nscale.empty() ? nullptr : nscale.data(),
              shadow.empty() ? nullptr : shadow.data());
+  trace("final_look", x_out->data(), nHR);
   std::memcpy(p, pb.map, size_t(K) * 24);
   S.dispatches = gpu_->dispatches();
   if (prm.local_out && prm.local_block > 0) std::memcpy(prm.local_out, dloc.map, size_t(K) * nb * 8);
@@ -623,6 +663,33 @@ void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, 
   const size_t HW = size_t(H) * W;
   const float q[3] = {0.25f * prm.wb[0], 0.5f * prm.wb[1], 0.25f * prm.wb[2]};
   std::vector<float> L(HW), C(HW);
+  // Clip halo (IMG_20261107_132932 chrome glints): the Bayer-period notches
+  // ring around a clipped point -- negative (black) pixels 1-3 px away -- and
+  // pull the clipped core below the clip level, so the neutraliser below
+  // missed it and it stayed magenta (raw-clipped R,B times wb). Keep the
+  // solved values within 3 px of any near-clipped pixel.
+  std::vector<uint8_t> halo;
+  std::vector<float> keep;
+  if (prm.notch) {
+    std::vector<uint8_t> hot(HW, 0);
+    bool any = false;
+    for (size_t i = 0; i < HW; ++i)
+      if (std::max(x[i], std::max(x[HW + i], x[2 * HW + i])) >= 0.92f * prm.clip) { hot[i] = 1; any = true; }
+    if (any) {
+      halo.assign(HW, 0);
+      constexpr int r = 3;
+      for (int Y = 0; Y < H; ++Y)
+        for (int X = 0; X < W; ++X) {
+          if (!hot[size_t(Y) * W + X]) continue;
+          for (int dy = -r; dy <= r; ++dy)
+            for (int dx = -r; dx <= r; ++dx) {
+              const int yy = Y + dy, xx = X + dx;
+              if (yy >= 0 && yy < H && xx >= 0 && xx < W) halo[size_t(yy) * W + xx] = 1;
+            }
+        }
+      keep.assign(x, x + 3 * HW);
+    }
+  }
   if (prm.notch) {
     for (size_t i = 0; i < HW; ++i) L[i] = q[0] * x[i] + q[1] * x[HW + i] + q[2] * x[2 * HW + i];
     for (int c = 0; c < 3; ++c) {
@@ -648,6 +715,9 @@ void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, 
       for (int c = 0; c < 3; ++c) x[c * HW + i] += d / prm.wb[c];
     }
   }
+  if (!halo.empty())
+    for (size_t i = 0; i < HW; ++i)
+      if (halo[i]) for (int c = 0; c < 3; ++c) x[c * HW + i] = keep[c * HW + i];
   if (prm.grain > 0.0f) {
     for (size_t i = 0; i < HW; ++i)
       L[i] = q[0] * (z[i] - x[i]) + q[1] * (z[HW + i] - x[HW + i]) + q[2] * (z[2 * HW + i] - x[2 * HW + i]);
@@ -677,29 +747,16 @@ void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, 
       }
     }
   }
-  // Blown highlights -> neutral (see SolveParams::highlight_desat).
+  // Neutralise only pixels with no remaining unsaturated colour channel.
+  // One-channel clipping is common in sunsets: the other channels still
+  // contain valid colour. Do not expand this mask into coloured neighbours.
   if (prm.highlight_desat) {
-    const float lo = 0.92f * prm.clip, hi = prm.clip;   // ramp on the raw level of the brightest channel (only genuinely near-clipped pixels)
-    std::vector<float> m(HW), tmp;
+    const float lo = 0.92f * prm.clip, hi = prm.clip;
+    std::vector<float> m(HW);
     for (size_t i = 0; i < HW; ++i) {
-      const float mx = std::max(x[i], std::max(x[HW + i], x[2 * HW + i]));
-      m[i] = std::min(std::max((mx - lo) / std::max(hi - lo, 1e-6f), 0.0f), 1.0f);
+      const float mn = std::min(x[i], std::min(x[HW + i], x[2 * HW + i]));
+      m[i] = std::clamp((mn - lo) / std::max(hi - lo, 1e-6f), 0.0f, 1.0f);
     }
-    // widen by 2 px (max filter, separable) so the fringe pixels just outside are included
-    auto maxfilt = [&](bool rows) {
-      tmp = m;
-      for (int a = 0; a < (rows ? H : W); ++a)
-        for (int b = 0; b < (rows ? W : H); ++b) {
-          float v = 0.0f;
-          for (int d = -2; d <= 2; ++d) {
-            const int bb = std::min(std::max(b + d, 0), (rows ? W : H) - 1);
-            v = std::max(v, rows ? tmp[size_t(a) * W + bb] : tmp[size_t(bb) * W + a]);
-          }
-          (rows ? m[size_t(a) * W + b] : m[size_t(b) * W + a]) = v;
-        }
-    };
-    maxfilt(true);
-    maxfilt(false);
     for (size_t i = 0; i < HW; ++i) {
       if (m[i] <= 0.0f) continue;
       const float L = q[0] * x[i] + q[1] * x[HW + i] + q[2] * x[2 * HW + i];   // wb-space luma

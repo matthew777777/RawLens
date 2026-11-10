@@ -547,6 +547,13 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
       size_t i, n = td_read_reals(r, type, data_off, count, v, 4);
       for (i = 0; i < n; i++) {
         img->raw.black_level[i] = td_clamp_i32(v[i]);
+        img->raw.black_level_precise[i] = v[i];
+      }
+      if (n == 1) {
+        for (i = 1; i < 4; ++i) {
+          img->raw.black_level[i] = img->raw.black_level[0];
+          img->raw.black_level_precise[i] = v[0];
+        }
       }
       if (n > 0) {
         img->raw.black_level_present = 1;

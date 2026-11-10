@@ -53,6 +53,9 @@ struct SolveParams {
   // the average of e.g. moving water). 0 = off.
   float temporal_k = 3.0f;
   float temporal_tau = 0.6f;
+  // Energy test tolerance for single-frame model error, as a fraction of the
+  // local detail energy common to the frame and its prediction. 0 = off.
+  float temporal_detail = 1.0f;
   int robust_spread = 3;        // min-filter radius (LR px) on the robust weights (Wronski robustness); 0 = off
   bool mhc_init = true;         // start from the encoded-video coherent MHC (lkr_mhc, = MhcReference); false = bilinear (paper)   // prior noise map / grain follow the contributing-frame count
   float robust_k = 3.0f;
@@ -85,11 +88,10 @@ struct SolveParams {
   // chroma part below keeps daylight shadow colour noise below Google HDR+.
   float shadow_boost = 0.0f;
   float shadow_chroma = 0.7f;
-  // Blown highlights: near clipping one colour channel saturates (and is left
-  // out of the data term) while the others do not, which leaves single red /
-  // blue / magenta pixels on lamp edges. Pull colour toward neutral (luma kept)
-  // where any channel nears clip, over a 2-px widened mask. Off in paper parity.
+  // Neutralise fully clipped highlights only. A clipped single channel
+  // does not justify discarding the remaining sunset / coloured-light signal.
   bool highlight_desat = true;
+  std::string debug_prefix; // opt-in per-tile trace, unique path owned by MergeFull
   bool debug_maps = false;   // fill SolveStats::dbg (LKR_DEBUG_MAPS)
   bool notch = true;           // remove Bayer-period (zipper/maze) structure from colour + grain
   float clip = 0.98f;          // normalised level at/above which a raw sample is treated as clipped

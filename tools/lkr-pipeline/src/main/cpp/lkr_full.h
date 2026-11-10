@@ -31,13 +31,13 @@ struct FullParams {
   int crop_x = -1, crop_y = -1, crop_w = 0, crop_h = 0;   // optional sub-rectangle (sensor px)
   SolveParams solve;       // T, z_steps, prior_at, step_scale (sigma_* filled here)
   float smax_x = 10.0f, end_x = 1.0f;   // schedule in multiples of our noise sigma
-  // DSLR look follows OUR noise model at mid-grey (user-picked 2026-11-04):
-  // clean (<= 0.0025, ISO-50 daylight) prior 0.15 / grain 0.8, noisy (>= 0.012,
-  // ISO-4653 night) prior 0.4 / grain 0.4, log-linear in between.
+  // Noise-aware look controls. The old daylight prior 0.15 plus 0.8 residual
+  // reinjection retained substantial shadow noise. Keep the denoised estimate
+  // by default; explicit Lab overrides can still request residual texture.
   // false = use solve.prior_gain / solve.grain as given.
   bool auto_look = true;
-  float look_day_prior = 0.15f, look_night_prior = 0.40f;   // auto look endpoints (LK-SR Lab)
-  float look_day_grain = 0.80f, look_night_grain = 0.40f;
+  float look_day_prior = 0.35f, look_night_prior = 0.35f;   // auto look endpoints (LK-SR Lab)
+  float look_day_grain = 0.0f, look_night_grain = 0.0f;
   float equalize_day = 0.25f, equalize_night = 1.0f;
   // Motion rejection follows the noise level too (2026-11-04, wind-blown pine in
   // IMG_20261104_111404): daylight uses a steep curve at k 2, so frames moved by
@@ -45,7 +45,7 @@ struct FullParams {
   // night keeps Cauchy at k 3 (steep at night over-smoothed the building 20 %).
   float robust_k_day = 2.0f, robust_k_night = 3.0f;
   float robust_pow_day = 2.0f, robust_pow_night = 1.0f;   // noise-equalisation strength, blended like the look
-  // Paper parity (Lecouat et al. 2021 as published, learned parts substituted):
+  // LK baseline with FFDNet (not a reproduction of the trained paper model):
   // turns OFF every RawLens addition -- DSLR look (prior gain / grain / auto),
   // Bayer notch, clip masking, robust weights + noise equalisation, local
   // motion + block search. Noise estimation, schedule and prior stay.
@@ -54,7 +54,7 @@ struct FullParams {
   // Reference = sharpest frame (Laplacian of the Bayer-cell grey, per unit
   // brightness), not simply the first: a wind- or shake-blurred first frame
   // otherwise becomes the image LK-SR builds on (pine in IMG_20261104_111404).
-  // Paper parity keeps the first frame.
+  // The LK baseline keeps the first frame.
   // Parallax (handheld camera moved: near objects shift up to 35 px relative
   // to far ones, IMG_20261104_111404 bunker vs road below): each solve tile is
   // also aligned in sub_lk x sub_lk LR quadrants (affine from the tile's), and

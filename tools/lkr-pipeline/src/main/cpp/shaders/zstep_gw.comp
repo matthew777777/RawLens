@@ -48,7 +48,7 @@ void main() {
         for (int oy = 0; oy < pc.s; ++oy)
           for (int ox = 0; ox < pc.s; ++ox) {
             vec2 u = subPos(i, j, ox, oy);
-            vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+            precise vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
             vec2 f = q - 0.5;
             vec2 fl = floor(f);
             ivec2 t0 = ivec2(fl);

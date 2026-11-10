@@ -28,9 +28,8 @@ bool LoadBurstCrop(const std::vector<std::string>& paths, int crop, int cx, int 
 // the (0,1) green plane) -- python run.noise_sigma.
 float NoiseSigma(const float* raw, int h, int w);
 
-// Poisson-Gaussian fit var = a x + b from one RGGB frame -- python
-// run.noise_ab (block medians, binned by level, lower quartile, weighted
-// non-negative least squares).
+// Poisson-Gaussian fit var = a x + b from one RGGB frame: block Laplacian
+// energy, binned by level, bias-corrected fifth percentile, weighted NNLS.
 void NoiseAB(const float* raw, int h, int w, float* a, float* b);
 
 // Grey image (mean of the bilinear demosaic) -- python lkr.grey.
