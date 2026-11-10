@@ -145,6 +145,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
             ?: throw IllegalStateException("MFSR merge failed")
         try {
             val mergeMs = SystemClock.elapsedRealtime() - tMerge
+            val provenance = sharpMergeProvenance(merged, inputs.mfsr.copy(engine = MfsrEngine.MFSR), frames.size,
+                ordered.take(merged.keptCount).map { it.source.metadata }, "auto (sharpness and blur rejection)")
             val outputs = ArrayList<String>()
             if (format.includesDng) {
                 merged.rgb.rewind()
@@ -152,18 +154,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 outputs += LinearRgbDngSaver(appContext).saveLinearRgbStriped(
                     merged.width, merged.height, merged.rgb.asFloatBuffer(),
                     merged.refMetadata,
-                    MergeProvenance(
-                        algorithmVersion = "RawLens-Mfsr/scale1-sr-pipeline",
-                        selectedFrames = ordered.size,
-                        acceptedFrames = merged.keptCount,
-                        rejectedFrames = ordered.size - merged.keptCount,
-                        referenceTimestampNs = merged.refMetadata.timestampNanos,
-                        outputScale = 1,
-                        sourceCameraId = merged.refMetadata.cameraId,
-                        // C19: shading is applied to the merged RGB whenever the reference has a map
-                        lensShadingApplied = RawPreDemosaicPipeline.lensShadingModel(merged.refMetadata) != null,
-                        effectiveFrames = merged.keptCount.toDouble()
-                    ),
+                    provenance,
                     captureId = captureId, gps = null
                 )
             }
@@ -182,7 +173,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
                     try {
                         outputs += JpegSaver(appContext).save(developed, merged.refMetadata, null,
                             captureTimeMillis = captureId,
-                            typeSuffix = CaptureFileNames.TYPE_MFSR, gps = null)
+                            typeSuffix = CaptureFileNames.TYPE_MFSR, gps = null,
+                            description = LinearRgbDngWriter.provenanceBlock(provenance))
                     } finally {
                         developed.bitmap.recycle()
                     }
@@ -209,27 +201,19 @@ internal class BurstMergeRunner(private val appContext: Context) {
     ): Completed {
         val captureId = take.lastModified()
         val merged = LkrMerge.mergeDecoded(appContext, frames,
-            LkrMerge.Settings(paperParity = inputs.mfsr.lkrPaperParity, tuning = LkrTuning.overrides(appContext),
+            LkrMerge.Settings(dctPrior = inputs.mfsr.lkrDctPrior, tuning = LkrTuning.overrides(appContext),
                 zoom = inputs.mfsr.lkrZoom))
             ?: throw IllegalStateException("LK-Reloaded merge failed")
         try {
+            val provenance = sharpMergeProvenance(merged, inputs.mfsr.copy(engine = MfsrEngine.LKR), frames.size,
+                frames.map { it.metadata }, "first frame of sampled burst")
             val outputs = ArrayList<String>()
             if (format.includesDng) {
                 merged.rgb.rewind()
                 outputs += LinearRgbDngSaver(appContext).saveLinearRgbStriped(
                     merged.width, merged.height, merged.rgb.asFloatBuffer(),
                     merged.refMetadata,
-                    MergeProvenance(
-                        algorithmVersion = "RawLens-LKR/scale1-ffdnet-gat",
-                        selectedFrames = frames.size,
-                        acceptedFrames = merged.keptCount,
-                        rejectedFrames = frames.size - merged.keptCount,
-                        referenceTimestampNs = merged.refMetadata.timestampNanos,
-                        outputScale = 1,
-                        sourceCameraId = merged.refMetadata.cameraId,
-                        lensShadingApplied = RawPreDemosaicPipeline.lensShadingModel(merged.refMetadata) != null,
-                        effectiveFrames = merged.keptCount.toDouble()
-                    ),
+                    provenance,
                     captureId = captureId, gps = null
                 )
             }
@@ -240,13 +224,14 @@ internal class BurstMergeRunner(private val appContext: Context) {
                         merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise),
                         look = inputs.jpeg, jxl = inputs.jxl)
                     outputs += JxlSaver(appContext).save(developed, merged.refMetadata, null,
-                        captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_MFSR)
+                        captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_LKSR)
                 } else {
                     val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
                         merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg)
                     try {
                         outputs += JpegSaver(appContext).save(developed, merged.refMetadata, null,
-                            captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_MFSR, gps = null)
+                            captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_LKSR, gps = null,
+                            description = LinearRgbDngWriter.provenanceBlock(provenance))
                     } finally {
                         developed.bitmap.recycle()
                     }
@@ -311,11 +296,38 @@ internal class BurstMergeRunner(private val appContext: Context) {
             RawDevelopmentCoordinator(appContext).denoiseCfa(merged, refMeta) ?: merged
         } else merged
         val outputs = ArrayList<String>()
+        val timings = processor.lastTimings
+        val motion = processor.lastMotion
+        val frameStrengths = if (decision.strengthMaps != null) null
+        else decision.frameStrengths?.takeIf { it.toSet().size > 1 }
+        val provenance = HdrPlusProvenance(
+            mergedFrames = keptFrames.size, selectedFrames = frames.size,
+            rejectedFrames = decision.droppedIndices.size,
+            highQuality = decision.highQuality,
+            strength = decision.strength,
+            tileSize = HdrPlusSettings.TILE_SIZE,
+            searchDistance = HdrPlusSettings.SEARCH_DISTANCE,
+            referenceIndex = decision.refIndex,
+            referenceTimestampNs = refMeta.timestampNanos,
+            referenceFrameNumber = refMeta.frameNumber,
+            sourceWidth = refMeta.imageWidth, sourceHeight = refMeta.imageHeight,
+            sourceCameraId = cameraId,
+            mergeMs = mergeMs,
+            packMs = timings.packMs, gpuMs = timings.gpuMs, unpackMs = timings.unpackMs,
+            mapsActive = decision.strengthMaps != null,
+            frames = keptFrames.mapIndexed { keptPos, input ->
+                val origIndex = decision.keepIndices[keptPos]
+                val delta = motion?.pairDeltas?.getOrNull(origIndex - 1)
+                    ?.takeIf { it.isFinite() }?.toFloat()
+                HdrPlusFrameInfo(
+                    input.metadata.exposureTimeNanos, input.metadata.sensitivityIso,
+                    deltaVsPrev = delta,
+                    gyroRadiansPerSecond = null,
+                    mergeStrength = frameStrengths?.getOrNull(keptPos)
+                )
+            }
+        )
         if (format.includesDng) {
-            val timings = processor.lastTimings
-            val motion = processor.lastMotion
-            val frameStrengths = if (decision.strengthMaps != null) null
-            else decision.frameStrengths?.takeIf { it.toSet().size > 1 }
             // Same store MainActivity's DNG toggle writes (single shared
             // preferences file): offline merges honor the user's choice.
             val dngCompression = DngCompression.fromPreference(
@@ -327,33 +339,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 displayName = CaptureFileNames.hdrPlusDng(captureId),
                 sixteenBit = true,
                 dngCompression = dngCompression,
-                hdrPlusProvenance = HdrPlusProvenance(
-                    mergedFrames = keptFrames.size, selectedFrames = frames.size,
-                    rejectedFrames = decision.droppedIndices.size,
-                    highQuality = decision.highQuality,
-                    strength = decision.strength,
-                    tileSize = HdrPlusSettings.TILE_SIZE,
-                    searchDistance = HdrPlusSettings.SEARCH_DISTANCE,
-                    referenceIndex = decision.refIndex,
-                    referenceTimestampNs = refMeta.timestampNanos,
-                    referenceFrameNumber = refMeta.frameNumber,
-                    sourceWidth = refMeta.imageWidth, sourceHeight = refMeta.imageHeight,
-                    sourceCameraId = cameraId,
-                    mergeMs = mergeMs,
-                    packMs = timings.packMs, gpuMs = timings.gpuMs, unpackMs = timings.unpackMs,
-                    mapsActive = decision.strengthMaps != null,
-                    frames = keptFrames.mapIndexed { keptPos, input ->
-                        val origIndex = decision.keepIndices[keptPos]
-                        val delta = motion?.pairDeltas?.getOrNull(origIndex - 1)
-                            ?.takeIf { it.isFinite() }?.toFloat()
-                        HdrPlusFrameInfo(
-                            input.metadata.exposureTimeNanos, input.metadata.sensitivityIso,
-                            deltaVsPrev = delta,
-                            gyroRadiansPerSecond = null,
-                            mergeStrength = frameStrengths?.getOrNull(keptPos)
-                        )
-                    }
-                )
+                hdrPlusProvenance = provenance
             )
         }
         if (format.includesJpeg) {
@@ -371,7 +357,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 try {
                     outputs += JpegSaver(appContext).save(developed, refMeta, null,
                         captureTimeMillis = captureId,
-                        typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = null)
+                        typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = null,
+                        description = HdrPlusDngWriter.provenanceBlock(provenance))
                 } finally {
                     developed.bitmap.recycle()
                 }

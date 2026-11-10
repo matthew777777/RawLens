@@ -299,9 +299,8 @@ class RawDevelopmentCoordinator(context: Context) {
         // (the wavelet stage needs the unfused RGBA16F frame).
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        // FFDNet (when selected), sharpening and wavelet share the pre-WB tap.
+        // Sharpening and wavelet share the pre-WB tap.
         val cameraLinearPlan = waveletPlan ||
-            (settings.denoise.ffdnet.active && !metadata.quadBayer) ||
             (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
         val effectiveFused = if (cameraLinearPlan || !allowOutputFusion) null else fusedOutputSettings
         val consumeOutput: (AmazeGpuOutput) -> T = { output ->
@@ -311,7 +310,7 @@ class RawDevelopmentCoordinator(context: Context) {
             ) {
                 consumeCameraLinearTail(
                     output, metadata, normalization, transform, preDemosaic,
-                    settings.denoise.wavelet, settings.denoise.captureSharpening, settings.denoise.ffdnet,
+                    settings.denoise.wavelet, settings.denoise.captureSharpening,
                     normalization.sensorPattern.shifted(
                         geometry.sensorOriginX + geometry.processingCrop.left,
                         geometry.sensorOriginY + geometry.processingCrop.top), clipState = captureClip, consume = consume
@@ -402,7 +401,7 @@ class RawDevelopmentCoordinator(context: Context) {
     }
 
     /**
-     * Post-demosaic camera-linear tail: optional FFDNet, Capture Sharpening, then profiled
+     * Post-demosaic camera-linear tail: Capture Sharpening, then profiled
      * wavelet (Vulkan), then the WB/color matrix to ACEScg. Hands a
      * standard scene-linear frame to [consume]. Any wavelet failure falls
      * back to the un-denoised readback (no re-demosaic); the JPEG never
@@ -416,87 +415,85 @@ class RawDevelopmentCoordinator(context: Context) {
         preDemosaic: PreDemosaicResult,
         settings: WaveletSettings,
         sharpening: CaptureSharpeningSettings,
-        ffdnet: FfdnetSettings,
         pattern: BayerPattern,
         clipState: CaptureSharpeningClipState? = preDemosaic.cfa?.captureSharpeningClipState,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
         val t0 = SystemClock.elapsedRealtime()
         val camera = try {
-            amaze.readbackHalfFloat(output)
+            amaze.readbackHalfFloat(output, nativeOwned = true)
         } catch (failure: Exception) {
             if (sharpening.enabled) throw failure
             Log.w(LOG_TAG, "Wavelet readback failed, developing without denoise", failure)
             return consumeFallbackCameraLinear(output, transform, preDemosaic, consume)
         }
-        val t1 = SystemClock.elapsedRealtime()
-        val greenSites = (0..3).filter {
-            normalization.sensorPattern.colorAt(it and 1, it shr 1) == CfaColor.GREEN
-        }
-        val black = (normalization.blackLevels[greenSites[0]] +
-            normalization.blackLevels[greenSites[1]]) * 0.5f
-        val noise = WaveletDenoiser.noiseAB(
-            metadata.noiseProfile?.toDoubleArray(), normalization.sensorPattern,
-            black, normalization.whiteLevel
-        )
-        val denoiseWb = WaveletDenoiser.rawrWhiteBalance(metadata.wbGains?.toFloatArray())
-        // Both rules can use the learned model or estimate without a sensor profile.
-        if (settings.enabled && settings.strength > 0f && denoiseWb == null) {
-            Log.w(LOG_TAG, "Wavelet bypass: missing or invalid WB gains " +
-                "entries=${metadata.noiseProfile?.size ?: 0}")
-        }
-        if (ffdnet.active) {
-            FfdnetDenoiser(appContext).process(camera, output.width, output.height,
-                pattern, denoiseWb ?: WaveletDenoiser.wbGainsGreen1(metadata.neutralColorPoint?.toDoubleArray()),
-                ffdnet.strength)
-        }
-        val denoise = !ffdnet.active && settings.enabled && settings.strength > 0f && denoiseWb != null
-        val sharpenWb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
-        // Sharpening alone keeps its own call. With denoise it runs first in the
-        // same GPU submit (no extra 8 B/px download/upload); the sharpening WB is
-        // the same RAWR collapse of the capture gains as the denoise WB.
-        val fused = denoise && sharpening.enabled && denoiseWb != null && denoiseWb.contentEquals(sharpenWb)
-        if (sharpening.enabled && !fused) {
-            waveletDenoiser.captureSharpen(camera, output.width, output.height,
-                sharpenWb, pattern, sharpening, clipState)
-        }
-        val reconstructed = camera
-        val t2 = SystemClock.elapsedRealtime()
         try {
-            // Native stages the complete input before processing, then copies
-            // output back only after a successful GPU wait. Reuse this owned
-            // readback buffer: ~100 MiB less live memory for a 13 MP frame.
-            if (denoise) waveletDenoiser.process(
-                reconstructed, reconstructed, output.width, output.height,
-                settings.bounded(), noise?.first ?: 0f, noise?.second ?: 0f, denoiseWb!!,
-                if (fused) WaveletDenoiser.SharpenRequest(sharpening, pattern, clipState) else null,
-                pattern,
-                WaveletDenoiser.NoiseSource.of(metadata)
+            val t1 = SystemClock.elapsedRealtime()
+            val greenSites = (0..3).filter {
+                normalization.sensorPattern.colorAt(it and 1, it shr 1) == CfaColor.GREEN
+            }
+            val black = (normalization.blackLevels[greenSites[0]] +
+                normalization.blackLevels[greenSites[1]]) * 0.5f
+            val noise = WaveletDenoiser.noiseAB(
+                metadata.noiseProfile?.toDoubleArray(), normalization.sensorPattern,
+                black, normalization.whiteLevel
             )
-        } catch (failure: Exception) {
-            Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
-            // Native leaves the buffer untouched on failure: still sharpen
-            // (its own failures propagate, as on the unfused path).
-            if (fused) waveletDenoiser.captureSharpen(camera, output.width, output.height,
-                sharpenWb, pattern, sharpening, clipState)
+            val denoiseWb = WaveletDenoiser.rawrWhiteBalance(metadata.wbGains?.toFloatArray())
+            // Both rules can use the learned model or estimate without a sensor profile.
+            if (settings.enabled && settings.strength > 0f && denoiseWb == null) {
+                Log.w(LOG_TAG, "Wavelet bypass: missing or invalid WB gains " +
+                    "entries=${metadata.noiseProfile?.size ?: 0}")
+            }
+            val denoise = settings.enabled && settings.strength > 0f && denoiseWb != null
+            val sharpenWb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
+            // Sharpening alone keeps its own call. With denoise it runs first in the
+            // same GPU submit (no extra 8 B/px download/upload); the sharpening WB is
+            // the same RAWR collapse of the capture gains as the denoise WB.
+            val fused = denoise && sharpening.enabled && denoiseWb.contentEquals(sharpenWb)
+            if (sharpening.enabled && !fused) {
+                waveletDenoiser.captureSharpen(camera, output.width, output.height,
+                    sharpenWb, pattern, sharpening, clipState)
+            }
+            val reconstructed = camera
+            val t2 = SystemClock.elapsedRealtime()
+            try {
+                // Native stages the complete input before processing, then copies
+                // output back only after a successful GPU wait. Reuse this owned
+                // readback buffer: ~100 MiB less live memory for a 13 MP frame.
+                if (denoise) waveletDenoiser.process(
+                    reconstructed, reconstructed, output.width, output.height,
+                    settings.bounded(), noise?.first ?: 0f, noise?.second ?: 0f, denoiseWb,
+                    if (fused) WaveletDenoiser.SharpenRequest(sharpening, pattern, clipState) else null,
+                    pattern,
+                    WaveletDenoiser.NoiseSource.of(metadata)
+                )
+            } catch (failure: Exception) {
+                Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
+                // Native leaves the buffer untouched on failure: still sharpen
+                // (its own failures propagate, as on the unfused path).
+                if (fused) waveletDenoiser.captureSharpen(camera, output.width, output.height,
+                    sharpenWb, pattern, sharpening, clipState)
+            }
+            val upload = reconstructed
+            val t3 = SystemClock.elapsedRealtime()
+            var t4 = 0L
+            val result = amaze.transformCameraLinear(
+                upload, output.width, output.height,
+                transform.glslColumnMajorMatrix()
+            ) { aces ->
+                t4 = SystemClock.elapsedRealtime()
+                consume(SceneLinearGpuFrame(aces, preDemosaic, transform))
+            }
+            val t5 = SystemClock.elapsedRealtime()
+            Log.i(
+                LOG_TAG,
+                "Wavelet tap stages: readback=${t1 - t0}ms hl=${t2 - t1}ms wavelet=${t3 - t2}ms " +
+                    "upload+toAces=${t4 - t3}ms output=${t5 - t4}ms"
+            )
+            return result
+        } finally {
+            HdrPlusVulkan.freeBuffer(camera)
         }
-        val upload = reconstructed
-        val t3 = SystemClock.elapsedRealtime()
-        var t4 = 0L
-        val result = amaze.transformCameraLinear(
-            upload, output.width, output.height,
-            transform.glslColumnMajorMatrix()
-        ) { aces ->
-            t4 = SystemClock.elapsedRealtime()
-            consume(SceneLinearGpuFrame(aces, preDemosaic, transform))
-        }
-        val t5 = SystemClock.elapsedRealtime()
-        Log.i(
-            LOG_TAG,
-            "Wavelet tap stages: readback=${t1 - t0}ms hl=${t2 - t1}ms wavelet=${t3 - t2}ms " +
-                "upload+toAces=${t4 - t3}ms output=${t5 - t4}ms"
-        )
-        return result
     }
 
     private fun sharpeningClipState(cfa: UnpackedRawCfa): CaptureSharpeningClipState? =
@@ -522,13 +519,17 @@ class RawDevelopmentCoordinator(context: Context) {
     ): T {
         if (!sharpening.enabled) return consume(output)
         require(output.colorDomain == AmazeColorDomain.CAMERA_LINEAR)
-        val pixels = if (externalContext) amaze.readbackHalfFloatCurrentContext(output) else amaze.readbackHalfFloat(output)
-        val wb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
-        waveletDenoiser.captureSharpen(pixels, output.width, output.height, wb, pattern, sharpening, clipState)
-        return if (externalContext) amaze.transformCameraLinearFromExternalContext(
-            pixels, output.width, output.height, transform.glslColumnMajorMatrix(), consume)
-        else amaze.transformCameraLinear(pixels, output.width, output.height,
-            transform.glslColumnMajorMatrix(), consume)
+        val pixels = if (externalContext) amaze.readbackHalfFloatCurrentContext(output, nativeOwned = true) else amaze.readbackHalfFloat(output, nativeOwned = true)
+        try {
+            val wb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
+            waveletDenoiser.captureSharpen(pixels, output.width, output.height, wb, pattern, sharpening, clipState)
+            return if (externalContext) amaze.transformCameraLinearFromExternalContext(
+                pixels, output.width, output.height, transform.glslColumnMajorMatrix(), consume)
+            else amaze.transformCameraLinear(pixels, output.width, output.height,
+                transform.glslColumnMajorMatrix(), consume)
+        } finally {
+            HdrPlusVulkan.freeBuffer(pixels)
+        }
     }
 
     /**
@@ -773,7 +774,6 @@ class RawDevelopmentCoordinator(context: Context) {
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
         val cameraLinearPlan = waveletPlan ||
-            (settings.denoise.ffdnet.active && !metadata.quadBayer) ||
             (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
         val tapWhiteWindow = if (outputSettings.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
@@ -806,7 +806,7 @@ class RawDevelopmentCoordinator(context: Context) {
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet, settings.denoise.captureSharpening, settings.denoise.ffdnet, cfa.pattern,
+                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern,
                             sharpeningClipState(cfa)
                         ) { frame -> finishJpeg(frame.texture, outputSettings) }
                     }
@@ -1173,7 +1173,6 @@ class RawDevelopmentCoordinator(context: Context) {
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
         val cameraLinearPlan = waveletPlan ||
-            (settings.denoise.ffdnet.active && !metadata.quadBayer) ||
             (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
         val tapWhiteWindow = if (look.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
@@ -1206,7 +1205,7 @@ class RawDevelopmentCoordinator(context: Context) {
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet, settings.denoise.captureSharpening, settings.denoise.ffdnet, cfa.pattern,
+                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern,
                             sharpeningClipState(cfa)
                         ) { frame -> finishJxl(frame.texture, look, jxl) }
                     }

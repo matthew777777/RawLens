@@ -15,11 +15,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 
-/**
- * Keeps full-resolution RAW develop work in Android's foreground scheduling group after the
- * camera Activity is backgrounded. The controller starts it only while developed-still
- * (JPEG or JXL) work is outstanding.
- */
+/** Keeps queued photo saves and merges active when their Activity goes into the background. */
 class JpegProcessingService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -49,6 +45,10 @@ class JpegProcessingService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopSelf()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
@@ -66,7 +66,9 @@ class JpegProcessingService : Service() {
     private fun acknowledgeForeground(): Boolean {
         return try {
             val note = notification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            if (Build.VERSION.SDK_INT >= 35) {
+                startForeground(NOTIFICATION_ID, note, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     NOTIFICATION_ID,
                     note,
@@ -94,10 +96,10 @@ class JpegProcessingService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Photo processing",
+            "Merging and saving",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Shown while RawLens develops a captured photo"
+            description = "Shown while RawLens merges, develops and saves photos"
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -115,8 +117,8 @@ class JpegProcessingService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tune)
-            .setContentTitle("Developing photo")
-            .setContentText("RAW photo processing is in progress")
+            .setContentTitle("Merging and saving photos")
+            .setContentText("HDR+, MFSR, LK-SR and photo saves continue in the background")
             .setContentIntent(contentIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -129,8 +131,8 @@ class JpegProcessingService : Service() {
         private const val CHANNEL_ID = "jpeg_processing"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "com.matthew.rawlens.STOP_JPEG_PROCESSING"
-        /** Worst-case partial-wakelock hold: 10 minutes, then the OS releases it. */
-        private const val WAKELOCK_TIMEOUT_MS = 10L * 60L * 1000L
+        /** Bounded by the Android media-processing foreground-service budget. */
+        private const val WAKELOCK_TIMEOUT_MS = 6L * 60L * 60L * 1000L
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, JpegProcessingService::class.java))

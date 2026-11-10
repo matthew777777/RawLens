@@ -61,6 +61,51 @@ class BurstPublishedTest {
         assertEquals(2000L, rows[1].sizeBytes)
     }
 
+    @Test fun publishedQueriesFilesCollectionForNonVideoCraw() {
+        val filesUri = mock(Uri::class.java)
+        org.mockito.Mockito.mockStatic(MediaStore.Files::class.java).use { media ->
+            media.`when`<Uri> { MediaStore.Files.getContentUri("external") }.thenReturn(filesUri)
+            val resolver = resolverWith(cursorFor(
+                listOf("IMG_20260926_010000_000_BURST.craw"), listOf(1000L), listOf(100L)))
+            val rows = BurstMergeTakes.loadPublished(resolver) { mock(Uri::class.java) }
+            assertEquals(1, rows.size)
+            org.mockito.Mockito.verify(resolver).query(
+                org.mockito.ArgumentMatchers.eq(filesUri),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())
+        }
+    }
+
+    @Test fun grantedBurstFolderListsUnindexedCraw() {
+        val tree = mock(Uri::class.java)
+        val children = mock(Uri::class.java)
+        val document = mock(Uri::class.java)
+        val cursor = mock(Cursor::class.java)
+        val docId = "primary:DCIM/RawLens/Bursts/IMG_BURST.craw"
+        `when`(cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)).thenReturn(0)
+        `when`(cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)).thenReturn(1)
+        `when`(cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)).thenReturn(2)
+        `when`(cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)).thenReturn(3)
+        `when`(cursor.moveToNext()).thenReturn(true, false)
+        `when`(cursor.getString(0)).thenReturn(docId)
+        `when`(cursor.getString(1)).thenReturn("IMG_BURST.craw")
+        `when`(cursor.getLong(2)).thenReturn(1234L)
+        `when`(cursor.getLong(3)).thenReturn(5678L)
+        org.mockito.Mockito.mockStatic(android.provider.DocumentsContract::class.java).use { docs ->
+            docs.`when`<String> { android.provider.DocumentsContract.getTreeDocumentId(tree) }
+                .thenReturn("primary:DCIM/RawLens/Bursts")
+            docs.`when`<Uri> { android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, "primary:DCIM/RawLens/Bursts") }
+                .thenReturn(children)
+            docs.`when`<Uri> { android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, docId) }
+                .thenReturn(document)
+            val rows = BurstMergeTakes.loadPublishedTree(resolverWith(cursor), tree)
+            assertEquals(1, rows.size)
+            assertEquals(document, rows.single().uri)
+            assertEquals(1234L, rows.single().sizeBytes)
+            assertEquals(5678L, rows.single().lastModified)
+        }
+    }
+
     @Test fun publishedSkipsNonBurstNames() {
         val cursor = cursorFor(
             listOf("notes.txt", "IMG_20260926_010000_000_BURST.craw"),

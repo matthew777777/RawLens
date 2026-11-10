@@ -961,7 +961,9 @@ class MainActivity : Activity() {
             if (activeProgramAxis != null) showProgramPanel()
         }
         updateQuickControls()
-        val missingMedia = mediaReadPermissions().filter {
+        val notificationPermission = if (android.os.Build.VERSION.SDK_INT >= 33)
+            listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
+        val missingMedia = (mediaReadPermissions() + notificationPermission).filter {
             checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
@@ -971,6 +973,11 @@ class MainActivity : Activity() {
         } else if (missingMedia.isNotEmpty() && !lensPreferences().getBoolean(KEY_MEDIA_ASKED, false)) {
             lensPreferences().edit().putBoolean(KEY_MEDIA_ASKED, true).apply()
             requestPermissions(missingMedia.toTypedArray(), MEDIA_PERMISSION)
+        } else if (notificationPermission.any {
+                checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+            } && !lensPreferences().getBoolean("processing_notifications_asked", false)) {
+            lensPreferences().edit().putBoolean("processing_notifications_asked", true).apply()
+            requestPermissions(notificationPermission.toTypedArray(), 4109)
         }
         if (WelcomeFlow.shouldDeferUpdateConsent(
                 lensPreferences().getBoolean(KEY_LENS_SETUP_COMPLETE, false)
@@ -1040,6 +1047,10 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (permissions.contains(Manifest.permission.POST_NOTIFICATIONS)) {
+            lensPreferences().edit().putBoolean("processing_notifications_asked", true).apply()
+        }
+        if (requestCode == 4109) return
         if (requestCode == AUDIO_PERMISSION) {
             // Lazy mic grant for RAW video: granted -> start with sound,
             // denied -> record silent (legal .craw), never block video.
@@ -1608,6 +1619,16 @@ class MainActivity : Activity() {
         val panelHeight =
             findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
         val baseBottomMargin = panelHeight + dp(16) + floatingLiftPx()
+        // The zoom chip shares the scope's measured clearance above the opaque panel.
+        // Its labels rotate inside the view, so no quarter-turn bounding-box lift is needed.
+        findViewById<View>(R.id.lkrZoomChip)?.let { chip ->
+            (chip.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                if (params.bottomMargin != baseBottomMargin) {
+                    params.bottomMargin = baseBottomMargin
+                    chip.layoutParams = params
+                }
+            }
+        }
         val scope = activeScopeView()
         val widthPx = ScopeSlot.sizePx(scope.width, scope.layoutParams.width)
         val heightPx = ScopeSlot.sizePx(scope.height, scope.layoutParams.height)
@@ -3033,9 +3054,6 @@ class MainActivity : Activity() {
             .getOrDefault(emptyList())).distinct()
         for (id in ids) {
             val chars = resolveVideoCameraRoute(manager, id)?.characteristics ?: continue
-            if (chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) !=
-                android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
-            ) continue
             val size = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?.getOutputSizes(android.graphics.ImageFormat.RAW_SENSOR)
                 ?.maxByOrNull { it.width * it.height }
@@ -3668,7 +3686,6 @@ class MainActivity : Activity() {
         val prefs = lensPreferences()
         return DenoiseSettings(
             captureSharpening = CaptureSharpeningSettings.read(prefs),
-            ffdnet = FfdnetSettings.read(prefs),
             aiEnabled = prefs.getBoolean(KEY_AI_DENOISE_ENABLED, false),
             saveOriginalDng = prefs.getBoolean(KEY_SAVE_ORIGINAL_DNG, true),
             aiStrength = prefs.getInt(KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,
@@ -3678,7 +3695,7 @@ class MainActivity : Activity() {
                 detail = prefs.getInt(KEY_WAVELET_DETAIL_PCT, 100).coerceIn(0, 180) / 100f,
                 luma = prefs.getInt(KEY_WAVELET_LUMA_PCT, 25).coerceIn(0, 100) / 100f,
                 maxScale = prefs.getInt(KEY_WAVELET_SCALES, 7).coerceIn(1, 7),
-                algorithm = WaveletAlgorithm.fromOrdinal(prefs.getInt(KEY_WAVELET_ALGORITHM, WaveletAlgorithm.RAWLENS.ordinal)),
+                algorithm = WaveletAlgorithm.fromOrdinal(prefs.getInt(KEY_WAVELET_ALGORITHM, WaveletAlgorithm.RAWR.ordinal)),
                 grain = prefs.getInt(KEY_WAVELET_GRAIN_PCT, (WaveletSettings.DEFAULT_GRAIN * 100).toInt()).coerceIn(0, 100) / 100f
             )
         )
@@ -3692,8 +3709,6 @@ class MainActivity : Activity() {
         lensPreferences().edit()
             .putBoolean(CaptureSharpeningSettings.ENABLED_KEY, settings.captureSharpening.enabled)
             .putString(CaptureSharpeningSettings.LEVEL_KEY, settings.captureSharpening.level.name)
-            .putBoolean(FfdnetSettings.ENABLED_KEY, settings.ffdnet.enabled)
-            .putInt(FfdnetSettings.STRENGTH_KEY, (settings.ffdnet.strength * 100).toInt())
             .putBoolean(KEY_AI_DENOISE_ENABLED, settings.aiEnabled)
             .putBoolean(KEY_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
             .putInt(KEY_AI_STRENGTH_PCT, (settings.aiStrength * 100 + 0.5f).toInt().coerceIn(0, 100))
@@ -4227,9 +4242,9 @@ class MainActivity : Activity() {
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
         // Video (RAW / Encoded Video) records continuous frames: still-only
-        // tiles (HDR, HDR+, MFSR, timer) go, and LIGHT becomes a
+        // tiles (HDR, HDR+, MFSR, LK-SR, timer) go, and LIGHT becomes a
         // torch. Rows left empty collapse so the grid stays tight.
-        val stillOnly = listOf(hdr, hdrPlus, sharp, timer)
+        val stillOnly = listOf(hdr, hdrPlus, sharp, lkrQuick, timer)
         release.visibility = View.VISIBLE
         stillOnly.forEach { it.visibility = if (isVideoMode) View.GONE else View.VISIBLE }
         if (isVideoMode) {

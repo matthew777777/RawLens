@@ -567,12 +567,13 @@ class Gles31AmazeProcessor(
      * Reads an RGBA16F output texture back to a direct RGBA16F ByteBuffer
      * (W*H*8 bytes, texture row order: image top row first, matching the
      * demosaic output layout, so re-upload round-trips exactly). Wavelet
-     * stage input. Must run
+     * stage input. With nativeOwned=true the caller must free the returned buffer
+     * with HdrPlusVulkan.freeBuffer after use. Must run
      * on this session's worker while its EGL context is current (i.e. from
      * a [process]/[processRaw]/[processRcdRaw]/[processRcdCfa] consume
      * callback). Throws when half-float color buffers are unsupported.
      */
-    fun readbackHalfFloat(output: AmazeGpuOutput): ByteBuffer {
+    fun readbackHalfFloat(output: AmazeGpuOutput, nativeOwned: Boolean = false): ByteBuffer {
         require(output.internalFormat == AmazeTextureFormat.RGBA16F) {
             "Half-float readback needs an RGBA16F output"
         }
@@ -580,45 +581,53 @@ class Gles31AmazeProcessor(
         check(processingThread === Thread.currentThread()) {
             "Half-float readback must stay on the AMaZE worker thread"
         }
-        return readbackHalfFloatCurrentContext(output)
+        return readbackHalfFloatCurrentContext(output, nativeOwned)
     }
 
     /** Read the caller-owned current context before switching to the AMaZE worker context. */
-    internal fun readbackHalfFloatCurrentContext(output: AmazeGpuOutput): ByteBuffer {
+    internal fun readbackHalfFloatCurrentContext(output: AmazeGpuOutput, nativeOwned: Boolean = false): ByteBuffer {
         require(output.internalFormat == AmazeTextureFormat.RGBA16F)
         val limits = queryLimits()
         check(limits.halfFloatColorBuffer) {
             "Half-float color buffers unsupported (${limits.versionString})"
         }
         val bytes = output.width * output.height * 8
-        val pixels = ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder())
-        val fbo = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
-        check(fbo != 0) { "Could not allocate half-float readback framebuffer" }
+        // Full-resolution production taps use explicitly freed native storage; ART
+        // charges allocateDirect against the Java heap even for GPU staging.
+        val pixels = (if (nativeOwned) HdrPlusVulkan.allocBuffer(bytes.toLong())
+            else ByteBuffer.allocateDirect(bytes)).order(ByteOrder.nativeOrder())
         try {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D, output.textureId, 0
-            )
-            check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
-                GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                "Half-float readback framebuffer is incomplete"
-            }
-            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 2)
+            val fbo = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
+            check(fbo != 0) { "Could not allocate half-float readback framebuffer" }
             try {
-                GLES30.glReadPixels(
-                    0, 0, output.width, output.height,
-                    GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, pixels
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
+                GLES30.glFramebufferTexture2D(
+                    GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                    GLES30.GL_TEXTURE_2D, output.textureId, 0
                 )
+                check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
+                    GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                    "Half-float readback framebuffer is incomplete"
+                }
+                GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 2)
+                try {
+                    GLES30.glReadPixels(
+                        0, 0, output.width, output.height,
+                        GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, pixels
+                    )
+                } finally {
+                    GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+                }
+                checkGl("half-float readback")
             } finally {
-                GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
             }
-            checkGl("half-float readback")
-        } finally {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
+            return pixels
+        } catch (failure: Throwable) {
+            if (nativeOwned) HdrPlusVulkan.freeBuffer(pixels)
+            throw failure
         }
-        return pixels
     }
 
     /**

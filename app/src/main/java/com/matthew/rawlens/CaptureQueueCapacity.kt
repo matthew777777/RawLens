@@ -13,6 +13,12 @@ internal object CaptureQueueCapacity {
         return requestedFrames > 0 && pendingFrames >= 0 && requestedFrames <= limit - pendingFrames
     }
 
+    /** Merge jobs serialize development; their source images occupy reader slots only until merge. */
+    fun acceptsMerge(pendingJobs: Int, pendingFrames: Int, requestedFrames: Int,
+                     readerSlots: Int, previewReserve: Int): Boolean =
+        pendingJobs in 0 until 3 && accepts(pendingFrames, requestedFrames,
+            Int.MAX_VALUE, readerSlots, previewReserve)
+
     fun ringFits(pendingFrames: Int, ringCapacity: Int, readerSlots: Int, previewReserve: Int): Boolean =
         ringCapacity > 0 && pendingFrames >= 0 &&
             pendingFrames.toLong() + ringCapacity + previewReserve <= readerSlots

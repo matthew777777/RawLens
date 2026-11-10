@@ -5,6 +5,8 @@ package com.matthew.rawlens
 
 import android.content.ContentResolver
 import android.provider.MediaStore
+import android.provider.DocumentsContract
+import android.net.Uri
 import java.io.File
 
 /**
@@ -48,13 +50,13 @@ internal object BurstMergeTakes {
         resolver: ContentResolver,
         uriFor: (Long) -> android.net.Uri = { id ->
             android.net.Uri.withAppendedPath(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id.toString()
+                MediaStore.Files.getContentUri("external"), id.toString()
             )
         }
     ): List<PublishedTake> {
         return try {
             resolver.query(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                MediaStore.Files.getContentUri("external"),
                 arrayOf(
                     MediaStore.Video.Media._ID,
                     MediaStore.Video.Media.DISPLAY_NAME,
@@ -91,6 +93,52 @@ internal object BurstMergeTakes {
                 }
                 out
             } ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Read the same folder hierarchy used by publishViaTree, without creating folders.
+     * Custom CRAW files need not be indexed by MediaStore at all.
+     */
+    fun loadPublishedTree(resolver: ContentResolver, treeUri: Uri): List<PublishedTake> {
+        return try {
+            var parentId = DocumentsContract.getTreeDocumentId(treeUri)
+            val suffix = parentId.substringAfter(':', "").trimEnd('/')
+            fun children(id: String): List<Pair<String, PublishedTake>> {
+                return resolver.query(
+                    DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, id),
+                    arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED),
+                    null, null, null
+                )?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    val sizeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+                    val dateCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                    buildList {
+                        while (cursor.moveToNext()) {
+                            val childId = cursor.getString(idCol) ?: continue
+                            val name = cursor.getString(nameCol) ?: continue
+                            add(childId to PublishedTake(name,
+                                if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L,
+                                if (dateCol >= 0) cursor.getLong(dateCol) else 0L,
+                                DocumentsContract.buildDocumentUriUsingTree(treeUri, childId)))
+                        }
+                    }
+                } ?: emptyList()
+            }
+            if (suffix == "DCIM" || suffix.endsWith("/DCIM")) {
+                parentId = children(parentId).firstOrNull { it.second.displayName == "RawLens" }
+                    ?.first ?: return emptyList()
+            }
+            if (!suffix.endsWith("Bursts")) {
+                parentId = children(parentId).firstOrNull { it.second.displayName == "Bursts" }
+                    ?.first ?: return emptyList()
+            }
+            children(parentId).map { it.second }
+                .filter { it.displayName.endsWith("_BURST.craw", ignoreCase = true) }
+                .sortedBy { it.lastModified }
         } catch (_: Exception) {
             emptyList()
         }

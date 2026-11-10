@@ -31,6 +31,8 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
     interface Host : RawFrameSaveJob.Host {
         /** Shared HDR+ Vulkan merge (lazily created, synchronized). */
         fun hdrPlusProcessor(): HdrPlusMerge
+        /** Releases RAW reader slots as soon as merging finishes, before development/save. */
+        fun releaseInputs()
         /** Gyro tracker running: per-frame gyro is reported only then. */
         fun gyroRunning(): Boolean
     }
@@ -123,7 +125,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
                 referenceIndex, settings
             )
         } finally {
-            inputs.forEach { RawImageOwnership.release(it.frame.image) }
+            host.releaseInputs()
         } ?: run {
             Log.e(LOG_TAG, "HDR+ merge returned null")
             host.reportSaveState("HDR+ ERROR")
@@ -160,47 +162,47 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             developer.denoiseCfa(merged, refMetadata) ?: merged
         } else merged
         var referenceDng: String? = null
+        val timings = host.hdrPlusProcessor().lastTimings
+        val motion = host.hdrPlusProcessor().lastMotion
+        // Same snapshot discipline as lastTimings: merge is synchronized
+        // and this read follows our own merge call on the saver thread.
+        val gyroReported = host.gyroRunning()
+        // Per-frame strengths reach provenance only when they actually
+        // vary (uniform reads as the burst strength line) — and never
+        // when strength maps drove the merge (the maps supersede them).
+        val frameStrengths = if (decision.strengthMaps != null) null
+        else decision.frameStrengths?.takeIf { it.toSet().size > 1 }
+        val provenance = HdrPlusProvenance(
+            mergedFrames = keptInputs.size, selectedFrames = inputs.size,
+            rejectedFrames = decision.droppedIndices.size,
+            highQuality = decision.highQuality,
+            strength = decision.strength,
+            tileSize = HdrPlusSettings.TILE_SIZE,
+            searchDistance = HdrPlusSettings.SEARCH_DISTANCE,
+            referenceIndex = decision.refIndex,
+            referenceTimestampNs = refMetadata.timestampNanos,
+            referenceFrameNumber = refMetadata.frameNumber,
+            sourceWidth = refMetadata.imageWidth, sourceHeight = refMetadata.imageHeight,
+            sourceCameraId = refMetadata.cameraId,
+            mergeMs = mergeMs,
+            packMs = timings.packMs, gpuMs = timings.gpuMs, unpackMs = timings.unpackMs,
+            mapsActive = decision.strengthMaps != null,
+            frames = keptInputs.mapIndexed { keptPos, input ->
+                // Delta vs the immediate capture-order predecessor
+                // (which may itself have been dropped).
+                val origIndex = decision.keepIndices[keptPos]
+                val delta = motion?.pairDeltas?.getOrNull(origIndex - 1)
+                    ?.takeIf { it.isFinite() }?.toFloat()
+                HdrPlusFrameInfo(
+                    input.metadata.exposureTimeNanos, input.metadata.sensitivityIso,
+                    deltaVsPrev = delta,
+                    gyroRadiansPerSecond =
+                        input.frame.motionRadiansPerSecond.takeIf { gyroReported },
+                    mergeStrength = frameStrengths?.getOrNull(keptPos)
+                )
+            }
+        )
         if (outputFormat.includesDng) {
-            val timings = host.hdrPlusProcessor().lastTimings
-            val motion = host.hdrPlusProcessor().lastMotion
-            // Same snapshot discipline as lastTimings: merge is synchronized
-            // and this read follows our own merge call on the saver thread.
-            val gyroReported = host.gyroRunning()
-            // Per-frame strengths reach provenance only when they actually
-            // vary (uniform reads as the burst strength line) — and never
-            // when strength maps drove the merge (the maps supersede them).
-            val frameStrengths = if (decision.strengthMaps != null) null
-            else decision.frameStrengths?.takeIf { it.toSet().size > 1 }
-            val provenance = HdrPlusProvenance(
-                mergedFrames = keptInputs.size, selectedFrames = inputs.size,
-                rejectedFrames = decision.droppedIndices.size,
-                highQuality = decision.highQuality,
-                strength = decision.strength,
-                tileSize = HdrPlusSettings.TILE_SIZE,
-                searchDistance = HdrPlusSettings.SEARCH_DISTANCE,
-                referenceIndex = decision.refIndex,
-                referenceTimestampNs = refMetadata.timestampNanos,
-                referenceFrameNumber = refMetadata.frameNumber,
-                sourceWidth = refMetadata.imageWidth, sourceHeight = refMetadata.imageHeight,
-                sourceCameraId = refMetadata.cameraId,
-                mergeMs = mergeMs,
-                packMs = timings.packMs, gpuMs = timings.gpuMs, unpackMs = timings.unpackMs,
-                mapsActive = decision.strengthMaps != null,
-                frames = keptInputs.mapIndexed { keptPos, input ->
-                    // Delta vs the immediate capture-order predecessor
-                    // (which may itself have been dropped).
-                    val origIndex = decision.keepIndices[keptPos]
-                    val delta = motion?.pairDeltas?.getOrNull(origIndex - 1)
-                        ?.takeIf { it.isFinite() }?.toFloat()
-                    HdrPlusFrameInfo(
-                        input.metadata.exposureTimeNanos, input.metadata.sensitivityIso,
-                        deltaVsPrev = delta,
-                        gyroRadiansPerSecond =
-                            input.frame.motionRadiansPerSecond.takeIf { gyroReported },
-                        mergeStrength = frameStrengths?.getOrNull(keptPos)
-                    )
-                }
-            )
             referenceDng = DngSaver(context).saveMerged(
                 effectiveMerged, refMetadata, captureTimeMillis, gps = captureGps,
                 displayName = CaptureFileNames.hdrPlusDng(captureTimeMillis),
@@ -245,7 +247,8 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
                 try {
                     JpegSaver(context).save(developed, refMetadata,
                         refResult, captureTimeMillis = captureTimeMillis,
-                        typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = captureGps)
+                        typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = captureGps,
+                        description = HdrPlusDngWriter.provenanceBlock(provenance))
                     host.publishDevelopedScope(developed.bitmap)
                     host.reportSaveState(if (referenceDng != null) "HDR+ MERGED+DNG" else "HDR+ MERGED")
                 } finally {
@@ -263,7 +266,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
     }
 }
 
-internal class MfsrZslSaveJob(private val context: Context, private val host: RawFrameSaveJob.Host) {
+internal class MfsrZslSaveJob(private val context: Context, private val host: HdrPlusZslSaveJob.Host) {
     /**
      * ZSL sharp merge job: unpack + sharpest-first order, native-resolve
      * SR merge (scale 1, RGB out), linear DNG via [LinearRgbDngSaver]
@@ -310,7 +313,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
                 }
             }
         }
-        host.reportSaveState("MFSR MERGING")
+        host.reportSaveState("${settings.label} MERGING")
         val tMerge0 = android.os.SystemClock.elapsedRealtime()
         val ordered = try {
             MfsrMerge.prepare(selected) { frame ->
@@ -320,33 +323,35 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
             // Images stay open for the just-in-time decode inside merge.
         }
         if (ordered.isNullOrEmpty()) {
-            Log.e(LOG_TAG, "MFSR prepare produced no usable frames")
-            host.reportSaveState("MFSR ERROR")
-            selected.forEach { RawImageOwnership.release(it.image) }
+            Log.e(LOG_TAG, "${settings.label} prepare produced no usable frames")
+            host.reportSaveState("${settings.label} ERROR")
+            host.releaseInputs()
             return
         }
         val merged = try {
             // Same shutter / ZSL / save tail for both engines; only the merge differs.
             if (settings.engine == MfsrEngine.LKR)
                 LkrMerge.mergeLive(context, ordered,
-                    LkrMerge.Settings(paperParity = settings.lkrPaperParity, tuning = LkrTuning.overrides(context),
+                    LkrMerge.Settings(dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
                         zoom = settings.lkrZoom))
             else MfsrMerge.merge(context, ordered, settings)
         } finally {
-            selected.forEach { RawImageOwnership.release(it.image) }
+            host.releaseInputs()
         } ?: run {
-            Log.e(LOG_TAG, "MFSR merge returned null")
-            host.reportSaveState("MFSR ERROR")
+            Log.e(LOG_TAG, "${settings.label} merge returned null")
+            host.reportSaveState("${settings.label} ERROR")
             return
         }
         try {
             val mergeMs = android.os.SystemClock.elapsedRealtime() - tMerge0
-            Log.i(LOG_TAG, "MFSR timing merge=${mergeMs}ms frames=${merged.keptCount}/${selected.size} " +
+            Log.i(LOG_TAG, "${settings.label} timing merge=${mergeMs}ms frames=${merged.keptCount}/${selected.size} " +
                 "${merged.width}x${merged.height}")
+            val provenance = sharpMergeProvenance(merged, settings, selected.size,
+                ordered.take(merged.keptCount).map { it.metadata }, "auto (sharpness and blur rejection)")
             var referenceDng: String? = null
             if (outputFormat.includesDng) {
-                referenceDng = saveMfsrDng(merged, cameraId, captureTimeMillis, captureGps, selected)
-                host.reportSaveState("MFSR DNG SAVED")
+                referenceDng = saveMfsrDng(merged, captureTimeMillis, captureGps, provenance)
+                host.reportSaveState("${settings.label} DNG SAVED")
             }
             if (outputFormat.includesJpeg) {
                 // Meter merged camera-linear RGB; DNG above retains the merge values.
@@ -364,25 +369,26 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
                         look = outputSettings, jxl = jxlSettings)
                     JxlSaver(context).save(developed, merged.refMetadata, merged.refResult,
                         captureTimeMillis = captureTimeMillis,
-                        typeSuffix = CaptureFileNames.TYPE_MFSR, gps = captureGps)
+                        typeSuffix = settings.mergeFileSuffix(), gps = captureGps)
                     host.publishDevelopedJxlScope(developed)
-                    host.reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG • JXL" else "MFSR MERGED • JXL")
+                    host.reportSaveState(if (referenceDng != null) "${settings.label} MERGED+DNG • JXL" else "${settings.label} MERGED • JXL")
                 } else {
                     val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
                         merged.refMetadata, development, outputSettings)
                     try {
                         JpegSaver(context).save(developed, merged.refMetadata,
                             merged.refResult, captureTimeMillis = captureTimeMillis,
-                            typeSuffix = CaptureFileNames.TYPE_MFSR, gps = captureGps)
+                            typeSuffix = settings.mergeFileSuffix(), gps = captureGps,
+                            description = LinearRgbDngWriter.provenanceBlock(provenance))
                         host.publishDevelopedScope(developed.bitmap)
-                        host.reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG" else "MFSR MERGED")
+                        host.reportSaveState(if (referenceDng != null) "${settings.label} MERGED+DNG" else "${settings.label} MERGED")
                     } finally {
                         recycleUltraHdrGainmapContents(developed)
                         developed.bitmap.recycle()
                     }
                 }
             } else {
-                host.reportSaveState("MFSR DNG SAVED")
+                host.reportSaveState("${settings.label} DNG SAVED")
             }
         } finally {
             // Native output (MfsrMerge): free once the DNG/JPEG tail is done.
@@ -393,24 +399,11 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
 
     private fun saveMfsrDng(
         merged: MfsrMerge.MfsrResult,
-        cameraId: String,
         captureTimeMillis: Long,
         captureGps: GpsLocation?,
-        selected: List<BufferedRawFrame>
+        provenance: MergeProvenance
     ): String {
         merged.rgb.rewind()
-        val provenance = MergeProvenance(
-            algorithmVersion = "RawLens-Mfsr/scale1-sr-pipeline",
-            selectedFrames = selected.size,
-            acceptedFrames = merged.keptCount,
-            rejectedFrames = selected.size - merged.keptCount,
-            referenceTimestampNs = merged.refMetadata.timestampNanos,
-            outputScale = 1,
-            sourceCameraId = cameraId,
-            // C19: shading is applied to the merged RGB whenever the reference has a map
-            lensShadingApplied = RawPreDemosaicPipeline.lensShadingModel(merged.refMetadata) != null,
-            effectiveFrames = merged.keptCount.toDouble()
-        )
         // C11: striped from the native merge buffer (no 150 MB heap copy)
         return LinearRgbDngSaver(context).saveLinearRgbStriped(
             merged.width, merged.height, merged.rgb.asFloatBuffer(),

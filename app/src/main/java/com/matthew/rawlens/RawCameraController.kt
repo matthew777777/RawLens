@@ -204,9 +204,7 @@ class RawCameraController(
     // time so full-resolution CPU/GPU allocation peaks never overlap. The physical
     // queue accepts a complete ZSL DNG selection; hasProcessingCapacity() applies
     // the smaller JPEG-development safety bound.
-    private val writer = ThreadPoolExecutor(
-        1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(MAX_QUEUED_SAVES)
-    )
+    private val writer = PhotoDevelopmentExecutor(MAX_QUEUED_SAVES)
     // Parallel worker for plain DNG-only saves (no JPEG develop, no AI inference:
     // each job owns an independent DngCreator + MediaStore entry), so a ZSL
     // burst's DNGs are written concurrently and the gap between back-to-back
@@ -219,11 +217,9 @@ class RawCameraController(
         DNG_WRITER_THREADS, DNG_WRITER_THREADS,
         0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(DNG_WRITER_QUEUE_SLOTS)
     )
-    // Future SR hook: single-flight SR merge worker + in-flight flag here.
-    // Same single-flight contract for HDR+ (Vulkan merge on the writer): a
-    // second press fails fast with HDR+ BUSY instead of queueing a second
-    // full-burst merge.
-    private val hdrPlusMergeInFlight = AtomicBoolean(false)
+    // Includes queued merges and the running development/save. RAW inputs are
+    // accounted separately and released immediately after the serial merge.
+    private val pendingMergeCount = AtomicInteger(0)
     // Metering sampler worker: full-resolution Bayer sampling costs hundreds of ms on
     // some sensors and must never run on the camera handler (see dispatchMeteringSample).
     // Below-normal priority so it never contends with acquisition, pairing, or saves.
@@ -244,7 +240,6 @@ class RawCameraController(
     @Volatile private var hdrPlusMerge: HdrPlusMerge? = null
     @Volatile private var mfsrSettings = initialMfsrSettings
     private var activeMfsrSettings = initialMfsrSettings
-    private val mfsrMergeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     /** RAW image ↔ capture result matching for forward captures and the ZSL ring. */
     private val pairing = FramePairing(cameraHandler, PairingHost())
     /**
@@ -2471,12 +2466,6 @@ class RawCameraController(
             captureSingleWithFlash(outputFormat, orientationSnapshot)
             return
         }
-        if ((hdrPlusSettings.enabled || mfsrSettings.enabled) &&
-            (hdrPlusMergeInFlight.get() || mfsrMergeInFlight.get())) {
-            onState("MERGE BUSY")
-            refreshCaptureAvailability()
-            return
-        }
         // ZSL purity: when ZSL is requested and usable, reserve the full burst
         // up front. A 30-frame burst needs 30 slots; checking only 1 would lock
         // the shutter, spin the 3s recovery wait with no capacity, then degrade
@@ -2546,6 +2535,11 @@ class RawCameraController(
             }
         }
     }
+
+    private fun hasMergeCapacity(outputFormat: CaptureFormat): Boolean =
+        CaptureQueueCapacity.acceptsMerge(pendingMergeCount.get(), pendingFrameSaveCount.get(),
+            zslSelectedFrameCount(outputFormat), rawReaderMaxImages,
+            SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS)
 
     private fun photoMergeFitsReader(count: Int): Boolean = CaptureQueueCapacity.accepts(
         pendingFrameSaveCount.get(), count, MAX_ZSL_FRAMES,
@@ -2662,7 +2656,8 @@ class RawCameraController(
         orientationSnapshot: Int = deviceOrientationDegrees
     ): Boolean {
         if (captureInProgress.get()) return false
-        if (!hasProcessingCapacity(requiredSaveSlots, outputFormat)) {
+        if (!hasProcessingCapacity(requiredSaveSlots, outputFormat) ||
+            ((hdrPlusSettings.enabled || mfsrSettings.enabled) && !hasMergeCapacity(outputFormat))) {
             onState("QUEUE FULL")
             refreshCaptureAvailability()
             return false
@@ -2837,7 +2832,7 @@ class RawCameraController(
         }
         // Snapshot above is camera-thread work; SAF/file I/O must not block RAW delivery.
         if (sidecar != null) {
-            pendingSaveCount.incrementAndGet()
+            beginPendingSave()
             try {
                 writer.execute {
                     try { writeZslSidecar(stem, sidecar) } finally { postSaveCompletion() }
@@ -2875,14 +2870,28 @@ class RawCameraController(
         val captureTimeMillis = System.currentTimeMillis()
         val captureGps = gpsLocation()
         val saveSettings = zslMergeSaveSettings(cameraId)
-        pendingSaveCount.incrementAndGet()
+        val saveGeneration = lifecycleGeneration
+        pendingMergeCount.incrementAndGet()
+        pendingFrameSaveCount.addAndGet(selected.size)
+        val inputsReleased = AtomicBoolean(false)
+        fun releaseInputs() {
+            if (!inputsReleased.compareAndSet(false, true)) return
+            selected.forEach { RawImageOwnership.release(it.image) }
+            cameraHandler.post {
+                pendingFrameSaveCount.addAndGet(-selected.size)
+                closeRetiredRawReaders()
+                refreshCaptureAvailability()
+                resumeRawZslIfIdle()
+            }
+        }
+        beginPendingSave()
         if (outputFormat.includesJpeg) beginJpegProcessing()
         val releasedOwnership = AutoCloseable {
-            selected.forEach { RawImageOwnership.release(it.image) }
+            releaseInputs()
         }
         val job = OwnedCaptureJob(releasedOwnership) {
             try {
-                HdrPlusZslSaveJob(context, zslMergeJobHost(lifecycleGeneration)).run(
+                HdrPlusZslSaveJob(context, zslMergeJobHost(saveGeneration, ::releaseInputs)).run(
                     selected, settings, c, orientation, cameraId,
                     outputFormat, outputSettings, captureDenoiseSettings,
                     captureTimeMillis, captureGps = captureGps, saveSettings = saveSettings
@@ -2895,9 +2904,9 @@ class RawCameraController(
                 onState("HDR+ ERROR")
             } finally {
                 if (outputFormat.includesJpeg) endJpegProcessing()
+                endPendingSave()
                 cameraHandler.post {
-                    pendingSaveCount.decrementAndGet()
-                    hdrPlusMergeInFlight.set(false)
+                    pendingMergeCount.decrementAndGet()
                     refreshCaptureAvailability()
                     resumeRawZslIfIdle()
                     publishRawZslStatus()
@@ -2906,11 +2915,11 @@ class RawCameraController(
         }
         try {
             writer.execute(job)
-            hdrPlusMergeInFlight.set(true)
         } catch (_: RejectedExecutionException) {
             job.cancelBeforeRun()
             if (outputFormat.includesJpeg) endJpegProcessing()
-            pendingSaveCount.decrementAndGet()
+            endPendingSave()
+            pendingMergeCount.decrementAndGet()
             onState("QUEUE FULL")
             finishCapture()
             resumeRawZslIfIdle()
@@ -2919,15 +2928,16 @@ class RawCameraController(
 
     /**
      * Host for the ZSL merge jobs: status lines are tied to the lifecycle
-     * generation current when the job starts (as the in-controller jobs did).
+     * generation frozen when the capture was queued.
      */
-    private fun zslMergeJobHost(saveGeneration: Int): HdrPlusZslSaveJob.Host {
+    private fun zslMergeJobHost(saveGeneration: Int, releaseInputs: () -> Unit): HdrPlusZslSaveJob.Host {
         val base = saveJobHost { message ->
             cameraHandler.post { if (isCurrent(saveGeneration)) onState(message) }
         }
         return object : HdrPlusZslSaveJob.Host, RawFrameSaveJob.Host by base {
             override fun hdrPlusProcessor(): HdrPlusMerge = this@RawCameraController.hdrPlusProcessor()
             override fun gyroRunning(): Boolean = motionTracker.isRunning()
+            override fun releaseInputs() = releaseInputs.invoke()
         }
     }
 
@@ -2956,14 +2966,28 @@ class RawCameraController(
         val captureTimeMillis = System.currentTimeMillis()
         val captureGps = gpsLocation()
         val saveSettings = zslMergeSaveSettings(cameraId)
-        pendingSaveCount.incrementAndGet()
+        val saveGeneration = lifecycleGeneration
+        pendingMergeCount.incrementAndGet()
+        pendingFrameSaveCount.addAndGet(selected.size)
+        val inputsReleased = AtomicBoolean(false)
+        fun releaseInputs() {
+            if (!inputsReleased.compareAndSet(false, true)) return
+            selected.forEach { RawImageOwnership.release(it.image) }
+            cameraHandler.post {
+                pendingFrameSaveCount.addAndGet(-selected.size)
+                closeRetiredRawReaders()
+                refreshCaptureAvailability()
+                resumeRawZslIfIdle()
+            }
+        }
+        beginPendingSave()
         if (outputFormat.includesJpeg) beginJpegProcessing()
         val releasedOwnership = AutoCloseable {
-            selected.forEach { RawImageOwnership.release(it.image) }
+            releaseInputs()
         }
         val job = OwnedCaptureJob(releasedOwnership) {
             try {
-                MfsrZslSaveJob(context, zslMergeJobHost(lifecycleGeneration)).run(
+                MfsrZslSaveJob(context, zslMergeJobHost(saveGeneration, ::releaseInputs)).run(
                     selected, settings, c, orientation, cameraId,
                     outputFormat, outputSettings, captureDenoiseSettings,
                     captureTimeMillis, captureGps = captureGps, saveSettings = saveSettings
@@ -2976,9 +3000,9 @@ class RawCameraController(
                 onState("MFSR ERROR")
             } finally {
                 if (outputFormat.includesJpeg) endJpegProcessing()
+                endPendingSave()
                 cameraHandler.post {
-                    pendingSaveCount.decrementAndGet()
-                    mfsrMergeInFlight.set(false)
+                    pendingMergeCount.decrementAndGet()
                     refreshCaptureAvailability()
                     resumeRawZslIfIdle()
                     publishRawZslStatus()
@@ -2987,11 +3011,11 @@ class RawCameraController(
         }
         try {
             writer.execute(job)
-            mfsrMergeInFlight.set(true)
         } catch (_: RejectedExecutionException) {
             job.cancelBeforeRun()
             if (outputFormat.includesJpeg) endJpegProcessing()
-            pendingSaveCount.decrementAndGet()
+            endPendingSave()
+            pendingMergeCount.decrementAndGet()
             onState("QUEUE FULL")
             finishCapture()
             resumeRawZslIfIdle()
@@ -3025,9 +3049,9 @@ class RawCameraController(
 
     /** Runs only after an accepted save/sidecar has released everything it owns. */
     private fun postSaveCompletion(frameSlots: Int = 0) {
+        endPendingSave()
         cameraHandler.post {
             if (frameSlots > 0) pendingFrameSaveCount.addAndGet(-frameSlots)
-            pendingSaveCount.decrementAndGet()
             closeRetiredRawReaders()
             if (running && !destroyed) {
                 refreshCaptureAvailability()
@@ -4482,6 +4506,10 @@ class RawCameraController(
     @Volatile private var rawFpsDiagnostic = "RAW preview FPS: waiting for camera"
     @Volatile private var measuredRawFpsDiagnostic = ""
     fun vendorRawFpsDiagnostic(): String = rawFpsDiagnostic + measuredRawFpsDiagnostic
+
+    fun vendorRawPreviewFpsRanges(): List<IntRange> =
+        vendorKeyCharacteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            .orEmpty().map { it.lower..it.upper }
 
     fun vendorRawPreviewFpsOptions(): List<Int> {
         val ranges = vendorKeyCharacteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
@@ -6082,7 +6110,7 @@ class RawCameraController(
         val cameraId = selectedCameraId ?: "unknown"
         val generation = lifecycleGeneration
         val ordered = frames.sortedBy { (it.result.request.tag as? CaptureTag)?.frameNumber ?: Int.MAX_VALUE }
-        pendingSaveCount.incrementAndGet()
+        beginPendingSave()
         pendingFrameSaveCount.addAndGet(2)
         val owner = CloseOnceOwner(frames) { RawImageOwnership.release(it.image) }
         val released = AutoCloseable { try { owner.close() } finally { postSaveCompletion(2) } }
@@ -6130,7 +6158,7 @@ class RawCameraController(
         val captureDevelopedFormat = activeDevelopedFormat
         val captureJxlSettings = activeJxlOutputSettings
         val captureFocusView = developFocusView
-        pendingSaveCount.incrementAndGet()
+        beginPendingSave()
         pendingFrameSaveCount.addAndGet(pending.size)
         if (!saveEachBracket && outputFormat.includesJpeg) beginJpegProcessing()
         val saveGeneration = lifecycleGeneration
@@ -6223,7 +6251,7 @@ class RawCameraController(
         // so DNGs, JPEGs, and sidecars share the IMG_YYYYMMDD_HHMMSS_mmm
         // stem and sort together; legacy callers mint per-frame time.
         val captureGps = gpsLocation()
-        pendingSaveCount.incrementAndGet()
+        beginPendingSave()
         pendingFrameSaveCount.incrementAndGet()
         if (outputFormat.includesJpeg) beginJpegProcessing()
         val saveGeneration = lifecycleGeneration
@@ -6271,13 +6299,23 @@ class RawCameraController(
         }
     }
 
+    private fun beginPendingSave() {
+        ProcessingWork.begin(context)
+        pendingSaveCount.incrementAndGet()
+    }
+
+    private fun endPendingSave() {
+        pendingSaveCount.decrementAndGet()
+        ProcessingWork.end(context)
+    }
+
     private fun beginJpegProcessing() {
         synchronized(jpegServiceLock) {
             if (pendingJpegCount.incrementAndGet() != 1) return
             // A foreground service keeps this process out of Android's background scheduling
             // group if the user leaves the Activity while the serialized render is still active.
             try {
-                JpegProcessingService.start(context)
+                ProcessingWork.begin(context)
             } catch (failure: RuntimeException) {
                 // Never leak the acquired RAW Image if a vendor rejects foreground-service
                 // startup. Development can still finish, albeit at normal background priority.
@@ -6291,7 +6329,7 @@ class RawCameraController(
             check(pendingJpegCount.get() > 0) { "Unbalanced JPEG processing lifetime" }
             if (pendingJpegCount.decrementAndGet() == 0) {
                 try {
-                    JpegProcessingService.stop(context)
+                    ProcessingWork.end(context)
                 } catch (failure: RuntimeException) {
                     Log.e(LOG_TAG, "Could not stop JPEG processing service", failure)
                 }
@@ -6472,7 +6510,7 @@ class RawCameraController(
             hasProcessingCapacity()
         }
         val merging = (hdrPlusSettings.enabled || mfsrSettings.enabled) &&
-            (hdrPlusMergeInFlight.get() || mfsrMergeInFlight.get())
+            !hasMergeCapacity(captureFormat)
         onCaptureEnabled(
             running && !destroyed && session != null && !captureInProgress.get() && hasCapacity && !merging
         )
@@ -7048,14 +7086,13 @@ class RawCameraController(
         val characteristics: CameraCharacteristics
     )
 
-    private fun directRearRawCharacteristics(id: String): CameraCharacteristics? = try {
+    private fun directRawCharacteristics(id: String): CameraCharacteristics? = try {
         val c = cameraManager.getCameraCharacteristics(id)
         val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
         val rawByCapability = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
         val rawByStream = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?.outputFormats?.contains(android.graphics.ImageFormat.RAW_SENSOR) == true
-        if (c.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_FRONT &&
-            (rawByCapability || rawByStream)) c else null
+        if (rawByCapability || rawByStream) c else null
     } catch (_: Exception) {
         null
     }
@@ -7075,11 +7112,8 @@ class RawCameraController(
             } catch (_: Exception) {
                 return@firstNotNullOfOrNull null
             }
-            if (logical.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT) {
-                return@firstNotNullOfOrNull null
-            }
             Triple(logicalId, physicalId, logical)
-        } ?: return directRearRawCharacteristics(cameraId)?.let { direct ->
+        } ?: return directRawCharacteristics(cameraId)?.let { direct ->
             CameraRoute(cameraId, cameraId, null, direct)
         }
 
@@ -7201,8 +7235,13 @@ class RawCameraController(
         Float.MAX_VALUE
     }
 
+    private fun isFrontCamera(cameraId: String): Boolean =
+        cachedCameraRoute(cameraId)?.characteristics?.get(CameraCharacteristics.LENS_FACING) ==
+            CameraCharacteristics.LENS_FACING_FRONT
+
     private fun zoomLabel(cameraId: String?): String {
         if (cameraId == null) return "1×"
+        if (isFrontCamera(cameraId)) return "F"
         val current = opticalMetric(cameraId)
         if (!current.isFinite() || rawCameraIds.isEmpty()) return "1×"
         // Pick the optical route closest to the conventional phone main-camera field of view
@@ -7210,7 +7249,7 @@ class RawCameraController(
         // lens, while still producing intuitive 0.5× / 0.7× / 1× / tele labels across vendors.
         val targetMainMetric = 24f / 36f
         val mainId = rawCameraIds
-            .filter { opticalMetric(it).isFinite() }
+            .filter { !isFrontCamera(it) && opticalMetric(it).isFinite() }
             .minByOrNull { kotlin.math.abs(opticalMetric(it) - targetMainMetric) }
             ?: cameraId
         val baseline = opticalMetric(mainId)

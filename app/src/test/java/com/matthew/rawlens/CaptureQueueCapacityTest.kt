@@ -5,6 +5,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CaptureQueueCapacityTest {
+    @Test fun `merge can capture again during development but respects held RAW buffers`() {
+        assertFalse(CaptureQueueCapacity.acceptsMerge(1, 8, 8, 22, 10))
+        // Merge finished consuming its RAW inputs; development and saving continue.
+        assertTrue(CaptureQueueCapacity.acceptsMerge(1, 0, 8, 22, 10))
+        assertTrue(CaptureQueueCapacity.acceptsMerge(2, 0, 8, 22, 10))
+        assertFalse(CaptureQueueCapacity.acceptsMerge(3, 0, 8, 22, 10))
+        assertTrue(CaptureQueueCapacity.acceptsMerge(2, 0, 8, 22, 10))
+        assertFalse(CaptureQueueCapacity.acceptsMerge(0, 0, 8, 8, 10))
+    }
+
     @Test fun `minimal reader admits one photo and waits for its input to close`() {
         assertTrue(CaptureQueueCapacity.accepts(0, 1, 6, 8, 10))
         assertFalse(CaptureQueueCapacity.accepts(1, 1, 6, 8, 10))
