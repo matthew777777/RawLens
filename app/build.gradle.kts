@@ -1,7 +1,3 @@
-import java.net.URI
-import java.util.zip.ZipFile
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.io.File
 import java.util.Properties
 import java.util.zip.GZIPOutputStream
@@ -144,96 +140,7 @@ if (isPackagingBuild && !freezeVersion) {
     println("RawLens version: $appVersionName ($appVersionCode)")
 }
 
-// Qualcomm JIT needs both LiteRT plugins and the matching QAIRT SDK libraries.
-// Enabled on every checkout; Gradle fetches missing dependencies automatically.
-val machineProperties = Properties().also { props ->
-    rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use(props::load)
-}
-fun localBuildProperty(name: String) = providers.gradleProperty(name).orElse(
-    providers.provider { machineProperties.getProperty(name) }
-)
-val qualcommNpu = localBuildProperty("qualcommNpu").map { it.toBooleanStrict() }.getOrElse(true)
-val qairtSdkOverride = localBuildProperty("qairtSdk")
-val qairtSdk = qairtSdkOverride.orElse("../.local/qualcomm/2.50.0.260828")
-val fetchQualcommSdk = tasks.register("fetchQualcommSdk") {
-    val destination = file(qairtSdk.get())
-    val libraries = listOf("libQnnSystem.so", "libQnnHtp.so", "libQnnHtpPrepare.so")
-        .map { "lib/aarch64-android/$it" } + listOf(69, 73, 75, 79, 81).flatMap {
-            listOf("lib/aarch64-android/libQnnHtpV${it}Stub.so",
-                "lib/hexagon-v${it}/unsigned/libQnnHtpV${it}Skel.so")
-        }
-    outputs.files(libraries.map { destination.resolve(it) })
-    onlyIf { qualcommNpu && libraries.any { !destination.resolve(it).isFile } }
-    doLast {
-        check(!qairtSdkOverride.isPresent) { "Incomplete custom QAIRT SDK: $destination" }
-        check(!gradle.startParameter.isOffline) {
-            "QAIRT SDK is not cached. Run the build once without --offline."
-        }
-        destination.parentFile.mkdirs()
-        val archive = File.createTempFile("qairt-", ".zip", destination.parentFile)
-        try {
-            logger.lifecycle("Downloading QAIRT 2.50.0.260828 (approximately 2.4 GB; first build only)")
-            val url = URI("https://softwarecenter.qualcomm.com/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/2.50.0.260828/v2.50.0.260828.zip").toURL()
-            val connection = url.openConnection().apply { connectTimeout = 30000; readTimeout = 120000 }
-            connection.getInputStream().use { input -> archive.outputStream().use { input.copyTo(it) } }
-            ZipFile(archive).use { zip ->
-                for (path in libraries) {
-                    val entry = zip.getEntry("qairt/2.50.0.260828/$path")
-                        ?: error("QAIRT archive is missing $path")
-                    val target = destination.resolve(path)
-                    target.parentFile.mkdirs()
-                    val partial = File.createTempFile("qnn-", ".part", target.parentFile)
-                    try {
-                        zip.getInputStream(entry).use { input -> partial.outputStream().use { input.copyTo(it) } }
-                        Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                    } finally { partial.delete() }
-                }
-            }
-        } finally { archive.delete() }
-    }
-}
-val prepareQualcommRuntime by tasks.registering(Sync::class) {
-    dependsOn(fetchQualcommSdk)
-    val sdk = qairtSdk.map { file(it) }
-    val hostLibraries = listOf("libQnnSystem.so", "libQnnHtp.so", "libQnnHtpPrepare.so")
-    val architectures = listOf(69, 73, 75, 79, 81)
-    val paths = hostLibraries.map { "lib/aarch64-android/$it" } +
-        architectures.flatMap { listOf(
-            "lib/aarch64-android/libQnnHtpV${it}Stub.so",
-            "lib/hexagon-v${it}/unsigned/libQnnHtpV${it}Skel.so"
-        ) }
-    if (qualcommNpu) {
-        require(qairtSdk.isPresent) { "Qualcomm NPU requires -PqairtSdk=/path/to/qairt/2.50.0.260828" }
-        from(sdk) {
-            include(paths)
-            eachFile { path = "arm64-v8a/$name" }
-            includeEmptyDirs = false
-        }
-        doFirst {
-            val missing = paths.filter { !sdk.get().resolve(it).isFile }
-            check(missing.isEmpty()) { "Incomplete QAIRT 2.50.0.260828 SDK: $missing" }
-        }
-    }
-    into(layout.buildDirectory.dir("generated/qualcomm-jni"))
-}
-
-if (qualcommNpu) {
-    tasks.named("preBuild").configure { dependsOn(prepareQualcommRuntime) }
-}
-
 android {
-    if (qualcommNpu) {
-        sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("generated/qualcomm-jni").get().asFile)
-        // Hexagon ELF files are DSP firmware, not ARM libraries: never strip them.
-        packaging.jniLibs.keepDebugSymbols.add("**/libQnnHtpV*Skel.so")
-    }
-    // LiteRT loads its vendor dispatch / compiler plugins from a real
-    // directory (nativeLibraryDir): extract native libraries on install.
-    packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
-    }
     namespace = "com.matthew.rawlens"
     compileSdk = 37
     // Pinned so local, CI, and F-Droid builds use the same NDK.
@@ -406,7 +313,6 @@ android {
             if (project.hasProperty("recordingToolsAudit")) applicationIdSuffix = ".recordingcheck"
             if (project.hasProperty("waveletCheck")) applicationIdSuffix = ".waveletcheck"
             if (project.hasProperty("lkrCheck")) applicationIdSuffix = ".lkrcheck"
-            if (project.hasProperty("ffdnetCheck")) applicationIdSuffix = ".ffdnetcheck"
             isMinifyEnabled = false
             // Resource shrinking requires code shrinking (AGP enforces
             // the pair); tests keep the full resource set instead.
@@ -536,26 +442,6 @@ tasks.matching { it.name == "processFdroidReleaseMainManifest" }.configureEach {
 
 dependencies {
     implementation("com.google.android.material:material:1.14.0")
-    // LK-Reloaded FFDNet prior on the NPU (tools/lkr-pipeline lkr_litert.cpp,
-    // dlopen'ed: unsupported devices fall back to ncnn).
-    // Only the AARs' native libraries are used (never the LiteRT Java API), so
-    // no transitive deps: litert pulls WorkManager + Room, whose R8-stripped
-    // WorkDatabase crashed release startup (androidx.startup provider).
-    implementation("com.google.ai.edge.litert:litert:2.3.2") { isTransitive = false }
-    implementation("com.google.ai.edge.litert:litert-npu-runtime-mediatek:2.3.2") { isTransitive = false }
-    if (qualcommNpu) {
-        val cachedRuntime = rootProject.file(".local/qualcomm/litert-npu-runtime-qualcomm-2.3.2.aar")
-        val localRuntime = localBuildProperty("qualcommRuntimeAar").orElse(
-            providers.provider { cachedRuntime.takeIf { it.isFile }?.absolutePath }
-        )
-        if (localRuntime.isPresent) {
-            val aar = file(localRuntime.get())
-            require(aar.isFile) { "Missing Qualcomm runtime AAR: $aar. Run python3 tools/setup_qualcomm.py from the repository root." }
-            implementation(files(aar))
-        } else {
-            implementation("com.google.ai.edge.litert:litert-npu-runtime-qualcomm:2.3.2") { isTransitive = false }
-        }
-    }
     // Unified SR pipeline (Kotlin stages + SrpBridge JNI facade, single
     // truth with tools/sr-pipeline; its native half builds as
     // libsrpipeline.so from the same sources via app CMake).

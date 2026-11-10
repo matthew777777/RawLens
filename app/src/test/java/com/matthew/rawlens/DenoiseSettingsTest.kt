@@ -5,17 +5,6 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
 class DenoiseSettingsTest {
-    @Test fun ffdnetReplacesWaveletOnlyWhenActive() {
-        val settings = DenoiseSettings(ffdnet = FfdnetSettings(enabled = true),
-            wavelet = WaveletSettings(enabled = true))
-        assertEquals(false, resolveDenoise(settings, false).wavelet)
-        assertEquals(true, resolveDenoise(settings.copy(ffdnet = FfdnetSettings(true, 0f)), false).wavelet)
-        assertEquals(false, resolveDenoise(settings, true).wavelet)
-        assertEquals(false, DenoiseSettings().ffdnet.active)
-    }
-    @Test(expected = IllegalArgumentException::class) fun rejectsInvalidFfdnetStrength() {
-        FfdnetSettings(true, Float.NaN)
-    }
     @Test fun defaultsAreAiOffWithArchivalDng() {
         val settings = DenoiseSettings()
         assertEquals(false, settings.aiEnabled)

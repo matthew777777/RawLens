@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-// Minimal row-range parallel-for for the CPU stages around the GPU/NPU work
+// Minimal row-range parallel-for for the CPU stages around the GPU work
 // (prior GAT/pack/unpack, look finishing). Deterministic: each index range is
 // written by exactly one thread, no reductions.
 #include <algorithm>

@@ -212,12 +212,12 @@ enum class WaveletAlgorithm {
     RAWLENS;
 
     companion object {
-        fun fromOrdinal(value: Int): WaveletAlgorithm = entries.getOrElse(value) { RAWLENS }
+        fun fromOrdinal(value: Int): WaveletAlgorithm = entries.getOrElse(value) { RAWR }
     }
 }
 
 /**
- * Wavelet stage defaults: disabled RawLens Wiener with strength 0.5,
+ * Wavelet stage defaults: disabled RAWR with strength 0.5,
  * detail 1, luma 0.25, 7 scales, chroma 0.75, and no retained grain.
  */
 data class WaveletSettings(
@@ -227,7 +227,7 @@ data class WaveletSettings(
     val luma: Float = 0.25f,
     val maxScale: Int = 7,
     val forceUv: Float = 0.75f,
-    val algorithm: WaveletAlgorithm = WaveletAlgorithm.RAWLENS,
+    val algorithm: WaveletAlgorithm = WaveletAlgorithm.RAWR,
     val grain: Float = DEFAULT_GRAIN
 ) {
     companion object {

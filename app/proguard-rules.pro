@@ -25,9 +25,3 @@
     public <init>(android.content.Context, android.util.AttributeSet);
     public <init>(android.content.Context, android.util.AttributeSet, int);
 }
-
-# LK-Reloaded (tools/lkr-pipeline): the LiteRT AARs are used only for their
-# native libraries (lkr_litert.cpp dlopens libLiteRt.so) and are pulled in
-# without transitive deps, so their unused Java classes reference absent
-# TFLite API classes.
--dontwarn org.tensorflow.lite.**

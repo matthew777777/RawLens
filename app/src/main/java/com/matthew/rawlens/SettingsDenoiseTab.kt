@@ -94,38 +94,6 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         content.addView(sharpChoices)
         refreshSharp()
 
-        content.addView(sectionTitle("FFDNet photo denoise"))
-        content.addView(SettingsSwitch(this).apply {
-            text = "FFDNet denoise\nSingle-frame JPEG/JXL photos with colour-noise cleanup. Replaces wavelet when enabled; merged photos and DNGs are unchanged."
-            isChecked = settings.ffdnet.enabled
-            setOnCheckedChangeListener { button, enabled ->
-                val next = settings.copy(ffdnet = settings.ffdnet.copy(enabled = enabled))
-                if (persistDenoiseSettings(next)) settings = next
-                else button.isChecked = settings.ffdnet.enabled
-            }
-        })
-        val ffdnetLabel = TextView(this).apply {
-            text = "FFDNet strength: ${(settings.ffdnet.strength * 100).toInt()}%"
-            setTextColor(getColor(R.color.text_primary))
-            setPadding(dp(12), dp(8), dp(12), 0)
-        }
-        content.addView(ffdnetLabel)
-        content.addView(SettingsSlider(this).apply {
-            max = 100
-            progress = (settings.ffdnet.strength * 100).toInt()
-            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
-                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
-                    ffdnetLabel.text = "FFDNet strength: $progress%"
-                }
-                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
-                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
-                    val next = settings.copy(ffdnet = settings.ffdnet.copy(strength = seekBar.progress / 100f))
-                    if (persistDenoiseSettings(next)) settings = next
-                    else seekBar.progress = (settings.ffdnet.strength * 100).toInt()
-                }
-            })
-        })
-
         content.addView(sectionTitle("Profiled wavelet (Vulkan)"))
         val waveSubordinate = ArrayList<View>()
         val waveMaster = SettingsSwitch(this).apply {
@@ -184,9 +152,22 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             waveSubordinate += label
             waveSubordinate += bar
         }
-        addWaveSlider("Algorithm", 1, settings.wavelet.algorithm.ordinal,
-            { if (it == 0) "RAWR" else "RawLens Wiener" }
-        ) { s, v -> s.copy(algorithm = WaveletAlgorithm.fromOrdinal(v)) }
+        val waveAlgorithm = SettingsSwitch(this).apply {
+            text = "RawLens Wiener algorithm\nOff: RAWR (default). On: RawLens Wiener."
+            isChecked = settings.wavelet.algorithm == WaveletAlgorithm.RAWLENS
+            setOnCheckedChangeListener { button, enabled ->
+                val algorithm = if (enabled) WaveletAlgorithm.RAWLENS else WaveletAlgorithm.RAWR
+                val proposed = settings.copy(wavelet = settings.wavelet.copy(algorithm = algorithm))
+                if (persistDenoiseSettings(proposed)) {
+                    settings = proposed
+                    setStatus("WAVELET ALGORITHM • ${if (enabled) "RawLens Wiener" else "RAWR"}")
+                } else {
+                    button.isChecked = settings.wavelet.algorithm == WaveletAlgorithm.RAWLENS
+                }
+            }
+        }
+        content.addView(waveAlgorithm)
+        waveSubordinate += waveAlgorithm
         addWaveSlider("Strength", 80, (settings.wavelet.strength * 10 + 0.5f).toInt(),
             { "%.1f".format(Locale.US, it / 10f) }) { s, v -> s.copy(strength = v / 10f) }
         addWaveSlider("Detail", 36, (settings.wavelet.detail * 20 + 0.5f).toInt(),
@@ -199,7 +180,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             { val scales = it + 1; if (scales == 1) "1 scale" else "$scales scales" }
         ) { s, v -> s.copy(maxScale = v + 1) }
         content.addView(TextView(this).apply {
-            text = "RawLens Wiener (default) removes chroma blotches while keeping colour edges, and turns luma noise into fine, even grain; Grain sets how much of that fine grain stays (RawLens only). RAWR uses the RAWR wavelet shrinkage rule with our learned noise model. Defaults: strength 0.5, detail 1.00, luma 0.25, grain 0.00, 7 scales; chroma is fixed at 0.75. Strength supports 0–8; Detail supports 0–1.80 and controls shadow texture preservation independently of Luma. Both modes learn noise per camera and raw mode, using measurements from each photo and the sensor profile as fallbacks. RawLens also denoises luma more gently when noise is barely visible (base ISO)."
+            text = "RawLens Wiener removes chroma blotches while keeping colour edges, and turns luma noise into fine, even grain; Grain sets how much of that fine grain stays (RawLens only). RAWR (default) uses the RAWR wavelet shrinkage rule with our learned noise model. Defaults: strength 0.5, detail 1.00, luma 0.25, grain 0.00, 7 scales; chroma is fixed at 0.75. Strength supports 0–8; Detail supports 0–1.80 and controls shadow texture preservation independently of Luma. Both modes learn noise per camera and raw mode, using measurements from each photo and the sensor profile as fallbacks. RawLens also denoises luma more gently when noise is barely visible (base ISO)."
             setTextColor(getColor(R.color.text_secondary))
             textSize = 12f
             setPadding(dp(12), dp(4), dp(12), dp(4))

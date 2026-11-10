@@ -406,7 +406,7 @@ endif()
 add_subdirectory("../../../../tools/sr-pipeline/src/main/cpp" srpipeline)
 
 # LK-Reloaded burst SR (tools/lkr-pipeline): links srpipeline for the shared
-# Vulkan context / DNG I/O and the vendored ncnn above for the FFDNet prior;
+# Vulkan context / DNG I/O;
 # exposed to Kotlin through LkrBridge.
 add_subdirectory("../../../../tools/lkr-pipeline/src/main/cpp" lkrpipeline)
 
