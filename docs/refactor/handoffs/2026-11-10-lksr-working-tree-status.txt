@@ -1,0 +1,111 @@
+ D 2026-10-29-175640-local-command-caveatthe-command-below-was-run-d.txt
+ D 2026-10-29-175724-read-fully-logs-and-fix-the-issue-xiaomi-14t-pro.txt
+ M app/src/androidTest/java/com/matthew/rawlens/LkrPipelineDeviceTest.kt
+ M app/src/main/AndroidManifest.xml
+ M app/src/main/cpp/deps/tinydng/rawlens.patch
+ M app/src/main/cpp/deps/tinydng/tinydng.h
+ M app/src/main/cpp/deps/tinydng/tinydng_dng.c
+ M app/src/main/cpp/wavelet/upstream/src/DenoisePipeline.cpp
+ M app/src/main/java/com/matthew/rawlens/BurstMergeRunner.kt
+ M app/src/main/java/com/matthew/rawlens/BurstMergeTakes.kt
+ M app/src/main/java/com/matthew/rawlens/CaptureFileNames.kt
+ M app/src/main/java/com/matthew/rawlens/CaptureQueueCapacity.kt
+ M app/src/main/java/com/matthew/rawlens/FfdnetDenoiser.kt
+ M app/src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt
+ M app/src/main/java/com/matthew/rawlens/HdrPlusAutoSelect.kt
+ M app/src/main/java/com/matthew/rawlens/HdrPlusAutoTuning.kt
+ M app/src/main/java/com/matthew/rawlens/HdrPlusMerge.kt
+ M app/src/main/java/com/matthew/rawlens/HdrPlusMotionMeter.kt
+ M app/src/main/java/com/matthew/rawlens/HdrPlusSettings.kt
+ M app/src/main/java/com/matthew/rawlens/JpegProcessingService.kt
+ M app/src/main/java/com/matthew/rawlens/JpegSaver.kt
+ M app/src/main/java/com/matthew/rawlens/LensDiscovery.kt
+ M app/src/main/java/com/matthew/rawlens/LensSelection.kt
+ M app/src/main/java/com/matthew/rawlens/LinearRgbDngWriter.kt
+ M app/src/main/java/com/matthew/rawlens/LkrMerge.kt
+ M app/src/main/java/com/matthew/rawlens/LkrTuning.kt
+ M app/src/main/java/com/matthew/rawlens/LkrZoomControls.kt
+ M app/src/main/java/com/matthew/rawlens/MainActivity.kt
+ M app/src/main/java/com/matthew/rawlens/MergeScreenSettings.kt
+ M app/src/main/java/com/matthew/rawlens/MergesActivity.kt
+ M app/src/main/java/com/matthew/rawlens/MfsrMerge.kt
+ M app/src/main/java/com/matthew/rawlens/MfsrSettings.kt
+ M app/src/main/java/com/matthew/rawlens/QuickAndManualControls.kt
+ M app/src/main/java/com/matthew/rawlens/RawCameraController.kt
+ M app/src/main/java/com/matthew/rawlens/RawDevelopmentCoordinator.kt
+ M app/src/main/java/com/matthew/rawlens/SettingsDenoiseTab.kt
+ M app/src/main/java/com/matthew/rawlens/SettingsMergeTab.kt
+ M app/src/main/java/com/matthew/rawlens/SettingsVideoTab.kt
+ M app/src/main/java/com/matthew/rawlens/VideoCameraRoute.kt
+ M app/src/main/java/com/matthew/rawlens/VideoQuickControls.kt
+ M app/src/main/java/com/matthew/rawlens/WaveletDenoiser.kt
+ M app/src/main/java/com/matthew/rawlens/ZslMergeSaveJobs.kt
+ M app/src/main/res/layout/activity_main.xml
+ M app/src/test/java/com/matthew/rawlens/BurstPublishedTest.kt
+ M app/src/test/java/com/matthew/rawlens/CaptureQueueCapacityTest.kt
+ M app/src/test/java/com/matthew/rawlens/HdrPlusAutoSelectTest.kt
+ M app/src/test/java/com/matthew/rawlens/HdrPlusSettingsTest.kt
+ M app/src/test/java/com/matthew/rawlens/LensDiscoveryGroupingTest.kt
+ M app/src/test/java/com/matthew/rawlens/LinearRgbDngWriterTest.kt
+ M app/src/test/java/com/matthew/rawlens/VideoCameraRouteTest.kt
+ M app/version.properties
+ M docs/tinydng-integration.md
+ M python/lkr/lkr.py
+ M python/lkr/lkr_torch.py
+ ? third_party/libjxl
+ M tools/lkr-pipeline/README.md
+ M tools/lkr-pipeline/host/lkr_full_run.cpp
+ M tools/lkr-pipeline/src/main/cpp/CMakeLists.txt
+ M tools/lkr-pipeline/src/main/cpp/lkr_full.cpp
+ M tools/lkr-pipeline/src/main/cpp/lkr_full.h
+ M tools/lkr-pipeline/src/main/cpp/lkr_host.cpp
+ M tools/lkr-pipeline/src/main/cpp/lkr_host.h
+ M tools/lkr-pipeline/src/main/cpp/lkr_litert.cpp
+ M tools/lkr-pipeline/src/main/cpp/lkr_photo_denoise.cpp
+ M tools/lkr-pipeline/src/main/cpp/lkr_prior.cpp
+ M tools/lkr-pipeline/src/main/cpp/lkr_prior.h
+ M tools/lkr-pipeline/src/main/cpp/lkr_solver.cpp
+ M tools/lkr-pipeline/src/main/cpp/lkr_solver.h
+ M tools/lkr-pipeline/src/main/cpp/lkr_tuning.h
+ M tools/lkr-pipeline/src/main/cpp/shaders/jac.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/jacblk.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/resid.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/resid_adj.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/resid_adj_w.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/resid_adj_w_q.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/resid_adj_w_zq.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/resid_q.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/resid_zq.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/scatter.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/scatter_q.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/weight_t.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/weight_th.comp
+ M tools/lkr-pipeline/src/main/cpp/shaders/zstep_gw.comp
+ M tools/sr-pipeline/src/main/cpp/srp_dng.cpp
+ M tools/sr-pipeline/src/main/cpp/srp_dng.h
+?? 2026-11-05-073307-this-session-is-being-continued-from-a-previous-c.txt
+?? IMG_20261107_110041_800_VID_2.craw
+?? app/src/androidTest/java/com/matthew/rawlens/FfdnetRecoveryDeviceTest.kt
+?? app/src/main/java/com/matthew/rawlens/HdrPlusSceneNoise.kt
+?? app/src/main/java/com/matthew/rawlens/LiteRtLibraries.kt
+?? app/src/main/java/com/matthew/rawlens/PhotoDevelopmentExecutor.kt
+?? app/src/main/java/com/matthew/rawlens/ProcessingWork.kt
+?? app/src/main/java/com/matthew/rawlens/SharpMergeProvenance.kt
+?? app/src/test/java/com/matthew/rawlens/HdrPlusLocalBurstTest.kt
+?? app/src/test/java/com/matthew/rawlens/HdrPlusSceneNoiseTest.kt
+?? app/src/test/java/com/matthew/rawlens/PhotoDevelopmentExecutorTest.kt
+?? app/src/test/java/com/matthew/rawlens/ProcessingWorkTest.kt
+?? app/src/test/java/com/matthew/rawlens/SharpMergeProvenanceTest.kt
+?? docs/refactor/hdrplus-scene-auto.md
+?? docs/refactor/results/hdrplus-scene-auto-2026-11-05/
+?? docs/refactor/results/lkr-baseline-npu-2026-11-06/
+?? docs/refactor/results/lkr-equation-parity-2026-11-09/
+?? docs/refactor/results/lkr-motion-validation-2026-11-10/
+?? docs/refactor/results/lksr-shadow-motion-2026-11-05/
+?? python/lkr/check_unrolled.py
+?? tools/hdrplus-auto/
+?? tools/lkr-pipeline/burst_motion_sweep.py
+?? tools/lkr-pipeline/full_motion_validation.py
+?? tools/lkr-pipeline/host/lkr_noise_check.cpp
+?? tools/lkr-pipeline/host/lkr_robust_check.cpp
+?? tools/lkr-pipeline/inspect_trace.py

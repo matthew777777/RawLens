@@ -1,0 +1,31 @@
+--------- beginning of main
+11-06 00:40:19.647 12581 12608 I RawLensLkrTest: loaded 8 frames 4080x3060 in 197 ms
+11-06 00:40:19.741 12581 12608 I RawLensLkr: adjoint: scatter
+11-06 00:40:21.938 12581 12608 I RawLensLkr: prior on NPU (LiteRT, 256x256 packed)
+11-06 00:40:32.766 12581 12608 I RawLensLkr: prior calls 36: wait 25.7 pack 11.7 run 107.2 unpack 65.8 ms/call
+11-06 00:40:32.766 12581 12608 I RawLensLkr: mode: RawLens improvements
+11-06 00:40:32.766 12581 12608 I RawLensLkr: look: prior 0.35 grain 0.00 (sigma 0.00761)
+11-06 00:40:32.766 12581 12608 I RawLensLkr: merge 1024x1024 s=1 K=8 tiles 9: noise 51 coarse 275 tiles 10385 (gpu 14212 prior 8564) total 10711 ms
+11-06 00:40:32.766 12581 12608 I RawLensLkr: reference frame 0 (sharpest)
+11-06 00:40:32.766 12581 12608 I RawLensLkr: workers 3, tile sums: solve 24559 (gpu 14212 prior 8564 -> cpu/other 1783) prep 2635 (load 77) ms
+11-06 00:40:32.841 12581 12608 I RawLensLkrTest: [npu=true] crop1: 1024x1024 s=1 tiles 9 | total 13136 ms (native 10711: noise 51 coarse 275 tiles 10385 = gpu 14212 + prior 8564 [36 calls, backend 3]) sigma 0.00761
+11-06 00:40:32.853 12581 12608 I RawLensLkrTest: wrote /storage/emulated/0/Android/data/com.matthew.rawlens.lkrcheck/files/lkr_crop1.f32
+11-06 00:40:32.864 12581 12608 I RawLensLkr: adjoint: scatter
+11-06 00:40:35.799 12581 12608 I RawLensLkr: prior on NPU (LiteRT, 512x512 packed)
+11-06 00:40:41.429 12581 12608 I RawLensLkr: prior calls 4: wait 0.0 pack 24.4 run 394.3 unpack 9.4 ms/call
+11-06 00:40:41.429 12581 12608 I RawLensLkr: mode: RawLens improvements
+11-06 00:40:41.429 12581 12608 I RawLensLkr: look: prior 0.35 grain 0.00 (sigma 0.01348)
+11-06 00:40:41.429 12581 12608 I RawLensLkr: merge 1024x1024 s=2 K=8 tiles 1: noise 14 coarse 80 tiles 5527 (gpu 1880 prior 2160) total 5621 ms
+11-06 00:40:41.429 12581 12608 I RawLensLkr: reference frame 0 (sharpest)
+11-06 00:40:41.429 12581 12608 I RawLensLkr: workers 1, tile sums: solve 4514 (gpu 1880 prior 2160 -> cpu/other 474) prep 138 (load 7) ms
+11-06 00:40:41.550 12581 12608 I RawLensLkrTest: [npu=true] crop2x: 1024x1024 s=2 tiles 1 | total 8695 ms (native 5621: noise 14 coarse 80 tiles 5527 = gpu 1880 + prior 2160 [4 calls, backend 3]) sigma 0.01348
+11-06 00:40:41.564 12581 12608 I RawLensLkrTest: wrote /storage/emulated/0/Android/data/com.matthew.rawlens.lkrcheck/files/lkr_crop2x.f32
+11-06 00:40:41.574 12581 12608 I RawLensLkr: adjoint: scatter
+11-06 00:40:43.213 12581 12608 I RawLensLkr: prior on NPU (LiteRT, 256x256 packed)
+11-06 00:41:52.349 12581 12608 I RawLensLkr: prior calls 252: wait 25.5 pack 11.2 run 105.7 unpack 65.6 ms/call
+11-06 00:41:52.349 12581 12608 I RawLensLkr: mode: RawLens improvements
+11-06 00:41:52.349 12581 12608 I RawLensLkr: look: prior 0.35 grain 0.00 (sigma 0.00588)
+11-06 00:41:52.349 12581 12608 I RawLensLkr: merge 4080x3060 s=1 K=8 tiles 63: noise 413 coarse 1187 tiles 67329 (gpu 95536 prior 59500) total 68928 ms
+11-06 00:41:52.349 12581 12608 I RawLensLkr: reference frame 0 (sharpest)
+11-06 00:41:52.349 12581 12608 I RawLensLkr: workers 3, tile sums: solve 163621 (gpu 95536 prior 59500 -> cpu/other 8586) prep 31388 (load 318) ms
+11-06 00:41:52.428 12581 12608 I RawLensLkrTest: [npu=true] full: 4080x3060 s=1 tiles 63 | total 70862 ms (native 68928: noise 413 coarse 1187 tiles 67329 = gpu 95536 + prior 59500 [252 calls, backend 3]) sigma 0.00588

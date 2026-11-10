@@ -1,0 +1,90 @@
+[
+  {
+    "burst": "0009_20160702_154921_383",
+    "path": "/Users/monikamalinowska/Downloads/hdrplus_subset/0009_20160702_154921_383/out/LKSR.dng",
+    "shape": [
+      3036,
+      4048,
+      3
+    ],
+    "seconds": 32.6,
+    "status": "ok"
+  },
+  {
+    "burst": "0030_20151214_101221_477",
+    "path": "/Users/monikamalinowska/Downloads/hdrplus_subset/0030_20151214_101221_477/out/LKSR.dng",
+    "shape": [
+      3024,
+      4032,
+      3
+    ],
+    "seconds": 32.9,
+    "status": "ok"
+  },
+  {
+    "burst": "0039_20141007_135645_851",
+    "path": "/Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/out/LKSR.dng",
+    "shape": [
+      3120,
+      4208,
+      3
+    ],
+    "seconds": 36.4,
+    "status": "ok"
+  },
+  {
+    "burst": "0043_20160917_113940_016",
+    "path": "/Users/monikamalinowska/Downloads/hdrplus_subset/0043_20160917_113940_016/out/LKSR.dng",
+    "shape": [
+      3036,
+      4048,
+      3
+    ],
+    "seconds": 30.4,
+    "status": "ok"
+  },
+  {
+    "burst": "0272_20160521_145117_858",
+    "path": "/Users/monikamalinowska/Downloads/hdrplus_subset/0272_20160521_145117_858/out/LKSR.dng",
+    "shape": [
+      3024,
+      4032,
+      3
+    ],
+    "seconds": 23.7,
+    "status": "ok"
+  },
+  {
+    "burst": "0543_20150918_185854_904",
+    "path": "/Users/monikamalinowska/Downloads/hdrplus_subset/0543_20150918_185854_904/out/LKSR.dng",
+    "shape": [
+      3024,
+      4032,
+      3
+    ],
+    "seconds": 29.7,
+    "status": "ok"
+  },
+  {
+    "burst": "4KK2_20150906_172222_214",
+    "path": "/Users/monikamalinowska/Downloads/hdrplus_subset/4KK2_20150906_172222_214/out/LKSR.dng",
+    "shape": [
+      3120,
+      4208,
+      3
+    ],
+    "seconds": 53.3,
+    "status": "ok"
+  },
+  {
+    "burst": "5a9e_20150328_160520_398",
+    "path": "/Users/monikamalinowska/Downloads/hdrplus_subset/5a9e_20150328_160520_398/out/LKSR.dng",
+    "shape": [
+      2464,
+      3280,
+      3
+    ],
+    "seconds": 38.2,
+    "status": "ok"
+  }
+]
