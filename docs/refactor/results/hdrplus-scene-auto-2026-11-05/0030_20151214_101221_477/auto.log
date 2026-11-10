@@ -1,0 +1,15 @@
+frame 0: /Users/monikamalinowska/Downloads/hdrplus_subset/0030_20151214_101221_477/frames/payload_N000.dng black=[52.00 52.00 52.00 52.00] white=1023
+frame 1: /Users/monikamalinowska/Downloads/hdrplus_subset/0030_20151214_101221_477/frames/payload_N001.dng black=[52.00 52.00 52.00 52.00] white=1023
+frame 2: /Users/monikamalinowska/Downloads/hdrplus_subset/0030_20151214_101221_477/frames/payload_N002.dng black=[52.00 52.00 52.00 52.00] white=1023
+frame 3: /Users/monikamalinowska/Downloads/hdrplus_subset/0030_20151214_101221_477/frames/payload_N003.dng black=[52.00 52.00 52.00 52.00] white=1023
+frame 4: /Users/monikamalinowska/Downloads/hdrplus_subset/0030_20151214_101221_477/frames/payload_N004.dng black=[52.00 52.00 52.00 52.00] white=1023
+frame 5: /Users/monikamalinowska/Downloads/hdrplus_subset/0030_20151214_101221_477/frames/payload_N005.dng black=[52.00 52.00 52.00 52.00] white=1023
+frame 6: /Users/monikamalinowska/Downloads/hdrplus_subset/0030_20151214_101221_477/frames/payload_N006.dng black=[52.00 52.00 52.00 52.00] white=1023
+frame 7: /Users/monikamalinowska/Downloads/hdrplus_subset/0030_20151214_101221_477/frames/payload_N007.dng black=[52.00 52.00 52.00 52.00] white=1023
+geometry 4032x3024 frames=8 ref=7 path=Fast-spatial strength=1.0 tile=32 search=64
+[hdrplus] hdrplus device: Apple M1
+[hdrplus] hdrplus: 28 shader modules loaded
+[hdrplus] hdrplus upload: 8 frames, staging=24385536 bytes (released before merge scratch)
+[hdrplus] hdrplus merge spatial 4032x3024 N=8 ref=7 gpu=416.9ms
+merged: gpu=416.9ms range=[-0.0010 0.8898] mean=0.0225 nonfinite=0
+wrote /tmp/rawlens-scene-subset/0030_20151214_101221_477/auto.dng

@@ -1,0 +1,15 @@
+frame 0: /Users/monikamalinowska/Downloads/My/Photos/Photos/IMG_20261104_111404_842/IMG_20261104_111404_842_F00.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 1: /Users/monikamalinowska/Downloads/My/Photos/Photos/IMG_20261104_111404_842/IMG_20261104_111404_842_F01.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 2: /Users/monikamalinowska/Downloads/My/Photos/Photos/IMG_20261104_111404_842/IMG_20261104_111404_842_F02.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 3: /Users/monikamalinowska/Downloads/My/Photos/Photos/IMG_20261104_111404_842/IMG_20261104_111404_842_F03.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 4: /Users/monikamalinowska/Downloads/My/Photos/Photos/IMG_20261104_111404_842/IMG_20261104_111404_842_F04.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 5: /Users/monikamalinowska/Downloads/My/Photos/Photos/IMG_20261104_111404_842/IMG_20261104_111404_842_F05.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 6: /Users/monikamalinowska/Downloads/My/Photos/Photos/IMG_20261104_111404_842/IMG_20261104_111404_842_F06.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 7: /Users/monikamalinowska/Downloads/My/Photos/Photos/IMG_20261104_111404_842/IMG_20261104_111404_842_F07.dng black=[64.00 64.00 64.00 64.00] white=1023
+geometry 4080x3060 frames=8 ref=4 path=HQ-frequency strength=1.0 tile=32 search=64
+[hdrplus] hdrplus device: Apple M1
+[hdrplus] hdrplus: 28 shader modules loaded
+[hdrplus] hdrplus upload: 8 frames, staging=24969600 bytes (released before merge scratch)
+[hdrplus] hdrplus merge frequency 4080x3060 N=8 ref=4 gpu=987.2ms
+merged: gpu=987.2ms range=[0.0002 1.0032] mean=0.0675 nonfinite=0
+wrote /tmp/rawlens-scene-bursts/IMG_20261104_111404_842/auto-hq.dng

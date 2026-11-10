@@ -23,6 +23,18 @@ class HdrPlusSettingsTest {
         assertEquals(HdrPlusSettings(), HdrPlusSettings.fromPreferences(emptyMap<String, Any>()))
     }
 
+    @Test fun existingManualPreferencesMigrateOnceThenRespectNewManualChoice() {
+        val legacy = mapOf("hdr_plus_auto_strength" to false, "hdr_plus_auto_quality" to false,
+            "hdr_plus_strength" to 6f, "hdr_plus_enabled" to true)
+        val migrated = HdrPlusSettings.fromPreferences(legacy)
+        assertEquals(true, migrated.autoStrength)
+        assertEquals(true, migrated.autoQuality)
+        assertEquals(6f, migrated.strength, 0f)
+        assertEquals(true, migrated.enabled)
+        val manual = migrated.copy(autoStrength = false, autoQuality = false)
+        assertEquals(manual, HdrPlusSettings.fromPreferences(manual.toPreferences()))
+    }
+
     @Test fun corruptStrengthFallsBackToDefault() {
         assertEquals(
             HdrPlusSettings.DEFAULT_STRENGTH,
@@ -74,33 +86,33 @@ class HdrPlusSettingsTest {
         assertEquals("HDR+\nMERGING", on.quickText(8, 8, true, true))
         assertEquals("HDR+\nUNAVAILABLE", on.quickText(8, 8, false, false))
         assertEquals("HDR+\nWARMING", on.quickText(8, 3, true, false))
-        assertEquals("HDR+\nHQ ×8", on.quickText(8, 8, true, false))
+        assertEquals("HDR+\nAUTO ×8", on.quickText(8, 8, true, false))
         assertEquals(
-            "HDR+\nAUTO ×8",
-            on.copy(autoQuality = true).quickText(8, 8, true, false)
+            "HDR+\nHQ ×8",
+            on.copy(autoQuality = false).quickText(8, 8, true, false)
         )
         assertEquals(
             "HDR+\nFAST ×8",
-            on.copy(highQuality = false).quickText(8, 8, true, false)
+            on.copy(highQuality = false, autoQuality = false).quickText(8, 8, true, false)
         )
     }
 
-    @Test fun autoDefaultsOff() {
-        assertEquals(false, HdrPlusSettings().autoStrength)
-        assertEquals(false, HdrPlusSettings().autoQuality)
+    @Test fun autoDefaultsOn() {
+        assertEquals(true, HdrPlusSettings().autoStrength)
+        assertEquals(true, HdrPlusSettings().autoQuality)
         val reloaded = HdrPlusSettings.fromPreferences(emptyMap<String, Any>())
-        assertEquals(false, reloaded.autoStrength)
-        assertEquals(false, reloaded.autoQuality)
+        assertEquals(true, reloaded.autoStrength)
+        assertEquals(true, reloaded.autoQuality)
     }
 
-    @Test fun defaultsToManualHqStrength3() {
+    @Test fun defaultsToAutoWithManualStrengthPreserved() {
         val fresh = HdrPlusSettings.fromPreferences(emptyMap<String, Any>())
         assertEquals(HdrPlusSettings(), fresh)
         assertEquals(3f, fresh.strength, 0f)
         assertEquals(3f, HdrPlusSettings.DEFAULT_STRENGTH, 0f)
         assertEquals(true, fresh.highQuality)
-        assertEquals(false, fresh.autoStrength)
-        assertEquals(false, fresh.autoQuality)
+        assertEquals(true, fresh.autoStrength)
+        assertEquals(true, fresh.autoQuality)
     }
 
     @Test fun highQualityDefaultsOn() {
@@ -142,7 +154,7 @@ class HdrPlusSettingsTest {
     }
     @Test fun freshPhotoBurstDoesNotWaitForZslRing() {
         val on = HdrPlusSettings(enabled = true)
-        assertEquals("HDR+\nHQ ×8", on.quickText(8, 0, true, false, zsl = false))
+        assertEquals("HDR+\nAUTO ×8", on.quickText(8, 0, true, false, zsl = false))
     }
 
 }

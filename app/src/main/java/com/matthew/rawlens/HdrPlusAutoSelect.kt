@@ -5,7 +5,6 @@ package com.matthew.rawlens
 
 import com.matthew.rawlens.HdrPlusMotionMeter.MotionSummary
 import java.util.Locale
-import kotlin.math.roundToInt
 
 /**
  * The merged burst the auto brain decided on. [keepIndices] are original
@@ -51,12 +50,13 @@ data class HdrPlusAutoDecision(
 }
 
 /**
- * Pure auto brain: metering + ISO + manual overrides in, merge plan out.
- * Drops outlier frames (relative MAD rule + brightness band, GCam-style
- * frame selection), picks the sharpest low-motion base, and maps motion
- * to strength/path on the fitted curve. No Android dependencies.
+ * Scene measurements and manual overrides to a merge plan. Frame rejection
+ * and path selection retain the existing compatibility policy; strength is
+ * derived from measured RAW noise, then attenuated by motion. See
+ * docs/refactor/hdrplus-scene-auto.md for references and calibration limits.
  */
 object HdrPlusAutoSelect {
+    @Suppress("UNUSED_PARAMETER") // ISO retained for source compatibility, not a noise measurement.
     fun select(
         metering: MotionSummary,
         frameCount: Int,
@@ -79,7 +79,7 @@ object HdrPlusAutoSelect {
 
         val medianDelta = deltas.medianFinite()
         val medianMean = means.medianFinite()
-        // Drop frames whose every adjacent pair is a MAD outlier, or whose
+        // Drop frames whose every adjacent pair exceeds the median ratio, or whose
         // brightness left the plausible band. Ends have a single pair.
         val dropped = (0 until frameCount).filter { i ->
             val madOut = medianDelta.isFinite() && medianDelta > 0.0 &&
@@ -126,39 +126,20 @@ object HdrPlusAutoSelect {
                 (HdrPlusAutoTuning.GYRO_MOTION_RAD_S - HdrPlusAutoTuning.GYRO_STILL_RAD_S))
                 .coerceIn(0.0, 1.0)
         } else 0.0
-        val levelDark = if (medianMean.isFinite()) {
-            (1.0 - (medianMean - HdrPlusAutoTuning.DARK_LEVEL_FULL) /
-                (HdrPlusAutoTuning.DARK_LEVEL_NONE - HdrPlusAutoTuning.DARK_LEVEL_FULL))
-                .coerceIn(0.0, 1.0)
-        } else 0.0
-        val isoDark = if (sensitivityIso > 0) {
-            ((sensitivityIso - HdrPlusAutoTuning.ISO_REF).toDouble() /
-                (HdrPlusAutoTuning.ISO_FULL - HdrPlusAutoTuning.ISO_REF)).coerceIn(0.0, 1.0)
-        } else 0.0
-        val dark01 = maxOf(levelDark, isoDark)
-        val roundedAuto = curveStrength(motion01, dark01, gyro01)
+        val noiseStrength = HdrPlusSceneNoise.strength(
+            metering.frameRelativeNoise.takeIf { it.size == frameCount } ?: emptyList())
+        val autoStrength = attenuate(noiseStrength, maxOf(motion01, gyro01))
         val fastPath = (maxHot.isFinite() && maxHot > HdrPlusAutoTuning.FAST_PATH_HOT_FRACTION) ||
             (maxGyro.isFinite() && maxGyro > HdrPlusAutoTuning.GYRO_FAST_PATH_RAD_S)
-        // Per-frame strengths (step 4): the same curve with each kept
-        // frame's own local pixel motion instead of the burst max, so
-        // clean frames merge hard while shaky ones merge faintly.
-        // Darkness stays burst-level (scene-global median); gyro is
-        // excluded — it already gates the path burst-wide, and a
-        // sibling frame's gyro spike is no evidence about this frame
-        // (including it flattens mixed bursts to the floor: measured
-        // on 163726, all frames 3.0 either way). The frames only relax
-        // upward from decision.strength, never below it.
-        val frameStrengths = if (manualStrength != null) null
-        else kept.map { o -> curveStrength(hotFractionToMotion(localHot(o)), dark01, 0.0) }
+        // Gyro is burst-wide: local maps must not remove this safety constraint.
+        val frameStrengths = if (manualStrength != null) null else kept.map { o ->
+            attenuate(noiseStrength, maxOf(hotFractionToMotion(localHot(o)), gyro01))
+        }
         val finalHighQuality = manualQuality ?: !fastPath
-        // Strength maps (step-4 maps, both paths): per-block neighbor
-        // mismatch maxes curved to strengths, so still regions merge hard
-        // while moving ones stay faint inside one frame. Manual strength
-        // and unusable grids fall back to frame strengths.
         val ratios = metering.pairMismatchRatios
         val mw = metering.mapCellsX
         val mh = metering.mapCellsY
-        val mapsUsable = ratios.size == frameCount - 1 && mw > 0 && mh > 0 &&
+        val mapsUsable = ratios.size == frameCount - 1 && mw > 0 && mh > 0 && mw.toLong() * mh <= Int.MAX_VALUE &&
             ratios.all { it.size == mw * mh }
         // Dense-MAD danger grids (native meter): same neighbor-max
         // discipline as the ratios; absent without native metering.
@@ -166,7 +147,7 @@ object HdrPlusAutoSelect {
         val dangerUsable = mapsUsable && madDense.size == frameCount - 1 &&
             madDense.all { it.size == mw * mh }
         val strengthMaps = if (manualStrength != null || !mapsUsable) null
-        else kept.map { o ->
+        else kept.mapIndexed { slot, o ->
             val local = DoubleArray(mw * mh) { i ->
                 adjacentPairs(o, frameCount).map { p -> ratios[p][i] }.maxOrNull()
                     ?: Double.NaN
@@ -176,10 +157,10 @@ object HdrPlusAutoSelect {
                 adjacentPairs(o, frameCount).map { p -> madDense[p][i] }.maxOrNull()
                     ?: Double.NaN
             }
-            buildStrengthMap(local, mw, mh, dark01, danger)
+            buildStrengthMap(local, mw, mh, frameStrengths!![slot], danger)
         }
         return HdrPlusAutoDecision(
-            strength = manualStrength ?: roundedAuto,
+            strength = manualStrength ?: autoStrength,
             highQuality = finalHighQuality,
             keepIndices = kept,
             refIndex = kept.indexOf(best),
@@ -191,77 +172,38 @@ object HdrPlusAutoSelect {
         )
     }
 
-    /**
-     * Curves per-block neighbor-mismatch maxes to strengths and smooths
-     * with a 3x3 box blur (replicate edges) so 32px transitions stay
-     * invisible. Non-finite ratios go strict (safe direction). The
-     * dense-MAD danger grid (null without native metering) takes the
-     * minimum with the ratio strength per block: it catches the
-     * sub-sample jitter (thin wires) that stride-16 sampling misses.
-     * Full float precision — no slider rounding (that would band
-     * the map).
-     */
+    /** Maps can only tighten a frame's noise/motion budget. A minimum filter
+     * extends rejection to neighboring cells without averaging it away. */
     private fun buildStrengthMap(
-        local: DoubleArray,
-        mw: Int,
-        mh: Int,
-        dark01: Double,
+        local: DoubleArray, mw: Int, mh: Int, ceiling: Float,
         danger: DoubleArray? = null
     ): FloatArray {
         val t = HdrPlusAutoTuning
-        val curved = DoubleArray(local.size) { i ->
-            val r = local[i].takeIf { it.isFinite() } ?: t.MAP_RATIO_MOTION
-            val s = when {
-                r <= t.MAP_RATIO_CLEAN -> t.AUTO_STRENGTH_MAX.toDouble()
-                r >= t.MAP_RATIO_MOTION -> t.AUTO_STRENGTH_MIN.toDouble()
-                else -> t.AUTO_STRENGTH_MAX + (t.AUTO_STRENGTH_MIN - t.AUTO_STRENGTH_MAX) *
-                    (r - t.MAP_RATIO_CLEAN) / (t.MAP_RATIO_MOTION - t.MAP_RATIO_CLEAN)
-            }
-            val d = danger?.get(i)
-            val ds = if (d == null) t.AUTO_STRENGTH_MAX.toDouble()
-            else {
-                val v = d.takeIf { it.isFinite() } ?: t.MAP_DANGER_STRICT
-                when {
-                    v <= t.MAP_DANGER_CLEAN -> t.AUTO_STRENGTH_MAX.toDouble()
-                    v >= t.MAP_DANGER_STRICT -> t.AUTO_STRENGTH_MIN.toDouble()
-                    else -> t.AUTO_STRENGTH_MAX + (t.AUTO_STRENGTH_MIN - t.AUTO_STRENGTH_MAX) *
-                        (v - t.MAP_DANGER_CLEAN) / (t.MAP_DANGER_STRICT - t.MAP_DANGER_CLEAN)
-                }
-            }
-            (minOf(s, ds) + t.STRENGTH_DARK_BOOST * dark01)
-                .coerceIn(t.AUTO_STRENGTH_MIN.toDouble(), t.AUTO_STRENGTH_MAX.toDouble())
+        fun risk(v: Double, lo: Double, hi: Double): Double =
+            if (!v.isFinite() || v < 0.0) 1.0 else ((v - lo) / (hi - lo)).coerceIn(0.0, 1.0)
+        val bounded = FloatArray(local.size) { i ->
+            val mismatch = risk(local[i], t.MAP_RATIO_CLEAN, t.MAP_RATIO_MOTION)
+            val dense = danger?.let { risk(it[i], t.MAP_DANGER_CLEAN, t.MAP_DANGER_STRICT) } ?: 0.0
+            attenuate(ceiling, maxOf(mismatch, dense))
         }
         return FloatArray(local.size) { i ->
             val x = i % mw
             val y = i / mw
-            var sum = 0.0
+            var value = bounded[i]
             for (dy in -1..1) for (dx in -1..1) {
-                sum += curved[(y + dy).coerceIn(0, mh - 1) * mw + (x + dx).coerceIn(0, mw - 1)]
+                value = minOf(value, bounded[(y + dy).coerceIn(0, mh - 1) * mw +
+                    (x + dx).coerceIn(0, mw - 1)])
             }
-            (sum / 9.0).toFloat()
+            value
         }
     }
 
-    /**
-     * Shared auto-strength curve at slider granularity (keeps logs
-     * and labels clean). Burst strength evaluates it at the burst-max
-     * motion; per-frame strengths at each frame's local motion.
-     */
-    private fun curveStrength(motion01: Double, dark01: Double, gyro01: Double): Float {
-        val autoStrength = (HdrPlusAutoTuning.STRENGTH_BASE +
-            HdrPlusAutoTuning.STRENGTH_DARK_BOOST * dark01 -
-            HdrPlusAutoTuning.STRENGTH_MOTION_PENALTY * motion01 -
-            HdrPlusAutoTuning.STRENGTH_GYRO_PENALTY * gyro01)
-            .coerceIn(
-                HdrPlusAutoTuning.AUTO_STRENGTH_MIN.toDouble(),
-                HdrPlusAutoTuning.AUTO_STRENGTH_MAX.toDouble()
-            )
-        return ((autoStrength * 10).roundToInt() / 10f)
-            .coerceIn(HdrPlusAutoTuning.AUTO_STRENGTH_MIN, HdrPlusAutoTuning.AUTO_STRENGTH_MAX)
-    }
+    private fun attenuate(strength: Float, risk: Double): Float =
+        (HdrPlusSettings.MIN_STRENGTH +
+            (strength - HdrPlusSettings.MIN_STRENGTH) * (1.0 - risk)).toFloat()
 
     private fun hotFractionToMotion(maxHot: Double): Double {
-        if (!maxHot.isFinite()) return 0.0
+        if (!maxHot.isFinite() || maxHot < 0.0) return 1.0
         return ((maxHot - HdrPlusAutoTuning.STILL_HOT_FRACTION) /
             (HdrPlusAutoTuning.MOTION_HOT_FRACTION - HdrPlusAutoTuning.STILL_HOT_FRACTION))
             .coerceIn(0.0, 1.0)
@@ -276,7 +218,7 @@ object HdrPlusAutoSelect {
     ): HdrPlusAutoDecision {
         val kept = (0 until frameCount).toList()
         return HdrPlusAutoDecision(
-            strength = manualStrength ?: 8f,
+            strength = manualStrength ?: HdrPlusSettings.DEFAULT_STRENGTH,
             highQuality = manualQuality ?: false,
             keepIndices = kept,
             refIndex = kept.indexOf(ref),

@@ -1,0 +1,17 @@
+frame 0: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N000.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 1: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N001.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 2: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N002.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 3: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N003.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 4: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N004.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 5: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N005.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 6: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N006.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 7: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N007.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 8: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N008.dng black=[64.00 64.00 64.00 64.00] white=1023
+frame 9: /Users/monikamalinowska/Downloads/hdrplus_subset/0039_20141007_135645_851/frames/payload_N009.dng black=[64.00 64.00 64.00 64.00] white=1023
+geometry 4208x3120 frames=10 ref=5 path=HQ-frequency strength=3.7 tile=32 search=64
+[hdrplus] hdrplus device: Apple M1
+[hdrplus] hdrplus: 28 shader modules loaded
+[hdrplus] hdrplus upload: 10 frames, staging=26257920 bytes (released before merge scratch)
+[hdrplus] hdrplus merge frequency 4208x3120 N=10 ref=5 gpu=1394.0ms
+merged: gpu=1394.0ms range=[-0.0017 1.0061] mean=0.2242 nonfinite=0
+wrote /tmp/rawlens-scene-subset/0039_20141007_135645_851/auto.dng

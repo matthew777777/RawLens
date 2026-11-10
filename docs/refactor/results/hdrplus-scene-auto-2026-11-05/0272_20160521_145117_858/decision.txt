@@ -1,0 +1,12 @@
+strength=2.98855
+hq=true
+ref=0
+kept=0,1
+frameStrengths=2.98855,2.98855
+relativeNoise=0.034406776046397664,0.0345091641181448
+noiseMs=2.177834
+hot=0.0
+mapMean=1.784652698896483,1.784652698896483
+mapMin=1.0
+mapMax=2.98855
+log=HDR+ auto: strength=3.0 (auto) path=hq (auto) ref=F1 kept=2/2 maps

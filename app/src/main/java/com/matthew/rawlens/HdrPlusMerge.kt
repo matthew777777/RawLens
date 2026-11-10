@@ -143,7 +143,7 @@ class HdrPlusMerge(context: Context) {
                 // Meter first: the auto brain picks strength/path/frames/ref
                 // from read-only views of the packed buffers. Scores travel in
                 // locals, so the decision can never observe a stale volatile.
-                val metering = meterMotion(frames, packed, blacks, whites, width, height)
+                val metering = meterMotion(frames, packed, blacks, whites, width, height, settings.autoStrength)
                 val decision = HdrPlusAutoSelect.select(
                     metering = metering,
                     frameCount = frames.size,
@@ -261,7 +261,8 @@ class HdrPlusMerge(context: Context) {
         blacks: FloatArray,
         whites: FloatArray,
         width: Int,
-        height: Int
+        height: Int,
+        measureNoise: Boolean
     ): HdrPlusMotionMeter.MotionSummary {
         val ranges = DoubleArray(frames.size) { i ->
             val blackMean = (blacks[i * 4] + blacks[i * 4 + 1] +
@@ -334,7 +335,11 @@ class HdrPlusMerge(context: Context) {
         return HdrPlusMotionMeter.summarize(
             deltas, prevTs, currTs, gyros, hots,
             stats.map { it.meanLevel }, stats.map { it.sharpness },
-            fullRatios, mapX, mapY, fullMadDense, fullTexDense
+            fullRatios, mapX, mapY, fullMadDense, fullTexDense,
+            if (!measureNoise) emptyList() else frames.indices.map { i ->
+                HdrPlusSceneNoise.measure(packed[i], width, height,
+                    FloatArray(4) { blacks[i * 4 + it] }, whites[i])
+            }
         )
     }
 

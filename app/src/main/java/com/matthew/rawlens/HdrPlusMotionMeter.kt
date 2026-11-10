@@ -8,7 +8,7 @@ import java.nio.ByteOrder
 import kotlin.math.abs
 
 /**
- * HDR+ motion metering (GCam `BuildPayloadBurstSpec`-style instrumentation).
+ * Read-only RAW burst measurements for HDR+ automatic selection.
  *
  * Per consecutive frame pair, measures a normalized frame-difference score
  * over strided samples of the packed uint16 buffers, plus the inter-frame
@@ -17,9 +17,8 @@ import kotlin.math.abs
  * off). Pure JVM math — no Android dependencies — so the whole unit is
  * testable on the host.
  *
- * Step 2 of the auto plan: instrumentation only. Nothing here changes
- * merge behavior; step 3 consumes [MotionSummary] for auto strength,
- * auto path, and base-frame selection.
+ * [HdrPlusAutoSelect] consumes [MotionSummary] for strength, merge-path
+ * and reference-frame selection.
  */
 object HdrPlusMotionMeter {
     /** Sample every Nth pixel per pair (~48k samples at 12 MP). */
@@ -64,7 +63,9 @@ object HdrPlusMotionMeter {
         val mapCellsX: Int = 0,
         val mapCellsY: Int = 0,
         val pairMadDense: List<DoubleArray> = emptyList(),
-        val pairTexDense: List<DoubleArray> = emptyList()
+        val pairTexDense: List<DoubleArray> = emptyList(),
+        /** Per-frame black-subtracted relative noise; empty/NaN means unknown. */
+        val frameRelativeNoise: List<Double> = emptyList()
     ) {
         /** GCam-style one-line report for the merge log. */
         fun logLine(frames: Int): String {
@@ -320,7 +321,8 @@ object HdrPlusMotionMeter {
         mapCellsX: Int = 0,
         mapCellsY: Int = 0,
         pairMadDense: List<DoubleArray> = emptyList(),
-        pairTexDense: List<DoubleArray> = emptyList()
+        pairTexDense: List<DoubleArray> = emptyList(),
+        frameRelativeNoise: List<Double> = emptyList()
     ): MotionSummary {
         require(pairDeltas.size == prevTimestampsNs.size &&
             pairDeltas.size == currTimestampsNs.size &&
@@ -373,7 +375,8 @@ object HdrPlusMotionMeter {
             mapCellsX = mapCellsX,
             mapCellsY = mapCellsY,
             pairMadDense = pairMadDense.toList(),
-            pairTexDense = pairTexDense.toList()
+            pairTexDense = pairTexDense.toList(),
+            frameRelativeNoise = frameRelativeNoise.toList()
         )
     }
 }

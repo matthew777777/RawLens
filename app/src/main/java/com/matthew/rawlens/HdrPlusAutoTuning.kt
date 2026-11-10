@@ -66,29 +66,9 @@ object HdrPlusAutoTuning {
      * favoring still-side safety (the pixel leg backstops motion).
      */
     const val GYRO_FAST_PATH_RAD_S = 0.30
-    /** Strength curve anchor: still-scene strength. */
-    const val STRENGTH_BASE = 13f
-    /** Strength lost from still to full motion. */
-    const val STRENGTH_MOTION_PENALTY = 10f
-    /** Strength lost from still to full gyro motion. */
-    const val STRENGTH_GYRO_PENALTY = 6f
-    /** Strength regained in full darkness (denoise need). */
-    const val STRENGTH_DARK_BOOST = 2f
-    /** Auto strength floor (plan range). */
-    const val AUTO_STRENGTH_MIN = 3f
-    /**
-     * Auto strength ceiling. 13 is the tested default; 16 needs a
-     * still-burst sweep proving stronger helps before it is allowed.
-     */
+    /** Valid automatic range; upper bound retained as a compatibility guard. */
+    const val AUTO_STRENGTH_MIN = HdrPlusSettings.MIN_STRENGTH
     const val AUTO_STRENGTH_MAX = 13f
-    /** Mean level at/below this is full darkness. */
-    const val DARK_LEVEL_FULL = 0.02
-    /** Mean level at/above this needs no darkness boost. */
-    const val DARK_LEVEL_NONE = 0.12
-    /** ISO at/below this needs no darkness boost. */
-    const val ISO_REF = 100
-    /** ISO at/above this is full darkness. */
-    const val ISO_FULL = 1600
     /** Base score is sharpness / (1 + gain x local motion). */
     const val LOCAL_MOTION_GAIN = 100.0
     /**

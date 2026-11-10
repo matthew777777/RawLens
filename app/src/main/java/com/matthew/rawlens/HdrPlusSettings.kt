@@ -22,14 +22,13 @@ data class HdrPlusSettings(
     /**
      * Upstream "noise reduction" slider, 1..22 (upstream `Config.strength`).
      * Higher merges more aggressively (cleaner, more ghosting).
-     * Defaults to 3.0 (conservative: ghost-safe, matches the auto
-     * curve floor).
+     * Defaults to 3.0 (conservative fallback, used when auto
+     * noise metering is unavailable).
      */
     val strength: Float = DEFAULT_STRENGTH,
     /**
      * False = spatial ("Fast"); true = frequency ("Higher quality" 4-pass
-     * Wiener). HQ is the default: HDR+ is an explicit quality opt-in, and
-     * The upstream align-once mode keeps the frequency merge practical. Costs
+     * Wiener). HQ is the stored manual default. The upstream align-once mode keeps the frequency merge practical. Costs
      * ~0.85 GB vs ~0.5 GB at 12.5 MP and takes longer; long-press the
      * quick tile to cycle back to Fast.
      */
@@ -37,19 +36,17 @@ data class HdrPlusSettings(
     /** Also save every source frame as DNG alongside the merge. */
     val keepSourceBurst: Boolean = false,
     /**
-     * True = the auto brain picks strength from motion (manual slider
-     * value is kept as the fallback). Dragging the slider turns this
-     * off; the settings checkbox turns it back on. Off by default:
-     * the manual slider value is used unless the user opts in.
+     * True = the auto brain picks strength from measured noise and motion (manual slider
+     * value is preserved). Dragging the slider turns this off; the
+     * settings checkbox turns it back on. Enabled by default.
      */
-    val autoStrength: Boolean = false,
+    val autoStrength: Boolean = true,
     /**
      * True = the auto brain picks Fast/HQ from motion. Long-pressing
      * the quick tile cycles AUTO -> HQ -> FAST -> AUTO; [highQuality]
-     * holds the manual choice while auto is off. Off by default, so
-     * fresh installs merge HQ at the manual strength.
+     * holds the manual choice while auto is off. Enabled by default.
      */
-    val autoQuality: Boolean = false
+    val autoQuality: Boolean = true
 ) {
     init {
         require(strength.isFinite() && strength in MIN_STRENGTH..MAX_STRENGTH) {
@@ -68,7 +65,8 @@ data class HdrPlusSettings(
         "hdr_plus_high_quality" to highQuality,
         "hdr_plus_keep_source_burst" to keepSourceBurst,
         "hdr_plus_auto_strength" to autoStrength,
-        "hdr_plus_auto_quality" to autoQuality
+        "hdr_plus_auto_quality" to autoQuality,
+        SCENE_AUTO_MIGRATED to true
     )
 
     fun quickText(count: Int, buffered: Int, available: Boolean?, busy: Boolean, zsl: Boolean = true): String = "HDR+\n" + when {
@@ -81,6 +79,10 @@ data class HdrPlusSettings(
     }
 
     companion object {
+        // One-time opt-in for every existing installation. A later explicit
+        // manual choice persists this marker and remains manual on reload.
+        private const val SCENE_AUTO_MIGRATED = "hdr_plus_scene_auto_migrated"
+
         fun fromPreferences(values: Map<String, *>): HdrPlusSettings = HdrPlusSettings(
             enabled = values["hdr_plus_enabled"] as? Boolean ?: false,
             strength = (values["hdr_plus_strength"] as? Number)?.toFloat()
@@ -88,8 +90,10 @@ data class HdrPlusSettings(
                 ?: DEFAULT_STRENGTH,
             highQuality = values["hdr_plus_high_quality"] as? Boolean ?: true,
             keepSourceBurst = values["hdr_plus_keep_source_burst"] as? Boolean ?: false,
-            autoStrength = values["hdr_plus_auto_strength"] as? Boolean ?: false,
-            autoQuality = values["hdr_plus_auto_quality"] as? Boolean ?: false
+            autoStrength = values[SCENE_AUTO_MIGRATED] != true ||
+                (values["hdr_plus_auto_strength"] as? Boolean ?: true),
+            autoQuality = values[SCENE_AUTO_MIGRATED] != true ||
+                (values["hdr_plus_auto_quality"] as? Boolean ?: true)
         )
         const val MIN_ZSL_FRAMES = 1
         const val MIN_MERGE_FRAMES = 2
