@@ -492,7 +492,7 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
       if (packz && !z0_packed) { d_pack(sZ0P, qt); z0_packed = true; }   // z0 is fixed: pack once
       d_resid(sRT, sRTq, qt, sRTzq);
       Push qd = qt; qd.f0 = prm.temporal_detail;
-      qd.f1 = prm.temporal_dark_k;
+      qd.f1 = prm.temporal_dark_wide ? 1.0f : 0.0f;
       qd.f2 = prm.temporal_dark_level;
       gpu_->dispatch(wth_, sTH, &qd, gxLR, gyLR, K);
       gpu_->dispatch(wtemp_, sWT, &qd, gxLR, gyLR, K);

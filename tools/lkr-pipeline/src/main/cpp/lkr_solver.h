@@ -60,9 +60,9 @@ struct SolveParams {
   float temporal_k = 3.0f;
   float temporal_tau = 0.6f;
   // Dark-area motion test: in deep shadow a moving dark object differs from a dark background by
-  // about the noise, so the threshold temporal_k is scaled by temporal_dark_k (1 = off) where the
-  // local mean signal is below temporal_dark_level (full effect below a quarter of it).
-  float temporal_dark_k = 0.667f;   // 3 -> 2 sigma in deep shadow (33TJ walking-person veils)
+  // about the noise of the 5x5 test, so where the local mean signal is below temporal_dark_level
+  // (full effect below a quarter of it) a wider 9 x 15 window is tested too, at the same threshold.
+  bool temporal_dark_wide = true;
   float temporal_dark_level = 0.02f;
   // Energy test tolerance for single-frame model error, as a fraction of the
   // local detail energy common to the frame and its prediction. 0 = off.

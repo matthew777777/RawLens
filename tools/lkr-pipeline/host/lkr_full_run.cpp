@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     else if (k == "--tau") prm.solve.robust_tau = float(std::atof(argv[++i]));
     else if (k == "--tk") prm.solve.temporal_k = float(std::atof(argv[++i]));
     else if (k == "--tdet") prm.solve.temporal_detail = float(std::atof(argv[++i]));
-    else if (k == "--tdk") prm.solve.temporal_dark_k = float(std::atof(argv[++i]));
+    else if (k == "--tdw") prm.solve.temporal_dark_wide = nx() != 0;
     else if (k == "--tdl") prm.solve.temporal_dark_level = float(std::atof(argv[++i]));
     else if (k == "--sb") prm.solve.shadow_boost = float(std::atof(argv[++i]));
     else if (k == "--rgather") prm.solve.robust_gather = std::atoi(argv[++i]) != 0;

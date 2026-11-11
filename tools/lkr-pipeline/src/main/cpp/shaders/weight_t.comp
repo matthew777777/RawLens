@@ -17,6 +17,19 @@ layout(std430, binding = 2) readonly buffer TM { vec4 tmp[]; };   // row sums (w
 layout(std430, binding = 3) writeonly buffer WT { float wt[]; };
 layout(std430, binding = 4) readonly buffer TD { float td[]; };   // model-error row sums (weight_th.comp)
 
+// Mean + energy test of one window (sums of r, a y + b, count, r^2, model error).
+float windowWeight(float sr, float sv, float n, float ss, float sd, float g2, float kk) {
+  float m = sr / n;
+  float var = max(2.0 * sv / (n * n) + pc.f3 * pc.f3 * g2, 1e-12);
+  float e = m * m / var, k2 = kk * kk;
+  float w = 1.0 / (1.0 + max(e - k2, 0.0) / k2);
+  float energyVar = max(2.0 * sv / n + pc.f3 * pc.f3 * g2 + pc.f0 * sd / n, 1e-12);
+  float energy = ss / n / energyVar;
+  float limit = 1.0 + kk * sqrt(2.0 / n);
+  float support = clamp(2.0 - energy / limit, 0.0, 1.0);
+  return min(w, support * support);
+}
+
 void main() {
   int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
   int k = int(gl_GlobalInvocationID.z);
@@ -39,27 +52,26 @@ void main() {
       int iu = clamp(i - 2, 0, pc.h - 1), id = clamp(i + 2, 0, pc.h - 1);
       float gx = (y[base + i * pc.w + jr] - y[base + i * pc.w + jl]) * 0.25;
       float gy = (y[base + id * pc.w + j] - y[base + iu * pc.w + j]) * 0.25;
-      float m = sr / n;
-      float var = max(2.0 * sv / (n * n) + pc.f3 * pc.f3 * (gx * gx + gy * gy), 1e-12);
-      // Dead zone: exactly 1 until the disagreement exceeds k sigma (pure
-      // ordinary noise rarely down-weights a frame -- the spread min-filter
-      // amplifies noisy rejections), then Cauchy-like falloff.
-      // Stricter in deep shadow (pc.f1 < 1): local mean signal from the summed noise model a y + b.
+      float g2 = gx * gx + gy * gy;
+      w = windowWeight(sr, sv, n, ss, sd, g2, pc.rob_k);
+      // Deep shadow (pc.f1 > 0.5): a moving dark object differs from a dark background by about
+      // the noise of a 5x5 mean, so also test a 9 x 15 window (row sums at j-5, j, j+5 over
+      // rows i-4..i+4). Its mean is ~2.3x less noisy at the same threshold, so static shadows
+      // keep their frames while larger dark movers are caught.
       float level = max((sv / n - pc.rob_b) / max(pc.rob_a, 1e-12), 0.0);
-      float kk = pc.f1 == 1.0 ? pc.rob_k : pc.rob_k * mix(pc.f1, 1.0, smoothstep(0.25 * pc.f2, pc.f2, level));
-      float e = m * m / var, k2 = kk * kk;
-      w = 1.0 / (1.0 + max(e - k2, 0.0) / k2);
-      // Energy cannot cancel. For independent Gaussian residuals its
-      // normalised mean is 1 with standard deviation sqrt(2/n), rather than
-      // the k^2 threshold of a single squared residual. Demosaic correlations
-      // and edge registration make this a tolerance, not a confidence bound.
-      // Finite support prevents many disagreeing frames accumulating into a
-      // visible ghost. Keep the existing edge tolerance and noise dead zone.
-      float energyVar = max(2.0 * sv / n + pc.f3 * pc.f3 * (gx * gx + gy * gy) + pc.f0 * sd / n, 1e-12);
-      float energy = ss / n / energyVar;
-      float limit = 1.0 + kk * sqrt(2.0 / n);
-      float support = clamp(2.0 - energy / limit, 0.0, 1.0);
-      w = min(w, support * support);
+      float dark = pc.f1 > 0.5 ? 1.0 - smoothstep(0.25 * pc.f2, pc.f2, level) : 0.0;
+      if (dark > 0.0) {
+        float br = 0.0, bv = 0.0, bn = 0.0, bs = 0.0, bd = 0.0;
+        for (int di = -4; di <= 4; ++di) {
+          int rr = base + clamp(i + di, 0, pc.h - 1) * pc.w;
+          for (int dj = -5; dj <= 5; dj += 5) {
+            int t = rr + clamp(j + dj, 0, pc.w - 1);
+            vec4 q = tmp[t];
+            br += q.x; bv += q.y; bn += q.z; bs += q.w; bd += td[t];
+          }
+        }
+        if (bn > 0.0) w = min(w, mix(1.0, windowWeight(br, bv, bn, bs, bd, g2, pc.rob_k), dark));
+      }
     }
   }
   wt[base + i * pc.w + j] = w;
