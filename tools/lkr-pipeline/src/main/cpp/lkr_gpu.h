@@ -49,6 +49,9 @@ class Gpu {
   Gpu();
   ~Gpu();
   bool ok() const { return dev_ != VK_NULL_HANDLE; }
+  // Compiled pipelines are shared by every Gpu of the process; with a file they also survive it
+  // (the app passes one in its code cache directory). Call before creating a Gpu.
+  static void SetPipelineCacheFile(const std::string& path);
   std::string info() const;
 
   // host_read: the CPU reads this buffer (prior input, results): prefer a
@@ -87,6 +90,7 @@ class Gpu {
   VkCommandBuffer cmd_ = VK_NULL_HANDLE;
   VkFence fence_ = VK_NULL_HANDLE;
   VkDescriptorPool dpool_ = VK_NULL_HANDLE;
+  VkPipelineCache pcache_ = VK_NULL_HANDLE;   // seeded from / saved to a process-wide blob
   VkPhysicalDeviceMemoryProperties memprops_{};
   bool recording_ = false;
   std::vector<Buffer> noncoherent_;   // flushed before / invalidated after each submit

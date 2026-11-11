@@ -166,7 +166,9 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   LKR_LOG("merge %dx%d s=%d K=%d tiles %d: noise %.0f coarse %.0f tiles %.0f (gpu %.0f prior %.0f) total %.0f ms",
           ow, oh, s, int(K), st.tiles, st.ms_noise, st.ms_coarse, st.ms_tiles, st.ms_gpu, st.ms_prior, st.ms_total);
   LKR_LOG("reference frame %d (sharpest)", st.ref_index);
-  LKR_LOG("workers %d, tile sums: solve %.0f (gpu %.0f prior %.0f -> cpu/other %.0f) prep %.0f (load %.0f) ms", st.workers, st.ms_solve, st.ms_gpu, st.ms_prior, st.ms_solve - st.ms_gpu - st.ms_prior, st.ms_prep, st.ms_load);
+  LKR_LOG("workers %d, tile sums: solve %.0f (gpu %.0f prior %.0f init %.0f finish %.0f other %.0f) prep %.0f (load %.0f) blend %.0f | setup %.0f wait %.0f ms",
+          st.workers, st.ms_solve, st.ms_gpu, st.ms_prior, st.ms_init, st.ms_finish,
+          st.ms_solve - st.ms_gpu - st.ms_prior - st.ms_init - st.ms_finish, st.ms_prep, st.ms_load, st.ms_blend, st.ms_setup, st.ms_wait);
   jobject buf = env->NewDirectByteBuffer(out, jlong(bytes));
   if (!buf) std::free(out);
   return buf;
@@ -184,6 +186,15 @@ extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMe
 }
 
 // Native defaults of the LK-SR Lab table (lkr_tuning.h), shown by the app's sliders.
+extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetCacheDir(JNIEnv* env, jclass, jstring dir) {
+  if (!dir) return;
+  const char* c = env->GetStringUTFChars(dir, nullptr);
+  if (c) {
+    lkr::Gpu::SetPipelineCacheFile(std::string(c) + "/lkr_pipelines.bin");
+    env->ReleaseStringUTFChars(dir, c);
+  }
+}
+
 extern "C" JNIEXPORT jfloatArray JNICALL Java_com_matthew_rawlens_LkrBridge_nativeTuningDefaults(JNIEnv* env, jclass) {
   const std::vector<float> v = lkr::TuningDefaults();
   jfloatArray a = env->NewFloatArray(jsize(v.size()));

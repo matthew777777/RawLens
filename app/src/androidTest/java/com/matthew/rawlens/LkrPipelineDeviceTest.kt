@@ -70,6 +70,7 @@ class LkrPipelineDeviceTest {
             }
             Log.i(TAG, "loaded $n frames ${w}x$h in ${SystemClock.elapsedRealtime() - tLoad} ms")
             val dct = (args.getString("lkrDct") ?: "0") == "1"
+            LkrBridge.nativeSetCacheDir(context.codeCacheDir.absolutePath)
             for (c in cases) {
                 val stats = FloatArray(LkrBridge.STATS_SIZE)
                 val t0 = SystemClock.elapsedRealtime()

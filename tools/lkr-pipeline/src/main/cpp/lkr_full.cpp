@@ -9,6 +9,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -164,8 +165,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // 1) Our own noise fit over the WHOLE reference (a centre crop can be
   // all fine texture -- a sunlit rock slope read as 2x the noise, which made
   // the robust threshold too lenient and smeared a moving car).
+  // Runs beside the coarse alignment below, which does not use it.
   double t = now_ms();
-  {
+  std::thread noise_fit([&] {
+    const double tn = now_ms();
     std::vector<float> c(size_t(g.w) * g.h);
     LoadTile(frames[0], g, 0, 0, g.w, g.h, black, white, c.data());
     S.sigma = NoiseSigma(c.data(), g.h, g.w);
@@ -174,8 +177,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     // every robust / temporal test reject all frames. Fall back to the
     // level-independent MAD sigma as read noise.
     if (S.a <= 0 && S.b < 0.25f * S.sigma * S.sigma) S.b = S.sigma * S.sigma;
-  }
-  S.ms_noise = now_ms() - t;
+    S.ms_noise = now_ms() - tn;
+  });
 
   // 2) Global coarse LK on a binned grey frame (threads over frames).
   t = now_ms();
@@ -207,6 +210,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     int bw = 0, bh = 0;
     std::vector<float> ref = alignmentGrey(frames[0], &bw, &bh);
     const float mref = median_of(ref);
+    const LkRef lref = LkPrepare(ref.data(), bh, bw, 3);
     const int nthr = std::max(1, std::min(K - 1, int(std::thread::hardware_concurrency()) / 2));
     std::vector<std::thread> pool;
     for (int tt = 0; tt < nthr; ++tt)
@@ -224,7 +228,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
               }
             }
           }
-          std::array<double, 6> q = LkAffine(ref.data(), mov.data(), bh, bw, 40, 3);
+          std::array<double, 6> q = LkAffine(lref, mov.data(), 40);
           const int alignment_scale = prm.paper_parity ? 1 : bin;
           q[2] *= alignment_scale;
           q[5] *= alignment_scale;
@@ -233,7 +237,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       });
     for (auto& th : pool) th.join();
   }
-  S.ms_coarse = now_ms() - t;
+  noise_fit.join();
+  S.ms_coarse = now_ms() - t;   // wall, noise fit included
 
   // 3) Overlapping tiles, feathered accumulation into the interleaved output.
   t = now_ms();
@@ -348,11 +353,12 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // blended strictly in job order (ticket), so the output is deterministic.
   int nwork = std::max(1, std::min<int>(prm.workers, int(jobs.size())));
   if (prm.solver_budget_mb > 0) {
-    // ~14 HR float planes x 3 colours + ~17 LR float buffers per frame (lkr_solver.cpp cache).
+    // 11 HR float planes x 3 colours + 13 LR float buffers per frame (lkr_solver.cpp cache).
     const double hr = 3.0 * HN * HN, lr = double(K) * n * n;
-    const double per_mb = (hr * 56.0 + lr * 68.0) / (1024.0 * 1024.0);
+    const double per_mb = (hr * 44.0 + lr * 52.0) / (1024.0 * 1024.0);
     nwork = std::clamp(int(prm.solver_budget_mb / per_mb), std::min(std::max(prm.min_workers, 1), nwork), nwork);
   }
+  const double t_setup = now_ms();
   std::vector<std::unique_ptr<Gpu>> own;
   std::vector<Gpu*> gpus{gpu};
   for (int w = 1; w < nwork; ++w) {
@@ -361,20 +367,76 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     gpus.push_back(own.back().get());
   }
   S.workers = int(gpus.size());
+  S.ms_setup = now_ms() - t_setup;
   std::atomic<size_t> next{0};
   std::mutex mu;
   std::condition_variable cv;
   size_t ticket = 0;
   bool failed = false;
-  std::string fail_msg;
+  std::string fail_msg, prof_names;
+  // A finished tile: blended strictly in job order (deterministic sums where tiles overlap), but
+  // by whichever worker closes the gap, so nobody idles waiting for an earlier tile.
+  struct Done {
+    std::vector<float> x, yk;   // solved tile; held-out frame's samples (holdout only)
+    SolveStats ss;
+  };
+  std::map<size_t, Done> pending;
+  auto blend = [&](size_t ji, const Done& d) {
+    const TileJob& jb = jobs[ji];
+    const int gx = jb.gx, gy = jb.gy;
+    // Feather only on sides shared with a neighbour tile.
+    const size_t HW = size_t(HN) * HN;
+    for (int Y = 0; Y < HN; ++Y) {
+      const float wy = wgt(Y, jb.T, jb.B);
+      const int oyy = s * gy + Y + offy;
+      if (oyy < 0 || oyy >= *out_h) continue;
+      for (int X = 0; X < HN; ++X) {
+        const int oxx = s * gx + X + offx;
+        if (oxx < 0 || oxx >= *out_w) continue;
+        const float w = wy * wgt(X, jb.L, jb.R);
+        float* o = rgb_data + (size_t(oyy) * *out_w + oxx) * 3;
+        const size_t i = size_t(Y) * HN + X;
+        o[0] += w * d.x[i];
+        o[1] += w * d.x[HW + i];
+        o[2] += w * d.x[2 * HW + i];
+        if (dbg_path && d.ss.dbg.size() == size_t(kDebugMaps) * HW)
+          for (int m = 0; m < kDebugMaps; ++m)
+            dmaps[size_t(m) * GW * GH + size_t(s * gy + Y) * GW + s * gx + X] += w * d.ss.dbg[size_t(m) * HW + i];
+      }
+    }
+    if (holdout && d.ss.ho_r.size() == size_t(n) * n) {
+      // Expected variance of a held-out sample: a * signal + b in the frame's own units, with
+      // the prediction as the signal (less noisy than the sample) and the exposure gain undone.
+      const float gk = gain[size_t(K - 1)];
+      const float* yk = d.yk.data();
+      const size_t plane = size_t(g.w) * g.h;
+      for (int i = 0; i < n; ++i) {
+        const float wy = wgt(s * i, jb.T, jb.B);
+        for (int j = 0; j < n; ++j) {
+          const size_t q = size_t(i) * n + j;
+          if (d.ss.ho_valid[q] < 0.5f) continue;
+          const float w = wy * wgt(s * j, jb.L, jb.R);
+          const float r = d.ss.ho_r[q];
+          const float var = std::max(gk * S.a * std::max(r + yk[q], 0.0f) + gk * gk * S.b, 1e-12f);
+          const size_t o = size_t(gy + i) * g.w + gx + j;
+          S.holdout[o] += w * r * r / var;
+          S.holdout[plane + o] += w;
+          S.holdout[2 * plane + o] += w * r / std::sqrt(var);
+        }
+      }
+    }
+  };
   auto worker = [&](Gpu* wg) {
+    const double t_solver = now_ms();
     Solver solver(wg);
+    { std::lock_guard<std::mutex> l(mu); S.ms_setup += now_ms() - t_solver; }
     if (!solver.ok()) {
       std::lock_guard<std::mutex> l(mu);
       failed = true; fail_msg = "solver pipelines unavailable";
       cv.notify_all();
       return;
     }
+    if (wg == gpu) { std::lock_guard<std::mutex> l(mu); prof_names = solver.profileNames(); }
     std::vector<float> tf(size_t(K) * n * n), x, field;
     BlockSearch bsearch(wg);
     for (;;) {
@@ -407,7 +469,11 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
             o[size_t(ii) * g2 + jj] = 0.25f * (r0[0] + r0[1] + r0[n] + r0[n + 1]);
           }
       };
-      if (prm.tile_lk && !prm.paper_parity) cellGrey(tf.data(), gref);
+      LkRef tref;
+      if (prm.tile_lk && !prm.paper_parity) {
+        cellGrey(tf.data(), gref);
+        tref = LkPrepare(gref.data(), g2, g2, 2);
+      }
       // Quadrant size and pre-blur follow the noise level: small, sharp patches in
       // daylight; larger, smoothed ones at night (small noisy patches misaligned
       // and blurred the night treeline).
@@ -418,6 +484,18 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       const int sub_nbx = (n + 15) / 16, sub_nby = (n + 15) / 16;
       std::vector<float> sub_field;
       if (use_sub) sub_field.assign(size_t(K) * sub_nbx * sub_nby * 2, 0.0f);
+      std::vector<LkRef> qref;   // quadrant references, row-major in the order align_frame visits them
+      if (use_sub) {
+        const int gs = sub_size / 2;
+        std::vector<float> sr(size_t(gs) * gs);
+        for (int qy = 0; qy + gs <= g2; qy += gs)
+          for (int qx = 0; qx + gs <= g2; qx += gs) {
+            for (int i = 0; i < gs; ++i)
+              for (int j = 0; j < gs; ++j) sr[size_t(i) * gs + j] = gref[size_t(qy + i) * g2 + qx + j];
+            if (sub_blur > 0) BoxBlurGrey(&sr, gs, sub_blur);
+            qref.push_back(LkPrepare(sr.data(), gs, gs, 2));
+          }
+      }
       // Frames are independent: the worker plus up to 2 helper threads (3
       // workers x 3 <= 9 threads on the 8-core phone; the solver threads mostly
       // wait on the GPU meanwhile). Per-frame results are identical.
@@ -428,8 +506,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         if (k > 0 && prm.tile_lk && !prm.paper_parity) {
           cellGrey(tf.data() + size_t(k) * n * n, gm);
           std::array<double, 6> pg{pt[0], pt[1], pt[2] * 0.5, pt[3], pt[4], pt[5] * 0.5};   // LR -> grey px
-          const std::array<double, 6> pr = LkAffine(gref.data(), gm.data(), g2, g2, 30, 2, &pg);
-          if (LkResidual(gref.data(), gm.data(), g2, g2, pr) < LkResidual(gref.data(), gm.data(), g2, g2, pg))
+          const std::array<double, 6> pr = LkAffine(tref, gm.data(), 30, &pg);
+          if (LkResidual(tref, gm.data(), pr) < LkResidual(tref, gm.data(), pg))
             pt = {pr[0], pr[1], pr[2] * 2.0, pr[3], pr[4], pr[5] * 2.0};
         }
         for (int c = 0; c < 6; ++c) p[k * 6 + c] = float(pt[c]);
@@ -437,21 +515,20 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         // written as the local motion start d(u) = (A' u + t') - (A u + t), LR px.
         if (k > 0 && use_sub) {
           const int gs = sub_size / 2;   // quadrant edge in grey px
-          std::vector<float> sr(size_t(gs) * gs), sm(size_t(gs) * gs);
+          std::vector<float> sm(size_t(gs) * gs);
+          size_t qi = 0;
           for (int qy = 0; qy + gs <= g2; qy += gs)
             for (int qx = 0; qx + gs <= g2; qx += gs) {
+              const LkRef& sr = qref[qi++];
               for (int i = 0; i < gs; ++i)
-                for (int j = 0; j < gs; ++j) {
-                  sr[size_t(i) * gs + j] = gref[size_t(qy + i) * g2 + qx + j];
-                  sm[size_t(i) * gs + j] = gm[size_t(qy + i) * g2 + qx + j];
-                }
-              if (sub_blur > 0) { BoxBlurGrey(&sr, gs, sub_blur); BoxBlurGrey(&sm, gs, sub_blur); }
+                for (int j = 0; j < gs; ++j) sm[size_t(i) * gs + j] = gm[size_t(qy + i) * g2 + qx + j];
+              if (sub_blur > 0) BoxBlurGrey(&sm, gs, sub_blur);
               const double tgx = pt[2] * 0.5, tgy = pt[5] * 0.5;   // tile affine in grey px
               std::array<double, 6> ps{pt[0], pt[1], pt[0] * qx + pt[1] * qy + tgx - qx,
                                        pt[3], pt[4], pt[3] * qx + pt[4] * qy + tgy - qy};
-              const std::array<double, 6> pq = LkAffine(sr.data(), sm.data(), gs, gs, 30, 2, &ps);
-              const double r_new = LkResidual(sr.data(), sm.data(), gs, gs, pq);
-              const double r_old = LkResidual(sr.data(), sm.data(), gs, gs, ps);
+              const std::array<double, 6> pq = LkAffine(sr, sm.data(), 30, &ps);
+              const double r_new = LkResidual(sr, sm.data(), pq);
+              const double r_old = LkResidual(sr, sm.data(), ps);
               if (std::getenv("LKR_DEBUG_SUB"))
                 std::fprintf(stderr, "sub k%d q(%d,%d) size %d blur %d: residual %.5f -> %.5f (%s)\n", k, qx, qy,
                              sub_size, sub_blur, r_old, r_new, r_new < prm.sub_lk_gain * r_old ? "kept" : "rejected");
@@ -510,8 +587,14 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       const double ts = now_ms();
       const bool ok = solver.solve(tf.data(), K, n, n, p.data(), spt, prior, &x, &ss);
       const double solve_ms = now_ms() - ts;
+      Done done;
+      done.x.swap(x);
+      if (holdout) done.yk.assign(tf.data() + size_t(K - 1) * n * n, tf.data() + size_t(K) * n * n);
+      const double t_wait = now_ms();
       std::unique_lock<std::mutex> l(mu);
-      cv.wait(l, [&] { return ticket == ji || failed; });
+      // Back-pressure: every waiting result holds a tile image.
+      cv.wait(l, [&] { return failed || ticket == ji || pending.size() < 2 * gpus.size(); });
+      S.ms_wait += now_ms() - t_wait;
       if (failed) return;
       if (!ok) { failed = true; fail_msg = "tile solve failed"; cv.notify_all(); return; }
       S.ms_gpu += ss.gpu_ms;
@@ -519,50 +602,19 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       S.ms_prep += ts - tprep;
       S.ms_load += tl1 - tl0;
       S.ms_prior += ss.prior_ms;
+      S.ms_init += ss.init_ms;
+      S.ms_finish += ss.finish_ms;
       S.prior_calls += ss.prior_calls;
       ++S.tiles;
-      // Feather only on sides shared with a neighbour tile.
-      const size_t HW = size_t(HN) * HN;
-      for (int Y = 0; Y < HN; ++Y) {
-        const float wy = wgt(Y, jb.T, jb.B);
-        const int oyy = s * gy + Y + offy;
-        if (oyy < 0 || oyy >= *out_h) continue;
-        for (int X = 0; X < HN; ++X) {
-          const int oxx = s * gx + X + offx;
-          if (oxx < 0 || oxx >= *out_w) continue;
-          const float w = wy * wgt(X, jb.L, jb.R);
-          float* o = rgb_data + (size_t(oyy) * *out_w + oxx) * 3;
-          const size_t i = size_t(Y) * HN + X;
-          o[0] += w * x[i];
-          o[1] += w * x[HW + i];
-          o[2] += w * x[2 * HW + i];
-          if (dbg_path && ss.dbg.size() == size_t(kDebugMaps) * HW)
-            for (int m = 0; m < kDebugMaps; ++m)
-              dmaps[size_t(m) * GW * GH + size_t(s * gy + Y) * GW + s * gx + X] += w * ss.dbg[size_t(m) * HW + i];
-        }
+      done.ss = std::move(ss);
+      pending.emplace(ji, std::move(done));
+      const double t_blend = now_ms();
+      while (!pending.empty() && pending.begin()->first == ticket) {
+        blend(ticket, pending.begin()->second);
+        pending.erase(pending.begin());
+        ++ticket;
       }
-      if (holdout && ss.ho_r.size() == size_t(n) * n) {
-        // Expected variance of a held-out sample: a * signal + b in the frame's own units, with
-        // the prediction as the signal (less noisy than the sample) and the exposure gain undone.
-        const float gk = gain[size_t(K - 1)];
-        const float* yk = tf.data() + size_t(K - 1) * n * n;
-        const size_t plane = size_t(g.w) * g.h;
-        for (int i = 0; i < n; ++i) {
-          const float wy = wgt(s * i, jb.T, jb.B);
-          for (int j = 0; j < n; ++j) {
-            const size_t q = size_t(i) * n + j;
-            if (ss.ho_valid[q] < 0.5f) continue;
-            const float w = wy * wgt(s * j, jb.L, jb.R);
-            const float r = ss.ho_r[q];
-            const float var = std::max(gk * S.a * std::max(r + yk[q], 0.0f) + gk * gk * S.b, 1e-12f);
-            const size_t o = size_t(gy + i) * g.w + gx + j;
-            S.holdout[o] += w * r * r / var;
-            S.holdout[plane + o] += w;
-            S.holdout[2 * plane + o] += w * r / std::sqrt(var);
-          }
-        }
-      }
-      ++ticket;
+      S.ms_blend += now_ms() - t_blend;
       cv.notify_all();
     }
   };
@@ -622,6 +674,28 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   }
   S.ms_tiles = now_ms() - t;
   S.gpu_profile = gpu->profileReport();
+  if (!S.gpu_profile.empty()) {   // pointer -> shader name, sorted by time
+    std::vector<std::pair<double, std::string>> rows;
+    size_t pos = 0;
+    while (pos < S.gpu_profile.size()) {
+      const size_t e = S.gpu_profile.find(' ', pos), c = S.gpu_profile.find(':', pos);
+      const std::string ptr = S.gpu_profile.substr(pos, c - pos);
+      const double ms = std::atof(S.gpu_profile.c_str() + c + 1);
+      const size_t at = prof_names.find("=" + ptr);
+      std::string name = ptr;
+      if (at != std::string::npos) {
+        const size_t b = prof_names.rfind(' ', at);
+        name = prof_names.substr(b == std::string::npos ? 0 : b + 1, at - (b == std::string::npos ? 0 : b + 1));
+      }
+      rows.emplace_back(ms, name);
+      if (e == std::string::npos) break;
+      pos = e + 1;
+    }
+    std::sort(rows.rbegin(), rows.rend());
+    S.gpu_profile.clear();
+    char b[96];
+    for (const auto& r : rows) { std::snprintf(b, sizeof(b), "%s %.0f, ", r.second.c_str(), r.first); S.gpu_profile += b; }
+  }
   S.ms_total = now_ms() - t0;
   if (st) *st = S;
   return true;

@@ -79,6 +79,12 @@ static const uint32_t resid_adj_w_zq[] = {
 static const uint32_t weight_t[] = {
 #include "weight_t.inc"
 };
+static const uint32_t weight_tv[] = {
+#include "weight_tv.inc"
+};
+static const uint32_t weight_td[] = {
+#include "weight_td.inc"
+};
 static const uint32_t scatter[] = {
 #include "scatter.inc"
 };

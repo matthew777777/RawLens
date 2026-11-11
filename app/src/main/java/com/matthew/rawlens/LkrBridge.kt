@@ -55,6 +55,12 @@ internal object LkrBridge {
         tuning: FloatArray?, outWidth: Int, outHeight: Int
     ): ByteBuffer?
 
+    /**
+     * Folder for the compiled Vulkan pipelines (use the app's code cache directory): without it
+     * every new process recompiles the shaders on its first merge. Call before [nativeMerge].
+     */
+    @JvmStatic external fun nativeSetCacheDir(dir: String)
+
     /** Native defaults of the LK-R Lab table (index layout: lkr_tuning.h / [LkrTuning.Entry]). */
     @JvmStatic external fun nativeTuningDefaults(): FloatArray
 }

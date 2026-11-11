@@ -111,17 +111,13 @@ double now_ms() {
 
 Solver::Solver(Gpu* gpu) : gpu_(gpu) {
   if (!gpu_ || !gpu_->ok()) return;
-  dct_y_ = gpu_->pipeline(spv::dct_x_y, sizeof(spv::dct_x_y), 5, sizeof(DctPush));
-  dct_u_ = gpu_->pipeline(spv::dct_x_u, sizeof(spv::dct_x_u), 5, sizeof(DctPush));
-  dct_v_ = gpu_->pipeline(spv::dct_x_v, sizeof(spv::dct_x_v), 5, sizeof(DctPush));
-  dct_yuv_ = gpu_->pipeline(spv::dct_yuv, sizeof(spv::dct_yuv), 1, sizeof(DctPush));
+  // Only what every solve uses. The x-step and the A/B variants are created on first use
+  // (Optional()): compiling all 30 shaders cost 2-3 s per worker on a Mali-G615, every merge.
   resid_ = gpu_->pipeline(spv::resid_adj, sizeof(spv::resid_adj), 5, sizeof(Push));
   zstep_ = gpu_->pipeline(spv::zstep, sizeof(spv::zstep), 3, sizeof(Push));
-  grad_ = gpu_->pipeline(spv::grad, sizeof(spv::grad), 2, sizeof(Push));
   jac_ = gpu_->pipeline(spv::jac, sizeof(spv::jac), 7, sizeof(Push));
   solve_ = gpu_->pipeline(spv::solve, sizeof(spv::solve), 2, sizeof(Push));
   residg_ = gpu_->pipeline(spv::resid, sizeof(spv::resid), 5, sizeof(Push));
-  zgather_ = gpu_->pipeline(spv::zstep_gather, sizeof(spv::zstep_gather), 4, sizeof(Push));
   weight_ = gpu_->pipeline(spv::weight, sizeof(spv::weight), 5, sizeof(Push));
   scatter_ = gpu_->pipeline(spv::scatter, sizeof(spv::scatter), 4, sizeof(Push));
   jacblk_ = gpu_->pipeline(spv::jacblk, sizeof(spv::jacblk), 7, sizeof(Push));
@@ -131,24 +127,52 @@ Solver::Solver(Gpu* gpu) : gpu_(gpu) {
   radjw_ = gpu_->pipeline(spv::resid_adj_w, sizeof(spv::resid_adj_w), 6, sizeof(Push));
   wexp_ = gpu_->pipeline(spv::weight_e, sizeof(spv::weight_e), 3, sizeof(Push));
   wth_ = gpu_->pipeline(spv::weight_th, sizeof(spv::weight_th), 4, sizeof(Push));
-  zgw_ = gpu_->pipeline(spv::zstep_gw, sizeof(spv::zstep_gw), 6, sizeof(Push));
-  residq_ = gpu_->pipeline(spv::resid_q, sizeof(spv::resid_q), 5, sizeof(Push));
-  radjwq_ = gpu_->pipeline(spv::resid_adj_w_q, sizeof(spv::resid_adj_w_q), 6, sizeof(Push));
-  scatq_ = gpu_->pipeline(spv::scatter_q, sizeof(spv::scatter_q), 4, sizeof(Push));
-  zpack_ = gpu_->pipeline(spv::zpack, sizeof(spv::zpack), 2, sizeof(Push));
-  residzq_ = gpu_->pipeline(spv::resid_zq, sizeof(spv::resid_zq), 5, sizeof(Push));
-  radjwzq_ = gpu_->pipeline(spv::resid_adj_w_zq, sizeof(spv::resid_adj_w_zq), 6, sizeof(Push));
-  wtemp_ = gpu_->pipeline(spv::weight_t, sizeof(spv::weight_t), 5, sizeof(Push));
-  ok_ = dct_y_.pipe && dct_u_.pipe && dct_v_.pipe && dct_yuv_.pipe && resid_.pipe && zstep_.pipe && grad_.pipe && jac_.pipe && solve_.pipe && residg_.pipe && zgather_.pipe &&
-        weight_.pipe && scatter_.pipe && jacblk_.pipe && solveblk_.pipe && wmin_.pipe && wtemp_.pipe && wminh_.pipe && radjw_.pipe && wexp_.pipe && wth_.pipe && zgw_.pipe && residq_.pipe && radjwq_.pipe && scatq_.pipe && zpack_.pipe && residzq_.pipe && radjwzq_.pipe;
+  wtemp_ = gpu_->pipeline(spv::weight_t, sizeof(spv::weight_t), 6, sizeof(Push));
+  wdarkv_ = gpu_->pipeline(spv::weight_tv, sizeof(spv::weight_tv), 8, sizeof(Push));
+  wdark_ = gpu_->pipeline(spv::weight_td, sizeof(spv::weight_td), 8, sizeof(Push));
+  ok_ = resid_.pipe && zstep_.pipe && jac_.pipe && solve_.pipe && residg_.pipe && weight_.pipe && scatter_.pipe &&
+        jacblk_.pipe && solveblk_.pipe && wmin_.pipe && wminh_.pipe && radjw_.pipe && wexp_.pipe && wth_.pipe &&
+        wtemp_.pipe && wdark_.pipe && wdarkv_.pipe;
+}
+
+bool Solver::Optional(const SolveParams& prm, bool dct) {
+  auto need = [&](Pipeline& p, const uint32_t* code, size_t bytes, uint32_t nbind, uint32_t push) {
+    if (!p.pipe) p = gpu_->pipeline(code, bytes, nbind, push);
+    return p.pipe != VK_NULL_HANDLE;
+  };
+  bool ok = true;
+  if (dct)
+    ok = need(dct_y_, spv::dct_x_y, sizeof(spv::dct_x_y), 5, sizeof(DctPush)) &&
+         need(dct_u_, spv::dct_x_u, sizeof(spv::dct_x_u), 5, sizeof(DctPush)) &&
+         need(dct_v_, spv::dct_x_v, sizeof(spv::dct_x_v), 5, sizeof(DctPush)) &&
+         need(dct_yuv_, spv::dct_yuv, sizeof(spv::dct_yuv), 1, sizeof(DctPush));
+  if (prm.gather) ok = ok && need(zgather_, spv::zstep_gather, sizeof(spv::zstep_gather), 4, sizeof(Push));
+  if (prm.robust_gather) ok = ok && need(zgw_, spv::zstep_gw, sizeof(spv::zstep_gw), 6, sizeof(Push));
+  if (prm.quad)
+    ok = ok && need(residq_, spv::resid_q, sizeof(spv::resid_q), 5, sizeof(Push)) &&
+         need(radjwq_, spv::resid_adj_w_q, sizeof(spv::resid_adj_w_q), 6, sizeof(Push)) &&
+         need(scatq_, spv::scatter_q, sizeof(spv::scatter_q), 4, sizeof(Push));
+  if (prm.pack_taps)
+    ok = ok && need(zpack_, spv::zpack, sizeof(spv::zpack), 2, sizeof(Push)) &&
+         need(residzq_, spv::resid_zq, sizeof(spv::resid_zq), 5, sizeof(Push)) &&
+         need(radjwzq_, spv::resid_adj_w_zq, sizeof(spv::resid_adj_w_zq), 6, sizeof(Push));
+  return ok;
 }
 
 std::string Solver::profileNames() const {
-  char b[512];
-  std::snprintf(b, sizeof(b), "resid_adj=%p zstep=%p resid=%p zstep_gather=%p grad=%p jac=%p solve=%p",
-                (const void*)&resid_, (const void*)&zstep_, (const void*)&residg_, (const void*)&zgather_,
-                (const void*)&grad_, (const void*)&jac_, (const void*)&solve_);
-  return b;
+  const std::pair<const char*, const Pipeline*> all[] = {
+      {"resid_adj", &resid_}, {"zstep", &zstep_}, {"resid", &residg_}, {"zstep_gather", &zgather_},
+      {"jac", &jac_}, {"solve", &solve_}, {"weight", &weight_}, {"scatter", &scatter_}, {"jacblk", &jacblk_},
+      {"solveblk", &solveblk_}, {"weight_min", &wmin_}, {"weight_minh", &wminh_}, {"resid_adj_w", &radjw_},
+      {"weight_e", &wexp_}, {"weight_th", &wth_}, {"weight_t", &wtemp_}, {"weight_td", &wdark_}, {"weight_tv", &wdarkv_}, {"zstep_gw", &zgw_}, {"dct_y", &dct_y_},
+      {"dct_u", &dct_u_}, {"dct_v", &dct_v_}, {"dct_yuv", &dct_yuv_}};
+  std::string out;
+  char b[64];
+  for (const auto& e : all) {
+    std::snprintf(b, sizeof(b), "%s%s=%p", out.empty() ? "" : " ", e.first, (const void*)e.second);
+    out += b;
+  }
+  return out;
 }
 
 Buffer& Solver::Cached(int slot, size_t bytes, bool host_read) {
@@ -166,7 +190,7 @@ Buffer& Solver::Cached(int slot, size_t bytes, bool host_read) {
 Solver::~Solver() {
   if (gpu_) for (Entry& e : cache_) gpu_->free(e.buf);
   if (!gpu_ || !gpu_->ok()) return;
-  for (Pipeline* p : {&dct_y_, &dct_u_, &dct_v_, &dct_yuv_, &resid_, &zstep_, &grad_, &jac_, &solve_, &residg_, &zgather_, &weight_, &scatter_, &jacblk_, &solveblk_, &wmin_, &wtemp_, &wminh_, &radjw_, &wexp_, &wth_, &zgw_, &residq_, &radjwq_, &scatq_, &zpack_, &residzq_, &radjwzq_})
+  for (Pipeline* p : {&dct_y_, &dct_u_, &dct_v_, &dct_yuv_, &resid_, &zstep_, &jac_, &solve_, &residg_, &zgather_, &weight_, &scatter_, &jacblk_, &solveblk_, &wmin_, &wtemp_, &wdark_, &wdarkv_, &wminh_, &radjw_, &wexp_, &wth_, &zgw_, &residq_, &radjwq_, &scatq_, &zpack_, &residzq_, &radjwzq_})
     gpu_->destroy(*p);
 }
 
@@ -193,7 +217,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   // input/output, final result), moved by GPU buffer copies.
   Buffer& z = cached(nHR * 4), &x = cached(nHR * 4), &acc = cached(nHR * 4);
   Buffer& zc = cached(nHR * 4, true), &xc = cached(nHR * 4, true);
-  Buffer& g = cached(nHR * 2 * 4);
+  Buffer& g = cached(16);   // bound by jac / jacblk, which take the gradient from the bilinear taps themselves
   // jac.comp: 64 lanes x 8 pixels per group, 16 subgroup slots per group.
   const uint32_t G = div_up(uint32_t(h * w), 64 * 8), kSlots = 16;
   Buffer& part = cached(size_t(std::max(Kall - 1, 1)) * G * kSlots * 27 * 4);
@@ -201,12 +225,17 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   Buffer& rr = cached(nLR * 4);   // residual (gather / robust paths)
   Buffer& rwb = cached(nLR * 4), &wtb = cached(nLR * 4);   // weighted residual, robust weight
   Buffer& wvb = cached(nLR * 4);                                 // valid * weight
-  Buffer& wrawb = cached(nLR * 4), &rwtmp = cached(nLR * 4), &wvtmp = cached(nLR * 4);   // pre-spread weights
-  // Temporal weights: z0 = reference-only start image, rrt its residuals.
-  Buffer& z0 = cached(nHR * 4), &rrt = cached(nLR * 4), &wtr = cached(nLR * 4);
-  // rwt2: vec4 row sums of the temporal test (weight_th); ebuf: per-sample robust terms (weight_e)
-  Buffer& rwt2 = cached(nLR * 16), &wvt2 = cached(nLR * 4), &wmtmp = cached(nLR * 4);
+  Buffer& wrawb = cached(nLR * 4);   // pre-spread weights
+  // Temporal weights: z0 = reference-only start image, rrt its residuals. Every pass runs behind a
+  // barrier, so scratch that is dead before its next writer shares memory: rrt is consumed by the
+  // temporal test before the robust residual overwrites rr (own buffer only for the trace dumps).
+  Buffer& z0 = cached(nHR * 4), &wtr = cached(nLR * 4);
+  Buffer& rrt = prm.debug_prefix.empty() ? rr : cached(nLR * 4);
+  // rwt2: vec4 row sums of the temporal test (weight_th); ebuf: per-sample robust terms (weight_e),
+  // read by weight.comp only, then reused for the row minima of the spread (wmtmp).
+  Buffer& rwt2 = cached(nLR * 16), &wvt2 = cached(nLR * 4);
   Buffer& ebuf = cached(nLR * 4);
+  Buffer& wmtmp = ebuf;
   // Packed 2x2 taps of z / z0 (zpack.comp); only the off-by-default pack_taps path reads them.
   const size_t zq_bytes = prm.pack_taps ? nHR * 16 : 16;
   Buffer& zq = cached(zq_bytes), &z0q = cached(zq_bytes);
@@ -220,7 +249,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   if (prm.local_init && prm.local_block > 0) std::memcpy(dloc.map, prm.local_init, size_t(Kall) * nb * 8);
   // Weighted coverage sum_k U_k^T (valid w) (acc2 -> cw) and plain coverage
   // U^T 1 (cov, = v after the L bound), host-cached copies for the prior map.
-  Buffer& acc2 = cached(nHR * 4), &cw = cached(nHR * 4), &cov = cached(nHR * 4);
+  Buffer& acc2 = cached(nHR * 4), &cw = cached(nHR * 4);
   Buffer& cwc = cached(nHR * 4, true), &covc = cached(nHR * 4, true);
   std::memset(acc2.map, 0, nHR * 4);
   if (!y.map || !pb.map || !z.map || !x.map || !acc.map || !g.map || !part.map || !v.map || !z0.map || !wtr.map ||
@@ -261,7 +290,13 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     axis(W, dct_nx, iw + H);
   }
 
+  S.init_ms = now_ms() - t_start;
+  if (!Optional(prm, dct)) return LKR_FAIL("optional pipelines");
   gpu_->resetSets();
+  // A set of a pipeline this solve does not use (not created) stays null and is never dispatched.
+  auto oset = [&](const Pipeline& pl, std::initializer_list<const Buffer*> bufs) {
+    return pl.pipe ? gpu_->set(pl, bufs) : VkDescriptorSet(VK_NULL_HANDLE);
+  };
   VkDescriptorSet sDctY = VK_NULL_HANDLE, sDctU = VK_NULL_HANDLE, sDctV = VK_NULL_HANDLE, sDctC = VK_NULL_HANDLE;
   if (dct) {
     sDctY = gpu_->set(dct_y_, {&z, &x, &dct_ns, &dct_iw, &dct_nv});
@@ -271,7 +306,6 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   }
   VkDescriptorSet sResid = gpu_->set(resid_, {&z, &y, &pb, &acc, &dloc});
   VkDescriptorSet sZ = gpu_->set(zstep_, {&z, &x, &acc});
-  VkDescriptorSet sGrad = gpu_->set(grad_, {&z, &g});
   VkDescriptorSet sJac = gpu_->set(jac_, {&z, &g, &y, &pb, &part, &wtb, &dloc});
   VkDescriptorSet sJB = gpu_->set(jacblk_, {&z, &g, &y, &pb, &blk, &wtb, &dloc});
   VkDescriptorSet sSB = gpu_->set(solveblk_, {&blk, &dloc, &dtmp});
@@ -286,36 +320,41 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   const uint32_t gxLR = div_up(w, 16), gyLR = div_up(h, 16);
   const uint32_t gHR1 = div_up(uint32_t(nHR), 256);
   VkDescriptorSet sR = gpu_->set(residg_, {&z, &y, &pb, &rr, &dloc});
-  VkDescriptorSet sZG = gpu_->set(zgather_, {&z, &x, &rr, &pb});
+  VkDescriptorSet sZG = oset(zgather_, {&z, &x, &rr, &pb});
   VkDescriptorSet sVR = gpu_->set(residg_, {&v, &y, &pb, &rr, &dloc});
-  VkDescriptorSet sVZG = gpu_->set(zgather_, {&v, &x, &rr, &pb});
+  VkDescriptorSet sVZG = oset(zgather_, {&v, &x, &rr, &pb});
   VkDescriptorSet sE = gpu_->set(wexp_, {&rr, &y, &ebuf});
   VkDescriptorSet sW = gpu_->set(weight_, {&rr, &ebuf, &rwb, &wtb, &wvb});
-  VkDescriptorSet sW0 = gpu_->set(weight_, {&rr, &ebuf, &rwtmp, &wrawb, &wvtmp});      // raw weights for the spread
+  VkDescriptorSet sW0 = gpu_->set(weight_, {&rr, &ebuf, &rwb, &wrawb, &wvb});      // raw weights for the spread (rwb, wvb: rewritten by weight_min)
   VkDescriptorSet sWH = gpu_->set(wminh_, {&wrawb, &wtr, &wmtmp});
   VkDescriptorSet sWM = gpu_->set(wmin_, {&rr, &wmtmp, &rwb, &wtb, &wvb});
   VkDescriptorSet sRW = gpu_->set(radjw_, {&z, &y, &pb, &acc, &dloc, &wtb});
-  VkDescriptorSet sZGW = gpu_->set(zgw_, {&z, &x, &rr, &pb, &dloc, &wtb});
+  VkDescriptorSet sZGW = oset(zgw_, {&z, &x, &rr, &pb, &dloc, &wtb});
   VkDescriptorSet sRT = gpu_->set(residg_, {&z0, &y, &pb, &rrt, &dloc});
-  VkDescriptorSet sHV = gpu_->set(residg_, {&z, &y, &pb, &rrt, &dloc});   // holdout: valid mask of the finished image
+  VkDescriptorSet sHV = gpu_->set(residg_, {&z, &y, &pb, &ebuf, &dloc});   // holdout: valid mask of the finished image
   VkDescriptorSet sTH = gpu_->set(wth_, {&rrt, &y, &rwt2, &wvt2});
-  VkDescriptorSet sWT = gpu_->set(wtemp_, {&rrt, &y, &rwt2, &wtr, &wvt2});
+  // ebuf is free during the temporal test (weight_e writes it later in the data step).
+  VkDescriptorSet sWT = gpu_->set(wtemp_, {&rrt, &y, &rwt2, &wtr, &wvt2, &ebuf});
+  // Column sums of the deep-shadow window: five buffers the data step rewrites before reading
+  // (weighted residual, coverage, raw and final robust weights, robust residual).
+  VkDescriptorSet sWV = gpu_->set(wdarkv_, {&ebuf, &rwt2, &wvt2, &rwb, &wvb, &wrawb, &wtb, &rr});
+  VkDescriptorSet sWD = gpu_->set(wdark_, {&ebuf, &y, &wtr, &rwb, &wvb, &wrawb, &wtb, &rr});
   const bool temporal = prm.temporal_k > 0.0f && prm.robust_spread > 0;
   VkDescriptorSet sS = gpu_->set(scatter_, {&rwb, &pb, &acc, &dloc});
   VkDescriptorSet sSW = gpu_->set(scatter_, {&wvb, &pb, &acc2, &dloc});       // weighted coverage
   // Quad variants (prm.quad): same buffers, one invocation per 2x2 quad.
   const bool quad = prm.quad && (w % 2 == 0) && (h % 2 == 0);
   const uint32_t gxQ = div_up(uint32_t(w / 2), 16), gyQ = div_up(uint32_t(h / 2), 16);
-  VkDescriptorSet sRq = gpu_->set(residq_, {&z, &y, &pb, &rr, &dloc});
-  VkDescriptorSet sRTq = gpu_->set(residq_, {&z0, &y, &pb, &rrt, &dloc});
-  VkDescriptorSet sRWq = gpu_->set(radjwq_, {&z, &y, &pb, &acc, &dloc, &wtb});
-  VkDescriptorSet sSq = gpu_->set(scatq_, {&rwb, &pb, &acc, &dloc});
-  VkDescriptorSet sSWq = gpu_->set(scatq_, {&wvb, &pb, &acc2, &dloc});
+  VkDescriptorSet sRq = oset(residq_, {&z, &y, &pb, &rr, &dloc});
+  VkDescriptorSet sRTq = oset(residq_, {&z0, &y, &pb, &rrt, &dloc});
+  VkDescriptorSet sRWq = oset(radjwq_, {&z, &y, &pb, &acc, &dloc, &wtb});
+  VkDescriptorSet sSq = oset(scatq_, {&rwb, &pb, &acc, &dloc});
+  VkDescriptorSet sSWq = oset(scatq_, {&wvb, &pb, &acc2, &dloc});
   const bool packz = prm.pack_taps && !quad;
-  VkDescriptorSet sZP = gpu_->set(zpack_, {&z, &zq}), sZ0P = gpu_->set(zpack_, {&z0, &z0q});
-  VkDescriptorSet sRzq = gpu_->set(residzq_, {&zq, &y, &pb, &rr, &dloc});
-  VkDescriptorSet sRTzq = gpu_->set(residzq_, {&z0q, &y, &pb, &rrt, &dloc});
-  VkDescriptorSet sRWzq = gpu_->set(radjwzq_, {&zq, &y, &pb, &acc, &dloc, &wtb});
+  VkDescriptorSet sZP = oset(zpack_, {&z, &zq}), sZ0P = oset(zpack_, {&z0, &z0q});
+  VkDescriptorSet sRzq = oset(residzq_, {&zq, &y, &pb, &rr, &dloc});
+  VkDescriptorSet sRTzq = oset(residzq_, {&z0q, &y, &pb, &rrt, &dloc});
+  VkDescriptorSet sRWzq = oset(radjwzq_, {&zq, &y, &pb, &acc, &dloc, &wtb});
   const uint32_t gxP = div_up(uint32_t(W), 16), gyP = div_up(uint32_t(H), 16);
   auto d_pack = [&](VkDescriptorSet s_, const Push& qq) { gpu_->dispatch(zpack_, s_, &qq, gxP, gyP, 3); };
   auto d_resid = [&](VkDescriptorSet sp, VkDescriptorSet sq, const Push& qq, VkDescriptorSet szq) {
@@ -473,9 +512,11 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
            std::find(prm.prior_at.begin(), prm.prior_at.end(), t) != prm.prior_at.end();
   };
 
+  const int last_prior = prm.prior_at.empty() ? prm.T - 1 : *std::max_element(prm.prior_at.begin(), prm.prior_at.end());
   bool x_from_staging = false;
   bool z0_packed = false;
   int motion_steps = 0;
+  bool temporal_stale = true;
   for (int t = 0; t < prm.T; ++t) {
     const float mu = float(prm.lam * double(prm.sigma_noise) * prm.sigma_noise / (double(sig[t]) * sig[t]));
     Push q = pc;
@@ -493,7 +534,9 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     const double tg = now_ms();
     gpu_->begin();
     if (x_from_staging) { gpu_->copy(xc, x, nHR * 4); x_from_staging = false; }   // previous prior's output
-    if (temporal && q.rob_on > 0.5f) {                             // temporal weights, current motion
+    // Temporal weights depend on the fixed z0 and the motion only: recompute after a motion step.
+    if (temporal && q.rob_on > 0.5f && temporal_stale) {
+      temporal_stale = false;
       Push qt = q; qt.rob_k = prm.temporal_k; qt.f3 = prm.temporal_tau;
       if (packz && !z0_packed) { d_pack(sZ0P, qt); z0_packed = true; }   // z0 is fixed: pack once
       d_resid(sRT, sRTq, qt, sRTzq);
@@ -502,12 +545,15 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       qd.f2 = prm.temporal_dark_level;
       gpu_->dispatch(wth_, sTH, &qd, gxLR, gyLR, K);
       gpu_->dispatch(wtemp_, sWT, &qd, gxLR, gyLR, K);
+      if (prm.temporal_dark_wide) {
+        gpu_->dispatch(wdarkv_, sWV, &qd, gxLR, gyLR, K);
+        gpu_->dispatch(wdark_, sWD, &qd, gxLR, gyLR, K);
+      }
     }
     for (int zs = 0; zs < prm.z_steps; ++zs) data_step(q, false, zs == 0);  // Eq. (5)
     const bool refine_now = prm.motion_every <= 1 || t < prm.motion_warmup ||
                             ((t - prm.motion_warmup) % prm.motion_every) == prm.motion_every - 1;
     if (prm.refine_motion && K > 1 && refine_now) {                // Eq. (7)
-      gpu_->dispatch(grad_, sGrad, &q, div_up(W, 16), div_up(H, 16), 3);
       gpu_->dispatch(jac_, sJac, &q, G, K - 1);
       gpu_->dispatch(solve_, sSolve, &q, K - 1);
       if (prm.local_block > 0) {                                   // local block translations
@@ -519,11 +565,15 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
         gpu_->copy(dtmp, dloc, size_t(K) * nb * 8);   // merged frames only: a held-out frame keeps its start
       }
       ++motion_steps;
+      temporal_stale = true;
     }
     const bool use_prior = prior_here(t);
     if (use_prior && !prior && !dct) gpu_->copy(z, x, nHR * 4);    // 'none': x = z
     if (use_prior && (prior || dct)) gpu_->copy(z, zc, nHR * 4);            // prior input to the CPU side
-    if (use_prior && eq && q.rob_on > 0.5f) {             // weighted coverage of this iteration
+    // Weighted coverage feeds the x-step's noise map and, after the last one, the finishing
+    // (FinishLook, debug maps): without an x-step only that last map is ever read.
+    const bool cov_now = use_prior && eq && q.rob_on > 0.5f && (prior || dct || t == last_prior);
+    if (cov_now) {
       d_scatter(sSW, sSWq, q);
       Push q1 = q; q1.mode = 1;
       gpu_->dispatch(zstep_, sZW, &q1, gHR1);
@@ -538,7 +588,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     S.gpu_ms += now_ms() - tg;
     // Coverage is also needed by no-prior motion-region Bayer cleanup.
     if (use_prior) {
-      if (eq && q.rob_on > 0.5f) {
+      if (cov_now) {
         // f = sqrt(cov / cov_w) over the three planes: 1 where every frame
         // contributed, sqrt(K) where only the reference did.
         nscale.resize(size_t(H) * W);
@@ -677,8 +727,10 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   trace("local_final", dloc.as<float>(), size_t(K) * nb * 2);
   trace("final_z", zc.as<float>(), nHR);
   trace("final_x", x_out->data(), nHR);
+  const double t_fin = now_ms();
   FinishLook(zc.as<float>(), x_out->data(), H, W, prm, nscale.empty() ? nullptr : nscale.data(),
              shadow.empty() ? nullptr : shadow.data());
+  S.finish_ms = now_ms() - t_fin;
   trace("final_look", x_out->data(), nHR);
   if (prm.holdout) {
     // Align the held-out frame to the FINISHED image with the solver's own motion step (affine +
@@ -712,7 +764,6 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
           gpu_->dispatch(weight_, sW, &q, gxLR, gyLR, Kall);
         }
       }
-      gpu_->dispatch(grad_, sGrad, &q, div_up(W, 16), div_up(H, 16), 3);
       gpu_->dispatch(jac_, sJac, &q, G, Kall - 1);
       gpu_->dispatch(solve_, sSolve, &q, Kall - 1);
       if (prm.local_block > 0) {
@@ -733,7 +784,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     const size_t o = size_t(ko) * h * w, n1 = size_t(h) * w;
     S.ho_r.assign(rr.as<float>() + o, rr.as<float>() + o + n1);
     S.ho_valid.resize(n1);
-    const float* vm = rrt.as<float>() + o;
+    const float* vm = ebuf.as<float>() + o;
     for (size_t i = 0; i < n1; ++i) S.ho_valid[i] = (vm[i] > 0.5f && frames[o + i] < prm.clip) ? 1.0f : 0.0f;
   }
   std::memcpy(p, pb.map, size_t(Kall) * 24);
@@ -756,18 +807,24 @@ static void NotchBayerPeriod(float* P, int H, int W) {
   auto box5 = [&](std::vector<float>& a) {
     for (int y = 0; y < H; ++y) {
       const float* r = a.data() + size_t(y) * W;
+      float* o = t.data() + size_t(y) * W;
       for (int x = 0; x < W; ++x) {
         float s = 0;
-        for (int d = -2; d <= 2; ++d) s += k5[d + 2] * r[refl(x + d, W)];
-        t[size_t(y) * W + x] = s;
+        if (x >= 2 && x + 2 < W) for (int d = -2; d <= 2; ++d) s += k5[d + 2] * r[x + d];
+        else for (int d = -2; d <= 2; ++d) s += k5[d + 2] * r[refl(x + d, W)];
+        o[x] = s;
       }
     }
-    for (int y = 0; y < H; ++y)
+    for (int y = 0; y < H; ++y) {
+      const float* rows[5];
+      for (int d = -2; d <= 2; ++d) rows[d + 2] = t.data() + size_t(refl(y + d, H)) * W;
+      float* o = a.data() + size_t(y) * W;
       for (int x = 0; x < W; ++x) {
         float s = 0;
-        for (int d = -2; d <= 2; ++d) s += k5[d + 2] * t[size_t(refl(y + d, H)) * W + x];
-        a[size_t(y) * W + x] = s;
+        for (int d = 0; d < 5; ++d) s += k5[d] * rows[d][x];
+        o[x] = s;
       }
+    }
   };
   for (int mode = 0; mode < 3; ++mode) {
     auto sg = [mode](int x, int y) { return ((mode == 0 ? x : mode == 1 ? y : x + y) & 1) ? -1.0f : 1.0f; };

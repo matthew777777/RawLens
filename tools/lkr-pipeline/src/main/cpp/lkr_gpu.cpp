@@ -3,6 +3,9 @@
 
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <string>
+#include <vector>
 
 #include "srp_context.h"
 
@@ -11,7 +14,39 @@ namespace lkr {
 namespace {
 constexpr uint32_t kMaxSets = 256;
 constexpr uint32_t kMaxBindings = 12;
+// Compiled pipelines of earlier devices in this process (every merge creates up to three devices
+// and compiles the same shaders on each). The driver checks the blob's header itself.
+std::mutex g_cache_mu;
+std::vector<uint8_t> g_cache_blob;
+std::string g_cache_file;   // optional copy on disk, so a new process starts warm too
+
+void SaveBlobLocked() {
+  if (g_cache_file.empty() || g_cache_blob.empty()) return;
+  const std::string tmp = g_cache_file + ".tmp";
+  FILE* f = std::fopen(tmp.c_str(), "wb");
+  if (!f) return;
+  const bool ok = std::fwrite(g_cache_blob.data(), 1, g_cache_blob.size(), f) == g_cache_blob.size();
+  std::fclose(f);
+  if (ok) std::rename(tmp.c_str(), g_cache_file.c_str()); else std::remove(tmp.c_str());
+}
 }  // namespace
+
+void Gpu::SetPipelineCacheFile(const std::string& path) {
+  std::lock_guard<std::mutex> l(g_cache_mu);
+  if (path == g_cache_file) return;
+  g_cache_file = path;
+  if (!g_cache_blob.empty() || path.empty()) return;
+  if (FILE* f = std::fopen(path.c_str(), "rb")) {
+    std::fseek(f, 0, SEEK_END);
+    const long n = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (n > 0 && n < (64L << 20)) {
+      g_cache_blob.resize(size_t(n));
+      if (std::fread(g_cache_blob.data(), 1, size_t(n), f) != size_t(n)) g_cache_blob.clear();
+    }
+    std::fclose(f);
+  }
+}
 
 Gpu::Gpu() {
   if (srp::Create(&ctx_) != srp::Status::kOk) {
@@ -42,11 +77,36 @@ Gpu::Gpu() {
   dpi.poolSizeCount = 1;
   dpi.pPoolSizes = &ps;
   vkCreateDescriptorPool(dev_, &dpi, nullptr, &dpool_);
+
+  std::vector<uint8_t> seed;
+  {
+    std::lock_guard<std::mutex> l(g_cache_mu);
+    seed = g_cache_blob;
+  }
+  VkPipelineCacheCreateInfo cci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+  cci.initialDataSize = seed.size();
+  cci.pInitialData = seed.empty() ? nullptr : seed.data();
+  if (vkCreatePipelineCache(dev_, &cci, nullptr, &pcache_) != VK_SUCCESS) pcache_ = VK_NULL_HANDLE;
 }
 
 Gpu::~Gpu() {
   if (dev_ != VK_NULL_HANDLE) {
     vkDeviceWaitIdle(dev_);
+    if (pcache_) {
+      size_t n = 0;
+      if (vkGetPipelineCacheData(dev_, pcache_, &n, nullptr) == VK_SUCCESS && n > 0) {
+        std::vector<uint8_t> blob(n);
+        if (vkGetPipelineCacheData(dev_, pcache_, &n, blob.data()) == VK_SUCCESS) {
+          blob.resize(n);
+          std::lock_guard<std::mutex> l(g_cache_mu);
+          if (blob.size() > g_cache_blob.size()) {
+            g_cache_blob.swap(blob);
+            SaveBlobLocked();
+          }
+        }
+      }
+      vkDestroyPipelineCache(dev_, pcache_, nullptr);
+    }
     if (qpool_) vkDestroyQueryPool(dev_, qpool_, nullptr);
     vkDestroyDescriptorPool(dev_, dpool_, nullptr);
     vkDestroyFence(dev_, fence_, nullptr);
@@ -135,7 +195,7 @@ Pipeline Gpu::pipeline(const uint32_t* spv, size_t spv_bytes, uint32_t nbind, ui
   ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
               VK_SHADER_STAGE_COMPUTE_BIT, p.mod, "main", nullptr};
   ci.layout = p.layout;
-  if (vkCreateComputePipelines(dev_, VK_NULL_HANDLE, 1, &ci, nullptr, &p.pipe) != VK_SUCCESS)
+  if (vkCreateComputePipelines(dev_, pcache_, 1, &ci, nullptr, &p.pipe) != VK_SUCCESS)
     std::fprintf(stderr, "lkr: pipeline creation failed\n");
   return p;
 }

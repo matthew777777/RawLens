@@ -143,6 +143,7 @@ struct SolveStats {
   float L = 0.0f;
   double gpu_ms = 0.0, prior_ms = 0.0, total_ms = 0.0;
   int prior_calls = 0, submits = 0, power_iters_used = 0;
+  double init_ms = 0.0, finish_ms = 0.0;   // CPU: buffers + start image; FinishLook
   uint64_t dispatches = 0;
   // Diagnostics (SolveParams::debug_maps): kDebugMaps planes of H x W (HR):
   // effective frames (sum of final weights, reference 1), mean temporal weight
@@ -170,10 +171,11 @@ class Solver {
  private:
   struct Entry { Buffer buf; size_t bytes = 0; bool host_read = false; };
   Buffer& Cached(int slot, size_t bytes, bool host_read);
+  bool Optional(const SolveParams& prm, bool dct);   // creates the pipelines only some settings use
   std::deque<Entry> cache_;   // deque: references stay valid while it grows
   Gpu* gpu_;
   bool ok_ = false;
-  Pipeline dct_y_, dct_u_, dct_v_, dct_yuv_, resid_, zstep_, grad_, jac_, solve_, residg_, zgather_, weight_, scatter_, jacblk_, solveblk_, wmin_, wtemp_, wminh_, radjw_, wexp_, wth_, zgw_, residq_, radjwq_, scatq_, zpack_, residzq_, radjwzq_;
+  Pipeline dct_y_, dct_u_, dct_v_, dct_yuv_, resid_, zstep_, jac_, solve_, residg_, zgather_, weight_, scatter_, jacblk_, solveblk_, wmin_, wtemp_, wdark_, wdarkv_, wminh_, radjw_, wexp_, wth_, zgw_, residq_, radjwq_, scatq_, zpack_, residzq_, radjwzq_;
 };
 
 // CPU helpers (exact mirrors of the python reference).

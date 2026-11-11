@@ -223,18 +223,24 @@ Img gauss1(const Img& a, int h, int w) {
     return i;
   };
   Img t(a.size()), o(a.size());
-  for (int i = 0; i < h; ++i)
+  for (int i = 0; i < h; ++i) {
+    const double* row = a.data() + size_t(i) * w;
     for (int j = 0; j < w; ++j) {
       double v = 0;
-      for (int d = -4; d <= 4; ++d) v += k[d + 4] * a[size_t(i) * w + refl(j + d, w)];
+      if (j >= 4 && j + 4 < w) for (int d = -4; d <= 4; ++d) v += k[d + 4] * row[j + d];
+      else for (int d = -4; d <= 4; ++d) v += k[d + 4] * row[refl(j + d, w)];
       t[size_t(i) * w + j] = v;
     }
-  for (int i = 0; i < h; ++i)
+  }
+  for (int i = 0; i < h; ++i) {
+    const double* rows[9];
+    for (int d = -4; d <= 4; ++d) rows[d + 4] = t.data() + size_t(refl(i + d, h)) * w;
     for (int j = 0; j < w; ++j) {
       double v = 0;
-      for (int d = -4; d <= 4; ++d) v += k[d + 4] * t[size_t(refl(i + d, h)) * w + j];
+      for (int d = 0; d < 9; ++d) v += k[d] * rows[d][j];
       o[size_t(i) * w + j] = v;
     }
+  }
   return o;
 }
 
@@ -297,69 +303,117 @@ bool solve6(double A[6][6], double b[6], double x[6]) {
 
 }  // namespace
 
-double LkResidual(const float* ref, const float* mov, int h, int w, const std::array<double, 6>& p) {
-  Img r(ref, ref + size_t(h) * w);
-  double e = 0;
-  size_t n = 0;
-  for (int i = 0; i < h; ++i)
-    for (int j = 0; j < w; ++j) {
-      const double ux = j + 0.5, uy = i + 0.5;
-      bool v;
-      const double s = sampleAt(r, h, w, p[0] * ux + p[1] * uy + p[2], p[3] * ux + p[4] * uy + p[5], &v);
-      if (!v) continue;
-      e += std::fabs(s - mov[size_t(i) * w + j]);
-      ++n;
-    }
-  return n ? e / n : 1e30;
+// Bilinear tap of sampleAt for a position known to be valid.
+static inline double tap(const double* a, size_t o, int w, double ax, double ay) {
+  return (a[o] * (1 - ax) + a[o + 1] * ax) * (1 - ay) + (a[o + w] * (1 - ax) + a[o + w + 1] * ax) * ay;
 }
 
-std::array<double, 6> LkAffine(const float* ref, const float* mov, int h, int w, int iters, int levels,
-                               const std::array<double, 6>* p0) {
-  std::array<double, 6> p{1, 0, 0, 0, 1, 0};
-  if (p0) p = *p0;
-  std::vector<Img> R(levels), M(levels);
-  std::vector<int> hs(levels), ws(levels);
-  R[0].assign(ref, ref + size_t(h) * w);
-  M[0].assign(mov, mov + size_t(h) * w);
-  hs[0] = h;
-  ws[0] = w;
-  for (int l = 1; l < levels; ++l) {
-    int nh, nw;
-    R[l] = zoomHalf(gauss1(R[l - 1], hs[l - 1], ws[l - 1]), hs[l - 1], ws[l - 1], &nh, &nw);
-    M[l] = zoomHalf(gauss1(M[l - 1], hs[l - 1], ws[l - 1]), hs[l - 1], ws[l - 1], &nh, &nw);
-    hs[l] = nh;
-    ws[l] = nw;
-  }
-  p[2] /= std::pow(2.0, levels - 1);
-  p[5] /= std::pow(2.0, levels - 1);
-  for (int lv = levels - 1; lv >= 0; --lv) {
-    const int H = hs[lv], W = ws[lv];
-    const Img& r = R[lv];
-    const Img& m = M[lv];
-    Img gx(r.size()), gy(r.size());          // np.gradient (central, one-sided edges)
+LkRef LkPrepare(const float* ref, int h, int w, int levels) {
+  LkRef R;
+  R.r.resize(size_t(levels));
+  R.gx.resize(size_t(levels));
+  R.gy.resize(size_t(levels));
+  R.hs.resize(size_t(levels));
+  R.ws.resize(size_t(levels));
+  R.r[0].assign(ref, ref + size_t(h) * w);
+  R.hs[0] = h;
+  R.ws[0] = w;
+  for (int l = 1; l < levels; ++l)
+    R.r[size_t(l)] = zoomHalf(gauss1(R.r[size_t(l - 1)], R.hs[size_t(l - 1)], R.ws[size_t(l - 1)]), R.hs[size_t(l - 1)],
+                              R.ws[size_t(l - 1)], &R.hs[size_t(l)], &R.ws[size_t(l)]);
+  for (int l = 0; l < levels; ++l) {   // np.gradient (central, one-sided edges)
+    const int H = R.hs[size_t(l)], W = R.ws[size_t(l)];
+    const Img& r = R.r[size_t(l)];
+    Img& gx = R.gx[size_t(l)];
+    Img& gy = R.gy[size_t(l)];
+    gx.resize(r.size());
+    gy.resize(r.size());
     for (int i = 0; i < H; ++i)
       for (int j = 0; j < W; ++j) {
         const size_t o = size_t(i) * W + j;
         gx[o] = j == 0 ? r[o + 1] - r[o] : (j == W - 1 ? r[o] - r[o - 1] : 0.5 * (r[o + 1] - r[o - 1]));
         gy[o] = i == 0 ? r[o + W] - r[o] : (i == H - 1 ? r[o] - r[o - W] : 0.5 * (r[o + W] - r[o - W]));
       }
+  }
+  return R;
+}
+
+double LkResidual(const LkRef& ref, const float* mov, const std::array<double, 6>& p) {
+  const int h = ref.hs[0], w = ref.ws[0];
+  const double* r = ref.r[0].data();
+  double e = 0;
+  size_t n = 0;
+  for (int i = 0; i < h; ++i)
+    for (int j = 0; j < w; ++j) {
+      const double ux = j + 0.5, uy = i + 0.5;
+      const double fx = p[0] * ux + p[1] * uy + p[2] - 0.5, fy = p[3] * ux + p[4] * uy + p[5] - 0.5;
+      const int x0 = int(std::floor(fx)), y0 = int(std::floor(fy));
+      if (!(x0 >= 0 && y0 >= 0 && x0 + 1 < w && y0 + 1 < h)) continue;
+      e += std::fabs(tap(r, size_t(y0) * w + x0, w, fx - x0, fy - y0) - mov[size_t(i) * w + j]);
+      ++n;
+    }
+  return n ? e / n : 1e30;
+}
+
+double LkResidual(const float* ref, const float* mov, int h, int w, const std::array<double, 6>& p) {
+  return LkResidual(LkPrepare(ref, h, w, 1), mov, p);
+}
+
+std::array<double, 6> LkAffine(const LkRef& ref, const float* mov, int iters, const std::array<double, 6>* p0) {
+  const int levels = int(ref.r.size());
+  std::array<double, 6> p{1, 0, 0, 0, 1, 0};
+  if (p0) p = *p0;
+  std::vector<Img> M(static_cast<size_t>(levels));
+  M[0].assign(mov, mov + size_t(ref.hs[0]) * ref.ws[0]);
+  for (int l = 1; l < levels; ++l) {
+    int nh, nw;
+    M[size_t(l)] = zoomHalf(gauss1(M[size_t(l - 1)], ref.hs[size_t(l - 1)], ref.ws[size_t(l - 1)]), ref.hs[size_t(l - 1)],
+                            ref.ws[size_t(l - 1)], &nh, &nw);
+  }
+  p[2] /= std::pow(2.0, levels - 1);
+  p[5] /= std::pow(2.0, levels - 1);
+  for (int lv = levels - 1; lv >= 0; --lv) {
+    const int H = ref.hs[size_t(lv)], W = ref.ws[size_t(lv)];
+    const double* r = ref.r[size_t(lv)].data();
+    const double* gx = ref.gx[size_t(lv)].data();
+    const double* gy = ref.gy[size_t(lv)].data();
+    const double* m = M[size_t(lv)].data();
     for (int it = 0; it < iters; ++it) {
+      // J = (sx ux, sx uy, sx, sy ux, sy uy, sy): J J^T and J e are the three gradient products
+      // (and two residual products) times monomials of (ux, uy). uy is constant along a row, so a
+      // row accumulates only the ux moments and the uy factors are applied once per row.
       double A[6][6] = {}, b[6] = {};
-      for (int i = 0; i < H; ++i)
+      for (int i = 0; i < H; ++i) {
+        const double uy = i + 0.5;
+        double xx[3] = {}, xy[3] = {}, yy[3] = {}, ex[2] = {}, ey[2] = {};   // sums of q, q ux, q ux^2
+        const double bx = p[1] * uy + p[2] - 0.5, by = p[4] * uy + p[5] - 0.5;
+        const double* mrow = m + size_t(i) * W;
         for (int j = 0; j < W; ++j) {
-          const double ux = j + 0.5, uy = i + 0.5;
-          const double qx = p[0] * ux + p[1] * uy + p[2], qy = p[3] * ux + p[4] * uy + p[5];
-          bool v1, v2, v3;
-          const double wr = sampleAt(r, H, W, qx, qy, &v1);
-          if (!v1) continue;
-          const double sx = sampleAt(gx, H, W, qx, qy, &v2), sy = sampleAt(gy, H, W, qx, qy, &v3);
-          const double e = m[size_t(i) * W + j] - wr;
-          const double J[6] = {sx * ux, sx * uy, sx, sy * ux, sy * uy, sy};
-          for (int a = 0; a < 6; ++a) {
-            b[a] += J[a] * e;
-            for (int c = a; c < 6; ++c) A[a][c] += J[a] * J[c];
-          }
+          const double ux = j + 0.5;
+          const double fx = p[0] * ux + bx, fy = p[3] * ux + by;
+          if (fx < 0 || fy < 0) continue;
+          const int x0 = int(fx), y0 = int(fy);
+          if (x0 + 1 >= W || y0 + 1 >= H) continue;
+          const double ax = fx - x0, ay = fy - y0;
+          const size_t o = size_t(y0) * W + x0;
+          const double wr = tap(r, o, W, ax, ay), sx = tap(gx, o, W, ax, ay), sy = tap(gy, o, W, ax, ay);
+          const double e = mrow[j] - wr;
+          const double qxx = sx * sx, qxy = sx * sy, qyy = sy * sy, qex = sx * e, qey = sy * e;
+          const double u2 = ux * ux;
+          xx[0] += qxx; xx[1] += qxx * ux; xx[2] += qxx * u2;
+          xy[0] += qxy; xy[1] += qxy * ux; xy[2] += qxy * u2;
+          yy[0] += qyy; yy[1] += qyy * ux; yy[2] += qyy * u2;
+          ex[0] += qex; ex[1] += qex * ux;
+          ey[0] += qey; ey[1] += qey * ux;
         }
+        const double v2 = uy * uy;
+        A[0][0] += xx[2]; A[0][1] += xx[1] * uy; A[0][2] += xx[1]; A[1][1] += xx[0] * v2; A[1][2] += xx[0] * uy; A[2][2] += xx[0];
+        A[0][3] += xy[2]; A[0][4] += xy[1] * uy; A[0][5] += xy[1]; A[1][3] += xy[1] * uy; A[1][4] += xy[0] * v2;
+        A[1][5] += xy[0] * uy; A[2][3] += xy[1]; A[2][4] += xy[0] * uy; A[2][5] += xy[0];
+        A[3][3] += yy[2]; A[3][4] += yy[1] * uy; A[3][5] += yy[1]; A[4][4] += yy[0] * v2; A[4][5] += yy[0] * uy; A[5][5] += yy[0];
+        b[0] += ex[1]; b[1] += ex[0] * uy; b[2] += ex[0];
+        b[3] += ey[1]; b[4] += ey[0] * uy; b[5] += ey[0];
+      }
       for (int a = 0; a < 6; ++a) {
         for (int c = 0; c < a; ++c) A[a][c] = A[c][a];
         A[a][a] += 1e-6;
@@ -375,6 +429,11 @@ std::array<double, 6> LkAffine(const float* ref, const float* mov, int h, int w,
     }
   }
   return p;
+}
+
+std::array<double, 6> LkAffine(const float* ref, const float* mov, int h, int w, int iters, int levels,
+                               const std::array<double, 6>* p0) {
+  return LkAffine(LkPrepare(ref, h, w, levels), mov, iters, p0);
 }
 
 }  // namespace lkr

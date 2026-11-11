@@ -19,9 +19,9 @@ int main() {
   auto r=gpu.alloc(K*N*4), y=gpu.alloc(K*N*4), tmp=gpu.alloc(K*N*16);
   auto wt=gpu.alloc(K*N*4), unused=gpu.alloc(K*N*4);
   auto rows=gpu.pipeline(lkr::spv::weight_th,sizeof(lkr::spv::weight_th),4,sizeof(Push));
-  auto cols=gpu.pipeline(lkr::spv::weight_t,sizeof(lkr::spv::weight_t),5,sizeof(Push));
+  auto cols=gpu.pipeline(lkr::spv::weight_t,sizeof(lkr::spv::weight_t),6,sizeof(Push));
   auto rs=gpu.set(rows,{&r,&y,&tmp,&unused});
-  auto cs=gpu.set(cols,{&r,&y,&tmp,&wt,&unused});
+  auto cs=gpu.set(cols,{&r,&y,&tmp,&wt,&unused,&unused});
   Push p{}; p.h=H;p.w=W;p.H=H;p.W=W;p.s=1;p.K=K;p.rob_b=0.00005f;p.rob_k=3;
   std::fill(y.as<float>(),y.as<float>()+K*N,0.05f);
   std::mt19937 rng(42);std::normal_distribution<float> noise(0,0.01f);

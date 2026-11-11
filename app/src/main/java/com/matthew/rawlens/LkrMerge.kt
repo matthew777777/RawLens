@@ -101,6 +101,7 @@ internal object LkrMerge {
         val wb = if (neutral != null && neutral.size == 3 && neutral[0] > 0 && neutral[2] > 0)
             floatArrayOf((neutral[1] / neutral[0]).toFloat(), 1f, (neutral[1] / neutral[2]).toFloat())
         else floatArrayOf(1f, 1f, 1f)
+        LkrBridge.nativeSetCacheDir(context.codeCacheDir.absolutePath)
         val t0 = SystemClock.elapsedRealtime()
         val rgb = LkrBridge.nativeMerge(
             buffers.toTypedArray(), w, h, rowStrideBytes / 2, cfa, norm.blackLevels.toFloatArray(),

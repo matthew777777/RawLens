@@ -16,6 +16,7 @@ layout(std430, binding = 1) readonly buffer Y { float y[]; };
 layout(std430, binding = 2) readonly buffer TM { vec4 tmp[]; };   // row sums (weight_th.comp)
 layout(std430, binding = 3) writeonly buffer WT { float wt[]; };
 layout(std430, binding = 4) readonly buffer TD { float td[]; };   // model-error row sums (weight_th.comp)
+layout(std430, binding = 5) writeonly buffer DK { float dk[]; };  // deep-shadow share for weight_td.comp
 
 // Mean + energy test of one window (sums of r, a y + b, count, r^2, model error).
 float windowWeight(float sr, float sv, float n, float ss, float sd, float g2, float kk) {
@@ -35,7 +36,7 @@ void main() {
   int k = int(gl_GlobalInvocationID.z);
   if (j >= pc.w || i >= pc.h) return;
   int base = k * pc.h * pc.w;
-  float w = 1.0;
+  float w = 1.0, dark = 0.0;
   if (k != 0) {
     float sr = 0.0, sv = 0.0, n = 0.0, ss = 0.0, sd = 0.0;
     for (int di = -2; di <= 2; ++di) {   // columns over the row sums (weight_th.comp)
@@ -54,25 +55,13 @@ void main() {
       float gy = (y[base + id * pc.w + j] - y[base + iu * pc.w + j]) * 0.25;
       float g2 = gx * gx + gy * gy;
       w = windowWeight(sr, sv, n, ss, sd, g2, pc.rob_k);
-      // Deep shadow (pc.f1 > 0.5): a moving dark object differs from a dark background by about
-      // the noise of a 5x5 mean, so also test a 9 x 15 window (row sums at j-5, j, j+5 over
-      // rows i-4..i+4). Its mean is ~2.3x less noisy at the same threshold, so static shadows
-      // keep their frames while larger dark movers are caught.
+      // Deep shadow (pc.f1 > 0.5): weight_td.comp also tests a wider window where dk > 0. Kept in
+      // its own pass: inlined here it pushed every sample over the Mali register limit (64
+      // registers, 640 bytes of stack) although only dark samples run it.
       float level = max((sv / n - pc.rob_b) / max(pc.rob_a, 1e-12), 0.0);
-      float dark = pc.f1 > 0.5 ? 1.0 - smoothstep(0.25 * pc.f2, pc.f2, level) : 0.0;
-      if (dark > 0.0) {
-        float br = 0.0, bv = 0.0, bn = 0.0, bs = 0.0, bd = 0.0;
-        for (int di = -4; di <= 4; ++di) {
-          int rr = base + clamp(i + di, 0, pc.h - 1) * pc.w;
-          for (int dj = -5; dj <= 5; dj += 5) {
-            int t = rr + clamp(j + dj, 0, pc.w - 1);
-            vec4 q = tmp[t];
-            br += q.x; bv += q.y; bn += q.z; bs += q.w; bd += td[t];
-          }
-        }
-        if (bn > 0.0) w = min(w, mix(1.0, windowWeight(br, bv, bn, bs, bd, g2, pc.rob_k), dark));
-      }
+      dark = pc.f1 > 0.5 ? 1.0 - smoothstep(0.25 * pc.f2, pc.f2, level) : 0.0;
     }
   }
   wt[base + i * pc.w + j] = w;
+  if (pc.f1 > 0.5) dk[base + i * pc.w + j] = dark;
 }

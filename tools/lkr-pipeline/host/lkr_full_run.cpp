@@ -23,6 +23,7 @@ int main(int argc, char** argv) {
   bool repeat_reference = false;
   int frames_max = 0;
   int reference = 0;
+  bool profile = false;
   for (int i = 3; i < argc; ++i) {
     std::string k = argv[i];
     auto nx = [&] { return std::atoi(argv[++i]); };
@@ -50,6 +51,7 @@ int main(int argc, char** argv) {
     else if (k == "--refine") prm.solve.refine_motion = nx() != 0;
     else if (k == "--mean") prm.solve.mean_preserve = nx();
     else if (k == "--reference") reference = nx();
+    else if (k == "--profile") profile = nx() != 0;
     else if (k == "--holdout") prm.holdout = nx();   // frame index (after --reference / --frames) kept out of the merge
     else if (k == "--smax") prm.smax_x = float(std::atof(argv[++i]));
     else if (k == "--notch") prm.solve.notch = nx() != 0;
@@ -113,6 +115,7 @@ int main(int argc, char** argv) {
   if (m.has_as_shot_neutral) wb = {float(m.as_shot_neutral[1] / m.as_shot_neutral[0]), 1.0f, float(m.as_shot_neutral[1] / m.as_shot_neutral[2])};
   lkr::Gpu gpu;
   if (!gpu.ok()) return 1;
+  gpu.profile(profile);
   prm.solve.dct_prior = dct_prior;
   const lkr::PriorFactory make;
   std::vector<float> rgb;
@@ -160,6 +163,10 @@ int main(int argc, char** argv) {
               prm.auto_look ? " (auto from noise)" : "", st.local_lambda);
   std::printf("ms: load %.0f noise %.0f coarseLK %.0f tiles %.0f (gpu %.0f prior %.0f, %d calls) TOTAL(merge) %.0f\n",
               ms_load, st.ms_noise, st.ms_coarse, st.ms_tiles, st.ms_gpu, st.ms_prior, st.prior_calls, st.ms_total);
+  std::printf("workers %d, tile sums ms: solve %.0f (gpu %.0f prior %.0f init %.0f finish %.0f other %.0f) prep %.0f (load %.0f) blend %.0f | setup %.0f wait %.0f\n",
+              st.workers, st.ms_solve, st.ms_gpu, st.ms_prior, st.ms_init, st.ms_finish,
+              st.ms_solve - st.ms_gpu - st.ms_prior - st.ms_init - st.ms_finish, st.ms_prep, st.ms_load, st.ms_blend, st.ms_setup, st.ms_wait);
+  if (!st.gpu_profile.empty()) std::printf("gpu profile: %s\n", st.gpu_profile.c_str());
   if (!st.holdout.empty()) {
     // Held-out frame: residual energy against the expected noise, per 16 x 16 block of its samples.
     const int hw = st.holdout_w, hh = st.holdout_h, B = 16;

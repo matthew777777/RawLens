@@ -39,6 +39,15 @@ void Grey(const float* raw, int h, int w, float* out);
 // -- python lkr.lk_affine (iters per level 40, stop at |dt| < 1e-3).
 std::array<double, 6> LkAffine(const float* ref, const float* mov, int h, int w, int iters = 40,
                                int levels = 3, const std::array<double, 6>* p0 = nullptr);
+// The reference side of LkAffine (pyramid and gradients), built once and shared by every frame
+// aligned to that reference; results are identical to the float* overloads.
+struct LkRef {
+  std::vector<std::vector<double>> r, gx, gy;   // per level
+  std::vector<int> hs, ws;
+};
+LkRef LkPrepare(const float* ref, int h, int w, int levels);
+std::array<double, 6> LkAffine(const LkRef& ref, const float* mov, int iters, const std::array<double, 6>* p0 = nullptr);
+double LkResidual(const LkRef& ref, const float* mov, const std::array<double, 6>& p);
 // Mean |ref(A u + t) - mov(u)| over valid pixels (alignment quality of p).
 double LkResidual(const float* ref, const float* mov, int h, int w, const std::array<double, 6>& p);
 

@@ -85,6 +85,8 @@ struct FullStats {
   float sigma = 0, a = 0, b = 0;
   double ms_noise = 0, ms_coarse = 0, ms_tiles = 0, ms_gpu = 0, ms_prior = 0, ms_total = 0;
   int prior_calls = 0;
+  double ms_setup = 0, ms_wait = 0;   // extra Vulkan devices + all solver pipelines; workers waiting for their blend turn
+  double ms_init = 0, ms_finish = 0, ms_blend = 0;   // sums over tiles: solver CPU start, FinishLook, output blend
   double ms_solve = 0, ms_prep = 0, ms_load = 0;   // ms_load: LoadTile part of ms_prep
   int workers = 0;
   int ref_index = 0;   // input frame used as the reference (sharpest_ref)   // tile workers actually running (own Vulkan context each)   // sums over tiles: solver wall, tile load + per-tile LK
