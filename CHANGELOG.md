@@ -9,6 +9,8 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - Speed up full 1× LK-R merges by approximately 23–34% in supplied benchmarks
   (19–25% less processing time); no measurable 2× zoom improvement.
 - List rear cameras before front cameras and group front camera routes separately.
+- Fix lower quick-panel tiles closing the panel instead of toggling on phones
+  whose app window starts below a display cutout.
 - See the [release notes](docs/releases/2.2.46.md) for details and validation.
 
 ## [2.0.69] - 2026-11-01

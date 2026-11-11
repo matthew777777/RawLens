@@ -3963,7 +3963,13 @@ class MainActivity : Activity() {
         quickPanel.postDelayed(quickAutoHide, QUICK_AUTO_HIDE_MS)
     }
 
-    private fun View.containsRaw(x: Float, y: Float): Boolean {
+    /**
+     * Hit test in window coordinates ([MotionEvent.getX]/[MotionEvent.getY] as the activity
+     * receives them), the same space as [View.getGlobalVisibleRect]. Screen coordinates
+     * (rawX/rawY) differ whenever the window does not start at the screen origin, e.g.
+     * letterboxed below a display cutout: the panel's lower rows then tested as "outside".
+     */
+    private fun View.containsWindowPoint(x: Float, y: Float): Boolean {
         if (visibility != View.VISIBLE || !isShown) return false
         val bounds = android.graphics.Rect()
         return getGlobalVisibleRect(bounds) && bounds.contains(x.toInt(), y.toInt())
@@ -4004,16 +4010,16 @@ class MainActivity : Activity() {
         if (ev.actionMasked == MotionEvent.ACTION_DOWN && ::quickPanel.isInitialized &&
             quickPanel.visibility == View.VISIBLE
         ) {
-            val x = ev.rawX
-            val y = ev.rawY
+            val x = ev.x
+            val y = ev.y
             when {
-                quickPanel.containsRaw(x, y) -> armQuickAutoHide()
-                findViewById<View>(R.id.quickButton).containsRaw(x, y) ||
-                    featureTags.containsRaw(x, y) -> Unit
+                quickPanel.containsWindowPoint(x, y) -> armQuickAutoHide()
+                findViewById<View>(R.id.quickButton).containsWindowPoint(x, y) ||
+                    featureTags.containsWindowPoint(x, y) -> Unit
                 else -> {
-                    quickDismissDownX = x
-                    quickDismissDownY = y
-                    quickDismissAllowsSwipe = ::meteringOverlay.isInitialized && meteringOverlay.containsRaw(x, y)
+                    quickDismissDownX = ev.rawX
+                    quickDismissDownY = ev.rawY
+                    quickDismissAllowsSwipe = ::meteringOverlay.isInitialized && meteringOverlay.containsWindowPoint(x, y)
                     hideQuickControls()
                     swallowQuickDismissGesture = true
                     return true
