@@ -114,4 +114,20 @@ object WaveletVulkan {
         if (!ensureLoaded()) null else try { nativePredictNoise(storePath, iso) } catch (_: RuntimeException) { null }
 
     private external fun nativePredictNoise(storePath: String, iso: Float): FloatArray?
+
+    /**
+     * Learned model at [iso] as prior, refined by a caller's own blind
+     * estimate ([estimateA], [estimateB] in normalized raw units, [bins] =
+     * its confidence) with the same rule the wavelet stage uses
+     * (rawlens_noise::combine): (a, b, evidence weight, samples, isos), or
+     * null when untrained for this ISO or the library is missing.
+     */
+    fun combineNoise(storePath: String, iso: Float, estimateA: Float, estimateB: Float, bins: Int): FloatArray? =
+        if (!ensureLoaded()) null else try {
+            nativeCombineNoise(storePath, iso, estimateA, estimateB, bins)
+        } catch (_: RuntimeException) { null }
+
+    private external fun nativeCombineNoise(
+        storePath: String, iso: Float, estimateA: Float, estimateB: Float, bins: Int
+    ): FloatArray?
 }

@@ -116,9 +116,8 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 "Noise-reduction strength " +
                 "${HdrPlusSettings.MIN_STRENGTH.toInt()}–${HdrPlusSettings.MAX_STRENGTH.toInt()}. " +
                 "Higher merges harder: cleaner stills, more ghosting on motion. " +
-                "AUTO picks ${HdrPlusAutoTuning.AUTO_STRENGTH_MIN.toInt()}–" +
-                "${HdrPlusAutoTuning.AUTO_STRENGTH_MAX.toInt()} from measured noise and motion " +
-                "and ignores the slider."
+                "AUTO matches the strength to the measured noise, higher for still scenes " +
+                "and lower where frames move, and ignores the slider."
         ))
         fun strengthRowText(value: Float): String =
             HdrPlusSettings.strengthSliderText(value) +
