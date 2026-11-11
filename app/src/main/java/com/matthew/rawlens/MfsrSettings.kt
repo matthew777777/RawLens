@@ -55,21 +55,21 @@ data class MfsrSettings(
     /**
      * Merge engine behind the same shutter / ZSL / save path: Wronski MFSR
      * (sr-pipeline) or LK-Reloaded (tools/lkr-pipeline, Lecouat et al. 2021).
-     * Each engine has its own quick tile (MFSR, LK-SR); turning one on
+     * Each engine has its own quick tile (MFSR, LK-R); turning one on
      * switches the shared sharp-merge path to that engine.
      */
     val engine: MfsrEngine = MfsrEngine.MFSR,
-    /** LK-SR: regularise with the Vulkan sliding-DCT x-step; false (default) = no prior. */
+    /** LK-R: regularise with the Vulkan sliding-DCT x-step; false (default) = no prior. */
     val lkrDctPrior: Boolean = false,
     /**
-     * LK-SR zoom (viewfinder chip): 1x full frame at x1; 1.5x / 2x solve the
+     * LK-R zoom (viewfinder chip): 1x full frame at x1; 1.5x / 2x solve the
      * centre crop at x2 (1.5x then area-downsampled). Output is always the
      * sensor resolution.
      */
     val lkrZoom: LkrZoom = LkrZoom.X1
 ) {
     /** Quick-tile / status label of the active engine. */
-    val label: String get() = if (engine == MfsrEngine.LKR) "LK-SR" else "MFSR"
+    val label: String get() = if (engine == MfsrEngine.LKR) "LK-R" else "MFSR"
     /** Follow the shared burst / ZSL frame count, up to the active engine's ceiling. */
     fun activeFrameCount(configuredCount: Int): Int =
         configuredCount.coerceIn(MIN_MERGE_FRAMES, maxFrames(engine, lkrZoom))
@@ -91,7 +91,7 @@ data class MfsrSettings(
 
     fun quickText(
         which: MfsrEngine, count: Int, buffered: Int, available: Boolean?, busy: Boolean, zsl: Boolean = true
-    ): String = (if (which == MfsrEngine.LKR) "LK-SR" else "MFSR") + "\n" + when {
+    ): String = (if (which == MfsrEngine.LKR) "LK-R" else "MFSR") + "\n" + when {
         !isOn(which) -> "OFF"
         busy -> "MERGING"
         available == false -> "UNAVAILABLE"
@@ -115,10 +115,10 @@ data class MfsrSettings(
 
         const val MIN_MERGE_FRAMES = 2
         const val MAX_MERGE_FRAMES = 16
-        /** LK-SR at x1 follows the largest burst the app captures. */
+        /** LK-R at x1 follows the largest burst the app captures. */
         const val MAX_LKR_FRAMES = 59
         /**
-         * LK-SR x2 modes (1.5x, 2x, full 2x): per-frame solver buffers are 4x larger, so one
+         * LK-R x2 modes (1.5x, 2x, full 2x): per-frame solver buffers are 4x larger, so one
          * worker at 24 frames already needs ~600 MB of native memory next to the frames and output.
          */
         const val MAX_LKR_FRAMES_X2 = 24
@@ -135,7 +135,7 @@ data class MfsrSettings(
 enum class MfsrKernel { KERNELNET, WRONSKI }
 
 /**
- * LK-SR zoom: [factor] of the centre crop. 1x solves the full frame at x1;
+ * LK-R zoom: [factor] of the centre crop. 1x solves the full frame at x1;
  * 1.5x and 2x solve the centre 1/factor crop at x2 (2x lands exactly on the
  * sensor size, 1.5x is area-downsampled to it), so the output is always
  * sensor resolution with real super-resolved detail.

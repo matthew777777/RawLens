@@ -333,7 +333,7 @@ internal object MfsrMerge {
     }
 
     /**
-     * Lens shading for a merge of a sensor sub-region (LK-SR zoom): output
+     * Lens shading for a merge of a sensor sub-region (LK-R zoom): output
      * pixel (x, y) sits at sensor (x0 + (x + 0.5) * sx, y0 + (y + 0.5) * sy).
      */
     internal fun applyShadingMapped(

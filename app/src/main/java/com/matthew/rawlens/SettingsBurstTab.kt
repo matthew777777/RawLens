@@ -75,7 +75,7 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
         content.removeAllViews()
         content.addView(sectionTitle("Offline burst merges"))
         content.addView(sectionDesc(
-            "Staged IMG_<ts>_BURST.craw takes merge here later via MFSR, LK-SR or HDR+, " +
+            "Staged IMG_<ts>_BURST.craw takes merge here later via MFSR, LK-R or HDR+, " +
                 "to DNG, JPEG, or both. RAW Video never lists."
         ))
         content.addView(settingsButton("OPEN MERGES").apply {

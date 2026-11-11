@@ -10,7 +10,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /**
- * Kotlin side of the LK-SR MHC port parity check (tools/lkr-pipeline
+ * Kotlin side of the LK-R MHC port parity check (tools/lkr-pipeline
  * lkr_mhc.cpp vs [MhcReference.demosaicCoherent]). Opt-in: set
  * LKR_MHC_DIR to a directory with in.u16 + meta.txt (lkr_mhc_check format);
  * writes kotlin.f32 there.

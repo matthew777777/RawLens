@@ -28,7 +28,7 @@ internal object LkrMerge {
         val dctPrior: Boolean = false,
         /** Sensor sub-rectangle `[x, y, w, h]`, or null for full frame. */
         val crop: IntArray? = null,
-        /** LK-SR Lab overrides (Settings -> Merge), NaN = code default; null = all defaults. */
+        /** LK-R Lab overrides (Settings -> Merge), NaN = code default; null = all defaults. */
         val tuning: FloatArray? = null,
         /** Zoom: 1.5x / 2x solve the centre crop at x2; output stays the sensor size. Overrides scale / crop. */
         val zoom: LkrZoom = LkrZoom.X1

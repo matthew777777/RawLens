@@ -75,7 +75,7 @@ class MergesActivity : Activity() {
     private var method = BurstMergeRunner.Method.MFSR
     private var format = CaptureFormat.DNG_ONLY
     private var developedFormat = DevelopedFormat.JPEG
-    /** LK-SR zoom for staged takes (own choice, not the live chip's). */
+    /** LK-R zoom for staged takes (own choice, not the live chip's). */
     private var lkrZoom = LkrZoom.X1
     private val mergeRunning = AtomicBoolean(false)
 
@@ -150,7 +150,7 @@ class MergesActivity : Activity() {
             button.setOnClickListener { setMethod(BurstMergeRunner.Method.HDRPLUS) }
             methodRow.addView(button, rowParams())
         }
-        methodLkr = optionButton("LK-SR").also { button ->
+        methodLkr = optionButton("LK-R").also { button ->
             button.setOnClickListener { setMethod(BurstMergeRunner.Method.LKR) }
             methodRow.addView(button, rowParams())
         }
@@ -649,7 +649,7 @@ class MergesActivity : Activity() {
     private fun methodLabel() = when (method) {
         BurstMergeRunner.Method.MFSR -> "MFSR"
         BurstMergeRunner.Method.HDRPLUS -> "HDR+"
-        BurstMergeRunner.Method.LKR -> "LK-SR"
+        BurstMergeRunner.Method.LKR -> "LK-R"
     }
 
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -795,7 +795,7 @@ class MergesActivity : Activity() {
                         "${when (method) {
                             BurstMergeRunner.Method.MFSR -> "MFSR"
                             BurstMergeRunner.Method.HDRPLUS -> "HDR+"
-                            BurstMergeRunner.Method.LKR -> "LK-SR"
+                            BurstMergeRunner.Method.LKR -> "LK-R"
                         }} " +
                             "×${result.keptFrames}/${result.pooledFrames} • " +
                             "${result.width}×${result.height} • " +

@@ -4242,7 +4242,7 @@ class MainActivity : Activity() {
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
         // Video (RAW / Encoded Video) records continuous frames: still-only
-        // tiles (HDR, HDR+, MFSR, LK-SR, timer) go, and LIGHT becomes a
+        // tiles (HDR, HDR+, MFSR, LK-R, timer) go, and LIGHT becomes a
         // torch. Rows left empty collapse so the grid stays tight.
         val stillOnly = listOf(hdr, hdrPlus, sharp, lkrQuick, timer)
         release.visibility = View.VISIBLE
