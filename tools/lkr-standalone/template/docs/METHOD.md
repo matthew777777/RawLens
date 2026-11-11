@@ -78,7 +78,9 @@ parameters supplied by the paper's authors.
 `lkr_full.cpp` normalizes RAW codes using per-CFA black levels and the white
 level. It estimates noise from the input itself, initializes coarse alignment,
 and distributes overlapping tiles to workers. Each worker owns a GPU context
-and solver buffers. Tile outputs are feather-blended in a fixed order.
+and solver buffers. Compiled pipelines are cached across contexts, and completed
+tiles enter a bounded queue before feather-blending in a fixed order. Reference
+alignment pyramids and scratch storage are reused to reduce repeated work.
 
 The current production defaults use 512-pixel tiles with 32-pixel overlap,
 three workers, and eight outer iterations. `AppDefaults()` in `lkr_tuning.h`

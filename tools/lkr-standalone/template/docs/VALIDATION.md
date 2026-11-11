@@ -139,3 +139,8 @@ iterations, tiles, workers and cold/warm status. Loading time and merge time
 are printed separately; the sum of per-tile GPU/prior times is not necessarily
 the end-to-end wall time under parallel workers. DNG export and display
 development add further work. No universal speed claim is made by this package.
+
+Use `--profile 1` for per-shader GPU timings. The current executable also prints
+setup, initialization, finishing, blending and worker-wait timings. Pipeline
+cache reuse affects warm timings, so record whether a run starts in a fresh
+process and keep profiling settings consistent across comparisons.

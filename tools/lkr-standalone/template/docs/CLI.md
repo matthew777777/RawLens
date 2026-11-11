@@ -116,6 +116,7 @@ other. Use `--paper 1` when you need the complete production-ablation preset.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--holdout N` | disabled | Keep selected frame N out of the merge and evaluate RAW residuals against it |
+| `--profile 0\|1` | `0` | Print per-shader GPU timing details |
 | `--repeat-reference 0\|1` | `0` | Replace selected frames with copies of the reference; diagnostic only |
 | `--rgather 0\|1` | `0` | Alternate robust adjoint/gather path |
 | `--quad 0\|1` | `0` | Experimental tap representation mode |
