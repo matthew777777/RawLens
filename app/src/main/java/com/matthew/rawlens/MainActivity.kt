@@ -4440,6 +4440,6 @@ class MainActivity : Activity() {
         const val HISTOGRAM_RAW_HOLD_MS = 2_000L
         const val MIN_RAW_ZSL_FRAMES = 1
         const val MAX_RAW_ZSL_FRAMES = 59
-        const val DEFAULT_RAW_ZSL_FRAME_COUNT = 8
+        const val DEFAULT_RAW_ZSL_FRAME_COUNT = 16
     }
 }
