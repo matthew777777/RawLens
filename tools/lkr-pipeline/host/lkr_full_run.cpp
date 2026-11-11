@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
     else if (k == "--dchroma") prm.solve.dct_chroma = float(std::atof(argv[++i]));
     else if (k == "--ddark") prm.solve.dct_dark_cap = float(std::atof(argv[++i]));
     else if (k == "--ddl") prm.solve.dct_dark_level = float(std::atof(argv[++i]));
+    else if (k == "--ddy") prm.solve.dct_dark_luma = float(std::atof(argv[++i]));
     else if (k == "--iterations") {
       prm.solve.T = nx(); if (prm.solve.T < 2) return 2;
       prm.solve.prior_at.clear();

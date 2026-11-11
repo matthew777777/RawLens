@@ -84,7 +84,7 @@ namespace {
 struct DctPush {
   int32_t H, W, ny, nx, py, px, ixo, has_ns;
   float sigma2, lv_a, lv_b, k_y2, k_c2, wb_r, wb_g, wb_b;
-  float dark_level, dark_cap;
+  float dark_level, dark_cap, dark_luma;
 };
 
 struct Push {
@@ -589,7 +589,7 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
         DctPush d{H, W, dct_ny, dct_nx, 0, 0, H / 4, ns ? 1 : 0, sg * sg,
                   denom > 0 ? prm.noise_a / denom : 0.0f, denom > 0 ? prm.noise_b / denom : 1.0f,
                   prm.dct_luma * prm.dct_luma, prm.dct_chroma * prm.dct_chroma,
-                  prm.wb[0], prm.wb[1], prm.wb[2], prm.dct_dark_level, prm.dct_dark_cap};
+                  prm.wb[0], prm.wb[1], prm.wb[2], prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma};
         gpu_->begin();
         gpu_->fill(x, 0);
         const std::pair<const Pipeline*, VkDescriptorSet> chans[3] = {{&dct_y_, sDctY}, {&dct_u_, sDctU}, {&dct_v_, sDctV}};

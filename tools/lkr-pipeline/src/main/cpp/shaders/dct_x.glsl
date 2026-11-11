@@ -22,7 +22,7 @@ layout(push_constant) uniform P {
   float sigma2, lv_a, lv_b, k_y2, k_c2, wb_r, wb_g, wb_b;
   // Deep shadow: the noise model under-predicts merged shadow noise, so dark blocks may raise
   // their noise level to the block's measured AC energy, up to dark_cap x the model.
-  float dark_level, dark_cap;
+  float dark_level, dark_cap, dark_luma;   // dark_luma: share of the boost the luma pass uses (0..1)
 } pc;
 
 const float C4 = 0.35355339, C1 = 0.98078528, C2 = 0.92387953, C3 = 0.83146961,
@@ -83,7 +83,7 @@ float filt(inout mat4 a0, inout mat4 a1, inout mat4 b0, inout mat4 b1, float t, 
              q1[0] * q1[0] + q1[1] * q1[1] + q1[2] * q1[2] + q1[3] * q1[3];
     float ac = (dot(e, vec4(1.0)) - dc * dc) / 63.0;
     boost = mix(1.0, clamp(ac / sm2, 1.0, pc.dark_cap), gate);
-    t *= boost;
+    t *= mix(1.0, boost, pc.dark_luma);   // colour passes always get the full boost (through nv)
   }
   p0[0] = shrink(p0[0], t); p0[1] = shrink(p0[1], t); p0[2] = shrink(p0[2], t); p0[3] = shrink(p0[3], t);
   p1[0] = shrink(p1[0], t); p1[1] = shrink(p1[1], t); p1[2] = shrink(p1[2], t); p1[3] = shrink(p1[3], t);
