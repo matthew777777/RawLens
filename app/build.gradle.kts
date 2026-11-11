@@ -44,7 +44,7 @@ abstract class CompileSrpShaders : DefaultTask() {
 
 // Use the pinned Android NDK's compiler: a fresh checkout needs neither
 // a desktop Vulkan SDK nor precompiled files in the host proof build tree.
-val compileSrpShaders by tasks.registering(CompileSrpShaders::class) {
+val compileSrpShaders = tasks.register<CompileSrpShaders>("compileSrpShaders") {
     shaderDirectory.set(rootProject.layout.projectDirectory.dir("tools/sr-pipeline/src/main/cpp/shaders"))
     val host = when {
         System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "darwin-x86_64"
@@ -83,7 +83,7 @@ abstract class CompilePhotoRcdShader : DefaultTask() {
         notice.get().asFile.copyTo(licenses.resolve("NOTICE.txt"), overwrite = true)
     }
 }
-val compilePhotoRcdShader by tasks.registering(CompilePhotoRcdShader::class) {
+val compilePhotoRcdShader = tasks.register<CompilePhotoRcdShader>("compilePhotoRcdShader") {
     source.set(rootProject.layout.projectDirectory.file("tools/photo-rcd/baseline.comp"))
     upstreamLicense.set(rootProject.layout.projectDirectory.file("tools/photo-rcd/upstream/RawTherapee/LICENSE"))
     notice.set(rootProject.layout.projectDirectory.file("tools/photo-rcd/NOTICE.txt"))
@@ -360,25 +360,6 @@ android {
     testBuildType = "deviceTest"
 
 
-    // Name APKs after the app instead of the generic module name, e.g.
-    // RawLens-1.0.0-release.apk instead of app-release.apk. ABI splits
-    // carry their ABI: RawLens-1.0.0-release-arm64-v8a.apk. Split
-    // version codes sit above the universal APK's so a device that can
-    // run a split always picks it (arm64 > armeabi-v7a > universal).
-    applicationVariants.all {
-        val variant = this
-        outputs.all {
-            val out = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            val abi = out.getFilter(com.android.build.OutputFile.ABI)
-            if (abi == null) {
-                out.outputFileName =
-                    "RawLens-${variant.versionName}-${variant.buildType.name}.apk"
-            } else {
-                out.outputFileName =
-                    "RawLens-${variant.versionName}-${variant.buildType.name}-$abi.apk"
-            }
-        }
-    }
 
 }
 
@@ -387,7 +368,7 @@ android {
 // at the repo root, which `clean` never touches. Retrace a crash with
 //   retrace RawLens-<version>-release-mapping.txt stacktrace.txt
 // (Android SDK cmdline-tools / R8).
-val archiveReleaseMapping by tasks.registering {
+val archiveReleaseMapping = tasks.register("archiveReleaseMapping") {
     description = "Saves the release R8 mapping (gzip) next to the APK and in release-mappings/."
     val mappingFile = layout.buildDirectory.file("outputs/mapping/githubRelease/mapping.txt")
     val apkDir = layout.buildDirectory.dir("outputs/apk/github/release")
@@ -415,7 +396,7 @@ tasks.matching { it.name == "assembleGithubRelease" || it.name == "bundleGithubR
 // only in src/github/AndroidManifest.xml). Fails the build if they reach
 // the merged fdroid manifest, so a future manifest refactor (or a library
 // that declares them) cannot silently re-add them to F-Droid builds.
-val checkFdroidPermissions by tasks.registering {
+val checkFdroidPermissions = tasks.register("checkFdroidPermissions") {
     description = "Fails if updater-only permissions reached the fdroid release manifest."
     val mergedDir = layout.buildDirectory
         .dir("intermediates/merged_manifest/fdroidRelease/processFdroidReleaseMainManifest")
@@ -467,13 +448,19 @@ androidComponents.onVariants { variant ->
     variant.sources.assets?.addGeneratedSourceDirectory(
         compileSrpShaders, CompileSrpShaders::outputDirectory
     )
+    // Preserve updater-compatible APK names in the standard output directory.
     // Split version codes above the universal APK's (see splits block):
     // a device that can run a split always picks it over the universal.
     for (output in variant.outputs) {
         val abi = output.filters.find {
             it.filterType ==
                 com.android.build.api.variant.FilterConfiguration.FilterType.ABI
-        }?.identifier ?: continue
+        }?.identifier
+        val suffix = abi?.let { "-$it" }.orEmpty()
+        output.outputFileName.set(output.versionName.map {
+            "RawLens-$it-${variant.buildType}$suffix.apk"
+        })
+        if (abi == null) continue
         output.versionCode.set(
             appVersionCode + when (abi) {
                 "arm64-v8a" -> 2
