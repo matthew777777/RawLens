@@ -2,6 +2,15 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
+## [2.2.46] - Unreleased
+
+- Increase the shared default ZSL buffer and burst / merge frame selection from
+  8 to 16, respecting saved choices and mode-specific limits.
+- Speed up full 1× LK-R merges by approximately 23–34% in supplied benchmarks
+  (19–25% less processing time); no measurable 2× zoom improvement.
+- List rear cameras before front cameras and group front camera routes separately.
+- See the [release notes](docs/releases/2.2.46.md) for details and validation.
+
 ## [2.0.69] - 2026-11-01
 
 Changes since 2.0.27. The [consolidated release notes](docs/releases/2.0.69.md)
