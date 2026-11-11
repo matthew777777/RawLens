@@ -50,6 +50,18 @@ class LensDiscoveryGroupingTest {
     }
 
     @Test
+    fun frontLensesFollowEveryRearLensRegardlessOfFocalLengthOrRoute() {
+        val wide = opticLens("0", LensRouteKind.STANDALONE)
+        val tele = opticLens("2/3", LensRouteKind.LOGICAL_PHYSICAL, focal = 12f, equivalent = 100f)
+            .copy(opticalMetric = 3f)
+        val front = opticLens("1", LensRouteKind.STANDALONE, focal = 2f, equivalent = 20f)
+            .copy(role = LensRole.FRONT, opticalMetric = 0.5f)
+        val lenses = listOf(front, tele, wide)
+        assertEquals(listOf("0", "2/3", "1"), groupLenses(lenses).flatMap { it.lenses }.map { it.id })
+        assertEquals(listOf("0", "2/3", "1"), groupByOptic(lenses).map { it.recommended.id })
+    }
+
+    @Test
     fun groupsAreOrderedDirectThenLogicalThenVendorThenUnavailable() {
         val lenses = listOf(
             lens("3/2", LensRouteKind.VENDOR_COMPOSITE, 1f),

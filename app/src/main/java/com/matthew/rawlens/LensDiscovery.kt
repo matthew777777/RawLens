@@ -247,7 +247,7 @@ class LensDiscovery(context: Context) {
             Log.i(LOG_TAG, "Discovered RAW lenses: ${found.keys}")
             return found.values
                 .map { lens -> applyAwbVerdict(applyVerdict(lens, routeVerdict(lens.id, verdicts)), verdicts) }
-                .sortedWith(compareBy<DiscoveredLens> { it.opticalMetric }.thenBy { it.id })
+                .sortedWith(compareBy<DiscoveredLens> { it.role == LensRole.FRONT }.thenBy { it.opticalMetric }.thenBy { it.id })
     }
 
     fun close() = executor.shutdownNow()
@@ -496,7 +496,7 @@ fun unavailableLens(id: String): DiscoveredLens = DiscoveredLens(
  * - Unavailable entries (explicit kind or "unavailable" label fallback) last.
  */
 fun groupLenses(lenses: List<DiscoveredLens>): List<LensGroup> {
-    val sorted = lenses.sortedWith(compareBy<DiscoveredLens> { it.opticalMetric }.thenBy { it.id })
+    val sorted = lenses.filter { it.role != LensRole.FRONT || isUnavailableLens(it) }.sortedWith(compareBy<DiscoveredLens> { it.role == LensRole.FRONT }.thenBy { it.opticalMetric }.thenBy { it.id })
     fun effectiveKind(lens: DiscoveredLens): LensRouteKind =
         if (lens.kind == LensRouteKind.UNAVAILABLE || "unavailable" in lens.label.lowercase()) {
             LensRouteKind.UNAVAILABLE
@@ -530,6 +530,16 @@ fun groupLenses(lenses: List<DiscoveredLens>): List<LensGroup> {
             title = "Vendor routes · ${vendor.size}",
             subtitle = "OEM composite IDs (such as 3/2 or A-B). Only needed when direct routes miss a lens.",
             lenses = vendor
+        )
+    }
+    val front = lenses.filter { it.role == LensRole.FRONT && !isUnavailableLens(it) }
+        .sortedWith(compareBy<DiscoveredLens> { it.opticalMetric }.thenBy { it.id })
+    if (front.isNotEmpty()) {
+        groups += LensGroup(
+            kind = LensRouteKind.STANDALONE,
+            title = "Front cameras · ${front.size}",
+            subtitle = "Front-facing camera routes.",
+            lenses = front
         )
     }
     val unavailable = sorted.filter { effectiveKind(it) == LensRouteKind.UNAVAILABLE }
@@ -700,7 +710,8 @@ fun groupByOptic(lenses: List<DiscoveredLens>): List<OpticGroup> {
             subtitle = "$routeText · recommended ID ${head.id}",
             lenses = ordered
         )
-    }.sortedWith(compareBy<OpticGroup> { it.recommended.opticalMetric }.thenBy { it.recommended.id })
+    }.sortedWith(compareBy<OpticGroup> { it.recommended.role == LensRole.FRONT }
+        .thenBy { it.recommended.opticalMetric }.thenBy { it.recommended.id })
     if (missing.isEmpty()) return groups
     return groups + OpticGroup(
         key = "unavailable",

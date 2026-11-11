@@ -603,7 +603,7 @@ class RawCameraController(
             rawCameraIds = candidates.filter { cameraId ->
                 val openId = resolveOpenCameraId(cameraId)
                 openId != null && openId !in ladder.unopenableOpenIds
-            }.sortedBy(::opticalMetric)
+            }.sortedWith(compareBy<String> { isFrontCamera(it) }.thenBy { opticalMetric(it) })
             val id = selectedCameraId?.takeIf(rawCameraIds::contains)
                 ?: preferredCameraId()?.takeIf(rawCameraIds::contains)
                 ?: rawCameraIds.firstOrNull()
