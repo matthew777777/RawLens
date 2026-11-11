@@ -37,10 +37,11 @@ struct SolveParams {
   std::vector<int> prior_at;   // empty = every iteration
   // Non-learned x-step on the prior iterations (shaders/dct_x.comp). H and W must be multiples of 4.
   bool dct_prior = false;
-  float dct_luma = 2.0f, dct_chroma = 16.0f;   // sweep 2026-11-10: luma 1 left almost all grain   // shrinkage thresholds, multiples of the noise level
+  float dct_luma = 1.0f, dct_chroma = 16.0f;   // luma 1.5-2 flattened asphalt and foliage at 2x; colour carries the cleaning   // shrinkage thresholds, multiples of the noise level
   // Dark blocks (mean luma below dct_dark_level, full effect below a quarter) use their measured
   // AC energy as the noise level when it exceeds the model, up to dct_dark_cap x (1 = off).
   float dct_dark_level = 0.02f, dct_dark_cap = 8.0f;
+  float dct_dark_luma = 0.25f;   // share of the dark boost applied to luma (colour always gets all of it)
   float L = 0.0f;              // >0 given; 0 = Schur bound max(U^T 1); <0 = power iteration
   // Look controls (not in the paper; PSNR-tuned values give a waxy look):
   float prior_gain = 0.4f;     // sigma handed to the prior = gain * sigma_t (0.4: DSLR look, user-picked)
