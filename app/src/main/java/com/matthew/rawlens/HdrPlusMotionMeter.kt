@@ -17,8 +17,9 @@ import kotlin.math.abs
  * off). Pure JVM math — no Android dependencies — so the whole unit is
  * testable on the host.
  *
- * [HdrPlusAutoSelect] consumes [MotionSummary] for strength, merge-path
- * and reference-frame selection.
+ * [HdrPlusAutoSelect] consumes [MotionSummary] for strength, merge-path,
+ * frame rejection and reference-frame selection. The hot-fraction and
+ * mismatch-ratio grids are reported for diagnostics only.
  */
 object HdrPlusMotionMeter {
     /** Sample every Nth pixel per pair (~48k samples at 12 MP). */
@@ -44,7 +45,7 @@ object HdrPlusMotionMeter {
      * ceil-cover ratio grid per pair (empty when unmeasured).
      * [pairMadDense]/[pairTexDense] hold the native meter's full-res
      * per-cell MAD/texture grids (empty when the native meter is
-     * unavailable; the danger term then stays off).
+     * unavailable; strength maps then stay off).
      */
     data class MotionSummary(
         val pairDeltas: List<Double>,
@@ -64,8 +65,17 @@ object HdrPlusMotionMeter {
         val mapCellsY: Int = 0,
         val pairMadDense: List<DoubleArray> = emptyList(),
         val pairTexDense: List<DoubleArray> = emptyList(),
-        /** Per-frame black-subtracted relative noise; empty/NaN means unknown. */
-        val frameRelativeNoise: List<Double> = emptyList()
+        /** Burst noise model (blind estimate, learned prior applied); null = unknown. */
+        val noiseModel: HdrPlusNoiseModel? = null,
+        /** White minus mean black of the reference frame, in raw codes. */
+        val codeRange: Double = Double.NaN,
+        /** Per-frame mean noise sigma on the strided grid ([pairDeltas] units). */
+        val frameNoiseSigma: List<Double> = emptyList(),
+        /** Per-frame mean noise sigma per map cell ([pairMadDense] units). */
+        val frameNoiseSigmaCells: List<DoubleArray> = emptyList(),
+        /** Spatial-merge noise reference of the preferred reference frame
+         * ([HdrPlusSceneNoise.spatialNoiseReference]); NaN = unknown. */
+        val spatialNoiseReference: Double = Double.NaN
     ) {
         /** GCam-style one-line report for the merge log. */
         fun logLine(frames: Int): String {
@@ -322,7 +332,11 @@ object HdrPlusMotionMeter {
         mapCellsY: Int = 0,
         pairMadDense: List<DoubleArray> = emptyList(),
         pairTexDense: List<DoubleArray> = emptyList(),
-        frameRelativeNoise: List<Double> = emptyList()
+        noiseModel: HdrPlusNoiseModel? = null,
+        codeRange: Double = Double.NaN,
+        frameNoiseSigma: List<Double> = emptyList(),
+        frameNoiseSigmaCells: List<DoubleArray> = emptyList(),
+        spatialNoiseReference: Double = Double.NaN
     ): MotionSummary {
         require(pairDeltas.size == prevTimestampsNs.size &&
             pairDeltas.size == currTimestampsNs.size &&
@@ -376,7 +390,11 @@ object HdrPlusMotionMeter {
             mapCellsY = mapCellsY,
             pairMadDense = pairMadDense.toList(),
             pairTexDense = pairTexDense.toList(),
-            frameRelativeNoise = frameRelativeNoise.toList()
+            noiseModel = noiseModel,
+            codeRange = codeRange,
+            frameNoiseSigma = frameNoiseSigma.toList(),
+            frameNoiseSigmaCells = frameNoiseSigmaCells.toList(),
+            spatialNoiseReference = spatialNoiseReference
         )
     }
 }

@@ -44,7 +44,7 @@ internal object LkrBridge {
      * @param wb R, G, B gains with G = 1 (1 / AsShotNeutral).
      * @param crop `[x, y, w, h]` sensor sub-rectangle, or null for full frame.
      * @param dctPrior regularise with the Vulkan sliding-DCT x-step; false = no prior.
-     * @param tuning LK-SR Lab overrides ([LkrTuning.overrides]): NaN = code default; null = all defaults.
+     * @param tuning LK-R Lab overrides ([LkrTuning.overrides]): NaN = code default; null = all defaults.
      * @param outWidth / [outHeight] requested output size (area-resampled if the solve differs), 0 = as solved.
      */
     @JvmStatic external fun nativeMerge(
@@ -55,6 +55,6 @@ internal object LkrBridge {
         tuning: FloatArray?, outWidth: Int, outHeight: Int
     ): ByteBuffer?
 
-    /** Native defaults of the LK-SR Lab table (index layout: lkr_tuning.h / [LkrTuning.Entry]). */
+    /** Native defaults of the LK-R Lab table (index layout: lkr_tuning.h / [LkrTuning.Entry]). */
     @JvmStatic external fun nativeTuningDefaults(): FloatArray
 }

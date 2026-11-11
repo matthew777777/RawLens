@@ -97,7 +97,9 @@ class HdrPlusMerge(context: Context) {
         settings: HdrPlusSettings,
         tileSize: Int = HdrPlusSettings.TILE_SIZE,
         searchDistance: Int = HdrPlusSettings.SEARCH_DISTANCE,
-        alignOnce: Boolean = true
+        alignOnce: Boolean = true,
+        /** Reference frame's key into the learned per-device noise model; null = burst estimate only. */
+        noiseSource: WaveletDenoiser.NoiseSource? = null
     ): UnpackedRawCfa? {
         try {
             require(frames.size in 2..MAX_NATIVE_FRAMES) {
@@ -143,7 +145,8 @@ class HdrPlusMerge(context: Context) {
                 // Meter first: the auto brain picks strength/path/frames/ref
                 // from read-only views of the packed buffers. Scores travel in
                 // locals, so the decision can never observe a stale volatile.
-                val metering = meterMotion(frames, packed, blacks, whites, width, height, settings.autoStrength)
+                val metering = meterMotion(frames, packed, blacks, whites, width, height,
+                    settings.autoStrength, refIndex, learnedPrior(noiseSource))
                 val decision = HdrPlusAutoSelect.select(
                     metering = metering,
                     frameCount = frames.size,
@@ -262,7 +265,9 @@ class HdrPlusMerge(context: Context) {
         whites: FloatArray,
         width: Int,
         height: Int,
-        measureNoise: Boolean
+        measureNoise: Boolean,
+        refIndex: Int,
+        prior: HdrPlusNoisePrior?
     ): HdrPlusMotionMeter.MotionSummary {
         val ranges = DoubleArray(frames.size) { i ->
             val blackMean = (blacks[i * 4] + blacks[i * 4 + 1] +
@@ -288,7 +293,7 @@ class HdrPlusMerge(context: Context) {
         val nativeScratch = HdrPlusMeterNative.Scratch(width, height)
             .takeIf { HdrPlusMeterNative.available }
         if (nativeScratch == null) {
-            Log.w(LOG_TAG, "HDR+ native meter unavailable, Kotlin fallback (danger term off)")
+            Log.w(LOG_TAG, "HDR+ native meter unavailable, Kotlin fallback (strength maps off)")
         }
         for (i in 1 until frames.size) {
             deltas += HdrPlusMotionMeter.meanAbsDiffNormalized(
@@ -332,15 +337,46 @@ class HdrPlusMerge(context: Context) {
         val fullTexDense = texDense.takeIf { it.size == frames.size - 1 } ?: emptyList()
         val (mapX, mapY) = if (fullRatios.isEmpty()) (0 to 0)
         else HdrPlusMotionMeter.mapCells(width, height)
+        // Noise: one model for the burst (blind estimate over every frame,
+        // refined by the learned per-device prior), then the noise each
+        // frame is expected to show on the meter's own sample grids.
+        fun black(i: Int) = FloatArray(4) { blacks[i * 4 + it] }
+        val noise = if (!measureNoise) null else HdrPlusSceneNoise.fit(
+            frames.indices.map { i -> HdrPlusSceneNoise.sample(packed[i], width, height, black(i), whites[i]) },
+            prior
+        )
+        val sigmas = if (noise == null) emptyList() else frames.indices.map { i ->
+            HdrPlusSceneNoise.frameSigma(packed[i], width, height, black(i), ranges[i], noise)
+        }
+        val cellSigmas = if (noise == null || fullMadDense.isEmpty()) emptyList()
+        else frames.indices.mapNotNull { i ->
+            HdrPlusSceneNoise.cellSigma(packed[i], width, height, black(i), ranges[i], noise)
+        }.takeIf { it.size == frames.size } ?: emptyList()
+        if (noise != null) Log.i(LOG_TAG, String.format(java.util.Locale.US,
+            "HDR+ noise: a=%.3g b=%.3g bins=%d learnedPrior=%s", noise.a, noise.b, noise.bins,
+            if (prior == null) "none" else "offered"))
         return HdrPlusMotionMeter.summarize(
             deltas, prevTs, currTs, gyros, hots,
             stats.map { it.meanLevel }, stats.map { it.sharpness },
             fullRatios, mapX, mapY, fullMadDense, fullTexDense,
-            if (!measureNoise) emptyList() else frames.indices.map { i ->
-                HdrPlusSceneNoise.measure(packed[i], width, height,
-                    FloatArray(4) { blacks[i * 4 + it] }, whites[i])
-            }
+            noise, ranges[refIndex], sigmas, cellSigmas,
+            if (noise == null) Double.NaN else HdrPlusSceneNoise.spatialNoiseReference(
+                packed[refIndex], width, height, ranges[refIndex])
         )
+    }
+
+    /**
+     * The learned per-device noise model (shared store with the wavelet
+     * stage and MFSR) as prior for the burst's own estimate. Null when the
+     * source is unknown; the prior itself declines when untrained for the ISO.
+     */
+    private fun learnedPrior(source: WaveletDenoiser.NoiseSource?): HdrPlusNoisePrior? {
+        val path = source?.let { WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(appContext), it) }
+            ?: return null
+        return HdrPlusNoisePrior { a, b, bins ->
+            WaveletVulkan.combineNoise(path, source.iso.toFloat(), a.toFloat(), b.toFloat(), bins)
+                ?.let { it[0].toDouble() to it[1].toDouble() }
+        }
     }
 
     /**

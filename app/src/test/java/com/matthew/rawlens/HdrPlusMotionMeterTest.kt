@@ -319,7 +319,7 @@ class HdrPlusMotionMeterTest {
         val curr = u16(100, 100, 100, 100)
         val ratios = HdrPlusMotionMeter.blockMismatchRatios(prev, curr, 2, 2, 1, 2, 1000.0)
         assertEquals(1, ratios!!.size)
-        assertTrue(ratios[0] > HdrPlusAutoTuning.MAP_RATIO_MOTION)
+        assertTrue(ratios[0] > 1e6)
     }
 
     @Test fun ratioGridCoversCeilWithPartials() {

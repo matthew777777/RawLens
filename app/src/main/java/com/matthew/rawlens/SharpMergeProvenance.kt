@@ -16,7 +16,7 @@ internal fun sharpMergeProvenance(
     val details = buildString {
         append("- Output: ${merged.width}x${merged.height}\n")
         if (lkr) {
-            append("- Merge: LK-SR (LK-Reloaded reconstruction)\n")
+            append("- Merge: LK-R (LK-Reloaded reconstruction)\n")
             append("- Zoom: ${settings.lkrZoom.factor}x\n")
             append("- Reconstruction scale: ${if (settings.lkrZoom == LkrZoom.X1) 1 else 2}x\n")
             append("- LK prior: ${if (settings.lkrDctPrior) "Sliding DCT" else "None"}\n")
@@ -44,7 +44,7 @@ internal fun sharpMergeProvenance(
         append("- Reference frame: ${ref.frameNumber}\n")
     }
     return MergeProvenance(
-        algorithmVersion = if (lkr) "RawLens-LK-SR/lkr-pipeline" else "RawLens-Mfsr/scale1-sr-pipeline",
+        algorithmVersion = if (lkr) "RawLens-LK-R/lkr-pipeline" else "RawLens-Mfsr/scale1-sr-pipeline",
         selectedFrames = selectedCount, acceptedFrames = merged.keptCount,
         rejectedFrames = selectedCount - merged.keptCount,
         referenceTimestampNs = ref.timestampNanos, outputScale = 1,

@@ -122,7 +122,8 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
                         sensitivityIso = it.metadata.sensitivityIso ?: 0
                     )
                 },
-                referenceIndex, settings
+                referenceIndex, settings,
+                noiseSource = WaveletDenoiser.NoiseSource.of(inputs[referenceIndex].metadata)
             )
         } finally {
             host.releaseInputs()

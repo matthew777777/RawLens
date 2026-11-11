@@ -10,7 +10,7 @@ import android.widget.TextView
 import java.util.Locale
 
 /**
- * Settings -> Merge: every burst-merge engine in one place (MFSR, LK-SR,
+ * Settings -> Merge: every burst-merge engine in one place (MFSR, LK-R,
  * HDR+). MFSR / HDR+ sections moved verbatim from Settings -> Burst, which
  * keeps the capture side (offline merges, ZSL ring, sidecars).
  */
@@ -80,13 +80,13 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 }
             }
         })
-        content.addView(sectionTitle("LK-SR merge"))
+        content.addView(sectionTitle("LK-R burst super-resolution"))
         content.addView(sectionDesc(
-            "LK-Reloaded burst super-resolution (Lecouat et al. 2021) with the RawLens " +
-                "improvements: DSLR look, motion and water rejection, local motion, " +
+            "RawLens adaptation of Lucas–Kanade Reloaded (Lecouat et al., 2021). " +
+                "RawLens improvements: DSLR look, motion and water rejection, local motion, " +
                 "shadow cleanup. Own quick tile; same shutter, ZSL and save path as MFSR."
         ))
-        content.addView(settingsCheck("LK-SR denoise: sliding DCT", mfsrSettings.lkrDctPrior).apply {
+        content.addView(settingsCheck("LK-R denoise: sliding DCT", mfsrSettings.lkrDctPrior).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrDctPrior &&
                     !applyMfsrSettings(mfsrSettings.copy(lkrDctPrior = checked))) {
@@ -100,7 +100,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
         ))
         val labPrefs = LkrTuning.prefs(this)
         val labBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(settingsCheck("Show LK-SR Lab (expert tuning)",
+        content.addView(settingsCheck("Show LK-R Lab (expert tuning)",
             labPrefs.getBoolean(LkrTuning.KEY_SHOW_LAB, false)).apply {
             setOnCheckedChangeListener { _, checked ->
                 labPrefs.edit().putBoolean(LkrTuning.KEY_SHOW_LAB, checked).apply()
@@ -116,9 +116,8 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 "Noise-reduction strength " +
                 "${HdrPlusSettings.MIN_STRENGTH.toInt()}–${HdrPlusSettings.MAX_STRENGTH.toInt()}. " +
                 "Higher merges harder: cleaner stills, more ghosting on motion. " +
-                "AUTO picks ${HdrPlusAutoTuning.AUTO_STRENGTH_MIN.toInt()}–" +
-                "${HdrPlusAutoTuning.AUTO_STRENGTH_MAX.toInt()} from measured noise and motion " +
-                "and ignores the slider."
+                "AUTO matches the strength to the measured noise, higher for still scenes " +
+                "and lower where frames move, and ignores the slider."
         ))
         fun strengthRowText(value: Float): String =
             HdrPlusSettings.strengthSliderText(value) +
@@ -182,19 +181,19 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
 }
 
 /**
- * LK-SR Lab rows: one slider (or switch) per [LkrTuning.Entry]. Values start at
+ * LK-R Lab rows: one slider (or switch) per [LkrTuning.Entry]. Values start at
  * the native code defaults; a changed value is stored and applies to the next
- * LK-SR merge (live and offline). "Reset" forgets every override.
+ * LK-R merge (live and offline). "Reset" forgets every override.
  */
 private fun MainActivity.buildLkrLab(p: SettingsPage, box: LinearLayout) {
     val prefs = LkrTuning.prefs(this)
     box.addView(p.kit.sectionDesc(
-        "Defaults are the tuned values in code. Changes apply to the next LK-SR merge; " +
+        "Defaults are the tuned values in code. Changes apply to the next LK-R merge; " +
             "a value set back to its default follows future code updates again."
     ))
     val defaults = LkrTuning.defaults()
     if (defaults == null) {
-        box.addView(p.kit.sectionDesc("LK-SR library unavailable on this build."))
+        box.addView(p.kit.sectionDesc("LK-R library unavailable on this build."))
         return
     }
     val refreshers = ArrayList<() -> Unit>()
@@ -253,11 +252,11 @@ private fun MainActivity.buildLkrLab(p: SettingsPage, box: LinearLayout) {
             setPadding(dp(12), 0, dp(12), dp(6))
         })
     }
-    box.addView(p.kit.settingsButton("RESET LK-SR LAB TO DEFAULTS").apply {
+    box.addView(p.kit.settingsButton("RESET LK-R LAB TO DEFAULTS").apply {
         setOnClickListener {
             LkrTuning.resetAll(prefs)
             refreshers.forEach { it() }
-            setStatus("LK-SR LAB • DEFAULTS")
+            setStatus("LK-R LAB • DEFAULTS")
         }
     })
 }

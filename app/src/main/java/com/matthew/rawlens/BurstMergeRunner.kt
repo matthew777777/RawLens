@@ -275,7 +275,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
         }
         val referenceIndex = (mergedInputs.size / 2).coerceIn(mergedInputs.indices)
         val tMerge = SystemClock.elapsedRealtime()
-        val mergedRaw = processor.merge(mergedInputs, referenceIndex, inputs.hdrPlus)
+        val mergedRaw = processor.merge(mergedInputs, referenceIndex, inputs.hdrPlus,
+            noiseSource = WaveletDenoiser.NoiseSource.of(frames[referenceIndex].metadata))
             ?: throw IllegalStateException("HDR+ merge failed")
         val mergeMs = SystemClock.elapsedRealtime() - tMerge
         val decision = processor.lastDecision

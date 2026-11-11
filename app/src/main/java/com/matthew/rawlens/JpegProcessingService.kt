@@ -118,7 +118,7 @@ class JpegProcessingService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tune)
             .setContentTitle("Merging and saving photos")
-            .setContentText("HDR+, MFSR, LK-SR and photo saves continue in the background")
+            .setContentText("HDR+, MFSR, LK-R and photo saves continue in the background")
             .setContentIntent(contentIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

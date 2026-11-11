@@ -151,12 +151,12 @@
         android:textSize="10sp"
         android:visibility="gone" />
 
-    <!-- LK-SR zoom chip: floats on the viewfinder's bottom-right corner,
+    <!-- LK-R zoom chip: floats on the viewfinder's bottom-right corner,
          mirroring the scope (bottom-left), seated above the measured panel by
          seatScopeSlot; 248dp below is only the initial fallback, independent
          of how many lenses the lens row holds.
          1x / 1.5x / 2x centre crop solved at x2; output stays sensor size.
-         Shown only while LK-SR is the active merge in photo mode. -->
+         Shown only while LK-R is the active merge in photo mode. -->
     <com.matthew.rawlens.RotatingTextView
         android:id="@+id/lkrZoomChip"
         android:layout_width="wrap_content"
@@ -389,7 +389,7 @@
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:baselineAligned="false">
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/hdrPlusQuick" style="@style/QuickControlTile" android:text="HDR+\nOFF" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/mfsrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="MFSR\nOFF" />
-            <com.matthew.rawlens.QuickControlTileView android:id="@+id/lkrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LK-SR\nOFF" />
+            <com.matthew.rawlens.QuickControlTileView android:id="@+id/lkrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LK-R\nOFF" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/dLightingQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="D-LIGHTING\nOFF" android:visibility="gone" />
         </LinearLayout>
     </LinearLayout>

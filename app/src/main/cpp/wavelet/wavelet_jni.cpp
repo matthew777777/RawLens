@@ -8,6 +8,8 @@
 #include <jni.h>
 #include <stdint.h>
 
+#include <cmath>
+
 #include <string>
 
 #include "noise_model.h"
@@ -184,5 +186,27 @@ extern "C" JNIEXPORT jfloatArray JNICALL Java_com_matthew_rawlens_WaveletVulkan_
     const jfloat out[4] = {model.predictA(iso), model.predictB(iso), (jfloat)model.samples, (jfloat)model.isos};
     jfloatArray arr = env->NewFloatArray(4);
     if (arr != nullptr) env->SetFloatArrayRegion(arr, 0, 4, out);
+    return arr;
+}
+
+// Learned model as prior + another stage's own blind estimate as evidence
+// (HDR+ burst estimate), mixed exactly as choose_noise does
+// (rawlens_noise::combine). Returns {a, b, evidence weight, samples, isos},
+// or null when the model does not cover [iso]. Read-only: adds no sample.
+extern "C" JNIEXPORT jfloatArray JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativeCombineNoise(
+        JNIEnv* env, jobject /*thiz*/, jstring storePath, jfloat iso, jfloat estimateA, jfloat estimateB,
+        jint bins) {
+    if (storePath == nullptr || !(iso > 0.0f)) return nullptr;
+    const char* p = env->GetStringUTFChars(storePath, nullptr);
+    std::string path(p != nullptr ? p : "");
+    if (p != nullptr) env->ReleaseStringUTFChars(storePath, p);
+    const auto model = rawlens_noise::fit(rawlens_noise::loadSamples(path));
+    if (!model.supports(iso)) return nullptr;
+    const bool estimateOk = std::isfinite(estimateA) && std::isfinite(estimateB) && estimateA >= 0.0f &&
+                            estimateB >= 0.0f;
+    const auto c = rawlens_noise::combine(model, iso, estimateA, estimateB, bins, estimateOk);
+    const jfloat out[5] = {c.a, c.b, c.w, (jfloat)model.samples, (jfloat)model.isos};
+    jfloatArray arr = env->NewFloatArray(5);
+    if (arr != nullptr) env->SetFloatArrayRegion(arr, 0, 5, out);
     return arr;
 }
