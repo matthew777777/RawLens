@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Data-term gradient U^T m (U z - y) for all K frames (paper Eq. 5).
 //
 // One invocation per LR pixel of one frame: forward model -> residual r ->

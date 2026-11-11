@@ -2,7 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Gauss-Newton normal equations per frame (paper Eq. 7), partial sums.
 //
 // r = m (U_p z - y), J = m dU_p/dp z with dU/dp from HR gradients sampled at

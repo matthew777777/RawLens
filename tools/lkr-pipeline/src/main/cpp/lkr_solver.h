@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // LK-Reloaded solver for one tile (Lecouat, Ponce, Mairal, ICCV 2021):
@@ -103,6 +103,9 @@ struct SolveParams {
   // Neutralise fully clipped highlights only. A clipped single channel
   // does not justify discarding the remaining sunset / coloured-light signal.
   bool highlight_desat = true;
+  // Held-out validation (diagnostics): the LAST frame is left out of the merge, aligned to the
+  // finished image and compared with it; SolveStats::ho_r / ho_valid receive the result.
+  bool holdout = false;
   std::string debug_prefix; // opt-in per-tile trace, unique path owned by MergeFull
   bool debug_maps = false;   // fill SolveStats::dbg (LKR_DEBUG_MAPS)
   bool notch = true;           // remove Bayer-period (zipper/maze) structure from colour + grain
@@ -146,6 +149,9 @@ struct SolveStats {
   // of frames 1..K-1, noise-equalisation factor, shadow weight, max local
   // motion |d| (LR px).
   std::vector<float> dbg;
+  // SolveParams::holdout: per LR sample of the held-out frame (h x w), prediction minus sample,
+  // and 1 where the sample is usable (inside the image, not clipped).
+  std::vector<float> ho_r, ho_valid;
 };
 constexpr int kDebugMaps = 5;
 
@@ -156,8 +162,8 @@ class Solver {
   bool ok() const { return ok_; }
   std::string profileNames() const;   // pointer -> shader name map for Gpu::profileReport
 
-  // frames: K x h x w RGGB raw in [0,1] (frame 0 = reference);
-  // p: K x 6 affine motions in/out; x_out: 3 x (s h) x (s w).
+  // frames: K x h x w RGGB raw in [0,1] (frame 0 = reference; with prm.holdout the last one is
+  // only compared, not merged); p: K x 6 affine motions in/out; x_out: 3 x (s h) x (s w).
   bool solve(const float* frames, int K, int h, int w, float* p, const SolveParams& prm,
              const PriorFn& prior, std::vector<float>* x_out, SolveStats* st);
 

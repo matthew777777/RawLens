@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "Cite the original LK-Reloaded paper and record this implementation's commit."
+title: "LK-Reloaded Super-Resolution: RawLens Vulkan implementation"
+type: software
+authors:
+  - name: The RawLens Authors
+license: Apache-2.0
+repository-code: https://github.com/matthew777777/LK-Reloaded-Super-Resolution
+preferred-citation:
+  type: conference-paper
+  title: "Lucas-Kanade Reloaded: End-to-End Super-Resolution from Raw Image Bursts"
+  authors:
+    - family-names: Lecouat
+      given-names: Bruno
+    - family-names: Ponce
+      given-names: Jean
+    - family-names: Mairal
+      given-names: Julien
+  conference:
+    name: IEEE/CVF International Conference on Computer Vision
+  year: 2021
+  start: 2370
+  end: 2379
+  url: https://arxiv.org/abs/2104.06191

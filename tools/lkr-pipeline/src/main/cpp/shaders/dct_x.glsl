@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Non-learned x-step: sliding 8x8 orthonormal DCT (stride 4), empirical-Wiener
 // coefficient shrinkage in luma / colour-difference space, Hann overlap-add.
 // Independent of the solver: planar RGB in, planar RGB out, per-pixel noise.

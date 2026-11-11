@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 // LK-SR expert tuning ("LK-SR Lab" in Settings -> Merge): a fixed-index float
 // table shared with the app (LkrTuning.kt mirrors the indices). The native

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Desktop parity/benchmark run of the Vulkan LK-Reloaded solver against the
 // python/lkr reference (python/lkr/parity.py writes the fixtures).
 //

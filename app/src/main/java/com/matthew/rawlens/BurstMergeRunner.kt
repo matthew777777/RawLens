@@ -231,13 +231,13 @@ internal class BurstMergeRunner(private val appContext: Context) {
                         merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise),
                         look = inputs.jpeg, jxl = inputs.jxl)
                     outputs += JxlSaver(appContext).save(developed, merged.refMetadata, null,
-                        captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_LKSR)
+                        captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_LKR)
                 } else {
                     val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
                         merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg)
                     try {
                         outputs += JpegSaver(appContext).save(developed, merged.refMetadata, null,
-                            captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_LKSR, gps = null,
+                            captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_LKR, gps = null,
                             description = LinearRgbDngWriter.provenanceBlock(provenance))
                     } finally {
                         developed.bitmap.recycle()

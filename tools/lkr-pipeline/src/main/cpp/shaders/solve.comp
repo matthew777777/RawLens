@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // One Gauss-Newton step per frame (paper Eq. 7): p_k <- p_k - (J^T J)^-1 J^T r.
 // One workgroup per non-reference frame: 64 lanes sum the jac.comp partials
 // (strided, then fixed tree), lane 0 solves the 6x6 system with Jacobi

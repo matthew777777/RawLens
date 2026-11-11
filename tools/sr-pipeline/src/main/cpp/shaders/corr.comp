@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // Align-L2 helpers (Vulkan 1.2, MoltenVK-safe). The FFT correlation itself
 // runs through fft.comp (see host/gpu_l2.py); this file holds the integer

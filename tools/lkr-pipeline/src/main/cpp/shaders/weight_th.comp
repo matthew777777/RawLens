@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Temporal weight, pass 1 (rows): over |dj| <= 2 of the VALID samples,
 // (sum r, sum (a y + b), count, sum r^2) -> tmp. weight_t.comp sums columns.
 #include "lkr_common.glsl"

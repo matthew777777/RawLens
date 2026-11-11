@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // Small fixed-kernel gradient + pointwise preprocessing ops (Vulkan 1.2,
 // MoltenVK-safe). No shared memory, no float64. Op-for-op identical to the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // Elementwise divide (utils.divide: num /= den under errstate ignore),
 // op-for-op identical to the proven Vulkan-port decomposition

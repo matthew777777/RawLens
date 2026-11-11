@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // HQS z-update (paper Eq. 5): z <- z - eta [U^T(Uz - y) + mu (z - x)],
 // with U^T(...) read from the fixed-point accumulator, which is cleared for
 // the next resid_adj pass. mode 1 (power iteration): z <- acc (as float).

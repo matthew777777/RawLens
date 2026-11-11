@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Unified linear-RGB DNG writer over TinyDNG v3 (desktop + Android).
 
 #include "srp_dng.h"

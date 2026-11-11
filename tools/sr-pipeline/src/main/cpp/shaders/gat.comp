@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // 1:1 port of utils_image.py cpu_GAT + cpu_decimate_to_grey (Alg.3 helpers).
 // CPU: float64 intermediates rounded on store to float32; GPU: float32

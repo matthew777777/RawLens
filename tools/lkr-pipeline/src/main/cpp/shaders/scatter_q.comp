@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // scatter.comp, one invocation per 2x2 Bayer quad (affine + local block
 // displacement once, rw as vec2 row pairs); per sample identical taps and
 // fixed-point atomics (bit-identical sum).

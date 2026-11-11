@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // ROBUST data step as a GATHER (no atomics), fused with the HQS z-update:
 //   z <- z - eta [U^T W r + mu (z - x)]
 // r = residual (resid.comp: 0 = invalid / clipped), W = robust weights wt.

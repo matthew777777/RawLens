@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Per-sample normalised squared residual for the robust weights:
 // e = r^2 / (a y + b + (tau * same-colour gradient)^2). weight.comp then takes
 // the 3x3 mean of e (was recomputed 9x per sample: 54 loads -> 6 + 9).

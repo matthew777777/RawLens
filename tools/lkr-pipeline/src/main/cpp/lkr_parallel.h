@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 // Minimal row-range parallel-for for the CPU stages around the GPU work
 // (prior GAT/pack/unpack, look finishing). Deterministic: each index range is

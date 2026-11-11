@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // Full-frame LK-Reloaded: overlapping tiles over the whole sensor, each its
@@ -73,6 +73,10 @@ struct FullParams {
   float sub_lk_blur_night = 1.5f; // pre-blur radius (grey px) at night, scaled by the look level: align on structure, not noise
   bool sharpest_ref = false;   // measured: did not help the wind-blurred pine; kept off        // per-tile coarse LK refinement of the global affine (corners)
   bool block_search = false;  // align.comp start for LARGE motion: off by default (false matches smeared wind-blown foliage)
+  // Held-out validation (desktop diagnostics): input frame index (>= 1) that is left out of the
+  // merge, aligned to the finished image and compared with it through the forward model.
+  // FullStats::holdout receives the maps. -1 = off. Needs >= 3 frames.
+  int holdout = -1;
   bool auto_local_lambda = true;   // scale solve.local_lambda by (noise / 0.0025)^2, cap 5   // init local motion with sr-pipeline align.comp (coarse-to-fine)
 };
 
@@ -88,6 +92,11 @@ struct FullStats {
   float sigma_look = 0;
   float local_lambda = 0;              // noise level the look was chosen from
   std::string gpu_profile;   // per-shader GPU ms (when Gpu::profile is on)
+  // FullParams::holdout: 3 planes of holdout_h x holdout_w, on the held-out frame's own RGGB grid
+  // (shifted against the output by that frame's motion): squared residual / expected noise
+  // variance, usable share of the sample (0..1), signed residual / expected noise sigma.
+  std::vector<float> holdout;
+  int holdout_w = 0, holdout_h = 0;
 };
 
 // cfa: LibRaw codes of the 2x2 cell, row-major (0=R, 1=G, 2=B).

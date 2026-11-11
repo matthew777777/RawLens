@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // resid.comp, one invocation per 2x2 Bayer quad (ESD4D-style quad
 // processing): the frame's affine and the local block displacement are read
 // once per quad (all 4 samples lie in the same local block: B even), y / r are

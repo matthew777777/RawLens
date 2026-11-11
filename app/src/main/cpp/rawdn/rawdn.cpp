@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "rawdn.h"
 
+#include "../wavelet/noise_model.h"
+
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
@@ -522,4 +524,38 @@ extern "C" int rawdn_estimate_noise(const uint16_t* in, int w, int h, int cfa, c
     *a = float(std::max(aa, 1e-9));
     *b = float(std::max(bb, 0.0));
     return used;
+}
+
+extern "C" int rawdn_choose_noise(const uint16_t* in, int w, int h, int cfa, const float black[4], float white,
+                                  float iso, float maxAnalogIso, uint64_t captureId, const char* storePath,
+                                  RawdnNoise* out) {
+    *out = RawdnNoise{};
+    out->estBins = rawdn_estimate_noise(in, w, h, cfa, black, white, &out->estA, &out->estB);
+    const bool estOk = out->estBins >= rawlens_noise::kMinBins;
+    rawlens_noise::Model model;
+    if (iso > 0.f && storePath && *storePath) {
+        // Fit before adding this shot, so the shot stays independent evidence.
+        auto samples = rawlens_noise::loadSamples(storePath);
+        model = rawlens_noise::fit(samples);
+        if (estOk) {
+            rawlens_noise::addSample(samples, {iso, out->estA, out->estB, out->estBins, maxAnalogIso, captureId});
+            rawlens_noise::saveSamples(storePath, samples);
+        }
+        out->modelSamples = model.samples;
+        out->modelIsos = model.isos;
+    }
+    if (model.supports(iso)) {
+        const auto c = rawlens_noise::combine(model, iso, out->estA, out->estB, out->estBins, estOk);
+        out->a = c.a;
+        out->b = c.b;
+        out->estWeight = c.w;
+        out->source = 2;
+    } else if (estOk) {
+        out->a = out->estA;
+        out->b = out->estB;
+        out->source = 1;
+    } else {
+        return -1;
+    }
+    return 0;
 }

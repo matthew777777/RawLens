@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // HR image gradients for the Gauss-Newton Jacobian, torch.gradient rules:
 // central (f[i+1]-f[i-1])/2 inside, one-sided differences at the borders.
 // Output planes: g[0..2] = d/dx per channel, g[3..5] = d/dy per channel.

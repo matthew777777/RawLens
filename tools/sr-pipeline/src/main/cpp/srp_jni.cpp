@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // JNI bridge for the sr-pipeline native library.
 //
 // Java class (to be added on the Kotlin side when needed):

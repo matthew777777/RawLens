@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // FFT grey image (IPOL utils_image.compute_grey_images, method "FFT"):
 //   G = Re(ifft2(M . fft2(J)))

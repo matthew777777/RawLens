@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 // Local-motion initialisation for LK-SR: coarse-to-fine block search with
 // sr-pipeline's MFSR align.comp (exhaustive L1 per tile, same SPIR-V source)

@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // resid.comp reading the packed taps zq (zpack.comp): one vec4 load per
 // bilinear sample instead of four scalar loads; identical arithmetic.
 // Residual r_k = m (U_k z - y_k) for all K frames (paper Eq. 5, first half).

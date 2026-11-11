@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // C++ side of the MHC parity check against app MhcReference.demosaicCoherent.
 //   lkr_mhc_check IN.u16 META.txt OUT.f32
 // META: sensorW sensorH pitch left top width height ch0 ch1 ch2 ch3 lv0 lv1 lv2 lv3 white

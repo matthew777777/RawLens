@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // PhotonCamera KernelNet (eszdman/PhotonCamera @ b2eff82,
 // assets/models/kernelnet_aniso_v2_2_params.ncnn.{param,bin}) evaluated

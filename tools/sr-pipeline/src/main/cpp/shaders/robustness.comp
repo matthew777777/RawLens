@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // 1:1 port of robustness.py (Alg.6-9): guide image, local stats, Dogson
 // (op-for-op identical to the proven Vulkan-port decomposition,

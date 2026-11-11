@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Minimal .npy reader for proof harnesses (float32 C-order only).
 //
 // Loads the parity fixtures and /tmp reference dumps the Python side writes:

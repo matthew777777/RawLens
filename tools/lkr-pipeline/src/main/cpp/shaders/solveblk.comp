@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // One regularised Gauss-Newton step of the local block translations:
 //   (J^T J + lam I) delta = -(J^T r + lam (d - dbar)),  d <- d + delta
 // dbar = mean of the 4-neighbour blocks (Jacobi; reads din, writes dout), so

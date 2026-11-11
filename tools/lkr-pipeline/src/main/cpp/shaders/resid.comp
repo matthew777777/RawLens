@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Residual r_k = m (U_k z - y_k) for all K frames (paper Eq. 5, first half).
 // Written to r[K][h][w]; invalid (out-of-frame) and clipped samples get 0, so
 // the gather adjoint (zstep_gather.comp) needs no mask of its own.

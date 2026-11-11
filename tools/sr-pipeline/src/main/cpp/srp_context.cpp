@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #include "srp_context.h"
 
 #include <vulkan/vulkan.h>

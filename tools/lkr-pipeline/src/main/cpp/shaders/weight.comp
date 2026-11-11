@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Robust data-term weights per LR sample from a 3x3 NEIGHBOURHOOD of residuals
 // (all colours of a Bayer area share one decision, so rejecting a moving
 // object never mixes colours from different frames -- per-sample weights left

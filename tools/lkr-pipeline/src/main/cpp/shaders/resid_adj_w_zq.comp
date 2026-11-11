@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Packed-tap variant: reads zq (zpack.comp), one vec4 load per sample.
 // ROBUST variant: U^T W m (U z - y) with this iteration's robust weights wt
 // (binding 5), fused residual + weighted adjoint for z-steps 2..n (replaces

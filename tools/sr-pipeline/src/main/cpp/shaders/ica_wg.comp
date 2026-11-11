@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // ICA refinement (IPOL ICA.py, Alg. 2, generic tile path: zero outside the
 // image, clipped update), one 256-thread workgroup per tile with a parallel

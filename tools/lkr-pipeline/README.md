@@ -1,5 +1,11 @@
 # lkr-pipeline
 
+This module is licensed under [Apache 2.0](LICENSE); see [NOTICE](NOTICE).
+The separately packaged desktop repository is generated with
+`tools/lkr-standalone` in the RawLens checkout, preserving shared source
+paths and bytes. Its detailed guides describe current CLI defaults; measurements
+below are historical runs with the explicitly stated settings.
+
 LK-Reloaded burst super-resolution (Lecouat, Ponce, Mairal, *Lucas-Kanade
 Reloaded: End-to-End Super-Resolution from Raw Image Bursts*, ICCV 2021,
 arXiv:2104.06191): the third burst method next to MFSR (`tools/sr-pipeline`)
@@ -82,6 +88,23 @@ and final output before/after finishing. RGB dumps are planar camera-linear;
 weights and residuals are `K × h × w` in source-frame coordinates. `temporal_rows`
 is `K × h × w × 4` (sum residual, sum variance, count, sum squared residual).
 The renderer requires NumPy and Pillow and applies one exposure to all stages.
+
+### Held-out frame check
+
+`lkr_full_run BURST OUT.dng --holdout 19` leaves input frame 19 out of the merge,
+aligns it to the finished image with the solver's own motion step and compares it
+with that image through the forward model, in the raw domain. It prints the
+residual energy divided by the expected noise variance, overall and per 16 px
+block, and writes `OUT.dng.holdout.f32`: three planar float32 maps on the held-out
+frame's grid (squared residual / variance, usable share, signed residual / sigma).
+
+Reading it: about 1 to 1 + 1/(merged frames) where every frame was used and the
+image is right; towards 2 where frames were rejected; above that where the image
+and the frame really differ (motion or a changed reflection in the held-out frame,
+ghosting, lost detail). Compare settings on the same burst and crop rather than
+reading absolute values: the scale follows the noise fit, and a fit over a small
+textured crop reads high (Friant 512 px crop: `a` twice the 1024 px value, block
+median 0.57). Real motion in the held-out frame is red whatever the setting.
 
 `lkr_robust_check` runs Vulkan regression checks for signed-residual cancellation,
 static-noise acceptance, reference preservation, independent shadow chroma and

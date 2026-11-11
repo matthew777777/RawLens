@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Run on a Vulkan desktop: temporal rejection and independent shadow controls.
 #include <algorithm>
 #include <cmath>

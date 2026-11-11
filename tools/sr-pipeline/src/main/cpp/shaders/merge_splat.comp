@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // 1:1 port of merge.py cpu_accumulate (Alg.4 Accumulation): per-HR-pixel 3x3,
 // op-for-op identical to the proven Vulkan-port decomposition

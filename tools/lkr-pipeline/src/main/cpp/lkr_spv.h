@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 // SPIR-V of shaders/*.comp, compiled at build time by glslc -mfmt=num
 // (CMakeLists.txt) and embedded, so desktop and Android load identical

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Desktop full-frame / region run through the same MergeFull path the app uses.
 //   lkr_full_run BURST_DIR OUT.dng [--s 1 --tile 512 --overlap 32 --crop W H --frames K]
 #include <dirent.h>
@@ -50,6 +50,7 @@ int main(int argc, char** argv) {
     else if (k == "--refine") prm.solve.refine_motion = nx() != 0;
     else if (k == "--mean") prm.solve.mean_preserve = nx();
     else if (k == "--reference") reference = nx();
+    else if (k == "--holdout") prm.holdout = nx();   // frame index (after --reference / --frames) kept out of the merge
     else if (k == "--smax") prm.smax_x = float(std::atof(argv[++i]));
     else if (k == "--notch") prm.solve.notch = nx() != 0;
     else if (k == "--workers") prm.workers = nx();
@@ -159,5 +160,45 @@ int main(int argc, char** argv) {
               prm.auto_look ? " (auto from noise)" : "", st.local_lambda);
   std::printf("ms: load %.0f noise %.0f coarseLK %.0f tiles %.0f (gpu %.0f prior %.0f, %d calls) TOTAL(merge) %.0f\n",
               ms_load, st.ms_noise, st.ms_coarse, st.ms_tiles, st.ms_gpu, st.ms_prior, st.prior_calls, st.ms_total);
+  if (!st.holdout.empty()) {
+    // Held-out frame: residual energy against the expected noise, per 16 x 16 block of its samples.
+    const int hw = st.holdout_w, hh = st.holdout_h, B = 16;
+    const size_t plane = size_t(hw) * hh;
+    const float* e = st.holdout.data();
+    const float* v = e + plane;
+    const float* sg = e + 2 * plane;
+    std::vector<float> ratio;
+    double all = 0, alln = 0, bias2 = 0;
+    for (int by = 0; by + B <= hh; by += B)
+      for (int bx = 0; bx + B <= hw; bx += B) {
+        double se = 0, sv = 0, ss = 0;
+        for (int i = 0; i < B; ++i)
+          for (int j = 0; j < B; ++j) {
+            const size_t o = size_t(by + i) * hw + bx + j;
+            se += double(v[o]) * e[o]; sv += v[o]; ss += double(v[o]) * sg[o];
+          }
+        all += se; alln += sv;
+        if (sv < 0.75 * B * B) continue;   // mostly clipped or outside the image
+        ratio.push_back(float(se / sv));
+        bias2 += (ss / sv) * (ss / sv);
+      }
+    FILE* hf = std::fopen((outp + ".holdout.f32").c_str(), "wb");
+    if (hf) { std::fwrite(st.holdout.data(), 4, st.holdout.size(), hf); std::fclose(hf); }
+    if (ratio.empty() || alln <= 0) {
+      std::printf("holdout frame %d: no usable samples\n", prm.holdout);
+    } else {
+      std::sort(ratio.begin(), ratio.end());
+      auto pct = [&](double q) { return ratio[size_t(q * (ratio.size() - 1))]; };
+      size_t over15 = 0, over2 = 0;
+      for (float r : ratio) { over15 += r > 1.5f; over2 += r > 2.0f; }
+      const int merged = int(fr.size()) - 1;
+      std::printf("holdout frame %d vs %d merged: residual / noise %.3f (all frames used: 1 .. %.3f)\n", prm.holdout,
+                  merged, all / alln, 1.0 + 1.0 / merged);
+      std::printf("holdout blocks (%d px, %zu): p10 %.3f p50 %.3f p90 %.3f  >1.5: %.1f%%  >2: %.1f%%  bias rms %.3f (noise alone %.3f)\n",
+                  B, ratio.size(), pct(0.10), pct(0.50), pct(0.90), 100.0 * over15 / ratio.size(),
+                  100.0 * over2 / ratio.size(), std::sqrt(bias2 / ratio.size()), 1.0 / B);
+      std::printf("holdout maps: 3 x %d x %d float32 -> %s.holdout.f32\n", hh, hw, outp.c_str());
+    }
+  }
   return 0;
 }

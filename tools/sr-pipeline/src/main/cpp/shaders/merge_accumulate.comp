@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // sr-pipeline merge-accumulate kernel (Vulkan 1.2, no extensions).
 //

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Host (macOS + MoltenVK) driver for app/src/main/cpp/rawdn.
-// usage: rawdn_host <spv-dir> <in.u16> <w> <h> <cfa> <black> <white> <wbR> <wbB> <out.u16> [a b] [grain] [levels] [repeat]
-// a = 0 (or omitted) uses the blind estimate.
+// usage: rawdn_host <spv-dir> <in.u16> <w> <h> <cfa> <black> <white> <wbR> <wbB> <out.u16> [a b] [grain] [levels] [repeat] [iso store captureId]
+// a = 0 (or omitted): noise from rawdn_choose_noise (learned model when iso + store are given, else the
+// blind estimate). out = "-" only reports the noise (and trains the store).
 #include "rawdn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -38,10 +39,18 @@ int main(int argc, char** argv) {
     f.read(reinterpret_cast<char*>(img.data()), std::streamsize(img.size() * 2));
     if (!f) { std::fprintf(stderr, "short input\n"); return 2; }
     if (!(p.noiseA > 0)) {
-        int bins = rawdn_estimate_noise(img.data(), w, h, p.cfa, p.black, p.white, &p.noiseA, &p.noiseB);
-        std::printf("estimate bins=%d a=%.4g b=%.4g\n", bins, p.noiseA, p.noiseB);
-        if (!bins) return 3;
+        float iso = argc > 16 ? float(std::atof(argv[16])) : 0.f;
+        const char* store = argc > 17 ? argv[17] : "";
+        uint64_t cap = argc > 18 ? std::strtoull(argv[18], nullptr, 10) : 0;
+        RawdnNoise nz;
+        int rc = rawdn_choose_noise(img.data(), w, h, p.cfa, p.black, p.white, iso, 0.f, cap, store, &nz);
+        std::printf("noise source=%d a=%.4g b=%.4g est_a=%.4g est_b=%.4g bins=%d est_weight=%.2f model_samples=%d model_isos=%d\n",
+                    nz.source, nz.a, nz.b, nz.estA, nz.estB, nz.estBins, nz.estWeight, nz.modelSamples, nz.modelIsos);
+        if (rc) return 3;
+        p.noiseA = nz.a;
+        p.noiseB = nz.b;
     }
+    if (std::string(argv[10]) == "-") return 0;
     char err[256] = "";
     RawdnContext* c = rawdn_create(err, sizeof(err));
     if (!c) { std::fprintf(stderr, "create: %s\n", err); return 1; }

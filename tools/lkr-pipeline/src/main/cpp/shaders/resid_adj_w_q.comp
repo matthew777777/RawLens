@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // resid_adj_w.comp, one invocation per 2x2 Bayer quad: affine + local block
 // displacement once per quad, y / wt as vec2 row pairs. Per sample: identical
 // forward model, residual, robust weight and fixed-point scatter onto its own

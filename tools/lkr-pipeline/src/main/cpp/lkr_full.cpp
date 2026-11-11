@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #include "lkr_full.h"
 
 #include <algorithm>
@@ -99,6 +99,14 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     if (err) *err = "need >= 2 frames of >= 64 px";
     return false;
   }
+  const bool holdout = prm.holdout >= 0;
+  if (holdout) {   // held-out frame last: every per-frame step below treats it like the others
+    if (K < 3 || prm.holdout < 1 || prm.holdout >= K) {
+      if (err) *err = "holdout needs >= 3 frames and an index in 1..K-1";
+      return false;
+    }
+    std::rotate(frames.begin() + prm.holdout, frames.begin() + prm.holdout + 1, frames.end());
+  }
   int ox = -1, oy = -1;
   for (int k = 0; k < 4; ++k)
     if (cfa[k] == 0) { ox = k & 1; oy = k >> 1; }
@@ -127,7 +135,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   const int s = prm.s;
 
   // 0) Sharpest frame as the reference (moved to index 0; the rest keep order).
-  if (prm.sharpest_ref && !prm.paper_parity && K > 1) {
+  if (prm.sharpest_ref && !prm.paper_parity && K > 1 && !holdout) {
     std::vector<double> sharp(size_t(K), 0.0);
     std::vector<std::thread> pool;
     const int nthr = std::max(1, std::min(K, int(std::thread::hardware_concurrency()) / 2));
@@ -281,6 +289,12 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   }
   sp.noise_a = S.a;
   sp.noise_b = S.b;
+  sp.holdout = holdout;
+  if (holdout) {
+    S.holdout_w = g.w;
+    S.holdout_h = g.h;
+    S.holdout.assign(size_t(3) * g.w * g.h, 0.0f);
+  }
   float look_t = 0.0f;   // 0 clean daylight .. 1 night (auto look), also gates sub-tile alignment
   if (prm.auto_look && !prm.paper_parity) {
     // Look level from OUR noise MODEL at mid-grey (flat-block fit, not fooled
@@ -527,6 +541,27 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
               dmaps[size_t(m) * GW * GH + size_t(s * gy + Y) * GW + s * gx + X] += w * ss.dbg[size_t(m) * HW + i];
         }
       }
+      if (holdout && ss.ho_r.size() == size_t(n) * n) {
+        // Expected variance of a held-out sample: a * signal + b in the frame's own units, with
+        // the prediction as the signal (less noisy than the sample) and the exposure gain undone.
+        const float gk = gain[size_t(K - 1)];
+        const float* yk = tf.data() + size_t(K - 1) * n * n;
+        const size_t plane = size_t(g.w) * g.h;
+        for (int i = 0; i < n; ++i) {
+          const float wy = wgt(s * i, jb.T, jb.B);
+          for (int j = 0; j < n; ++j) {
+            const size_t q = size_t(i) * n + j;
+            if (ss.ho_valid[q] < 0.5f) continue;
+            const float w = wy * wgt(s * j, jb.L, jb.R);
+            const float r = ss.ho_r[q];
+            const float var = std::max(gk * S.a * std::max(r + yk[q], 0.0f) + gk * gk * S.b, 1e-12f);
+            const size_t o = size_t(gy + i) * g.w + gx + j;
+            S.holdout[o] += w * r * r / var;
+            S.holdout[plane + o] += w;
+            S.holdout[2 * plane + o] += w * r / std::sqrt(var);
+          }
+        }
+      }
       ++ticket;
       cv.notify_all();
     }
@@ -575,6 +610,16 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       const float* src = rgb_data + (size_t(sy) * *out_w + sx) * 3;
       o[0] = src[0]; o[1] = src[1]; o[2] = src[2];
     }
+  if (holdout) {
+    const size_t plane = size_t(g.w) * g.h;
+    for (int i = 0; i < g.h; ++i)
+      for (int j = 0; j < g.w; ++j) {
+        const size_t o = size_t(i) * g.w + j;
+        const float wv = S.holdout[plane + o], ws = wrow[size_t(s * i)] * wcol[size_t(s * j)];
+        if (wv > 0) { S.holdout[o] /= wv; S.holdout[2 * plane + o] /= wv; }
+        S.holdout[plane + o] = ws > 0 ? std::min(wv / ws, 1.0f) : 0.0f;
+      }
+  }
   S.ms_tiles = now_ms() - t;
   S.gpu_profile = gpu->profileReport();
   S.ms_total = now_ms() - t0;

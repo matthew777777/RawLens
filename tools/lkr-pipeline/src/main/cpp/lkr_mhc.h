@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 // Line-by-line C++ port of app MhcReference.demosaicCoherent / runCoherent:
 // the CPU twin of the encoded-video coherent-green MHC path (vf_mhc_green +

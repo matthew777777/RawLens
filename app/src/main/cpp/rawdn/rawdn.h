@@ -49,6 +49,25 @@ void rawdn_destroy(RawdnContext* ctx);
 int rawdn_estimate_noise(const uint16_t* in, int w, int h, int cfa, const float black[4], float white,
                          float* a, float* b);
 
+
+// Noise for one capture: the learned per-camera model (wavelet/noise_model.h) as the prior and
+// this frame's blind estimate as evidence. The Camera2/DNG noise profile is never used.
+// storePath: sample file for this camera key, raw mode and firmware; it must be a store of
+// rawdn's own (raw-domain estimates), not the wavelet stage's. Null/empty or iso <= 0: the
+// blind estimate alone. A usable estimate is appended to the store (once per captureId).
+typedef struct RawdnNoise {
+    float a, b;            // chosen model
+    float estA, estB;      // this frame's blind estimate (0 when it failed)
+    int estBins;           // brightness bins behind the estimate (0 = failed)
+    int source;            // 0 none, 1 blind estimate, 2 learned model (+ estimate as evidence)
+    float estWeight;       // weight the estimate got against the model (source 2)
+    int modelSamples, modelIsos;
+} RawdnNoise;
+// Returns 0, or -1 when neither a model nor an estimate is available.
+int rawdn_choose_noise(const uint16_t* in, int w, int h, int cfa, const float black[4], float white,
+                       float iso, float maxAnalogIso, uint64_t captureId, const char* storePath,
+                       RawdnNoise* out);
+
 #ifdef __cplusplus
 }
 #endif

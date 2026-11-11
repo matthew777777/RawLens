@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // 1:1 port of block_matching.py cpu_l1_local_search (exhaustive L1, Alg.2).
 // The L2 FFT/correlation stage (align_lvl_block_matching_L2, torch FFT +

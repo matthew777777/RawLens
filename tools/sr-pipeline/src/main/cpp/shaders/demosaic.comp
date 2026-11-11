@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // Menon2007 (DDFAPD) demosaicing grey path, RGGB only (Vulkan 1.2,
 // MoltenVK-safe). Line-by-line port of colour_demosaicing menon2007.py

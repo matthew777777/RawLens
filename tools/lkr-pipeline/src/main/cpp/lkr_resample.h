@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 // Exact area-average resample of interleaved RGB (zoom 1.5x: the x2 solve of
 // the centre crop, 5440x4080, down to the sensor size 4080x3060). Each output

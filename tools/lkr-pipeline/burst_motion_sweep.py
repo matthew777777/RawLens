@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """Compare protected SR to static baseline and single-frame motion reference.
 
 Outputs are diagnostics, not ground-truth quality scores. No source files are

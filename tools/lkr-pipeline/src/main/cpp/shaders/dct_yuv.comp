@@ -1,5 +1,5 @@
 #version 450
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Last step of the DCT x-step: planes (Y, R-G, B-G) in white-balanced space to
 // planar camera RGB, in place. H and W % 4 == 0.
 layout(local_size_x = 16, local_size_y = 16) in;

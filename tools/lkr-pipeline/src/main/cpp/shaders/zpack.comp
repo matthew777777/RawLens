@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Bilinear-tap packing (malioc-guided: every LK-SR pass is load/store bound):
 // zq[idx] = (z[o], z[o+1], z[o+W], z[o+W+1]) per HR pixel and plane, so the
 // residual / adjoint passes read a sample's 4 taps with ONE vec4 load instead

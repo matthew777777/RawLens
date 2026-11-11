@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Exact adjoint U^T r as a GATHER, fused with the HQS z-update (paper Eq. 5):
 //   z <- z - eta [U^T r + mu (z - x)]          (mode 0)
 //   z <- U^T r                                 (mode 1/2, power iteration)

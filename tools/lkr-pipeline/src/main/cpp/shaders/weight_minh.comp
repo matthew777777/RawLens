@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Separable spread min-filter, pass 1 (rows): tmp = min over |dj| <= R of
 // min(wraw, wtr). Pass 2 (weight_min.comp) takes the column minimum.
 #include "lkr_common.glsl"

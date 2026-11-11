@@ -1,0 +1,20 @@
+name: Build and CPU check
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang cmake glslc libvulkan-dev default-jdk
+      - run: ./build.sh
+        env:
+          CC: clang
+          CXX: clang++
+      - run: ctest --test-dir build -R colour_guard --output-on-failure
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install cmake shaderc vulkan-headers vulkan-loader molten-vk openjdk
+      - run: ./build.sh
+      - run: ctest --test-dir build -R colour_guard --output-on-failure

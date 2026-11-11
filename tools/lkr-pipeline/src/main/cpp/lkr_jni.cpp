@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // JNI for LK-Reloaded (app: com.matthew.rawlens.LkrBridge).
 //
 // nativeMerge takes the caller's direct uint16 RAW buffers as-is (no Java

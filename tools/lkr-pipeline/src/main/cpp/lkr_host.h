@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // CPU-side stages of LK-Reloaded, mirrors of python/lkr (run.py, lkr.py):

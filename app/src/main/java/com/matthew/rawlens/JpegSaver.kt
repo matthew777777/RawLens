@@ -147,7 +147,7 @@ internal fun jpegImageDescription(
     typeSuffix: String?,
     description: String?
 ): String = (description?.let { "$it\nJPEG DEVELOPMENT\n" } ?: "") +
-    (if (typeSuffix == CaptureFileNames.TYPE_MFSR || typeSuffix == CaptureFileNames.TYPE_LKSR)
+    (if (typeSuffix == CaptureFileNames.TYPE_MFSR || typeSuffix == CaptureFileNames.TYPE_LKR)
         "Merged linear camera RGB -> ACEScg -> AgX " else "RAW_SENSOR -> AMaZE -> ACEScg -> AgX ") +
     "${settings.agxLook.label} -> " +
         (if (settings.displayP3) "Display P3" else "sRGB") +

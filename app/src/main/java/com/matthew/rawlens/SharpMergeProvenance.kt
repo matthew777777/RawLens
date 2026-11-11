@@ -55,4 +55,4 @@ internal fun sharpMergeProvenance(
 }
 
 internal fun MfsrSettings.mergeFileSuffix(): String =
-    if (engine == MfsrEngine.LKR) CaptureFileNames.TYPE_LKSR else CaptureFileNames.TYPE_MFSR
+    if (engine == MfsrEngine.LKR) CaptureFileNames.TYPE_LKR else CaptureFileNames.TYPE_MFSR

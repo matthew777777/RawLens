@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 #include "lkr_solver.h"
 
 #include <algorithm>
@@ -170,20 +170,24 @@ Solver::~Solver() {
     gpu_->destroy(*p);
 }
 
-bool Solver::solve(const float* frames, int K, int h, int w, float* p, const SolveParams& prm,
+bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const SolveParams& prm,
                    const PriorFn& prior, std::vector<float>* x_out, SolveStats* st) {
   const double t_start = now_ms();
+  // Held-out validation (prm.holdout): the last frame gets buffers and a motion start like the
+  // others but never enters the merge; K is the number of frames that do.
+  const int K = prm.holdout ? Kall - 1 : Kall;
+  if (K < 1) return LKR_FAIL("holdout needs a second frame");
   SolveStats local;
   SolveStats& S = st ? *st : local;
   S = SolveStats{};
   const int s = prm.s, H = s * h, W = s * w;
-  const size_t nLR = size_t(K) * h * w, nHR = size_t(3) * H * W;
+  const size_t nLR = size_t(Kall) * h * w, nHR = size_t(3) * H * W;
 
   // Buffers come from a per-solver cache (same tile size -> allocated once per
   // worker instead of ~32 allocations per tile); slots in declaration order.
   int slot = 0;
   auto cached = [&](size_t bytes, bool host_read = false) -> Buffer& { return Cached(slot++, bytes, host_read); };
-  Buffer& y = cached(nLR * 4), &pb = cached(size_t(K) * 6 * 4);
+  Buffer& y = cached(nLR * 4), &pb = cached(size_t(Kall) * 6 * 4);
   // z, x live in GPU-friendly memory (host-cached memory is slow for GPU reads
   // on Mali); zc / xc are host-cached staging copies for the CPU side (prior
   // input/output, final result), moved by GPU buffer copies.
@@ -192,7 +196,7 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
   Buffer& g = cached(nHR * 2 * 4);
   // jac.comp: 64 lanes x 8 pixels per group, 16 subgroup slots per group.
   const uint32_t G = div_up(uint32_t(h * w), 64 * 8), kSlots = 16;
-  Buffer& part = cached(size_t(std::max(K - 1, 1)) * G * kSlots * 27 * 4);
+  Buffer& part = cached(size_t(std::max(Kall - 1, 1)) * G * kSlots * 27 * 4);
   Buffer& v = cached(nHR * 4);
   Buffer& rr = cached(nLR * 4);   // residual (gather / robust paths)
   Buffer& rwb = cached(nLR * 4), &wtb = cached(nLR * 4);   // weighted residual, robust weight
@@ -210,10 +214,10 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
   // Local motion field: K x nby x nbx vec2 (+ Jacobi scratch, block normal eqs).
   const int LB = prm.local_block > 0 ? prm.local_block : 16;
   const int nbx = (w + LB - 1) / LB, nby = (h + LB - 1) / LB, nb = nbx * nby;
-  Buffer& dloc = cached(size_t(K) * nb * 8), &dtmp = cached(size_t(K) * nb * 8);
-  Buffer& blk = cached(size_t(std::max(K - 1, 1)) * nb * 6 * 4);
+  Buffer& dloc = cached(size_t(Kall) * nb * 8), &dtmp = cached(size_t(Kall) * nb * 8);
+  Buffer& blk = cached(size_t(std::max(Kall - 1, 1)) * nb * 6 * 4);
   std::memset(dloc.map, 0, dloc.bytes);
-  if (prm.local_init && prm.local_block > 0) std::memcpy(dloc.map, prm.local_init, size_t(K) * nb * 8);
+  if (prm.local_init && prm.local_block > 0) std::memcpy(dloc.map, prm.local_init, size_t(Kall) * nb * 8);
   // Weighted coverage sum_k U_k^T (valid w) (acc2 -> cw) and plain coverage
   // U^T 1 (cov, = v after the L bound), host-cached copies for the prior map.
   Buffer& acc2 = cached(nHR * 4), &cw = cached(nHR * 4), &cov = cached(nHR * 4);
@@ -224,7 +228,7 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
     return LKR_FAIL("buffer allocation");
 
   std::memcpy(y.map, frames, nLR * 4);
-  std::memcpy(pb.map, p, size_t(K) * 24);
+  std::memcpy(pb.map, p, size_t(Kall) * 24);
   std::memset(acc.map, 0, nHR * 4);
   std::memset(part.map, 0, part.bytes);   // unused subgroup slots must read 0
   {  // z0 = x0 = bilinear upsample of the bilinear-demosaiced reference
@@ -293,6 +297,7 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
   VkDescriptorSet sRW = gpu_->set(radjw_, {&z, &y, &pb, &acc, &dloc, &wtb});
   VkDescriptorSet sZGW = gpu_->set(zgw_, {&z, &x, &rr, &pb, &dloc, &wtb});
   VkDescriptorSet sRT = gpu_->set(residg_, {&z0, &y, &pb, &rrt, &dloc});
+  VkDescriptorSet sHV = gpu_->set(residg_, {&z, &y, &pb, &rrt, &dloc});   // holdout: valid mask of the finished image
   VkDescriptorSet sTH = gpu_->set(wth_, {&rrt, &y, &rwt2, &wvt2});
   VkDescriptorSet sWT = gpu_->set(wtemp_, {&rrt, &y, &rwt2, &wtr, &wvt2});
   const bool temporal = prm.temporal_k > 0.0f && prm.robust_spread > 0;
@@ -470,6 +475,7 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
 
   bool x_from_staging = false;
   bool z0_packed = false;
+  int motion_steps = 0;
   for (int t = 0; t < prm.T; ++t) {
     const float mu = float(prm.lam * double(prm.sigma_noise) * prm.sigma_noise / (double(sig[t]) * sig[t]));
     Push q = pc;
@@ -510,8 +516,9 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
         qb.f0 = prm.local_lambda;
         qb.f1 = prm.local_floor;
         gpu_->dispatch(solveblk_, sSB, &qb, div_up(uint32_t(K * nb), 64));
-        gpu_->copy(dtmp, dloc, dloc.bytes);
+        gpu_->copy(dtmp, dloc, size_t(K) * nb * 8);   // merged frames only: a held-out frame keeps its start
       }
+      ++motion_steps;
     }
     const bool use_prior = prior_here(t);
     if (use_prior && !prior && !dct) gpu_->copy(z, x, nHR * 4);    // 'none': x = z
@@ -673,9 +680,65 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
   FinishLook(zc.as<float>(), x_out->data(), H, W, prm, nscale.empty() ? nullptr : nscale.data(),
              shadow.empty() ? nullptr : shadow.data());
   trace("final_look", x_out->data(), nHR);
-  std::memcpy(p, pb.map, size_t(K) * 24);
+  if (prm.holdout) {
+    // Align the held-out frame to the FINISHED image with the solver's own motion step (affine +
+    // local blocks, robust weights), then take its residual. Its samples only ever set its own
+    // motion, so the residual is an out-of-sample test of the image.
+    const int ko = Kall - 1;
+    std::memcpy(z.map, x_out->data(), nHR * 4);
+    Push q = pc;
+    q.K = Kall;
+    q.mode = 0;
+    q.f0 = 1e-9f;
+    q.f1 = float(G * kSlots);
+    q.f2 = prm.clip;
+    q.rob_a = prm.noise_a;
+    q.rob_b = prm.noise_b;
+    q.rob_k = prm.robust_k;
+    q.f3 = prm.robust_tau;
+    q.rob_on = (prm.robust && prm.noise_b > 0) ? std::max(1.0f, prm.robust_pow) : 0.0f;
+    const int steps = std::max(motion_steps, 6);
+    for (int it = 0; it < steps; ++it) {
+      gpu_->begin();
+      if (q.rob_on > 0.5f) {
+        gpu_->dispatch(residg_, sR, &q, gxLR, gyLR, Kall);
+        gpu_->dispatch(wexp_, sE, &q, gxLR, gyLR, Kall);
+        if (prm.robust_spread > 0) {
+          gpu_->dispatch(weight_, sW0, &q, gxLR, gyLR, Kall);
+          Push qm = q; qm.f3 = float(prm.robust_spread);
+          gpu_->dispatch(wminh_, sWH, &qm, gxLR, gyLR, Kall);
+          gpu_->dispatch(wmin_, sWM, &qm, gxLR, gyLR, Kall);
+        } else {
+          gpu_->dispatch(weight_, sW, &q, gxLR, gyLR, Kall);
+        }
+      }
+      gpu_->dispatch(grad_, sGrad, &q, div_up(W, 16), div_up(H, 16), 3);
+      gpu_->dispatch(jac_, sJac, &q, G, Kall - 1);
+      gpu_->dispatch(solve_, sSolve, &q, Kall - 1);
+      if (prm.local_block > 0) {
+        gpu_->dispatch(jacblk_, sJB, &q, nbx, nby, Kall - 1);
+        Push qb = q;
+        qb.f0 = prm.local_lambda;
+        qb.f1 = prm.local_floor;
+        gpu_->dispatch(solveblk_, sSB, &qb, div_up(uint32_t(Kall * nb), 64));
+        gpu_->copy(dtmp, dloc, dloc.bytes);
+      }
+      if (!gpu_->submit()) return LKR_FAIL("holdout motion");
+    }
+    gpu_->begin();
+    gpu_->dispatch(residg_, sR, &q, gxLR, gyLR, Kall);
+    Push qv = q; qv.mode = 2;
+    gpu_->dispatch(residg_, sHV, &qv, gxLR, gyLR, Kall);
+    if (!gpu_->submit()) return LKR_FAIL("holdout residual");
+    const size_t o = size_t(ko) * h * w, n1 = size_t(h) * w;
+    S.ho_r.assign(rr.as<float>() + o, rr.as<float>() + o + n1);
+    S.ho_valid.resize(n1);
+    const float* vm = rrt.as<float>() + o;
+    for (size_t i = 0; i < n1; ++i) S.ho_valid[i] = (vm[i] > 0.5f && frames[o + i] < prm.clip) ? 1.0f : 0.0f;
+  }
+  std::memcpy(p, pb.map, size_t(Kall) * 24);
   S.dispatches = gpu_->dispatches();
-  if (prm.local_out && prm.local_block > 0) std::memcpy(prm.local_out, dloc.map, size_t(K) * nb * 8);
+  if (prm.local_out && prm.local_block > 0) std::memcpy(prm.local_out, dloc.map, size_t(Kall) * nb * 8);
   S.total_ms = now_ms() - t_start;
   return true;
 }

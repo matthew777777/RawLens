@@ -1,4 +1,5 @@
-"""1:1 comparison grids (lossless PNG). usage: grid.py <out_dir>
+"""1:1 comparison grids (lossless PNG). usage: grid.py <out_dir> [noise_store [real]]
+With a noise store, real frames take their noise from the learned model (rawdn_choose_noise, host build).
 Synthetic: clean reference | noisy | ESD3D2 | rawdn.  Real frames: input | ESD3D2 | rawdn."""
 import sys, os, numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../wavelet-parity'))
@@ -8,6 +9,25 @@ import cfadct as C
 import synth, real, joined
 from PIL import Image, ImageDraw
 OUT = sys.argv[1]; os.makedirs(OUT, exist_ok=True)
+STORE = sys.argv[2] if len(sys.argv) > 2 else ''
+ONLY_REAL = len(sys.argv) > 3 and sys.argv[3] == 'real'
+HOST = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../host/build')
+
+def model_noise(path):
+    """(a, b) from the learned model; works on a copy of the store so rendering does not train it."""
+    import subprocess, shutil, tempfile, re, tifffile
+    t = tifffile.TiffFile(path); pg = t.pages[0]; tg = {x.name: x for x in pg.tags.values()}
+    raw = pg.asarray(); h, w = raw.shape
+    black = float(np.mean(vals(tg['BlackLevel']))); white = float(vals(tg['WhiteLevel'])[0]); asn = np.array(vals(tg['AsShotNeutral'])); wbt = asn[1] / asn
+    cfa = {(0, 1, 1, 2): 0, (1, 0, 2, 1): 1, (1, 2, 0, 1): 2, (2, 1, 1, 0): 3}[tuple(tg['CFAPattern'].value)]
+    with tempfile.TemporaryDirectory() as d:
+        raw.tofile(d + '/in.u16'); shutil.copyfile(STORE, d + '/store.txt')
+        o = subprocess.run([HOST + '/rawdn_host', HOST, d + '/in.u16', str(w), str(h), str(cfa), str(black), str(white), str(wbt[0]), str(wbt[2]), '-',
+                            '0', '0', '0.35', '4', '1', str(float(tg['ISOSpeedRatings'].value)), d + '/store.txt', '0'], capture_output=True, text=True).stdout
+    print('  ', o.strip())
+    m = re.search(r'source=(\d) a=(\S+) b=(\S+)', o)
+    assert m and m.group(1) == '2', 'learned model not active: ' + o
+    return float(m.group(2)), float(m.group(3))
 BEST = dict(grain=0.35)          # everything else at cfadct.DEFAULT
 B = os.path.expanduser('~/Downloads/My/Bursts/')
 T = 512; BAR = 18
@@ -30,7 +50,7 @@ esd = lambda x, a, b, wb: E.esd3d2(np.clip(demosaic(x), 0, None), a, b)[0]
 # synthetic, with a true clean reference
 rng = np.random.default_rng(0)
 cl = synth.cleans()
-for lv in ('hi', 'mid'):
+for lv in (() if ONLY_REAL else ('hi', 'mid')):
     a, b, sc = synth.LEVELS[lv]; rows = []
     for name, rgb, wb in cl:
         c = rgb * sc; cc = mosaic(c)
@@ -43,7 +63,7 @@ for lv in ('hi', 'mid'):
 # real frames: no clean reference exists, the input is the reference
 for tag, f, n in (('night_iso4653', B + 'IMG_20260921_194618_520/IMG_20260921_194618_520_F00.dng', 5),
                   ('dusk_iso119', B + 'IMG_20260928_185731_891/IMG_20260928_185731_891_F00.dng', 4)):
-    x, wb, iso, lsb = load_dng(f); a, b, _ = estimate_noise(x); S = 640; rows = []
+    x, wb, iso, lsb = load_dng(f); a, b = model_noise(f) if STORE else estimate_noise(x)[:2]; S = 640; rows = []
     for nm, y0, x0 in real.pick(x, S, n):
         y0 = max(0, min(y0, x.shape[0] - S)) & ~1; x0 = max(0, min(x0, x.shape[1] - S)) & ~1
         c = x[y0:y0 + S, x0:x0 + S]; o = (S - T) // 2

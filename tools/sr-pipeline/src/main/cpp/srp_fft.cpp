@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Resident fft.comp chain (port of host/gpu_fft.py resident functions).
 //
 // See srp_fft.h for the ownership contract (arena buffers, borrowed

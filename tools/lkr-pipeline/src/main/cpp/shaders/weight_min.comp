@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Spread rejection (Wronski et al. 2019 robustness: minimum filter): a frame
 // that disagrees anywhere in a (2R+1)^2 LR neighbourhood is rejected across
 // it. Without this, the low-contrast interior of a moving object (car body)

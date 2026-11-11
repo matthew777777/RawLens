@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Exact adjoint U^T rw by scattering weighted residuals onto the SAME bilinear
 // taps as the forward model (fixed-point int32 atomics, as resid_adj.comp).
 // Used on robust iterations (resid -> weight -> scatter -> zstep).

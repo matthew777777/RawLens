@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """Full-frame replay of frozen burst inventory; maps are diagnostics, not truth."""
 import argparse,json,subprocess,os,time,re
 from pathlib import Path

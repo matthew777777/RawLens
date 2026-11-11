@@ -1,6 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Temporal consistency weight of frame k: residual r = U_k z0 - y_k against
 // the REFERENCE-only start image z0. Test both the mean and energy over a
 // 5x5 LR neighbourhood: displaced fine structures can have opposite-signed

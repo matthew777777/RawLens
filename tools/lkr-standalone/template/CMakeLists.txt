@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(LKReloadedSuperResolution LANGUAGES C CXX)
+add_subdirectory(tools/lkr-pipeline/src/main/cpp pipeline)
+enable_testing()
+add_test(NAME colour_guard COMMAND lkr_colour_guard_check)
+add_test(NAME robust COMMAND lkr_robust_check)

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #version 450
 // Portable complex FFT primitives + frequency-domain helpers (Vulkan 1.2,
 // no shared memory, no 64-bit; MoltenVK-safe). All complex data is vec2

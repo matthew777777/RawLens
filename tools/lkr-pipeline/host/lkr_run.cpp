@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // End-to-end desktop run: DNG burst directory -> LK-Reloaded crop -> outputs.
 //
 //   lkr_run BURST_DIR OUT_DIR [--cx X --cy Y --crop N --s 2 --T 16 --zs 3
