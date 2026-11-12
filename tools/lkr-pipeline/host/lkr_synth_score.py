@@ -120,11 +120,24 @@ def main():
     rail = up(L['rail'].reshape(2 * S, 2 * S).reshape(S, 2, S, 2).max((1, 3))) if s == 1 and 'rail' in L \
         else (L['rail'] if 'rail' in L else np.zeros_like(static))
     bars = binary_dilation(rail, iterations=3) & static
+    # Colour score (dB): chroma (R-G, B-G) at moderate resolution, target chroma deviation from its
+    # local mean over the error: a fading coloured person shows here, not in the luminance detail.
+    chroma = lambda v: gaussian_filter(np.stack([v[..., 0] - v[..., 1], v[..., 2] - v[..., 1]], -1), (1.0, 1.0, 0))
+    cg, co = chroma(g), chroma(o)
+    cgl = np.stack([gaussian_filter(cg[..., c], 12) for c in range(2)], -1)
+
+    def colour(m):
+        m = m & inner
+        if m.sum() < 50:
+            return float("nan")
+        return 10 * np.log10(((cg[m] - cgl[m]) ** 2).sum() / max(((co[m] - cg[m]) ** 2).sum(), 1e-20))
+
     res = dict(tex=detail(textured), bars=detail(bars), trail=detail(trail), person=detail(ref),
                sup_static=sup[static & inner].mean(), sup_trail=sup[trail & inner].mean(),
                sup_person=sup[ref & inner].mean())
     print(f"{a.tag:<14} K={K}  detail dB: texture {res['tex']:.2f}  bars {res['bars']:.2f}  "
           f"trail {res['trail']:.2f}  person {res['person']:.2f} | gain {gain:.3f} shift ({shift_px[0]:+.2f},{shift_px[1]:+.2f})"
+          f" | colour dB: trail {colour(trail):.2f}  person {colour(ref):.2f}"
           f" | frames static {res['sup_static']:.1f}  trail {res['sup_trail']:.1f}  person {res['sup_person']:.1f}")
     if a.save:
         from PIL import Image

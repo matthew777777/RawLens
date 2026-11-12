@@ -70,6 +70,9 @@ def main():
     ap.add_argument('--person-level', type=float, default=0.12, help='person mean level (bars are 0.08)')
     ap.add_argument('--person-stripes', type=float, default=7.0, help='clothing stripe period, HR px (0 = off)')
     ap.add_argument('--person-wobble', type=float, default=0.0, help='non-rigid motion amount (0 = rigid)')
+    ap.add_argument('--person-blur', type=int, default=1, help='motion-blur sub-positions per exposure (1 = sharp)')
+    ap.add_argument('--person-chroma', action='store_true', help='person at the background brightness, colour only')
+    ap.add_argument('--rail-level', type=float, default=0.08, help='bar brightness (background median 0.35)')
     ap.add_argument('--noise-a', type=float, default=2.05e-5)
     ap.add_argument('--noise-b', type=float, default=1.4e-6)
     a = ap.parse_args()
@@ -102,16 +105,34 @@ def main():
     band = (xx > 0.15 * HR) & (xx < 0.75 * HR) & (yy > 0.25 * HR) & (yy < 0.85 * HR)
     rail[band & ((xx.astype(int) % 9) < 2)] = 1.0
     rail[(np.abs(yy - 0.25 * HR) < 2) & (xx > 0.15 * HR) & (xx < 0.75 * HR)] = 1.0
-    rail_col = np.array([0.08, 0.08, 0.08], 'f4')
+    rail_col = np.array([a.rail_level] * 3, 'f4')
+    tint = np.array([0.6, 0.9, 1.6], 'f4'); tint /= tint.mean()
+    bg_lum = gaussian_filter(bg.mean(-1), 6)   # local background brightness (--person-chroma)
+    stripes = (1 + 0.15 * np.sin(2 * np.pi * (xx + 0.5 * yy) / max(a.person_stripes, 1e-6))) if a.person_stripes > 0 else 1.0
 
-    def composite(px, py, k=0):
+    def composite_sharp(px, py, k=0):
         # non-rigid (--person-wobble): outline width and clothing pattern change per frame like a walk
         wob = 1.0 + a.person_wobble * np.sin(1.3 * k)
         m = person_mask(px, py, wob)[..., None]
         tx = map_coordinates_shift(ptex, px - pc[0] + a.person_wobble * 6 * np.sin(2.1 * k), py - pc[1])
+        if a.person_chroma:   # same brightness as the background behind it, differs in colour only
+            sh = map_coordinates(stripes if np.ndim(stripes) else np.ones_like(xx), [yy - (py - pc[1]), xx - (px - pc[0])], order=1, mode='reflect')
+            tx = (bg_lum * sh)[..., None] * tint
         img = bg * (1 - m) + tx * m
         r = rail[..., None]
         return img * (1 - r) + rail_col * r, m[..., 0]
+
+    def composite(px, py, k=0):
+        # motion blur within the exposure (--person-blur N): average N person positions along the step
+        n = max(1, a.person_blur)
+        if n == 1:
+            return composite_sharp(px, py, k)
+        acc, macc = 0.0, 0.0
+        for j in range(n):
+            o = 2 * a.person_speed * ((j + 0.5) / n - 0.5)
+            img, m = composite_sharp(px + o, py, k)
+            acc = acc + img; macc = macc + m
+        return acc / n, macc / n
 
     def map_coordinates_shift(img, dx, dy):
         out = np.empty_like(img)
