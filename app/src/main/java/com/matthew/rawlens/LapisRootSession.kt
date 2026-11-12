@@ -31,6 +31,12 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
         val fps: Int get() = if(dcg) 30 else 10
         fun applyRequest(builder: CaptureRequest.Builder) {
             builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,Range(fps,fps))
+            if(mode==LapisRootProfile.Mode.CROP_4X) {
+                builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.configSensorScenarios",IntArray::class.java),intArrayOf(0,1,4))
+                builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.configCellCropSensorIds",IntArray::class.java),intArrayOf(0))
+                builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.forceSensorMode",IntArray::class.java),intArrayOf(0,8))
+                builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.sensorScenario",IntArray::class.java),intArrayOf(0,5))
+            }
             if(!dcg)return
             builder.set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_ON)
             builder.set(CaptureRequest.SENSOR_SENSITIVITY,null)
@@ -115,6 +121,10 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
                 "test \"\$(getprop vendor.debug.cameng.force_sensormode)\" = '$previous' && " +
                 "test \"\$(sha256sum /vendor/lib64/mt6878/libmtkcam_metastore.so | cut -d ' ' -f 1)\" = '${LapisRootProfile.VENDOR_SHA256}' && " +
                 "test \"\$(sha256sum /vendor/lib64/mt6878/libmtkcam_hal_core_utils.so | cut -d ' ' -f 1)\" = '${LapisRootProfile.CORE_SHA256}' && " +
+                "test \"\$(sha256sum /vendor/lib64/mt6878/libcam.sensor_mode_helper.so | cut -d ' ' -f 1)\" = '${LapisRootProfile.SMH_SHA256}' && " +
+                "test \"\$(sha256sum /vendor/lib64/mt6878/libcam.sensor_mode_helper_custom.so | cut -d ' ' -f 1)\" = '${LapisRootProfile.SMH_CUSTOM_SHA256}' && " +
+                "test \"\$(sha256sum /vendor/lib64/libcam.sensor_mode_helper.so | cut -d ' ' -f 1)\" = '${LapisRootProfile.SMH_SHA256}' && " +
+                "test \"\$(sha256sum /vendor/lib64/libcam.sensor_mode_helper_custom.so | cut -d ' ' -f 1)\" = '${LapisRootProfile.SMH_CUSTOM_SHA256}' && " +
                 "test \"\$(getprop vendor.debug.vhdr.strategy.config.force)\" = '$previousConfig' && " +
                 "test \"\$(getprop vendor.debug.vhdr.strategy.force)\" = '$previousRuntime' && " +
                 "test \"\$(getenforce)\" = Enforcing"

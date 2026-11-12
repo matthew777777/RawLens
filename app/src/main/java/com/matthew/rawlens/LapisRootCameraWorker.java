@@ -29,6 +29,8 @@ import java.util.zip.ZipFile;
 public final class LapisRootCameraWorker {
     private static final String LIB = "/vendor/lib64/mt6878/libmtkcam_metastore.so";
     private static final String CORE_LIB = "/vendor/lib64/mt6878/libmtkcam_hal_core_utils.so";
+    private static final String SMH_LIB = "/vendor/lib64/mt6878/libcam.sensor_mode_helper.so";
+    private static final String SMH_CUSTOM_LIB = "/vendor/lib64/mt6878/libcam.sensor_mode_helper_custom.so";
     private static final String HDR_CONFIG = "vendor.debug.vhdr.strategy.config.force";
     private static final String HDR_RUNTIME = "vendor.debug.vhdr.strategy.force";
     private static final String PROP = "vendor.debug.cameng.force_sensormode";
@@ -70,9 +72,10 @@ public final class LapisRootCameraWorker {
         boolean live = args[0].startsWith("session-");
         String mode = live ? args[0].substring(8) : args[0];
         boolean full = mode.equals("50mp");
-        boolean dcg=mode.equals("dcg14");
+        boolean dcg=mode.equals("dcg14"), crop4=mode.equals("4x");
+        if(crop4 && !live)throw new IOException("4x requires a regular app camera session");
         if(dcg && !live)throw new IOException("DCG14 requires a regular app AE session");
-        if (!full && !dcg && !mode.equals("2x")) throw new IOException("Unsupported sensor mode");
+        if (!full && !dcg && !crop4 && !mode.equals("2x")) throw new IOException("Unsupported sensor mode");
         job = new File(args[1]).getCanonicalFile();
         String apk = new File(args[2]).getCanonicalPath();
         String nativeDirectory = args[3];
@@ -112,20 +115,33 @@ public final class LapisRootCameraWorker {
             String old = command("getprop", PROP).trim();
             if (!old.matches("-?[0-9]*")) throw new IOException("Unknown existing sensor override");
             if(!hash(new File(CORE_LIB)).equals(LapisRootProfile.CORE_SHA256))throw new IOException("Unexpected core camera library");
+            if(!hash(new File(SMH_LIB)).equals(LapisRootProfile.SMH_SHA256) ||
+                !hash(new File(SMH_CUSTOM_LIB)).equals(LapisRootProfile.SMH_CUSTOM_SHA256))throw new IOException("Unexpected sensor-mode-helper libraries");
             String oldConfig=command("getprop",HDR_CONFIG).trim(),oldRuntime=command("getprop",HDR_RUNTIME).trim();
             if(!oldConfig.matches("-?[0-9]*")||!oldRuntime.matches("-?[0-9]*"))throw new IOException("Unknown existing HDR override");
             String token = UUID.randomUUID().toString();
             File patched = new File(job,"vendor-patch.so");
             if (full) patch(apk,patched);
             if(dcg)patchCore(patched);
+            File cropHelper=new File(job,"crop-helper.so"),cropCustom=new File(job,"crop-custom.so");
+            if(crop4) { patchCropHelper(cropHelper,false);patchCropHelper(cropCustom,true); }
             String selectedLib=dcg?CORE_LIB:LIB;
+            String cropRestore="";
+            if(crop4)for(String lib:new String[]{SMH_LIB,SMH_CUSTOM_LIB,"/vendor/lib64/libcam.sensor_mode_helper.so","/vendor/lib64/libcam.sensor_mode_helper_custom.so"})
+                cropRestore+="umount -l "+shellQuote(lib)+" 2>/dev/null || true\n";
             String script = "#!/system/bin/sh\n" +
                 "test \"$(cat '"+lease+"' 2>/dev/null)\" = '"+token+"' || exit 0\n" +
+                cropRestore +
                 ((full||dcg) ? "umount -l '"+selectedLib+"' 2>/dev/null || true\n" : "") +
                 "setprop '"+PROP+"' '"+old+"' || exit 1\n" +
                 (dcg?"setprop '"+HDR_CONFIG+"' '"+oldConfig+"' || exit 1\nsetprop '"+HDR_RUNTIME+"' '"+oldRuntime+"' || exit 1\n":"")+
                 "test \"$(sha256sum '"+CORE_LIB+"' | cut -d ' ' -f 1)\" = '"+LapisRootProfile.CORE_SHA256+"' || exit 1\n" +
                 "test \"$(sha256sum '"+LIB+"' | cut -d ' ' -f 1)\" = '"+LapisRootProfile.VENDOR_SHA256+"' || exit 1\n" +
+                "test \"$(sha256sum '"+SMH_LIB+"' | cut -d ' ' -f 1)\" = '"+LapisRootProfile.SMH_SHA256+"' || exit 1\n" +
+                "test \"$(sha256sum '"+SMH_CUSTOM_LIB+"' | cut -d ' ' -f 1)\" = '"+LapisRootProfile.SMH_CUSTOM_SHA256+"' || exit 1\n" +
+                "test \"$(sha256sum /vendor/lib64/libcam.sensor_mode_helper.so | cut -d ' ' -f 1)\" = '"+LapisRootProfile.SMH_SHA256+"' || exit 1\n" +
+                "test \"$(sha256sum /vendor/lib64/libcam.sensor_mode_helper_custom.so | cut -d ' ' -f 1)\" = '"+LapisRootProfile.SMH_CUSTOM_SHA256+"' || exit 1\n" +
+                (crop4?"rm -f "+shellQuote(cropHelper.getPath())+" "+shellQuote(cropCustom.getPath())+"\n":"") +
                 ((full||dcg) ? "rm -f "+shellQuote(patched.getPath())+"\n" : "") +
                 // "handoff": the next mode's worker restarts the HAL once for both sessions.
                 (full ? "touch '"+CAMERASERVER_PENDING+"' || exit 1\n" : "") +
@@ -148,8 +164,14 @@ public final class LapisRootCameraWorker {
             new ProcessBuilder("sh","-c",watchdog).redirectOutput(new File(job,"watchdog.log")).redirectErrorStream(true).start();
             try {
                 if (full||dcg) command("mount","-o","bind",patched.getPath(),selectedLib);
+                if(crop4) {
+                    command("mount","-o","bind",cropHelper.getPath(),SMH_LIB);
+                    command("mount","-o","bind",cropHelper.getPath(),"/vendor/lib64/libcam.sensor_mode_helper.so");
+                    command("mount","-o","bind",cropCustom.getPath(),SMH_CUSTOM_LIB);
+                    command("mount","-o","bind",cropCustom.getPath(),"/vendor/lib64/libcam.sensor_mode_helper_custom.so");
+                }
                 if(dcg) { command("setprop",HDR_CONFIG,"2");command("setprop",HDR_RUNTIME,"64"); }
-                command("setprop",PROP,full?"12":dcg?"9":"7");
+                command("setprop",PROP,full?"12":dcg?"9":crop4?"8":"7");
                 // A handed-off 50 MP session left stale stream tables in cameraserver.
                 boolean cameraserver=full||CAMERASERVER_PENDING.exists();
                 if (live) restartAndAwait(cameraserver);
@@ -161,7 +183,7 @@ public final class LapisRootCameraWorker {
                 Files.deleteIfExists(CAMERASERVER_PENDING.toPath());
                 float focus=Float.parseFloat(args[10]);
                 if(!Float.isFinite(focus)||focus<0||focus>20)throw new IOException("Invalid focus distance");
-                if (live) liveSession(full,dcg);
+                if (live) liveSession(full,dcg,crop4);
                 else capture(full,iso,exposure,orientation,gains,focus);
             } finally {
                 File release=new File(job,"release");
@@ -169,9 +191,14 @@ public final class LapisRootCameraWorker {
                 if (handoff) command("sh",cleanup.getPath(),"handoff"); else command("sh",cleanup.getPath());
                 report.put("handoff",handoff);
                 Files.deleteIfExists(patched.toPath());
+                Files.deleteIfExists(cropHelper.toPath());Files.deleteIfExists(cropCustom.toPath());
                 boolean restored = !lease.exists() && command("getprop",PROP).trim().equals(old)
                     && hash(new File(LIB)).equals(LapisRootProfile.VENDOR_SHA256)
                     && hash(new File(CORE_LIB)).equals(LapisRootProfile.CORE_SHA256)
+                    && hash(new File(SMH_LIB)).equals(LapisRootProfile.SMH_SHA256)
+                    && hash(new File(SMH_CUSTOM_LIB)).equals(LapisRootProfile.SMH_CUSTOM_SHA256)
+                    && hash(new File("/vendor/lib64/libcam.sensor_mode_helper.so")).equals(LapisRootProfile.SMH_SHA256)
+                    && hash(new File("/vendor/lib64/libcam.sensor_mode_helper_custom.so")).equals(LapisRootProfile.SMH_CUSTOM_SHA256)
                     && (!dcg || (command("getprop",HDR_CONFIG).trim().equals(oldConfig) && command("getprop",HDR_RUNTIME).trim().equals(oldRuntime)))
                     && command("getenforce").trim().equals("Enforcing");
                 report.put("restored",restored);
@@ -228,11 +255,38 @@ public final class LapisRootCameraWorker {
         data.putInt(0x41410,0x528442e0);data.putInt(0x41414,0xd65f03c0);
         Files.write(out.toPath(),bytes);command("chmod","644",out.getPath());command("chcon","u:object_r:vendor_file:s0",out.getPath());
     }
-    private static void liveSession(boolean full,boolean dcg)throws Exception {
-        JSONObject ready=new JSONObject().put("mode",full?"50mp":dcg?"dcg14":"2x").put("state","ready");
+    /** Exact-firmware classification fixes; no validation/assertion is removed. */
+    private static void patchCropHelper(File out,boolean custom)throws Exception {
+        byte[] bytes=Files.readAllBytes(new File(custom?SMH_CUSTOM_LIB:SMH_LIB).toPath());
+        ByteBuffer data=ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        int phoff=Math.toIntExact(data.getLong(32)),phsize=data.getShort(54)&65535,phcount=data.getShort(56)&65535;
+        int cave=custom?0x4a50:0x3b0e0,length=custom?36:28;
+        boolean extended=false;
+        for(int i=0;i<phcount;i++) {
+            int at=phoff+i*phsize;
+            if(data.getInt(at)!=1 || (data.getInt(at+4)&1)==0)continue;
+            long fileEnd=data.getLong(at+8)+data.getLong(at+32),vaEnd=data.getLong(at+16)+data.getLong(at+40);
+            if(fileEnd!=cave || vaEnd!=cave)throw new IOException("Unexpected helper executable layout");
+            for(int j=0;j<length;j++)if(bytes[cave+j]!=0)throw new IOException("Helper padding is not empty");
+            data.putLong(at+32,data.getLong(at+32)+length);data.putLong(at+40,data.getLong(at+40)+length);extended=true;break;
+        }
+        if(!extended)throw new IOException("Missing helper executable segment");
+        int entry=custom?0x3b20:0xf114,original=data.getInt(entry);
+        if(original!=(custom?0xa9bb7bfd:0xb9400c48))throw new IOException("Unexpected helper entry instruction");
+        // Sensor0 mode8 is the documented 4x crop. Other custom calls retain the original function.
+        int[] code=custom?new int[]{0xb9400008,0x350000c8,0xb9400028,0x7100211f,0x54000061,0x52800020,0xd65f03c0,original,branch(cave+32,entry+4)}:
+            new int[]{0xb9400448,0x7100211f,0x54000061,0x52810028,0xb9000848,original,branch(cave+24,entry+4)};
+        for(int i=0;i<code.length;i++)data.putInt(cave+i*4,code[i]);
+        data.putInt(entry,branch(entry,cave));
+        Files.write(out.toPath(),bytes);command("chmod","644",out.getPath());command("chcon","u:object_r:vendor_file:s0",out.getPath());
+    }
+    private static int branch(int from,int to){return 0x14000000|(((to-from)/4)&0x3ffffff);}
+
+    private static void liveSession(boolean full,boolean dcg,boolean crop4)throws Exception {
+        JSONObject ready=new JSONObject().put("mode",full?"50mp":dcg?"dcg14":crop4?"4x":"2x").put("state","ready");
         ownedJson(new File(job,"ready.json"),ready);
         long lastHeartbeat=SystemClock.elapsedRealtime()/1000;
-        int expected=full?0x100c300e:dcg?0x1009301a:0x1007301a,width=full?8160:4080,height=full?6120:3060;
+        int expected=full?0x100c300e:dcg?0x1009301a:crop4?0x1008301a:0x1007301a,width=full?8160:4080,height=full?6120:3060;
         boolean verified=false;
         while(!new File(job,"release").exists()) {
             try { lastHeartbeat=Long.parseLong(new String(Files.readAllBytes(new File(job,"heartbeat").toPath()),java.nio.charset.StandardCharsets.UTF_8).trim()); }
@@ -241,13 +295,13 @@ public final class LapisRootCameraWorker {
             int[] active=LapisRootCameraNative.activeSensorFormat();
             boolean match=active!=null&&active[0]==width&&active[1]==height&&active[2]==expected;
             if(match!=verified) {
-                ownedJson(new File(job,"verified.json"),new JSONObject().put("verified",match).put("mode",full?"50mp":dcg?"dcg14":"2x")
+                ownedJson(new File(job,"verified.json"),new JSONObject().put("verified",match).put("mode",full?"50mp":dcg?"dcg14":crop4?"4x":"2x")
                     .put("width",width).put("height",height).put("driverCode",active==null?0:active[2]));
                 verified=match;
             }
             Thread.sleep(200);
         }
-        report.put("mode",full?"50mp":dcg?"dcg14":"2x").put("session",true);
+        report.put("mode",full?"50mp":dcg?"dcg14":crop4?"4x":"2x").put("session",true);
     }
 
     private static void ownedJson(File file,JSONObject value)throws Exception {

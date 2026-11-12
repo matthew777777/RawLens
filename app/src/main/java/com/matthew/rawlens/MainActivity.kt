@@ -3355,6 +3355,7 @@ class MainActivity : Activity() {
         when (redmiRootMode()) {
             LapisRootProfile.Mode.FULL -> "50 MP • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.DCG14 -> "DCG14 • AUTO AE • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
+            LapisRootProfile.Mode.CROP_4X -> "4× • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.CROP_2X -> "2× • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.DCG14 -> "DCG14 • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.NORMAL -> if (captureFormat.includesJpeg)

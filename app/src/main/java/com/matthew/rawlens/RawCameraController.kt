@@ -1567,7 +1567,7 @@ class RawCameraController(
      * caught here; asynchronous session-configuration failures use normal recovery.
      */
     private fun attachVendorSessionParams(device: CameraDevice, config: SessionConfiguration) {
-        lapisSessionSpec?.takeIf { it.dcg && selectedCameraId=="0" }?.let { spec ->
+        lapisSessionSpec?.takeIf { (it.dcg || it.mode==LapisRootProfile.Mode.CROP_4X) && selectedCameraId=="0" }?.let { spec ->
             val parameters=device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
             spec.applyRequest(parameters)
             config.setSessionParameters(parameters.build())
@@ -4723,6 +4723,8 @@ class RawCameraController(
                 "50mp","Main camera, 50 megapixel RAW"))
             options.add(at+1,LensOption("0","2× · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X,
                 "2x","Main camera, 2× in-sensor crop RAW"))
+            options.add(at+2,LensOption("0","4× · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_4X,
+                "4x","Main camera, 4× in-sensor crop RAW"))
         }
         if(extended) options.add(LensOption("0","1× · DCG14",selectedCameraId=="0" && mode==LapisRootProfile.Mode.DCG14,
             "dcg14","DCG/DSG 14-bit RAW, automatic exposure, 30 fps sensor mode"))

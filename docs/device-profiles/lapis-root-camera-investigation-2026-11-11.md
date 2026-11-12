@@ -411,4 +411,40 @@ AE lock comparison:120frames, lock at45, measured30.078018477fps. Timestamp-matc
 
 Request key discovery includes Xiaomi stagger exposure/gain/ISO lists, but their applicability/units are unverified; no arbitrary setters or HAL assertion suppression applied. The practical supported DCG path remains AE ON, optionally locked.
 
-Corrected4×logical19 + actualmode8 with camera-engine override still fails initial kBinMode registration. Adding startup.sensorScenario19 + startup.forceSensorMode8 and removing cameng gets past configuration, but no completed RAW sequence yet; capture errors and request-level logs saved. 200MPlogical3 + sensor11 still fails kBinMode with cameng. Next bounded200MPtest sets startup.sensorScenario3 + startup.forceSensorMode11 without cameng, with original metadata exposure patch; automatic rollback retained.
+Logical19 was initially tried for4×, but decoded policy logs identify it as kBinModeCMS (flag0x40), not kCropMode4x (flag0x80). Logical19 + actualmode8 with camera-engine override still fails initial kBinMode registration. Adding startup.sensorScenario19 + startup.forceSensorMode8 and removing cameng gets past configuration, but no completed RAW sequence yet; capture errors and request-level logs saved. 200MPlogical3 + sensor11 still fails kBinMode with cameng. Next bounded200MPtest sets startup.sensorScenario3 + startup.forceSensorMode11 without cameng, with original metadata exposure patch; automatic rollback retained.
+
+
+### 2026-11-12: evidence recheck of 50 MP and 2× ISZ
+
+Rechecked saved capture logs, RAW payload and sensor-driver source. 50 MP: actual active driver0x100c300e (mode12),8160×6120; payload99,878,400bytes exactly. Sampled full rows0,100,2000,3059,3060,4000,6119 have8160 nonzero samples each and signal across all four horizontal quarters. Driver mode12 reads full16320×12240 area and scales to8160×6120. This establishes a sensor50MP readout rather than merely a larger app allocation; optical resolving power and remosaic accuracy still require scene/chart validation.
+
+2×: actual active driver0x1007301a (mode7),4080×3060; payload24,969,600bytes. Driver custom3 explicitly selects central8160×6128 region (x4080,y3080) from full16320×12288, scales4080×3064 and trims4080×3060. This is a real sensor crop with2× horizontal field-of-view relative to full width, not an app-only digital crop. Delivered RAW in this verified route remains10-bit (white1023/black64), despite RAW14 at the sensor interface. Previously completed native Camera2 acceptance for both modes passed ZSL, production merge and six-frame bursts.
+
+Current connection has shell UID2000, su unavailable at standard and KernelSU paths, sensor subdevice permission denied; no root worker observed. Therefore this recheck validates recorded evidence, not a fresh post-reboot rooted capture. Readable experimental DCG/sensor override properties are blank and no matching vendor bind mounts appear in shell mount output. No re-root exploit was run in this recheck.
+
+Interrupted manual-DCG test completed its EXIT rollback before this recheck: core hash28741847…b8cc, Enforcing. AE_OFF with AE_LOCK=true still disconnected after switch frame45; no verified manual DCG result.
+
+
+## 2026-11-12 16:20: real 4× sensor RAW achieved; 200 MP deferred
+
+Temporary root restored headlessly on identical kernel/firmware. Fresh hashes matched all original vendor libraries, Enforcing. Corrected mode-class diagnostics preserve original SMH and resource validation. ConfigIn mode8 needs general crop+Bayer flags0x801, and libcam.sensor_mode_helper_custom.so isCrop must register documented sensor0/mode8 as a crop. Separate kCropMode4x flag0x80 has no registered scenario in this HAL. No assertion bypass was applied. Builders: tools/lapis-profile/research/build_smh_class_probe.py and build_crop8_registration_probe.py; firmware-hash guarded, generate copies from local original libraries, do not ship proprietary binaries.
+
+Successful 4× recipe: both helper patches temporarily bound at /vendor/lib64 and /vendor/lib64/mt6878 aliases; cameng8, startup logical4, no startup forced mode; request/session configSensorScenarios=[0,1,4], configCellCropSensorIds=[0], forceSensorMode=[0,8], per-frame sensorScenario=[0,5], zoom4. 30-frame AE ON test measured10.1405fps, in-session DRIVER ACTIVE0x1008301a,4080×3060, populated RAW. Repeated90frames at30.1057582fps, same actual driver. RAW14 app-format patch produced white16383/black1024 but **all sampled Bayer phases lie on the left-shifted10-bit lattice**; no14-bit precision claim. Stock app-format selector, manual AE OFF ISO400/20ms also passed10frames with actual driver8, white1023/black64. This stock RAW10 path is selected for app integration.
+
+200MP progress: ConfigIn mode11 needs full+Bayer0x802. This passes initial sensor-mode checks, then kernel RAW-resource allocation rejects the pipeline. Both on-the-fly and direct-coupled paths tested; requesting1fps does not reduce the kernel resource calculation's sensor-native5fps. Kernel logs show one available RAW engine (mask0x2). Explicit two-engine request rejected by ResourceEvaluator: max possible raw for one sensor1, budget1. No200MP frame. User explicitly deferred200MP and requested app integration of4×. All200MP properties/binds restored, normal RAW baseline passed, actual driver0x1000300e, Enforcing.
+
+4× app integration and headless acceptance recorded below when complete. No app UI launched. Experimental evidence remains in ignored .local/lapis-root-camera-2026-11-11 and /tmp/rawlens-root-camera-research.
+
+
+### 4× app integration completed (2026-11-12 17:29 local)
+
+Added exact-firmware CROP_4X mode/persisted selection, “4× · SENSOR” lens-switcher entry and4× capture badge. Photo-only route follows2×: standard4080×3060 RAW10, manual AE supported,10fps session, ordinary app ZSL/bursts/merges. No CRAW14/native precision claim; the RAW14 app-format override is not used for4×. Session/request crop keys retain actual driver mode8. Worker builds two small classification patches from hash-matched local original helper libraries; proprietary binaries are not shipped. Temporary binds cover both vendor library aliases. Nonce-scoped EXIT/watchdog restoration verifies all four helper paths plus core/metastore hashes before releasing the lease. Firmware/hash mismatch fails closed.
+
+Headless acceptance on isolated com.matthew.rawlens.rcdcheck, no Activities:
+- sensor4xNativePipeline, lapisNativeSession=true/lapisMerge=true: PASS11.975s. Hardware verified,4080×3060,white1023/black64,3 pre-shutter ZSL frames, production3-frame HDR+ merge and6-frame forward burst. Source IMG_20261112_172318_989.dng; merge IMG_20261112_172321_153_HDR.dng.
+- killedWorkerRestoresSensor, lapisKillWorker=true/lapisKillMode=4x: PASS37.179s. Killed the actual4× worker; independent watchdog restored all added library binds and sensor state.
+- sensor2xNativePipeline regression: PASS6.346s, ZSL/DNG/6-frame burst.
+
+Built using isolated /tmp/rawlens-4x-isolated-build because parallel builds replaced the common APK output with lkrcheck artifacts. GitHub device-test and minified release builds passed. Installed separate **RawLens Redmi2.2.82**, com.matthew.rawlens.redmi, versionCode2282. Root grant retained for UID10323. Local ABI-targeted build required adb install -t. Existing app data/profile preserved; user can choose4× in the lens switcher. No UI launched.
+
+Installed minified-release worker smoke: PASS,10frames at10.000633fps, actual driver0x1008301a,4080×3060 RAW10,AE OFF ISO400/20ms,white1023/black64; report restored=true. Evidence/logs copied to .local/lapis-root-camera-2026-11-11/app-4x-acceptance. Temporary root remains active, Enforcing.200MP deferred at user request; no200MP overrides remain and no200MP mode is exposed.

@@ -24,17 +24,19 @@ import java.util.concurrent.TimeUnit
 /** No activities: real app Camera2 repeating RAW, pre-shutter ZSL, burst and production HDR+ merge. */
 class LapisNativeSessionInstrumentedTest {
     @Test fun fiftyMpNativePipeline() = run(LapisRootProfile.Mode.FULL)
+    @Test fun sensor4xNativePipeline() = run(LapisRootProfile.Mode.CROP_4X)
     @Test fun sensor2xNativePipeline() = run(LapisRootProfile.Mode.CROP_2X)
     @Test fun dcg14NativePipeline() = run(LapisRootProfile.Mode.DCG14)
 
     @Test fun killedWorkerRestoresSensor() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("lapisKillWorker")=="true")
         val context=InstrumentationRegistry.getInstrumentation().targetContext
-        val lease=LapisRootSession.open(context,LapisRootProfile.Mode.CROP_2X)
+        val mode=LapisRootProfile.fromArgument(InstrumentationRegistry.getArguments().getString("lapisKillMode")?:"2x")!!
+        val lease=LapisRootSession.open(context,mode)
         try {
             val command="pid=\$(cat /data/adb/rawlens-lapis/owner.pid); " +
                 "case \"\$(tr '\\000' ' ' </proc/\$pid/cmdline)\" in " +
-                "*com.matthew.rawlens.LapisRootCameraWorker*session-2x*) kill -KILL \$pid;; *) exit 1;; esac"
+                "*com.matthew.rawlens.LapisRootCameraWorker*session-${mode.argument}*) kill -KILL \$pid;; *) exit 1;; esac"
             val kill=ProcessBuilder("su","-M","-c",command).start()
             assertTrue(kill.waitFor(5,TimeUnit.SECONDS));assertEquals(0,kill.exitValue())
         } finally { lease.close() }
@@ -136,7 +138,7 @@ class LapisNativeSessionInstrumentedTest {
                     override fun onConfigured(s:CameraCaptureSession){configured.complete(s)}
                     override fun onConfigureFailed(s:CameraCaptureSession){configured.completeExceptionally(IllegalStateException("configure failed"))}
                 })
-            if(lease.spec.dcg) configuration.setSessionParameters(camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+            if(lease.spec.dcg || mode==LapisRootProfile.Mode.CROP_4X) configuration.setSessionParameters(camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 lease.spec.applyRequest(this)
             }.build())
             camera.createCaptureSession(configuration)

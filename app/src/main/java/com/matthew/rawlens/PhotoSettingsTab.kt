@@ -57,8 +57,8 @@ internal class PhotoSettingsTab(
                 }
             })
             if (LapisRootProfile.enabled(activity)) {
-                kit.content.addView(kit.sectionDesc("Choose 12.5 MP, 50 MP, 2× sensor RAW or DCG14 in the lens switcher. Root must be active and granted to RawLens. Sensor setup is automatic; camera settings are restored when the session closes."))
-                kit.content.addView(kit.sectionDesc("DCG14: 12.5 MP DCG/DSG RAW14 output at 30 fps; automatic exposure is required. Manual ISO/shutter and flash are unavailable in this mode. 50 MP: verified RAW10. 2×: RAW14 sensor interface, delivered as 10-bit RAW; extra precision is unverified. Firmware: ${LapisRootProfile.FIRMWARE}."))
+                kit.content.addView(kit.sectionDesc("Choose 12.5 MP, 50 MP, 2× / 4× sensor RAW or DCG14 in the lens switcher. Root must be active and granted to RawLens. Sensor setup is automatic; camera settings are restored when the session closes."))
+                kit.content.addView(kit.sectionDesc("DCG14: 12.5 MP DCG/DSG RAW14 output at 30 fps; automatic exposure is required. Manual ISO/shutter and flash are unavailable in this mode. 50 MP: verified RAW10. 2× / 4×: RAW14 sensor interface, delivered as 10-bit RAW; extra precision is unverified. Firmware: ${LapisRootProfile.FIRMWARE}."))
             }
         }
         // JPEG XL container options, mirroring darktable's export panel:
