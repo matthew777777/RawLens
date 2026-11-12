@@ -100,6 +100,15 @@ class SessionStreamComboTest {
     }
 
     @Test
+    fun threeAProbeVerdict() {
+        assertEquals(true, SessionStreamSelection.previewRequestNeededFor3a(90, anyAlive = false))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededFor3a(90, anyAlive = true))
+        // Manual/fixed focus: AF was never observable, so no verdict.
+        assertEquals(false, SessionStreamSelection.previewRequestNeededFor3a(0, anyAlive = false))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededFor3a(44, anyAlive = false))
+    }
+
+    @Test
     fun firstPreviewComboIsFullStep() {
         val ladder = combos()
         val full = ladder.indexOfFirst { it.label == "FULL" }

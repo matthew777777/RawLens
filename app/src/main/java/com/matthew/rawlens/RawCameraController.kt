@@ -492,6 +492,19 @@ class RawCameraController(
     /** Whether the current ladder offers any preview step to jump to. */
     private var sessionOffersPreview = false
     /**
+     * HAL 3A probe: armed on the raw-only default step while this camera has
+     * no 3A verdict. Qualcomm/Xiaomi HALs build a RAW-only session without
+     * the stats/3A nodes: continuous AF never leaves INACTIVE, AWB reports
+     * unity gains and AE never meters (field logs 2026-11-12, ishtar). A
+     * session whose 3A stayed dead for the whole settle window rebuilds with
+     * a normal preview target. Camera-thread only; reset by any rebuild.
+     */
+    private var threeAProbeArmed = false
+    private var threeAProbeFirstMs = 0L
+    private var threeAProbeAfFrames = 0
+    /** Camera whose preview trial this process just requested (single use). */
+    private var threeATrialCameraId: String? = null
+    /**
      * Session-level compat: DEFAULT plan without stream-use-case hints and a
      * HAL-default frame rate (no forced 30 fps). Engaged once a repeating RAW
      * stream proves stillborn; sticky afterwards and persisted by the host so
@@ -970,11 +983,22 @@ class RawCameraController(
         // ISP preview-request verdict: cameras proven to stall at ~20 fps
         // raw-only jump straight to the first preview combo; everyone else
         // starts raw-only (the probe below renders the verdict once).
-        if (ladder.comboIndex == 0 && ispPreviewRequestNeeded(selectedCameraId)) {
+        if (ladder.comboIndex == 0 &&
+            (ispPreviewRequestNeeded(selectedCameraId) || threeAPreviewWanted(selectedCameraId))
+        ) {
             SessionStreamSelection.firstPreviewComboIndex(combos).takeIf { it > 0 }?.let { ladder.comboIndex = it }
         }
         sessionOffersPreview = combos.any { it.preview != null }
         val combo = combos[ladder.comboIndex]
+        if (ladder.comboIndex > 0 && combo.preview == null &&
+            threeAPreviewState(selectedCameraId) in 1..THREE_A_CONFIRMED
+        ) {
+            // Same terminal state for the 3A remedy: every preview step was
+            // refused, so this camera stays raw-only with RawLens' own
+            // colour/exposure estimates and is never trialled again.
+            persistThreeAPreviewState(selectedCameraId, THREE_A_REFUSED)
+            Log.w(LOG_TAG, "3A preview remedy refused by HAL; raw-only verdict persisted")
+        }
         if (ladder.comboIndex > 0 && combo.preview == null && ispPreviewRequestNeeded(selectedCameraId)) {
             // The preview remedy failed on this camera: the stillborn ladder
             // fell through every preview step (some HALs crash with any
@@ -1091,6 +1115,13 @@ class RawCameraController(
         fpsProbeCameraId = selectedCameraId
         fpsProbeFirstNs = 0L
         fpsProbeShot = captureSequence.get()
+        // Arm the 3A probe on the first raw-only step only: a degraded
+        // raw-only tail means the preview steps were already refused.
+        threeAProbeArmed = combo.preview == null && ladder.comboIndex == 0 && sessionOffersPreview &&
+            lapisSessionSpec == null && selectedCameraId != null &&
+            threeAPreviewState(selectedCameraId) < THREE_A_MAX_TRIALS
+        threeAProbeFirstMs = 0L
+        threeAProbeAfFrames = 0
         logRawStreamCombo(map, rawSize, previewSize, combo.label, ladder.comboIndex, combos.size)
         // RAW-only combos skip the preview surface entirely: the session runs
         // a single RAW stream and the RAW viewfinder is the only display.
@@ -1218,6 +1249,13 @@ class RawCameraController(
                     // is the verification event. Idempotent, so a
                     // stale frame attributing to the same identity is
                     // harmless; generation-gated above.
+                    if (previewSize != null &&
+                        threeAPreviewState(selectedCameraId) in 1..THREE_A_MAX_TRIALS
+                    ) {
+                        // The RAW+preview trial streams: keep it across cold starts.
+                        persistThreeAPreviewState(selectedCameraId, THREE_A_CONFIRMED)
+                        Log.i(LOG_TAG, "3A preview remedy streaming; RAW+preview persisted for $selectedCameraId")
+                    }
                     val verifiedIdentity = pendingVerifiedIdentity
                     pendingVerifiedIdentity = null
                     if (verifiedIdentity != null) {
@@ -1856,6 +1894,110 @@ class RawCameraController(
                 .edit().putBoolean(ISP_PREVIEW_REQUEST_KEY_PREFIX + cameraId, needed).apply()
         } catch (_: Exception) {
             // Best effort: without persistence the probe simply re-arms next launch.
+        }
+    }
+
+    /** Persisted 3A remedy state: 0 unknown, 1..[THREE_A_MAX_TRIALS] trial pending, confirmed, refused. */
+    private fun threeAPreviewState(cameraId: String?): Int = try {
+        if (cameraId == null) THREE_A_REFUSED
+        else context.getSharedPreferences(ISP_PREVIEW_REQUEST_PREFS, Context.MODE_PRIVATE)
+            .getInt(THREE_A_PREVIEW_KEY_PREFIX + cameraId, 0)
+    } catch (_: Exception) {
+        // Best effort: without storage the probe never arms.
+        THREE_A_REFUSED
+    }
+
+    private fun persistThreeAPreviewState(cameraId: String?, state: Int) {
+        if (cameraId == null) return
+        try {
+            context.getSharedPreferences(ISP_PREVIEW_REQUEST_PREFS, Context.MODE_PRIVATE)
+                .edit().putInt(THREE_A_PREVIEW_KEY_PREFIX + cameraId, state).apply()
+        } catch (_: Exception) {
+            // Best effort: the probe simply re-runs next launch.
+        }
+    }
+
+    /**
+     * Plan-time 3A verdict: true jumps to the first preview combo. A pending
+     * trial counts only for the rebuild that requested it; a pending mark
+     * left by an earlier process means that trial never streamed (HAL or
+     * process died inside it), so it is re-probed once and then refused for
+     * good rather than crash-looping a HAL that cannot run RAW+preview.
+     */
+    private fun threeAPreviewWanted(cameraId: String?): Boolean {
+        val state = threeAPreviewState(cameraId)
+        if (state == THREE_A_CONFIRMED) return true
+        if (state !in 1..THREE_A_MAX_TRIALS) return false
+        if (threeATrialCameraId == cameraId) {
+            threeATrialCameraId = null
+            return true
+        }
+        if (state >= THREE_A_MAX_TRIALS) {
+            persistThreeAPreviewState(cameraId, THREE_A_REFUSED)
+            Log.w(LOG_TAG, "3A preview remedy never streamed on $cameraId; raw-only verdict persisted")
+        }
+        return false
+    }
+
+    /**
+     * HAL 3A probe on the raw-only default session (camera thread, every
+     * repeating result). Any sign of life from AF, AE or AWB ends the probe
+     * with no verdict. Continuous AF pinned at INACTIVE for the whole settle
+     * window with AE and AWB equally silent means the HAL built this session
+     * without 3A: rebuild with a preview target.
+     */
+    private fun noteThreeAProbe(result: TotalCaptureResult) {
+        if (!threeAProbeArmed) return
+        val now = SystemClock.elapsedRealtime()
+        if (threeAProbeFirstMs == 0L) threeAProbeFirstMs = now
+        val afMode = result.get(CaptureResult.CONTROL_AF_MODE)
+        val continuousAf = afMode == CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE ||
+            afMode == CaptureResult.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+        if (continuousAf) threeAProbeAfFrames++
+        val afAlive = continuousAf && (result.get(CaptureResult.CONTROL_AF_STATE)
+            ?: CaptureResult.CONTROL_AF_STATE_INACTIVE) != CaptureResult.CONTROL_AF_STATE_INACTIVE
+        val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+        val aeAlive = aeMode != null && aeMode != CaptureResult.CONTROL_AE_MODE_OFF &&
+            (result.get(CaptureResult.CONTROL_AE_STATE)
+                ?: CaptureResult.CONTROL_AE_STATE_INACTIVE) != CaptureResult.CONTROL_AE_STATE_INACTIVE
+        val awbAlive = result.get(CaptureResult.CONTROL_AWB_MODE) == CaptureResult.CONTROL_AWB_MODE_AUTO &&
+            ((result.get(CaptureResult.CONTROL_AWB_STATE)
+                ?: CaptureResult.CONTROL_AWB_STATE_INACTIVE) != CaptureResult.CONTROL_AWB_STATE_INACTIVE ||
+                !RawWhiteBalanceFallback.halAwbMissing(
+                    result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+                        ?.let { values -> DoubleArray(values.size) { values[it].toDouble() } },
+                    result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                        ?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
+                ))
+        if (afAlive || aeAlive || awbAlive) {
+            threeAProbeArmed = false
+            return
+        }
+        if (now - threeAProbeFirstMs < THREE_A_PROBE_SETTLE_MS) return
+        // A still capture owns the session; judge on the next idle result.
+        if (captureInProgress.get()) return
+        threeAProbeArmed = false
+        val cameraId = selectedCameraId ?: return
+        if (!SessionStreamSelection.previewRequestNeededFor3a(threeAProbeAfFrames, anyAlive = false)) {
+            // Manual or fixed focus: nothing to judge AF by; re-arms next session.
+            return
+        }
+        // The route is not at fault: do not let the AWB verdict demote it.
+        awbVerdictIdentity = null
+        persistThreeAPreviewState(cameraId, threeAPreviewState(cameraId) + 1)
+        threeATrialCameraId = cameraId
+        Log.w(LOG_TAG, "Route $cameraId: HAL ran no AF/AE/AWB for ${now - threeAProbeFirstMs}ms raw-only " +
+            "(afFrames=$threeAProbeAfFrames); adding preview target")
+        val generation = lifecycleGeneration
+        cameraHandler.post {
+            if (isCurrent(generation) && selectedCameraId == cameraId && !captureInProgress.get()) {
+                onState("RECOVERING PREVIEW")
+                restartCameraForConfigurationChange()
+            } else {
+                // Rebuild skipped: the mark must not read as a failed trial.
+                threeATrialCameraId = null
+                persistThreeAPreviewState(cameraId, (threeAPreviewState(cameraId) - 1).coerceAtLeast(0))
+            }
         }
     }
 
@@ -5186,6 +5328,7 @@ class RawCameraController(
                 }
                 latestPreviewResult = result
                 noteMeteringResult(result)
+                noteThreeAProbe(result)
                 noteHalAwbVerdict(result)
                 // P0: feed the flash precapture wait with every result's AE state.
                 val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
@@ -7506,6 +7649,17 @@ class RawCameraController(
          * verdict (~1.5 s at full rate, ~2.25 s on a stalled 20 fps stream).
          */
         internal const val ISP_PROBE_FRAMES = 45
+        /**
+         * 3A remedy state per camera, in the same device-local store: 0
+         * unknown, 1..[THREE_A_MAX_TRIALS] RAW+preview trial pending (attempt
+         * count), then confirmed or refused.
+         */
+        private const val THREE_A_PREVIEW_KEY_PREFIX = "needs_preview_3a_v1_"
+        private const val THREE_A_MAX_TRIALS = 2
+        private const val THREE_A_CONFIRMED = 10
+        private const val THREE_A_REFUSED = 11
+        /** Dead-3A results needed before the raw-only session is rebuilt. */
+        private const val THREE_A_PROBE_SETTLE_MS = 3000L
         /** HAL pixel format for RAW16 sessions (gralloc allocator queries). */
         internal const val HAL_PIXEL_FORMAT_RAW16 = 0x20
         // JPEG development retains large intermediate CPU/GPU buffers, so keep one serialized
