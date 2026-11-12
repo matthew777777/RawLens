@@ -149,7 +149,9 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
 #ifdef __ANDROID__
   {
     char v[PROP_VALUE_MAX] = {0};
-    if (__system_property_get("debug.lkr.profile", v) > 0 && v[0] == '1') gpu.profile(true);
+    // On by default so field logs (devices without adb) show where GPU time goes:
+    // two timestamps per dispatch, results unchanged. "0" switches it off.
+    if (!(__system_property_get("debug.lkr.profile", v) > 0 && v[0] == '0')) gpu.profile(true);
   }
 #endif
 
@@ -194,7 +196,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
                           float(st.prior_calls), float(ow), float(oh), backend};
     env->SetFloatArrayRegion(stats_j, 0, 14, sv);
   }
-  if (!st.gpu_profile.empty()) LKR_LOG("gpu profile: %s", st.gpu_profile.c_str());
+  if (!st.gpu_profile.empty())
+    LKR_LOG("gpu profile (worker 1 of %d, ms): %s", st.workers, st.gpu_profile.c_str());
   LKR_LOG("mode: %s", dct ? "DCT x-step" : "no prior");
   LKR_LOG("look: prior %.2f grain %.2f (sigma %.5f)", st.prior_gain, st.grain, st.sigma);
   LKR_LOG("merge %dx%d s=%d K=%d tiles %d: noise %.0f coarse %.0f tiles %.0f (gpu %.0f prior %.0f) total %.0f ms",
