@@ -153,6 +153,46 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         lens.id to (lens.id in selected)
     }.toMutableMap()
     val checkBoxes = mutableListOf<CheckBox>()
+    // Several routes can reach one physical lens. Name each route by its switcher zoom
+    // and flag routes that share a lens, so the same lens is not picked several times.
+    val available = lenses.filter { it.kind != LensRouteKind.UNAVAILABLE }
+    val rearMetrics = available.filter { it.role != LensRole.FRONT }.map { it.opticalMetric }
+    fun zoomOf(lens: DiscoveredLens): String =
+        if (lens.role == LensRole.FRONT) "F" else LensZoom.label(lens.opticalMetric, rearMetrics)
+    val sameLens: Map<String, List<DiscoveredLens>> = available.groupBy(::opticFingerprint)
+        .values.flatMap { routes -> routes.map { it.id to routes } }.toMap()
+    val recommended = recommendedLensIds(lenses)
+    val duplicateNotes = mutableMapOf<String, TextView>()
+    val selectionSummary = TextView(this).apply {
+        textSize = 12f
+        setPadding(0, 0, 0, dp(8))
+    }
+    fun refreshDuplicates() {
+        var duplicates = 0
+        duplicateNotes.forEach { (id, note) ->
+            val others = sameLens[id].orEmpty().filter { it.id != id }
+            val clashing = others.filter { checked[it.id] == true }
+            val isChecked = checked[id] == true
+            if (isChecked && clashing.isNotEmpty()) duplicates++
+            note.text = when {
+                others.isEmpty() -> ""
+                isChecked && clashing.isNotEmpty() ->
+                    "Same lens as ID ${clashing.joinToString(", ") { it.id }}, also checked: it will appear ${clashing.size + 1}× in the switcher"
+                id in recommended -> "Recommended route for this lens · ${others.size} other route${if (others.size == 1) "" else "s"}"
+                else -> "Another route to the same lens as ID ${(others.firstOrNull { it.id in recommended } ?: others.first()).id}"
+            }
+            note.setTextColor(getColor(if (isChecked && clashing.isNotEmpty()) R.color.accent else R.color.text_muted))
+            note.visibility = if (others.isEmpty()) View.GONE else View.VISIBLE
+        }
+        val picked = available.filter { checked[it.id] == true }
+        val pickedLenses = picked.map(::opticFingerprint).distinct().size
+        selectionSummary.text = when {
+            picked.isEmpty() -> "Nothing checked yet."
+            duplicates > 0 -> "${picked.size} routes checked for $pickedLenses lens${if (pickedLenses == 1) "" else "es"}: some lenses are checked more than once. Tap “One per lens” to keep the recommended route of each."
+            else -> "${picked.size} checked, one route per lens."
+        }
+        selectionSummary.setTextColor(getColor(if (duplicates > 0) R.color.accent else R.color.text_muted))
+    }
 
     val container = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -165,7 +205,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         typeface = Typeface.DEFAULT_BOLD
     })
     container.addView(TextView(this).apply {
-        text = "All discovered camera IDs. Checked entries appear in the viewfinder switcher, widest first."
+        text = "Phones often expose one lens through several camera IDs (routes). Check one route per lens; each checked entry becomes a button in the viewfinder switcher, widest first."
         setTextColor(getColor(R.color.text_secondary))
         textSize = 12f
         setPadding(0, dp(4), 0, dp(8))
@@ -181,7 +221,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         button.ellipsize = android.text.TextUtils.TruncateAt.END
     }
     val selectAll = Button(this).apply {
-        text = "All"
+        text = "One per lens"
         styleQuickButton(this)
     }
     val clear = Button(this).apply {
@@ -193,6 +233,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     quickRow.addView(selectAll, selectParams)
     quickRow.addView(clear, clearParams)
     container.addView(quickRow)
+    container.addView(selectionSummary)
     // Secondary action as a plain text link: a third full-width chip
     // made the preset block dominate the screen.
     val copyReport = TextView(this).apply {
@@ -222,18 +263,9 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     }
 
     val listScroll = ScrollView(this).apply {
-        layoutParams = if (firstRun) {
-            // Full-screen onboarding: fill everything between the header
-            // and the bottom action bar so actions pin to the bottom.
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-            )
-        } else {
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                (resources.displayMetrics.heightPixels * 0.52).toInt()
-            )
-        }
+        // Both presentations are full-screen pages: the list fills everything between
+        // the header and the bottom action bar, so the actions pin to the bottom.
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         isFillViewport = true
         isVerticalScrollBarEnabled = false
     }
@@ -245,7 +277,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
 
     fun refreshQuickState() {
         val values = checked.values
-        selectAll.isEnabled = values.any { !it }
+        selectAll.isEnabled = available.any { (checked[it.id] == true) != (it.id in recommended) }
         clear.isEnabled = values.any { it }
         selectAll.alpha = if (selectAll.isEnabled) 1f else 0.5f
         clear.alpha = if (clear.isEnabled) 1f else 0.5f
@@ -285,7 +317,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
             gravity = Gravity.CENTER_VERTICAL
         }
         topRow.addView(TextView(this).apply {
-            text = lens.title
+            text = if (lens.kind == LensRouteKind.UNAVAILABLE) lens.title else "${zoomOf(lens)} · ${lens.title}"
             setTextColor(getColor(R.color.text_primary))
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
@@ -314,9 +346,20 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
             textSize = 11f
             setPadding(0, dp(4), 0, 0)
         })
+        if (lens.kind != LensRouteKind.UNAVAILABLE) {
+            textCol.addView(TextView(this).apply {
+                textSize = 11f
+                setPadding(0, dp(4), 0, 0)
+                duplicateNotes[lens.id] = this
+            })
+        }
         card.addView(box)
         card.addView(textCol)
-        box.setOnCheckedChangeListener { _, enabled -> checked[lens.id] = enabled; refreshQuickState() }
+        box.setOnCheckedChangeListener { _, enabled ->
+            checked[lens.id] = enabled
+            refreshQuickState()
+            refreshDuplicates()
+        }
         card.setOnClickListener { box.toggle() }
         return card
     }
@@ -426,16 +469,20 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     })
 
     selectAll.setOnClickListener {
-        checked.keys.forEach { checked[it] = true }
-        checkBoxes.forEach { it.isChecked = true }
+        // One route per physical lens (the recommended one); saved-but-missing entries keep their state.
+        available.forEach { checked[it.id] = it.id in recommended }
+        checkBoxes.forEach { box -> (box.tag as? String)?.let { id -> checked[id]?.let { box.isChecked = it } } }
         refreshQuickState()
+        refreshDuplicates()
     }
     clear.setOnClickListener {
         checked.keys.forEach { checked[it] = false }
         checkBoxes.forEach { it.isChecked = false }
         refreshQuickState()
+        refreshDuplicates()
     }
     refreshQuickState()
+    refreshDuplicates()
 
     // First initial setup: dedicated full-screen black page (welcome
     // continuity) that scales to the bottom — the list fills the window
@@ -528,14 +575,50 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         return
     }
 
-    val dialog = RawLensDialogBuilder(this)
-        .setTitle("Lens discovery")
-        .setView(container)
-        .setPositiveButton("Save", null)
-        .setNegativeButton("Cancel", null)
-        .create()
-    dialog.show()
-    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+    // Later opens: a full-screen page like the rest of Settings (back arrow and title on
+    // top, Cancel / Save pinned to the bottom) instead of a floating panel.
+    val dialog = android.app.Dialog(this, R.style.Theme_RawLens)
+    val backButton = TextView(this).apply {
+        text = "←"
+        textSize = 22f
+        gravity = Gravity.CENTER
+        setTextColor(getColor(R.color.text_primary))
+        contentDescription = "Back"
+        isClickable = true
+        isFocusable = true
+        setOnClickListener { dialog.dismiss() }
+    }
+    val header = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(12), dp(12), dp(12), dp(4))
+        addView(backButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        addView(TextView(context).apply {
+            text = "Lenses"
+            textSize = 22f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setTextColor(getColor(R.color.text_primary))
+            isAccessibilityHeading = true
+            setPadding(dp(12), 0, dp(4), 0)
+        }, LinearLayout.LayoutParams(0, wrapContent(), 1f))
+    }
+    val saveButton = Button(this).apply { text = "Save"; RawLensUi.styleButton(this, true) }
+    val cancelButton = Button(this).apply { text = "Cancel"; RawLensUi.styleButton(this, false) }
+    val bottomBar = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(dp(20), dp(12), dp(20), dp(20))
+        addView(cancelButton, LinearLayout.LayoutParams(0, wrapContent(), 1f).apply { marginEnd = dp(8) })
+        addView(saveButton, LinearLayout.LayoutParams(0, wrapContent(), 1f))
+    }
+    val page = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setBackgroundColor(getColor(R.color.surface))
+        addView(header)
+        addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        addView(bottomBar)
+    }
+    RawLensUi.showFullscreen(dialog, page)
+    saveButton.setOnClickListener {
         val ids = checked.filterValues { it }.keys.toMutableSet()
         if (ids.isEmpty()) {
             setStatus("PICK A RAW LENS")
@@ -549,7 +632,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         setStatus("${ids.size} RAW LENS${if (ids.size == 1) "" else "ES"} ADDED")
         dialog.dismiss()
     }
-    dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+    cancelButton.setOnClickListener {
         dialog.dismiss()
     }
 }
