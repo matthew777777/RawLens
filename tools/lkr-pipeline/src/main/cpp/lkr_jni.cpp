@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "lkr_full.h"
+#include "lkr_pack.h"
 #include "lkr_tuning.h"
 #include "lkr_resample.h"
 
@@ -41,18 +42,20 @@ namespace {
 jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_px, jintArray cfa_j,
               jfloatArray black_j, jfloat white, jfloatArray wb_j, jint s, jint tile, jint overlap,
               jintArray crop_j, jboolean dct, jfloatArray stats_j, jfloatArray tuning_j, jint out_w_req,
-              jint out_h_req) {
+              jint out_h_req, jint packed_bits = 0) {
   const jsize K = env->GetArrayLength(frames);
   std::vector<lkr::RawFrame> fr;
   for (jsize k = 0; k < K; ++k) {
     jobject b = env->GetObjectArrayElement(frames, k);
     void* p = b ? env->GetDirectBufferAddress(b) : nullptr;
     const jlong cap = b ? env->GetDirectBufferCapacity(b) : 0;
-    if (!p || cap < jlong(row_stride_px) * h * 2) {
+    const jlong need = packed_bits > 0 ? jlong(lkr::PackedBytes(row_stride_px, h, packed_bits))
+                                       : jlong(row_stride_px) * h * 2;
+    if (!p || cap < need || packed_bits < 0 || packed_bits > 15) {
       LKR_LOG("frame %d: not a direct buffer or too small", int(k));
       return nullptr;
     }
-    fr.push_back({static_cast<const uint16_t*>(p), row_stride_px});
+    fr.push_back({static_cast<const uint16_t*>(p), row_stride_px, packed_bits});
     env->DeleteLocalRef(b);
   }
   int cfa[4], crop[4] = {-1, -1, 0, 0};
@@ -200,6 +203,44 @@ extern "C" JNIEXPORT jfloatArray JNICALL Java_com_matthew_rawlens_LkrBridge_nati
   jfloatArray a = env->NewFloatArray(jsize(v.size()));
   if (a) env->SetFloatArrayRegion(a, 0, jsize(v.size()), v.data());
   return a;
+}
+
+// Staged merge: frames come from nativeStage (rows of `w` samples, packed at packed_bits or plain when 0).
+extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMergeStaged(
+    JNIEnv* env, jclass, jobjectArray frames, jint w, jint h, jint packed_bits, jintArray cfa, jfloatArray black,
+    jfloat white, jfloatArray wb, jint s, jint tile, jint overlap, jintArray crop, jboolean dct,
+    jfloatArray stats, jfloatArray tuning,
+    jint out_w, jint out_h) {
+  return Merge(env, frames, w, h, w, cfa, black, white, wb, s, tile, overlap, crop, dct, stats, tuning, out_w, out_h,
+               packed_bits);
+}
+
+// Copies one RAW16 frame out of its camera buffer into malloc memory, rows tight (w samples).
+// bits 1..15: packed losslessly at that depth (lkr_pack.h); null when a sample needs more bits or
+// memory is short. bits >= 16: plain uint16. Freed with free() (SrpBridge.nativeFreeDirect).
+extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeStage(
+    JNIEnv* env, jclass, jobject src, jint w, jint h, jint row_stride_px, jint bits) {
+  const void* p = src ? env->GetDirectBufferAddress(src) : nullptr;
+  const jlong cap = src ? env->GetDirectBufferCapacity(src) : 0;
+  if (!p || w <= 0 || h <= 0 || row_stride_px < w || bits < 1 ||
+      cap < (jlong(row_stride_px) * (h - 1) + w) * 2)
+    return nullptr;
+  const uint16_t* s16 = static_cast<const uint16_t*>(p);
+  if (bits >= 16) {
+    const size_t bytes = size_t(w) * h * 2;
+    uint16_t* d = static_cast<uint16_t*>(std::malloc(bytes));
+    if (!d) return nullptr;
+    for (int y = 0; y < h; ++y) std::memcpy(d + size_t(y) * w, s16 + size_t(y) * row_stride_px, size_t(w) * 2);
+    return env->NewDirectByteBuffer(d, jlong(bytes));
+  }
+  const size_t bytes = lkr::PackedBytes(w, h, bits);
+  uint8_t* d = static_cast<uint8_t*>(std::malloc(bytes));
+  if (!d) return nullptr;
+  if (!lkr::PackRows(s16, w, h, row_stride_px, bits, d)) {
+    std::free(d);
+    return nullptr;
+  }
+  return env->NewDirectByteBuffer(d, jlong(bytes));
 }
 
 // Desktop Kotlin CLI (tools/lkr-pipeline, com.rawlens.lkrpipeline.LkrBridge): same entry.

@@ -6,6 +6,7 @@ package com.matthew.rawlens
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.rawlens.srpipeline.SrpBridge
 import java.nio.ByteOrder
 
 /**
@@ -19,6 +20,8 @@ import java.nio.ByteOrder
  */
 internal object LkrMerge {
     private const val LOG_TAG = "RawLensLkr"
+    /** Sensors deeper than this are staged as plain 16-bit: packing 14 bits saves only an eighth. */
+    private const val MAX_PACKED_BITS = 12
 
     data class Settings(
         val scale: Int = 1,
@@ -54,12 +57,20 @@ internal object LkrMerge {
      * Live ZSL / burst merge over Camera2 RAW16 frames (reference first, as
      * [MfsrMerge.prepare] orders them). Reads each Image plane in place;
      * the caller releases the Images after this returns.
+     *
+     * With [releaseInputs] the frames are first copied into native memory, packed
+     * losslessly at the sensor's bit depth when that is 12 bits or less (10-bit
+     * sensor: 1.25 instead of 2 bytes per sample), and [releaseInputs] is called
+     * before the merge starts: the camera gets its buffers back for the whole
+     * merge instead of after it. The merge reads the same sample values, so the
+     * result is bit-identical. If staging fails the Images are merged in place.
      */
     fun mergeLive(
         context: Context,
         ordered: List<MfsrMerge.MfsrFrame>,
         settings: Settings = Settings(),
-        stats: FloatArray = FloatArray(LkrBridge.STATS_SIZE)
+        stats: FloatArray = FloatArray(LkrBridge.STATS_SIZE),
+        releaseInputs: (() -> Unit)? = null
     ): MfsrMerge.MfsrResult? {
         if (ordered.size < 2) return null
         val ref = ordered[0]
@@ -72,8 +83,53 @@ internal object LkrMerge {
             Log.w(LOG_TAG, "live merge: mixed or unsupported RAW16 layouts, aborting")
             return null
         }
-        return mergeBuffers(context, planes.map { it.buffer.duplicate().also { b -> b.rewind() } },
+        val sources = planes.map { it.buffer.duplicate().also { b -> b.rewind() } }
+        if (releaseInputs != null) {
+            val t0 = SystemClock.elapsedRealtime()
+            val staged = stageFrames(sources, w, h, stride / 2, stageBits(ref.norm.whiteLevel))
+            if (staged != null) {
+                Log.i(LOG_TAG, "lkr staged ${staged.buffers.size} frames at ${staged.bits} bits, " +
+                    "${staged.buffers.sumOf { it.capacity().toLong() } / (1024 * 1024)} MB in " +
+                    "${SystemClock.elapsedRealtime() - t0} ms; camera buffers released")
+                releaseInputs()
+                try {
+                    return mergeBuffers(context, staged.buffers, w, h, w * 2, ref.norm, ref.metadata,
+                        ref.frame.result, settings, stats, packedBits = if (staged.bits < 16) staged.bits else 0)
+                } finally {
+                    staged.buffers.forEach(SrpBridge::nativeFreeDirect)
+                }
+            }
+            Log.w(LOG_TAG, "lkr staging failed; merging the camera buffers in place")
+        }
+        return mergeBuffers(context, sources,
             w, h, stride, ref.norm, ref.metadata, ref.frame.result, settings, stats)
+    }
+
+    private class Staged(val buffers: List<java.nio.ByteBuffer>, val bits: Int)
+
+    /**
+     * Bits per sample for staging: what the white level needs, when that is at most
+     * [MAX_PACKED_BITS] (above it packing saves little); otherwise plain 16.
+     */
+    internal fun stageBits(whiteLevel: Float): Int {
+        val white = whiteLevel.toInt()
+        if (white <= 0) return 16
+        val bits = 32 - Integer.numberOfLeadingZeros(white)
+        return if (bits <= MAX_PACKED_BITS) bits else 16
+    }
+
+    /** All frames at [bits]; if a sample does not fit (or memory is short) once more at 16; else null. */
+    private fun stageFrames(sources: List<java.nio.ByteBuffer>, w: Int, h: Int, stridePx: Int, bits: Int): Staged? {
+        for (attempt in if (bits < 16) listOf(bits, 16) else listOf(16)) {
+            val out = ArrayList<java.nio.ByteBuffer>(sources.size)
+            for (src in sources) {
+                val staged = LkrBridge.nativeStage(src, w, h, stridePx, attempt) ?: break
+                out.add(staged)
+            }
+            if (out.size == sources.size) return Staged(out, attempt)
+            out.forEach(SrpBridge::nativeFreeDirect)
+        }
+        return null
     }
 
     private fun mergeBuffers(
@@ -84,7 +140,8 @@ internal object LkrMerge {
         metadata: RawFrameMetadata,
         result: android.hardware.camera2.CaptureResult?,
         requested: Settings,
-        stats: FloatArray
+        stats: FloatArray,
+        packedBits: Int = -1
     ): MfsrMerge.MfsrResult? {
         // Zoom: centre crop solved at x2; the native side area-resamples the
         // solve to the sensor size (1.5x), 2x already lands on it.
@@ -103,14 +160,22 @@ internal object LkrMerge {
         else floatArrayOf(1f, 1f, 1f)
         LkrBridge.nativeSetCacheDir(context.codeCacheDir.absolutePath)
         val t0 = SystemClock.elapsedRealtime()
-        val rgb = LkrBridge.nativeMerge(
+        // packedBits >= 0: frames from LkrBridge.nativeStage (tight rows, packed when > 0).
+        val rgb = (if (packedBits >= 0) LkrBridge.nativeMergeStaged(
+            buffers.toTypedArray(), w, h, packedBits, cfa, norm.blackLevels.toFloatArray(),
+            norm.whiteLevel, wb, settings.scale, settings.tile, settings.overlap, settings.crop,
+            settings.dctPrior,
+            stats,
+            settings.tuning,
+            outW, outH
+        ) else LkrBridge.nativeMerge(
             buffers.toTypedArray(), w, h, rowStrideBytes / 2, cfa, norm.blackLevels.toFloatArray(),
             norm.whiteLevel, wb, settings.scale, settings.tile, settings.overlap, settings.crop,
             settings.dctPrior,
             stats,
             settings.tuning,
             outW, outH
-        ) ?: return null
+        )) ?: return null
         val mergeMs = SystemClock.elapsedRealtime() - t0
         rgb.order(ByteOrder.nativeOrder())
         val ow = stats[LkrBridge.STAT_OUT_W].toInt()

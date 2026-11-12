@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "lkr_full.h"
+#include "lkr_pack.h"
 #include "lkr_tuning.h"
 #include "srp_dng.h"
 
@@ -23,6 +24,7 @@ int main(int argc, char** argv) {
   bool repeat_reference = false;
   int frames_max = 0;
   int reference = 0;
+  int pack_bits = 0;
   bool profile = false;
   for (int i = 3; i < argc; ++i) {
     std::string k = argv[i];
@@ -77,6 +79,8 @@ int main(int argc, char** argv) {
     else if (k == "--eq") prm.solve.equalize_noise = nx() != 0;
     else if (k == "--local") prm.solve.local_block = nx();
     else if (k == "--bsearch") prm.block_search = nx() != 0;
+    else if (k == "--stage-bits") pack_bits = nx();   // stage the frames packed at this many bits (lkr_pack.h), as the app does
+    else if (k == "--fallback") prm.solve.dct_fallback = nx() != 0;
     else if (k == "--paper") prm.paper_parity = nx() != 0;
     else if (k == "--spread") prm.solve.robust_spread = nx();
     else if (k == "--tilelk") prm.tile_lk = nx() != 0;
@@ -104,6 +108,21 @@ int main(int argc, char** argv) {
   for (size_t k = 0; k < paths.size(); ++k) {
     if (srp::SrpReadDngPixels(paths[k].c_str(), px[k].data(), 0, 0, 0, 0) != srp::DngReadStatus::kOk) return 1;
     fr.push_back({px[k].data(), int(m.width)});
+  }
+  std::vector<std::vector<uint8_t>> packed;
+  if (pack_bits > 0 && pack_bits < 16) {
+    packed.resize(fr.size());
+    for (size_t k = 0; k < fr.size(); ++k) {
+      packed[k].resize(lkr::PackedBytes(int(m.width), int(m.height), pack_bits));
+      if (!lkr::PackRows(px[k].data(), int(m.width), int(m.height), int(m.width), pack_bits, packed[k].data())) {
+        std::fprintf(stderr, "frame %zu has samples wider than %d bits\n", k, pack_bits);
+        return 1;
+      }
+      std::vector<uint16_t>().swap(px[k]);
+      fr[k] = {reinterpret_cast<const uint16_t*>(packed[k].data()), int(m.width), pack_bits};
+    }
+    std::printf("staged %zu frames at %d bits: %.1f MB each (16-bit: %.1f MB)\n", fr.size(), pack_bits,
+                packed[0].size() / 1048576.0, double(m.width) * m.height * 2 / 1048576.0);
   }
   const double ms_load = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   const int cfa[4] = {m.cfa[0], m.cfa[1], m.cfa[2], m.cfa[3]};

@@ -22,6 +22,9 @@ namespace lkr {
 struct RawFrame {
   const uint16_t* data = nullptr;
   int row_stride_px = 0;   // pixels per row (>= width)
+  // > 0: `data` is a staged frame (lkr_pack.h), rows of row_stride_px samples packed at this
+  // many bits; 0: plain uint16 samples.
+  int packed_bits = 0;
 };
 
 struct FullParams {

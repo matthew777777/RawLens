@@ -334,7 +334,8 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
             if (settings.engine == MfsrEngine.LKR)
                 LkrMerge.mergeLive(context, ordered,
                     LkrMerge.Settings(dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
-                        zoom = settings.lkrZoom))
+                        zoom = settings.lkrZoom),
+                    releaseInputs = host::releaseInputs)
             else MfsrMerge.merge(context, ordered, settings)
         } finally {
             host.releaseInputs()

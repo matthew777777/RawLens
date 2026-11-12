@@ -59,6 +59,23 @@ internal object LkrBridge {
      * Folder for the compiled Vulkan pipelines (use the app's code cache directory): without it
      * every new process recompiles the shaders on its first merge. Call before [nativeMerge].
      */
+    /**
+     * Copies one RAW16 frame out of its camera buffer into native memory, rows tight
+     * ([width] samples). [bits] 1..15 packs losslessly at that depth and returns null
+     * when a sample needs more bits (or memory is short); 16 keeps plain uint16.
+     * Free the result with [SrpBridge.nativeFreeDirect].
+     */
+    @JvmStatic external fun nativeStage(src: ByteBuffer, width: Int, height: Int, rowStridePx: Int, bits: Int): ByteBuffer?
+
+    /** [nativeMerge] over frames from [nativeStage]; [packedBits] 0 = plain uint16 rows. */
+    @JvmStatic external fun nativeMergeStaged(
+        frames: Array<ByteBuffer>, width: Int, height: Int, packedBits: Int,
+        cfa: IntArray, black: FloatArray, white: Float, wb: FloatArray,
+        scale: Int, tile: Int, overlap: Int, crop: IntArray?,
+        dctPrior: Boolean, stats: FloatArray,
+        tuning: FloatArray?, outWidth: Int, outHeight: Int
+    ): ByteBuffer?
+
     @JvmStatic external fun nativeSetCacheDir(dir: String)
 
     /** Native defaults of the LK-R Lab table (index layout: lkr_tuning.h / [LkrTuning.Entry]). */

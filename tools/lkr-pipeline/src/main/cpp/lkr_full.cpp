@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "lkr_blocksearch.h"
+#include "lkr_pack.h"
 #include "lkr_host.h"
 
 namespace lkr {
@@ -31,15 +32,24 @@ struct Grid {          // RGGB-phase LR working grid inside the sensor
 };
 
 // Normalised RGGB-phase tile (n x n at grid offset (gx, gy)) of one frame.
+// Samples [x0, x0 + n) of sensor row y: straight from a plain frame, unpacked into tmp from a staged one.
+inline const uint16_t* RowSamples(const RawFrame& f, int y, int x0, int n, uint16_t* tmp) {
+  if (f.packed_bits <= 0) return f.data + size_t(y) * f.row_stride_px + x0;
+  const uint8_t* base = reinterpret_cast<const uint8_t*>(f.data);
+  UnpackRow(base + size_t(y) * PackedRowBytes(f.row_stride_px, f.packed_bits), x0, n, f.packed_bits, tmp);
+  return tmp;
+}
+
 void LoadTile(const RawFrame& f, const Grid& g, int gx, int gy, int tw, int th, const float black[4],
               float white, float* out) {
+  std::vector<uint16_t> unpacked(f.packed_bits > 0 ? size_t(tw) : 0);
   for (int i = 0; i < th; ++i) {
     const int y = g.y0 + gy + i;
-    const uint16_t* row = f.data + size_t(y) * f.row_stride_px;
+    const uint16_t* row = RowSamples(f, y, g.x0 + gx, tw, unpacked.data());
     for (int j = 0; j < tw; ++j) {
       const int x = g.x0 + gx + j;
       const int cell = ((y & 1) << 1) | (x & 1);
-      out[size_t(i) * tw + j] = (float(row[x]) - black[cell]) / (white - black[cell]);
+      out[size_t(i) * tw + j] = (float(row[j]) - black[cell]) / (white - black[cell]);
     }
   }
 }
@@ -51,6 +61,27 @@ std::vector<float> BinnedGrey(const RawFrame& f, const Grid& g, int bin, const f
   *bw = g.w / bin;
   *bh = g.h / bin;
   std::vector<float> out(size_t(*bw) * *bh);
+  if (f.packed_bits > 0) {   // staged frame: unpack each row once, same sums in the same order
+    const int wn = *bw * bin;
+    std::vector<uint16_t> rows(size_t(bin) * wn);
+    for (int bi = 0; bi < *bh; ++bi) {
+      for (int i = 0; i < bin; ++i) RowSamples(f, g.y0 + bi * bin + i, g.x0, wn, rows.data() + size_t(i) * wn);
+      for (int bj = 0; bj < *bw; ++bj) {
+        double s = 0;
+        for (int i = 0; i < bin; ++i) {
+          const int y = g.y0 + bi * bin + i;
+          const uint16_t* row = rows.data() + size_t(i) * wn;
+          for (int j = 0; j < bin; ++j) {
+            const int x = g.x0 + bj * bin + j;
+            const int cell = ((y & 1) << 1) | (x & 1);
+            s += (double(row[bj * bin + j]) - black[cell]) / (white - black[cell]);
+          }
+        }
+        out[size_t(bi) * *bw + bj] = float(s / (bin * bin));
+      }
+    }
+    return out;
+  }
   for (int bi = 0; bi < *bh; ++bi)
     for (int bj = 0; bj < *bw; ++bj) {
       double s = 0;
