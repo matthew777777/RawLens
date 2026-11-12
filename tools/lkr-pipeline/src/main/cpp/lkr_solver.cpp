@@ -115,24 +115,25 @@ Solver::Solver(Gpu* gpu) : gpu_(gpu) {
   // (Optional()): compiling all 30 shaders cost 2-3 s per worker on a Mali-G615, every merge.
   resid_ = gpu_->pipeline(spv::resid_adj, sizeof(spv::resid_adj), 5, sizeof(Push));
   zstep_ = gpu_->pipeline(spv::zstep, sizeof(spv::zstep), 3, sizeof(Push));
-  jac_ = gpu_->pipeline(spv::jac, sizeof(spv::jac), 7, sizeof(Push));
+  jac_ = gpu_->pipeline(spv::jac, sizeof(spv::jac), 8, sizeof(Push));
   solve_ = gpu_->pipeline(spv::solve, sizeof(spv::solve), 2, sizeof(Push));
   residg_ = gpu_->pipeline(spv::resid, sizeof(spv::resid), 5, sizeof(Push));
   weight_ = gpu_->pipeline(spv::weight, sizeof(spv::weight), 5, sizeof(Push));
   scatter_ = gpu_->pipeline(spv::scatter, sizeof(spv::scatter), 4, sizeof(Push));
-  jacblk_ = gpu_->pipeline(spv::jacblk, sizeof(spv::jacblk), 7, sizeof(Push));
+  jacblk_ = gpu_->pipeline(spv::jacblk, sizeof(spv::jacblk), 8, sizeof(Push));
   solveblk_ = gpu_->pipeline(spv::solveblk, sizeof(spv::solveblk), 3, sizeof(Push));
   wmin_ = gpu_->pipeline(spv::weight_min, sizeof(spv::weight_min), 5, sizeof(Push));
   wminh_ = gpu_->pipeline(spv::weight_minh, sizeof(spv::weight_minh), 3, sizeof(Push));
   radjw_ = gpu_->pipeline(spv::resid_adj_w, sizeof(spv::resid_adj_w), 6, sizeof(Push));
   wexp_ = gpu_->pipeline(spv::weight_e, sizeof(spv::weight_e), 3, sizeof(Push));
-  wth_ = gpu_->pipeline(spv::weight_th, sizeof(spv::weight_th), 4, sizeof(Push));
+  wth_ = gpu_->pipeline(spv::weight_th, sizeof(spv::weight_th), 5, sizeof(Push));
+  wtdet_ = gpu_->pipeline(spv::weight_tdet, sizeof(spv::weight_tdet), 3, sizeof(Push));
   wtemp_ = gpu_->pipeline(spv::weight_t, sizeof(spv::weight_t), 6, sizeof(Push));
   wdarkv_ = gpu_->pipeline(spv::weight_tv, sizeof(spv::weight_tv), 8, sizeof(Push));
   wdark_ = gpu_->pipeline(spv::weight_td, sizeof(spv::weight_td), 8, sizeof(Push));
   ok_ = resid_.pipe && zstep_.pipe && jac_.pipe && solve_.pipe && residg_.pipe && weight_.pipe && scatter_.pipe &&
         jacblk_.pipe && solveblk_.pipe && wmin_.pipe && wminh_.pipe && radjw_.pipe && wexp_.pipe && wth_.pipe &&
-        wtemp_.pipe && wdark_.pipe && wdarkv_.pipe;
+        wtemp_.pipe && wdark_.pipe && wdarkv_.pipe && wtdet_.pipe;
 }
 
 bool Solver::Optional(const SolveParams& prm, bool dct) {
@@ -168,7 +169,7 @@ std::string Solver::profileNames() const {
       {"resid_adj", &resid_}, {"zstep", &zstep_}, {"resid", &residg_}, {"zstep_gather", &zgather_},
       {"jac", &jac_}, {"solve", &solve_}, {"weight", &weight_}, {"scatter", &scatter_}, {"jacblk", &jacblk_},
       {"solveblk", &solveblk_}, {"weight_min", &wmin_}, {"weight_minh", &wminh_}, {"resid_adj_w", &radjw_},
-      {"weight_e", &wexp_}, {"weight_th", &wth_}, {"weight_t", &wtemp_}, {"weight_td", &wdark_}, {"weight_tv", &wdarkv_}, {"zstep_gw", &zgw_}, {"dct_y", &dct_y_},
+      {"weight_e", &wexp_}, {"weight_th", &wth_}, {"weight_tdet", &wtdet_}, {"weight_t", &wtemp_}, {"weight_td", &wdark_}, {"weight_tv", &wdarkv_}, {"zstep_gw", &zgw_}, {"dct_y", &dct_y_},
       {"dct_u", &dct_u_}, {"dct_v", &dct_v_}, {"dct_yuv", &dct_yuv_}};
   std::string out;
   char b[64];
@@ -194,7 +195,7 @@ Buffer& Solver::Cached(int slot, size_t bytes, bool host_read) {
 Solver::~Solver() {
   if (gpu_) for (Entry& e : cache_) gpu_->free(e.buf);
   if (!gpu_ || !gpu_->ok()) return;
-  for (Pipeline* p : {&dct_y_, &dct_u_, &dct_v_, &dct_yuv_, &resid_, &zstep_, &jac_, &solve_, &residg_, &zgather_, &weight_, &scatter_, &jacblk_, &solveblk_, &wmin_, &wtemp_, &wdark_, &wdarkv_, &wminh_, &radjw_, &wexp_, &wth_, &zgw_, &residq_, &radjwq_, &scatq_, &zpack_, &residzq_, &radjwzq_})
+  for (Pipeline* p : {&dct_y_, &dct_u_, &dct_v_, &dct_yuv_, &resid_, &zstep_, &jac_, &solve_, &residg_, &zgather_, &weight_, &scatter_, &jacblk_, &solveblk_, &wmin_, &wtemp_, &wdark_, &wdarkv_, &wminh_, &radjw_, &wexp_, &wth_, &wtdet_, &zgw_, &residq_, &radjwq_, &scatq_, &zpack_, &residzq_, &radjwzq_})
     gpu_->destroy(*p);
 }
 
@@ -240,6 +241,10 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   Buffer& rwt2 = cached(nLR * 16), &wvt2 = cached(nLR * 4);
   Buffer& ebuf = cached(nLR * 4);
   Buffer& wmtmp = ebuf;
+  // Per-sample temporal model-error term (weight_tdet.comp), read only by weight_th.
+  // Per-pixel (Jx, Jy, r, valid) from jac.comp for jacblk.comp (local blocks only).
+  Buffer& jbb = cached(prm.local_block > 0 && prm.jac_fuse ? nLR * 16 : 16);
+  Buffer& tdetb = cached(prm.temporal_detail > 0.0f ? nLR * 4 : 16);
   // Packed 2x2 taps of z / z0 (zpack.comp); only the off-by-default pack_taps path reads them.
   const size_t zq_bytes = prm.half_taps ? nHR * 2 : prm.pack_taps ? nHR * 16 : 16;
   Buffer& zq = cached(zq_bytes), &z0q = cached(zq_bytes);
@@ -318,8 +323,8 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   }
   VkDescriptorSet sResid = gpu_->set(resid_, {&z, &y, &pb, &acc, &dloc});
   VkDescriptorSet sZ = gpu_->set(zstep_, {&z, &x, &acc});
-  VkDescriptorSet sJac = gpu_->set(jac_, {&z, &g, &y, &pb, &part, &wtb, &dloc});
-  VkDescriptorSet sJB = gpu_->set(jacblk_, {&z, &g, &y, &pb, &blk, &wtb, &dloc});
+  VkDescriptorSet sJac = gpu_->set(jac_, {&z, &g, &y, &pb, &part, &wtb, &dloc, &jbb});
+  VkDescriptorSet sJB = gpu_->set(jacblk_, {&z, &g, &y, &pb, &blk, &wtb, &dloc, &jbb});
   VkDescriptorSet sSB = gpu_->set(solveblk_, {&blk, &dloc, &dtmp});
   VkDescriptorSet sSolve = gpu_->set(solve_, {&part, &pb});
   VkDescriptorSet sVResid = gpu_->set(resid_, {&v, &y, &pb, &acc, &dloc});
@@ -331,6 +336,13 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   pc.kOff = prm.local_block;   // local motion block size (0 = off), see localD()
   const uint32_t gxLR = div_up(w, 16), gyLR = div_up(h, 16);
   const uint32_t gHR1 = div_up(uint32_t(nHR), 256);
+  // Per-frame LR passes over the HR image: frame-innermost workgroup order keeps one block's HR
+  // taps in cache across the K frames (see resid_adj_w.comp); same result in either order.
+  auto kdispatch = [&](const Pipeline& pp, VkDescriptorSet ss, const Push* qq, int kk) {
+    const int bit = &pp == &radjw_ ? 1 : &pp == &residg_ ? 2 : 4;
+    if (prm.frame_inner & bit) gpu_->dispatch(pp, ss, qq, gxLR * uint32_t(kk), gyLR, 1);
+    else gpu_->dispatch(pp, ss, qq, gxLR, gyLR, uint32_t(kk));
+  };
   VkDescriptorSet sR = gpu_->set(residg_, {&z, &y, &pb, &rr, &dloc});
   VkDescriptorSet sZG = oset(zgather_, {&z, &x, &rr, &pb});
   VkDescriptorSet sVR = gpu_->set(residg_, {&v, &y, &pb, &rr, &dloc});
@@ -344,7 +356,8 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   VkDescriptorSet sZGW = oset(zgw_, {&z, &x, &rr, &pb, &dloc, &wtb});
   VkDescriptorSet sRT = gpu_->set(residg_, {&z0, &y, &pb, &rrt, &dloc});
   VkDescriptorSet sHV = gpu_->set(residg_, {&z, &y, &pb, &ebuf, &dloc});   // holdout: valid mask of the finished image
-  VkDescriptorSet sTH = gpu_->set(wth_, {&rrt, &y, &rwt2, &wvt2});
+  VkDescriptorSet sTH = gpu_->set(wth_, {&rrt, &y, &rwt2, &wvt2, &tdetb});
+  VkDescriptorSet sTDet = gpu_->set(wtdet_, {&rrt, &y, &tdetb});
   // ebuf is free during the temporal test (weight_e writes it later in the data step).
   VkDescriptorSet sWT = gpu_->set(wtemp_, {&rrt, &y, &rwt2, &wtr, &wvt2, &ebuf});
   // Column sums of the deep-shadow window: five buffers the data step rewrites before reading
@@ -372,10 +385,10 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   auto d_resid = [&](VkDescriptorSet sp, VkDescriptorSet sq, const Push& qq, VkDescriptorSet szq) {
     if (quad) gpu_->dispatch(residq_, sq, &qq, gxQ, gyQ, K);
     else if (packz) gpu_->dispatch(residzq_, szq, &qq, gxLR, gyLR, K);
-    else gpu_->dispatch(residg_, sp, &qq, gxLR, gyLR, K);
+    else kdispatch(residg_, sp, &qq, K);
   };
   auto d_scatter = [&](VkDescriptorSet sp, VkDescriptorSet sq, const Push& qq) {
-    if (quad) gpu_->dispatch(scatq_, sq, &qq, gxQ, gyQ, K); else gpu_->dispatch(scatter_, sp, &qq, gxLR, gyLR, K);
+    if (quad) gpu_->dispatch(scatq_, sq, &qq, gxQ, gyQ, K); else kdispatch(scatter_, sp, &qq, K);
   };
   VkDescriptorSet sZW = gpu_->set(zstep_, {&cw, &x, &acc2});           // acc2 -> cw (mode 1)
   const uint32_t gxHR = div_up(W, 16), gyHR = div_up(H, 16);
@@ -387,7 +400,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       d_resid(sR, sRq, q, sRzq);
       if (first) {
         gpu_->dispatch(wexp_, sE, &q, gxLR, gyLR, K);
-        gpu_->dispatch(weight_, sW0, &q, gxLR, gyLR, K);
+        { Push qw = q; qw.f0 = prm.weight_skip ? -1.0f : q.f0; gpu_->dispatch(weight_, sW0, &qw, gxLR, gyLR, K); }
         Push qm = q; qm.f3 = float(prm.robust_spread);
         gpu_->dispatch(wminh_, sWH, &qm, gxLR, gyLR, K);
         gpu_->dispatch(wmin_, sWM, &qm, gxLR, gyLR, K);
@@ -397,14 +410,14 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       // z-steps 2..n: this iteration's weights, fused residual + weighted adjoint
       if (quad) gpu_->dispatch(radjwq_, sRWq, &q, gxQ, gyQ, K);
       else if (packz) { d_pack(sZP, q); gpu_->dispatch(radjwzq_, sRWzq, &q, gxLR, gyLR, K); }
-      else gpu_->dispatch(radjw_, sRW, &q, gxLR, gyLR, K);
+      else kdispatch(radjw_, sRW, &q, K);   // frame-innermost order
       gpu_->dispatch(zstep_, sZ, &q, gHR1);
     } else if (!on_v && q.rob_on > 0.5f) {      // robust: resid -> weight -> scatter -> zstep
       if (packz) d_pack(sZP, q);
       d_resid(sR, sRq, q, sRzq);
       if (prm.robust_spread > 0) {
         gpu_->dispatch(wexp_, sE, &q, gxLR, gyLR, K);
-        gpu_->dispatch(weight_, sW0, &q, gxLR, gyLR, K);
+        { Push qw = q; qw.f0 = prm.weight_skip ? -1.0f : q.f0; gpu_->dispatch(weight_, sW0, &qw, gxLR, gyLR, K); }
         Push qm = q; qm.f3 = float(prm.robust_spread);
         gpu_->dispatch(wminh_, sWH, &qm, gxLR, gyLR, K);
         gpu_->dispatch(wmin_, sWM, &qm, gxLR, gyLR, K);
@@ -415,7 +428,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       d_scatter(sS, sSq, q);
       gpu_->dispatch(zstep_, sZ, &q, gHR1);
     } else if (prm.gather) {
-      gpu_->dispatch(residg_, on_v ? sVR : sR, &q, gxLR, gyLR, K);
+      kdispatch(residg_, on_v ? sVR : sR, &q, K);
       gpu_->dispatch(zgather_, on_v ? sVZG : sZG, &q, gxHR, gyHR);
     } else {
       gpu_->dispatch(resid_, on_v ? sVResid : sResid, &q, gxLR, gyLR, K);
@@ -436,7 +449,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       gpu_->begin();
       Push q = pc; q.mode = 2;
       if (prm.gather) {
-        gpu_->dispatch(residg_, sVR, &q, gxLR, gyLR, K);
+        kdispatch(residg_, sVR, &q, K);
         gpu_->dispatch(zgather_, sVZG, &q, gxHR, gyHR);
       } else {
         gpu_->dispatch(resid_, sVResid, &q, gxLR, gyLR, K);
@@ -478,7 +491,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       gpu_->begin();
       Push q = pc; q.mode = 2;
       if (prm.gather) {
-        gpu_->dispatch(residg_, sVR, &q, gxLR, gyLR, K);
+        kdispatch(residg_, sVR, &q, K);
         gpu_->dispatch(zgather_, sVZG, &q, gxHR, gyHR);
       } else {
         gpu_->dispatch(resid_, sVResid, &q, gxLR, gyLR, K);
@@ -555,7 +568,10 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       Push qd = qt; qd.f0 = prm.temporal_detail;
       qd.f1 = prm.temporal_dark_wide ? 1.0f : 0.0f;
       qd.f2 = prm.temporal_dark_level;
-      gpu_->dispatch(wth_, sTH, &qd, gxLR, gyLR, K);
+      // weight_th reads f0 (detail on) but not f1: f1 < 0 selects its inline A/B reference.
+      Push qh = qd; qh.f1 = prm.temporal_det_once ? 0.0f : -1.0f;
+      if (qd.f0 > 0.0f && prm.temporal_det_once) gpu_->dispatch(wtdet_, sTDet, &qd, gxLR, gyLR, K);
+      gpu_->dispatch(wth_, sTH, &qh, gxLR, gyLR, K);
       gpu_->dispatch(wtemp_, sWT, &qd, gxLR, gyLR, K);
       if (prm.temporal_dark_wide) {
         gpu_->dispatch(wdarkv_, sWV, &qd, gxLR, gyLR, K);
@@ -566,10 +582,12 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     const bool refine_now = prm.motion_every <= 1 || t < prm.motion_warmup ||
                             ((t - prm.motion_warmup) % prm.motion_every) == prm.motion_every - 1;
     if (prm.refine_motion && K > 1 && refine_now) {                // Eq. (7)
-      gpu_->dispatch(jac_, sJac, &q, G, K - 1);
+      // jac / jacblk read no f3: f3 < 0 turns the shared per-pixel terms off (A/B reference).
+      Push qj = q; qj.f3 = prm.jac_fuse && prm.local_block > 0 ? 0.0f : -1.0f;
+      gpu_->dispatch(jac_, sJac, &qj, G, K - 1);
       gpu_->dispatch(solve_, sSolve, &q, K - 1);
       if (prm.local_block > 0) {                                   // local block translations
-        gpu_->dispatch(jacblk_, sJB, &q, nbx, nby, K - 1);
+        gpu_->dispatch(jacblk_, sJB, &qj, nbx, nby, K - 1);
         Push qb = q;
         qb.f0 = prm.local_lambda;
         qb.f1 = prm.local_floor;
@@ -787,10 +805,10 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     for (int it = 0; it < steps; ++it) {
       gpu_->begin();
       if (q.rob_on > 0.5f) {
-        gpu_->dispatch(residg_, sR, &q, gxLR, gyLR, Kall);
+        kdispatch(residg_, sR, &q, Kall);
         gpu_->dispatch(wexp_, sE, &q, gxLR, gyLR, Kall);
         if (prm.robust_spread > 0) {
-          gpu_->dispatch(weight_, sW0, &q, gxLR, gyLR, Kall);
+          { Push qw = q; qw.f0 = prm.weight_skip ? -1.0f : q.f0; gpu_->dispatch(weight_, sW0, &qw, gxLR, gyLR, Kall); }
           Push qm = q; qm.f3 = float(prm.robust_spread);
           gpu_->dispatch(wminh_, sWH, &qm, gxLR, gyLR, Kall);
           gpu_->dispatch(wmin_, sWM, &qm, gxLR, gyLR, Kall);
@@ -798,10 +816,11 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
           gpu_->dispatch(weight_, sW, &q, gxLR, gyLR, Kall);
         }
       }
-      gpu_->dispatch(jac_, sJac, &q, G, Kall - 1);
+      Push qj = q; qj.f3 = prm.jac_fuse && prm.local_block > 0 ? 0.0f : -1.0f;
+      gpu_->dispatch(jac_, sJac, &qj, G, Kall - 1);
       gpu_->dispatch(solve_, sSolve, &q, Kall - 1);
       if (prm.local_block > 0) {
-        gpu_->dispatch(jacblk_, sJB, &q, nbx, nby, Kall - 1);
+        gpu_->dispatch(jacblk_, sJB, &qj, nbx, nby, Kall - 1);
         Push qb = q;
         qb.f0 = prm.local_lambda;
         qb.f1 = prm.local_floor;
@@ -811,9 +830,9 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       if (!gpu_->submit()) return LKR_FAIL("holdout motion");
     }
     gpu_->begin();
-    gpu_->dispatch(residg_, sR, &q, gxLR, gyLR, Kall);
+    kdispatch(residg_, sR, &q, Kall);
     Push qv = q; qv.mode = 2;
-    gpu_->dispatch(residg_, sHV, &qv, gxLR, gyLR, Kall);
+    kdispatch(residg_, sHV, &qv, Kall);
     if (!gpu_->submit()) return LKR_FAIL("holdout residual");
     const size_t o = size_t(ko) * h * w, n1 = size_t(h) * w;
     S.ho_r.assign(rr.as<float>() + o, rr.as<float>() + o + n1);

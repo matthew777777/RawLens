@@ -14,8 +14,14 @@ layout(std430, binding = 2) readonly buffer P { float p[]; };
 layout(std430, binding = 3) writeonly buffer R { float r[]; };
 
 void main() {
-  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
-  int k = int(gl_GlobalInvocationID.z);
+  // Frame-innermost workgroup order (dispatch gx = K * blocks), see resid_adj_w.comp:
+  // the K frames of one block share HR taps while they are still in cache.
+  // Dispatched with z = K: classic frame-outer order (A/B switch, debug.lkr.korder 0).
+  const bool inner = gl_NumWorkGroups.z == 1u;
+  int wx = int(gl_WorkGroupID.x);
+  int k = inner ? wx % pc.K : int(gl_GlobalInvocationID.z);
+  int j = inner ? (wx / pc.K) * 16 + int(gl_LocalInvocationID.x) : int(gl_GlobalInvocationID.x);
+  int i = int(gl_GlobalInvocationID.y);
   if (j >= pc.w || i >= pc.h) return;
   int o = (k * pc.h + i) * pc.w + j;
   float yv = y[o];

@@ -125,6 +125,14 @@ struct SolveParams {
   // 19.5-19.9 s vs 20.2-20.9 s; these passes are bound by the scattered HR
   // tap reads and int atomics, not by the y/wt loads): A/B switch only.
   bool quad = false;
+  // Frame-innermost workgroup order per pass (bit 1 resid_adj_w, 2 resid, 4 scatter):
+  // a cache-locality choice only, the result is identical either way.
+  int frame_inner = 7;
+  // jacblk reads jac.comp per-pixel terms: ~1.4 s faster on Mali but NOT bit-identical (rounding of r /
+  // Jx / Jy differs between the two shaders; held-out score 4.584 -> 4.596 at 1x). Off until approved.
+  bool jac_fuse = false;
+  bool weight_skip = true;   // weight.comp skips rw/wv that weight_min overwrites (false: A/B reference)
+  bool temporal_det_once = true;   // weight_tdet.comp precompute (false: A/B reference, same result)
   // Packed bilinear taps (malioc: every pass is load/store bound): zpack.comp
   // stores each HR pixel's 2x2 taps as one vec4 so the robust residual /
   // adjoint passes read 1 vector instead of 4 scalars per sample. Same maths
@@ -181,7 +189,7 @@ class Solver {
   std::deque<Entry> cache_;   // deque: references stay valid while it grows
   Gpu* gpu_;
   bool ok_ = false;
-  Pipeline dct_y_, dct_u_, dct_v_, dct_yuv_, resid_, zstep_, jac_, solve_, residg_, zgather_, weight_, scatter_, jacblk_, solveblk_, wmin_, wtemp_, wdark_, wdarkv_, wminh_, radjw_, wexp_, wth_, zgw_, residq_, radjwq_, scatq_, zpack_, residzq_, radjwzq_;
+  Pipeline dct_y_, dct_u_, dct_v_, dct_yuv_, resid_, zstep_, jac_, solve_, residg_, zgather_, weight_, scatter_, jacblk_, solveblk_, wmin_, wtemp_, wdark_, wdarkv_, wminh_, radjw_, wexp_, wth_, wtdet_, zgw_, residq_, radjwq_, scatq_, zpack_, residzq_, radjwzq_;
 };
 
 // CPU helpers (exact mirrors of the python reference).

@@ -140,6 +140,10 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.pack", v) > 0) prm.solve.pack_taps = v[0] != '0';
     if (__system_property_get("debug.lkr.half", v) > 0) prm.solve.half_taps = v[0] != '0';
     if (__system_property_get("debug.lkr.quad", v) > 0) prm.solve.quad = v[0] != '0';
+    if (__system_property_get("debug.lkr.korder", v) > 0) prm.solve.frame_inner = std::atoi(v);
+    if (__system_property_get("debug.lkr.tdet", v) > 0) prm.solve.temporal_det_once = v[0] != '0';
+    if (__system_property_get("debug.lkr.wskip", v) > 0) prm.solve.weight_skip = v[0] != '0';
+    if (__system_property_get("debug.lkr.jfuse", v) > 0) prm.solve.jac_fuse = v[0] != '0';
     if (__system_property_get("debug.lkr.rob", v) > 0 && v[0] == '0') prm.solve.robust = false;
     if (__system_property_get("debug.lkr.eq", v) > 0 && v[0] == '0') prm.solve.equalize_noise = false;
     if (__system_property_get("debug.lkr.loc", v) > 0 && v[0] == '0') prm.solve.local_block = 0;

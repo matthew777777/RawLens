@@ -23,8 +23,16 @@ layout(std430, binding = 3) buffer ACC { int acc[]; };
 layout(std430, binding = 5) readonly buffer WT { float wt[]; };
 
 void main() {
-  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
-  int k = int(gl_GlobalInvocationID.z);
+  // Frame-innermost workgroup order (dispatch gx = K * blocks): the K frames of
+  // one 16x16 block run back to back while its HR taps of z and acc are still
+  // in cache, instead of sweeping the whole tile once per frame (~8 MB, larger
+  // than the Mali L2). Integer atomics: the sum is order-independent.
+  // Dispatched with z = K: classic frame-outer order (A/B switch, debug.lkr.korder 0).
+  const bool inner = gl_NumWorkGroups.z == 1u;
+  int wx = int(gl_WorkGroupID.x);
+  int k = inner ? wx % pc.K : int(gl_GlobalInvocationID.z);
+  int j = inner ? (wx / pc.K) * 16 + int(gl_LocalInvocationID.x) : int(gl_GlobalInvocationID.x);
+  int i = int(gl_GlobalInvocationID.y);
   if (j >= pc.w || i >= pc.h) return;
   // Clipped samples break the linear model y = U x (the true value is
   // above white): leave them out of the data term like invalid pixels.

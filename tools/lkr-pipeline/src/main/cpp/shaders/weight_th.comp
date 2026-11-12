@@ -13,6 +13,7 @@ layout(std430, binding = 2) writeonly buffer TM { vec4 tmp[]; };
 // error of the single-frame z0 concentrates in fine detail present in BOTH;
 // an object appearing or leaving has detail in only one (minimum stays small).
 layout(std430, binding = 3) writeonly buffer TD { float td[]; };
+layout(std430, binding = 4) readonly buffer TDET { float tdet[]; };   // weight_tdet.comp
 
 void main() {
   int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
@@ -26,7 +27,8 @@ void main() {
     int t = row + clamp(j + dj, 0, pc.w - 1);
     if (r[t] == 0.0) continue;   // invalid / clipped
     acc += vec4(r[t], pc.rob_a * max(y[t], 0.0) + pc.rob_b, 1.0, r[t] * r[t]);
-    if (useDet) {
+    if (useDet && pc.f1 >= 0.0) det += tdet[t];   // per-sample term from weight_tdet.comp
+    else if (useDet) {   // A/B reference (debug.lkr.tdet 0): same term computed inline
       int c = clamp(j + dj, 0, pc.w - 1);
       int cl = row + max(c - 2, 0), cr = row + min(c + 2, pc.w - 1);
       int cu = (k * pc.h + max(i - 2, 0)) * pc.w + c, cd = (k * pc.h + min(i + 2, pc.h - 1)) * pc.w + c;

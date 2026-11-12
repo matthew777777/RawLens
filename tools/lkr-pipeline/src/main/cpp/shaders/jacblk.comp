@@ -17,6 +17,7 @@ layout(std430, binding = 2) readonly buffer Y { float y[]; };
 layout(std430, binding = 3) readonly buffer P { float p[]; };
 layout(std430, binding = 4) writeonly buffer BLK { float blk[]; };
 layout(std430, binding = 5) readonly buffer WT { float wt[]; };
+layout(std430, binding = 7) readonly buffer JB { vec4 jb[]; };   // jac.comp per-pixel terms (pc.f3 >= 0)
 
 shared float sh[16][6];
 
@@ -24,7 +25,10 @@ void main() {
   int k = int(gl_WorkGroupID.z) + 1;
   int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
   float v[6] = float[6](0, 0, 0, 0, 0, 0);
-  if (j < pc.w && i < pc.h) {
+  if (j < pc.w && i < pc.h && pc.f3 >= 0.0) {
+    vec4 e = jb[(k * pc.h + i) * pc.w + j];   // the same Jx, Jy, r jac.comp computed
+    if (e.w > 0.0) { v[0] = e.x * e.x; v[1] = e.x * e.y; v[2] = e.y * e.y; v[3] = e.x * e.z; v[4] = e.y * e.z; v[5] = 1.0; }
+  } else if (j < pc.w && i < pc.h) {   // A/B reference (debug.lkr.jfuse 0): recompute the taps
     float yv = y[(k * pc.h + i) * pc.w + j];
     if (yv < pc.f2) {
       int HW = pc.H * pc.W;

@@ -52,6 +52,9 @@ static const uint32_t resid_adj_w[] = {
 static const uint32_t weight_e[] = {
 #include "weight_e.inc"
 };
+static const uint32_t weight_tdet[] = {
+#include "weight_tdet.inc"
+};
 static const uint32_t weight_th[] = {
 #include "weight_th.inc"
 };
