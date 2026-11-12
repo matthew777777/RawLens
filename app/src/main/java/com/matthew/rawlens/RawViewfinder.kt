@@ -682,6 +682,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         // Default Z-order (surface behind the window) is load-bearing: guide/metering
         // overlays and controls draw in the window above the VF surface hole.
         holder.setFormat(PixelFormat.RGBA_8888)
+        // Above the ISP preview SurfaceView (still below the window's overlays/controls).
+        setZOrderMediaOverlay(true)
         holder.addCallback(this)
         if (alpha != 0f) alpha = 0f
     }

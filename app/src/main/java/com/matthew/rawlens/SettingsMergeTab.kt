@@ -84,6 +84,17 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 "RawLens improvements: DSLR look, motion and water rejection, local motion, " +
                 "shadow cleanup. Own quick tile; same shutter, ZSL and save path as MFSR."
         ))
+        content.addView(settingsCheck("ISP preview during LK-R merge", ispPreviewDuringMerge()).apply {
+            setOnCheckedChangeListener { _, checked ->
+                setIspPreviewSettings(ispPreviewAlways(), checked)
+                setStatus(if (checked) "MERGE ISP PREVIEW • ON" else "MERGE ISP PREVIEW • OFF")
+            }
+        })
+        content.addView(sectionDesc(
+            "While LK-R merges, the RAW viewfinder, scopes and peaking pause so the merge gets " +
+                "the GPU (~5-10 % faster) and the camera's own ISP preview (no noise reduction, " +
+                "no sharpening) is shown instead of a frozen frame."
+        ))
         content.addView(settingsCheck("LK-R denoise: sliding DCT", mfsrSettings.lkrDctPrior).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrDctPrior &&

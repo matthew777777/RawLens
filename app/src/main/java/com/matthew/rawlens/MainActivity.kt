@@ -237,7 +237,7 @@ class MainActivity : Activity() {
         val dngInfo = findViewById<TextView>(R.id.dngInfo)
         val sensorInfo = findViewById<TextView>(R.id.sensorInfo)
 
-        val viewfinder = findViewById<AutoFitTextureView>(R.id.viewfinder)
+        val viewfinder = findViewById<AutoFitSurfaceView>(R.id.viewfinder)
         val shutter = findViewById<View>(R.id.shutter)
         bindViewsAndOverlays()
         createController(dngInfo, sensorInfo, viewfinder, shutter)
@@ -475,7 +475,7 @@ class MainActivity : Activity() {
     }
 
     /** onCreate stage: The camera controller and its UI callbacks (status, scopes, focus, route). */
-    private fun createController(dngInfo: TextView, sensorInfo: TextView, viewfinder: AutoFitTextureView, shutter: View) {
+    private fun createController(dngInfo: TextView, sensorInfo: TextView, viewfinder: AutoFitSurfaceView, shutter: View) {
         controller = RawCameraController(this, viewfinder,
             { message -> runOnUiThread { setStatus(message) } },
             { iso, shutterSpeed, wb ->
@@ -669,6 +669,7 @@ class MainActivity : Activity() {
             },
             vendorKeysByKey = { key -> vendorKeyStore.get(key) }
         )
+        controller.onIspDisplayChanged = { show -> runOnUiThread { applyIspDisplay(show) } }
         controller.onVfRouteChanged = { isBgu ->
             runOnUiThread {
                 applyVfRoute(isBgu)
@@ -683,6 +684,7 @@ class MainActivity : Activity() {
         // The mode switcher owns the practical capture intent; Settings remain advanced defaults.
         controller.setCaptureExposureMode(captureExposureMode)
         controller.setZslHybridTopup(lensPreferences().getBoolean(KEY_ZSL_HYBRID_TOPUP, true))
+        applyIspPreviewSettings()
         controller.setCaptureFormat(captureFormat)
         controller.setJpegOutputSettings(jpegOutputSettings())
         controller.setRawExposureAssist(rawExposureSettings)
@@ -883,7 +885,7 @@ class MainActivity : Activity() {
     }
 
     /** onCreate stage: Tap-to-focus/meter and the manual slider row. */
-    private fun wireTouchAndManualControls(viewfinder: AutoFitTextureView) {
+    private fun wireTouchAndManualControls(viewfinder: AutoFitSurfaceView) {
         // Single tap (or joint drag) installs AF + AE together: one repeating
         // update + one AF START, retargeting instantly even while locked.
         // Dragging one square moves only that subsystem (AF rescans, AE re-meters).
@@ -1338,14 +1340,12 @@ class MainActivity : Activity() {
             return
         }
         val panel = findViewById<LinearLayout>(R.id.controlPanel)
-        val viewfinder = findViewById<AutoFitTextureView>(R.id.viewfinder)
+        val viewfinder = findViewById<AutoFitSurfaceView>(R.id.viewfinder)
         val topBar = findViewById<ViewGroup>(R.id.topBar)
         val root = panel.parent as View
         findViewById<View>(R.id.captureInfoRow).visibility = View.VISIBLE
-        // System preview is a stream target only: keep it attached and flowing for the HAL
-        // while fully transparent so ISP pixels never reach the eye. VISIBLE (not INVISIBLE)
-        // is load-bearing — some HALs never create the SurfaceTexture otherwise.
-        viewfinder.alpha = 0f
+        // ISP preview SurfaceView: always VISIBLE (its surface is a session output); the
+        // RAW/BGU VF media-overlay surfaces cover it unless an ISP preview toggle shows it.
         // Fill the exact viewport: letterboxing (fillViewport=false + 3:4) leaves a
         // black strip between the preview and the bottom panel on tall screens.
         // Both islands tuck over the preview by exactly their corner radius so
@@ -1353,7 +1353,7 @@ class MainActivity : Activity() {
         viewfinder.fillViewport = true
         // The camera UI is portrait-locked. Establish the 3:4 viewbox before the camera session
         // is opened so a cold start (including phone flat/upside-down) never gets measured first
-        // as an unconstrained tall TextureView. Camera stream selection can then use stable 4:3
+        // as an unconstrained tall preview view. Camera stream selection can then use stable 4:3
         // portrait geometry from its very first frame.
         controller.onCaptureSurfaceSize = { width, height ->
             if (captureRawPixels != width.toLong() * height) {
@@ -3437,11 +3437,32 @@ class MainActivity : Activity() {
 
     /** Shows exactly one VF surface: BGU or legacy, per the controller route. */
     private fun applyVfRoute(isBgu: Boolean) {
+        val hidden = ispDisplayShown
         findViewById<BguViewfinder>(R.id.bguViewfinder)?.visibility =
-            if (isBgu) android.view.View.VISIBLE else android.view.View.GONE
+            if (isBgu && !hidden) android.view.View.VISIBLE else android.view.View.GONE
         findViewById<RawViewfinder>(R.id.rawViewfinder)?.visibility =
-            if (isBgu) android.view.View.GONE else android.view.View.VISIBLE
+            if (isBgu || hidden) android.view.View.GONE else android.view.View.VISIBLE
     }
+
+    private var ispDisplayShown = false
+
+    /** ISP preview on screen: removing the RAW/BGU VF surface (media overlay) reveals the ISP SurfaceView below. */
+    private fun applyIspDisplay(show: Boolean) {
+        ispDisplayShown = show
+        applyVfRoute(controller.isBguActive())
+    }
+
+    internal fun ispPreviewAlways(): Boolean = lensPreferences().getBoolean(KEY_ISP_PREVIEW_ALWAYS, false)
+    internal fun ispPreviewDuringMerge(): Boolean = lensPreferences().getBoolean(KEY_ISP_PREVIEW_MERGE, false)
+
+    internal fun setIspPreviewSettings(always: Boolean, duringMerge: Boolean) {
+        lensPreferences().edit().putBoolean(KEY_ISP_PREVIEW_ALWAYS, always)
+            .putBoolean(KEY_ISP_PREVIEW_MERGE, duringMerge).apply()
+        applyIspPreviewSettings()
+    }
+
+    private fun applyIspPreviewSettings() =
+        controller.setIspPreview(ispPreviewAlways(), ispPreviewDuringMerge())
 
     /** Recording fan-out target: the same routed engine [applyVfRoute] shows. */
     private fun recorderViewfinder(isBgu: Boolean): VfEngine? =
@@ -4437,6 +4458,8 @@ class MainActivity : Activity() {
         const val KEY_BURST_FUSION_KEEP_SOURCE_BURST = "burst_fusion_keep_source_burst"
         // Future SR hook: KEY_RAW_SR_ENABLED / KEY_RAW_SR_DNG_MODE here.
         const val KEY_ZSL_HYBRID_TOPUP = "zsl_hybrid_topup"
+        const val KEY_ISP_PREVIEW_ALWAYS = "isp_preview_always"
+        const val KEY_ISP_PREVIEW_MERGE = "isp_preview_during_merge"
         const val KEY_DYNAMIC_EXPOSURE = "dynamic_exposure"
         const val KEY_DYNAMIC_EXPOSURE_BALANCE = "dynamic_exposure_balance"
         const val KEY_DYNAMIC_EXPOSURE_ISO_LIMIT = "dynamic_exposure_iso_limit"

@@ -2,17 +2,16 @@
     android:layout_width="match_parent" android:layout_height="match_parent" android:background="@android:color/black"
     android:clipChildren="false" android:clipToPadding="false">
 
-    <!-- System ISP preview: usually a repeating-request target (HAL stability), NEVER displayed.
-         The view stays VISIBLE so its SurfaceTexture is created, but fully transparent so the
-         user only ever sees our scene-referred RawViewfinder. (INVISIBLE suppresses surface
-         creation on some HALs and wedges startup with no camera client at all.) RAW-only
-         fallback sessions omit this stream entirely and drive the RawViewfinder alone. -->
-    <com.matthew.rawlens.AutoFitTextureView
+    <!-- System ISP preview, PhotonCamera style: a SurfaceView the camera fills directly
+         (zero app GPU). It stays VISIBLE whenever a preview session runs (a destroyed output
+         kills the session); the RAW/BGU VF surfaces sit above it as media overlays and are
+         removed only when Settings -> Merge "ISP preview" toggles show it. RAW-only fallback
+         sessions omit this stream entirely and drive the RawViewfinder alone. -->
+    <com.matthew.rawlens.AutoFitSurfaceView
         android:id="@+id/viewfinder"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_gravity="center"
-        android:alpha="0" />
+        android:layout_gravity="center" />
 
     <com.matthew.rawlens.RawViewfinder
         android:id="@+id/rawViewfinder"

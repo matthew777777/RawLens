@@ -74,6 +74,10 @@ class ZslCaptureSoakTest {
         android.util.Log.i("RawLensSoak", "Activity launched")
         val controller = MainActivity::class.java.getDeclaredField("controller").apply { isAccessible = true }
             .get(activity) as RawCameraController
+        fun previewResultTimestamp(controller: RawCameraController): Long =
+            (RawCameraController::class.java.getDeclaredField("latestPreviewResult")
+                .apply { isAccessible = true }.get(controller) as? android.hardware.camera2.CaptureResult)
+                ?.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: 0L
         fun uiBoolean(check: () -> Boolean): Boolean {
             var value = false
             instrumentation.runOnMainSync { value = check() }
@@ -169,7 +173,7 @@ class ZslCaptureSoakTest {
                 android.util.Log.i("RawLensSoak", "Cycle $cycle firing; artifacts=$before")
                 var previewTimestamp = 0L
                 instrumentation.runOnMainSync {
-                    previewTimestamp = activity.findViewById<AutoFitTextureView>(R.id.viewfinder).surfaceTexture?.timestamp ?: 0L
+                    previewTimestamp = previewResultTimestamp(controller)
                     when {
                         hdrBracket -> controller.captureHdrBracket()
                         burst -> controller.captureBurst()
@@ -195,13 +199,13 @@ class ZslCaptureSoakTest {
                     uiBoolean { activity.findViewById<View>(R.id.shutter).isEnabled }
                 }
                 // RAW-only sessions (ladder combo 0) attach no preview stream, so the
-                // TextureView never advances there; the RAW viewfinder check below
+                // ISP preview never advances there; the RAW viewfinder check below
                 // covers display recovery in every session.
                 val sessionHasPreview = RawCameraController::class.java.getDeclaredField("previewSize")
                     .apply { isAccessible = true }.get(controller) != null
                 if (sessionHasPreview) {
                     awaitCondition("Cycle $cycle Android preview froze", 15_000) {
-                        uiBoolean { (activity.findViewById<AutoFitTextureView>(R.id.viewfinder).surfaceTexture?.timestamp ?: 0L) > previewTimestamp }
+                        uiBoolean { (previewResultTimestamp(controller)) > previewTimestamp }
                     }
                 }
                 awaitCondition("Cycle $cycle RAW viewfinder did not recover", 15_000) {

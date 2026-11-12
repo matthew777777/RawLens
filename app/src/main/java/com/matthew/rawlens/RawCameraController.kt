@@ -10,7 +10,6 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.RectF
-import android.graphics.SurfaceTexture
 import android.hardware.HardwareBuffer
 import android.hardware.camera2.*
 import android.hardware.camera2.params.StreamConfigurationMap
@@ -31,7 +30,6 @@ import android.os.SystemClock
 import android.util.Range
 import android.util.Size
 import android.view.Surface
-import android.view.TextureView
 import android.view.View
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import java.nio.ByteOrder
@@ -146,7 +144,7 @@ internal data class PendingHdrFrame(val image: Image, val result: TotalCaptureRe
 
 class RawCameraController(
     private val context: Context,
-    private val viewfinder: AutoFitTextureView,
+    private val viewfinder: AutoFitSurfaceView,
     private val onState: (String) -> Unit,
     private val onMetadata: (iso: Int, shutter: Long, wb: Int) -> Unit,
     private val onInfo: (dngInfo: String, sensorInfo: String) -> Unit,
@@ -353,6 +351,39 @@ class RawCameraController(
     private var rawReaderHasZslBudget = true
     private var previewSurface: Surface? = null
     private var vfMergeQuiet = false
+    // ISP preview toggles (Settings -> Merge). The system preview stream goes to the
+    // ISP SurfaceView, which is shown instead of the RAW VF: always, or only during LK-R merges.
+    @Volatile private var ispPreviewAlways = false
+    @Volatile private var ispDisplayShown = false
+    var onIspDisplayChanged: ((Boolean) -> Unit)? = null
+    private fun ispPreviewWanted(): Boolean = ispPreviewAlways || MergeGpuQuiet.duringMergeEnabled
+
+    /** Shows the ISP preview while it is wanted and the session carries a preview stream. */
+    private fun refreshIspDisplay() {
+        val mergeQuiet = MergeGpuQuiet.active
+        val show = previewSurface != null &&
+            (ispPreviewAlways || (mergeQuiet && MergeGpuQuiet.duringMergeEnabled))
+        if (show != ispDisplayShown) {
+            ispDisplayShown = show
+            Log.i(LOG_TAG, "ISP preview display ${if (show) "ON" else "OFF"} (merge=$mergeQuiet)")
+            activeVf()?.setMonitoringSuspended(show || mergeQuiet)
+            onIspDisplayChanged?.invoke(show)
+        }
+    }
+
+    fun setIspPreview(always: Boolean, duringMerge: Boolean) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setIspPreview(always, duringMerge) }
+            return
+        }
+        val wasWanted = ispPreviewWanted()
+        ispPreviewAlways = always
+        MergeGpuQuiet.duringMergeEnabled = duringMerge
+        refreshIspDisplay()
+        // The preview stream and its NR/edge-off request are session-level: rebuild only
+        // when the session's need for an ISP stream actually changed.
+        if (wasWanted != ispPreviewWanted() && camera != null) restartCameraForConfigurationChange()
+    }
     private var previewSize: Size? = null
     private var selectedCameraId: String? = null
     private var rawCameraIds: List<String> = emptyList()
@@ -601,8 +632,8 @@ class RawCameraController(
         ladder.resetRouteRetries()
         viewfinder.removeOnLayoutChangeListener(previewLayoutListener)
         viewfinder.addOnLayoutChangeListener(previewLayoutListener)
-        viewfinder.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        viewfinder.listener = object : AutoFitSurfaceView.Listener {
+            override fun onSurfaceAvailable() {
                 val openedCamera = camera
                 if (openedCamera != null && session == null) {
                     createSession(openedCamera, lifecycleGeneration)
@@ -610,14 +641,14 @@ class RawCameraController(
                     open()
                 }
             }
-            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-                configurePreviewTransform(width, height)
+            override fun onSurfaceSizeChanged(width: Int, height: Int) {
+                // A session waiting for the pinned preview buffer size resumes here.
+                val openedCamera = camera
+                if (openedCamera != null && session == null && running) createSession(openedCamera, lifecycleGeneration)
             }
-            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+            override fun onSurfaceDestroyed() {
                 stop()
-                return true
             }
-            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
         }
         if (viewfinder.isAvailable) {
             Log.i(LOG_TAG, "Viewfinder surface ready at start; opening camera")
@@ -920,10 +951,10 @@ class RawCameraController(
 
     private fun createSession(device: CameraDevice, generation: Int) {
         if (!isCurrent(generation) || camera !== device || session != null) return
-        // Camera open and TextureView availability are independent asynchronous events. On a
+        // Camera open and SurfaceView availability are independent asynchronous events. On a
         // cold launch the device can open first; wait for the surface and let its listener call
         // us again instead of leaving an open camera with no session until the next Activity.
-        if (!viewfinder.isAvailable || viewfinder.surfaceTexture == null) {
+        if (!viewfinder.isAvailable) {
             Log.i(LOG_TAG, "Session deferred: viewfinder surface not available " +
                 "(available=${viewfinder.isAvailable} visibility=${viewfinder.visibility})")
             onState("WAITING FOR VIEWFINDER")
@@ -978,7 +1009,7 @@ class RawCameraController(
         // dimensions (3:4 for a 4:3 stream), irrespective of the phone's physical orientation.
         // Empty preview sizes are not terminal: the ladder's RAW-only tail
         // covers HALs that expose no preview stream at all.
-        val previewChoices = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
+        val previewChoices = map.getOutputSizes(android.view.SurfaceHolder::class.java)?.toList().orEmpty()
         // Fallback ladder: attempt 0 is raw-only (largest RAW, ring-sized
         // reader, no preview target). A HAL rejection advances the index and
         // rebuilds the session with a degraded combo instead of wedging on
@@ -1003,7 +1034,7 @@ class RawCameraController(
         // raw-only jump straight to the first preview combo; everyone else
         // starts raw-only (the probe below renders the verdict once).
         if (ladder.comboIndex == 0 &&
-            (ispPreviewRequestNeeded(selectedCameraId) || threeAPreviewWanted(selectedCameraId))
+            (ispPreviewRequestNeeded(selectedCameraId) || threeAPreviewWanted(selectedCameraId) || ispPreviewWanted())
         ) {
             SessionStreamSelection.firstPreviewComboIndex(combos).takeIf { it > 0 }?.let { ladder.comboIndex = it }
         }
@@ -1061,12 +1092,9 @@ class RawCameraController(
         vendorModeRawArrived = false
         vendorModeStartupLogged = false
         rawZslTargetFpsRange = chooseRawZslFpsRange(c, rawSize)
-        // RAW-only sessions leave the (never-displayed) TextureView alone.
+        // RAW-only sessions leave the ISP SurfaceView alone.
         previewSize?.let { ps ->
-            viewfinder.post {
-                viewfinder.setAspectRatio(ps.height, ps.width)
-                configurePreviewTransform(viewfinder.width, viewfinder.height)
-            }
+            viewfinder.post { viewfinder.setAspectRatio(ps.height, ps.width) }
         }
 
         // maxImages must fit the whole ring plus frames still waiting for their
@@ -1145,21 +1173,25 @@ class RawCameraController(
         // RAW-only combos skip the preview surface entirely: the session runs
         // a single RAW stream and the RAW viewfinder is the only display.
         val surface: Surface? = combo.preview?.let { pv ->
-            val texture = viewfinder.surfaceTexture ?: run {
+            val size = Size(pv.width, pv.height)
+            val live = viewfinder.surface
+            if (live == null || !viewfinder.hasBufferSize(size)) {
+                // Camera outputs must be a supported size: pin the SurfaceView buffer
+                // and resume from its surfaceChanged callback (PhotonCamera's order).
                 reader.setOnImageAvailableListener(null, null)
                 reader.close()
                 rawReaderMaxImages = 0
+                Log.i(LOG_TAG, "Session deferred: ISP SurfaceView buffer -> ${pv.width}x${pv.height}")
+                viewfinder.post { viewfinder.requestBufferSize(size) }
                 return
             }
-            texture.setDefaultBufferSize(pv.width, pv.height)
-            Surface(texture)
+            live
         }
         synchronized(cameraStateLock) {
             if (!isCurrent(generation) || camera !== device) {
                 reader.setOnImageAvailableListener(null, null)
                 reader.close()
                 rawReaderMaxImages = 0
-                surface?.release()
                 return
             }
             rawReader = reader
@@ -1309,8 +1341,9 @@ class RawCameraController(
                 val mergeQuiet = MergeGpuQuiet.active
                 if (mergeQuiet != vfMergeQuiet) {
                     vfMergeQuiet = mergeQuiet
-                    activeVf()?.setMonitoringSuspended(mergeQuiet)
+                    activeVf()?.setMonitoringSuspended(mergeQuiet || ispDisplayShown)
                 }
+                refreshIspDisplay()
                 if (!mergeQuiet) {
                 characteristics?.let { publishRawScopeIfDue(image, it) }
                 // Focus peaking rides the same RAW VF stream at its own throttle,
@@ -1319,7 +1352,7 @@ class RawCameraController(
                 characteristics?.let { rawExposureAssist.offer(image, it, developFocusView, result = latestPreviewResult) }
                 // The dual-RAW worker owns these allocations through Vulkan completion;
                 // don't concurrently hand the same AHB to the viewfinder GPU context.
-                if (!activeDualRaw) characteristics?.let {
+                if (!activeDualRaw && !ispDisplayShown) characteristics?.let {
                     activeVf()?.apply {
                         setSensorLevels(dngMetadataOverrides(selectedCameraId))
                         offer(image, it, latestPreviewResult)
@@ -1438,7 +1471,7 @@ class RawCameraController(
         previewSurface = null
         reader.setOnImageAvailableListener(null, null)
         reader.close()
-        surface?.release()
+        // [surface] is the SurfaceView holder's: never released here.
     }
 
     /**
@@ -1781,7 +1814,7 @@ class RawCameraController(
             ?: return 1
         val rawSizes = lapisSessionSpec?.takeIf { selectedCameraId=="0" }?.let { listOf(Size(it.width,it.height)) }
             ?: map.getOutputSizes(effectiveRawFormat(selectedCameraId, map))?.toList().orEmpty()
-        val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
+        val previewSizes = map.getOutputSizes(android.view.SurfaceHolder::class.java)?.toList().orEmpty()
         if (rawSizes.isEmpty()) return 1
         val mapRawSizes = rawSizes.map { SessionStreamSize(it.width, it.height) }
         return SessionStreamSelection.orderCombosForPreferredSize(
@@ -3894,7 +3927,7 @@ class RawCameraController(
             minOf(active.right, reported.right), minOf(active.bottom, reported.bottom))
             .takeIf { it.width > 0 && it.height > 0 } ?: active
         // RAW engines explicitly render the result crop. ISP outputs apply an additional
-        // centered aspect crop in the HAL before the buffer reaches the TextureView.
+        // centered aspect crop in the HAL before the buffer reaches the ISP SurfaceView.
         val size = previewSize
         return if (activeVf() == null && size != null)
             MeteringGeometry.streamCrop(crop, size.width, size.height) else crop
@@ -5195,7 +5228,7 @@ class RawCameraController(
                 if (activeFramesRemaining.get() <= 0) closeUnmatchedRawImages()
                 drainQueuedRawImages(reader)
             }
-            // Keep the SurfaceTexture on a real PREVIEW request even while RAW ZSL is active.
+            // Keep the ISP preview on a real PREVIEW request even while RAW ZSL is active.
             // Several Camera2 HALs treat TEMPLATE_ZERO_SHUTTER_LAG as a reprocessing/still path
             // and stop advancing the preview target once a full-resolution RAW target is added.
             // RAW ZSL here is app-operated (our ImageReader + ring buffer), so PREVIEW is the
@@ -5222,7 +5255,7 @@ class RawCameraController(
                     rawZslTargetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                 }
                 if (useRawZsl) {
-                    // App-operated RAW ZSL still uses TEMPLATE_PREVIEW so the TextureView never
+                    // App-operated RAW ZSL still uses TEMPLATE_PREVIEW so the ISP preview never
                     // freezes, but tell 3A/HAL scheduling that this repeating request is serving
                     // a zero-shutter-lag capture pipeline. Request the best advertised 30 fps
                     // range whenever the configured RAW+preview streams can physically sustain
@@ -5237,6 +5270,12 @@ class RawCameraController(
                 // RGBA16F sidecar), so every repeating RAW request carries the map —
                 // not only the ZSL path.
                 if (includeRaw) requestLensShadingMap(this)
+                // ISP preview shown to the user: no ISP noise reduction / sharpening, so it
+                // stays close to what the RAW pipeline will produce. RAW targets are unaffected.
+                if (surface != null && ispPreviewWanted()) {
+                    set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+                    set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+                }
             }.build()
             // Keep motion telemetry available throughout preview for burst metadata.
             motionTracker.start(cameraHandler)
@@ -7241,7 +7280,7 @@ class RawCameraController(
             meteringResults.clear()
             pairing.clearForTeardown(ignoreReleaseFailures = true)
             rawReader?.setOnImageAvailableListener(null, null)
-            session?.close(); camera?.close(); previewSurface?.release()
+            session?.close(); camera?.close()
             rawReader?.let(retiredRawReaders::add)
             closeRetiredRawReaders()
             session = null; camera = null; rawReader = null; previewSurface = null
@@ -7274,7 +7313,7 @@ class RawCameraController(
         rawViewfinder?.onStarvation = null
         bguViewfinder?.onStarvation = null
         viewfinder.removeOnLayoutChangeListener(previewLayoutListener)
-        viewfinder.surfaceTextureListener = null
+        viewfinder.listener = null
         // Queue teardown behind any accepted saves. The executor is serial, so EGL resources are
         // destroyed on exactly the thread that compiled and used their programs.
         try {
@@ -7595,20 +7634,10 @@ class RawCameraController(
         else -> failure.message ?: "camera unavailable"
     }
 
-    /** Keeps the camera preview in the portrait-locked 4:3 viewbox. */
-    private fun configurePreviewTransform(viewWidth: Int, viewHeight: Int) {
-        if (previewSize == null || viewWidth <= 0 || viewHeight <= 0) return
-
-        // The Activity/viewbox is portrait locked and SurfaceTexture/Camera2 already supplies the
-        // camera buffer transform for this preview surface. Applying an additional sensor/display
-        // rotation here double-rotates the image on devices such as Xiaomi/MediaTek (the previous
-        // implementation produced a 90-degree sideways preview). Keep the TextureView transform
-        // neutral; physical device orientation is used only for controls and DNG EXIF orientation.
-        //
-        // Reset explicitly because TextureView retains a previously assigned matrix across
-        // relayouts and camera-session changes.
-        viewfinder.setTransform(Matrix())
-    }
+    /** SurfaceView: the camera supplies the buffer transform and the view scales the
+     *  buffer to its bounds, so there is no matrix to keep; aspect is set per session. */
+    @Suppress("UNUSED_PARAMETER")
+    private fun configurePreviewTransform(viewWidth: Int, viewHeight: Int) = Unit
 
     private fun dngOrientation(
         c: CameraCharacteristics?,

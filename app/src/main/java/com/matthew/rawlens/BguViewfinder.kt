@@ -329,6 +329,8 @@ class BguViewfinder @JvmOverloads constructor(
 
     init {
         holder.setFormat(PixelFormat.RGBX_8888)
+        // Above the ISP preview SurfaceView (still below the window's overlays/controls).
+        setZOrderMediaOverlay(true)
         holder.addCallback(this)
         fitThread.start()
         renderThread.start()
