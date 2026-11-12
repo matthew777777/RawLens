@@ -159,6 +159,12 @@ internal object LkrMerge {
             floatArrayOf((neutral[1] / neutral[0]).toFloat(), 1f, (neutral[1] / neutral[2]).toFloat())
         else floatArrayOf(1f, 1f, 1f)
         LkrBridge.nativeSetCacheDir(context.codeCacheDir.absolutePath)
+        // Learned per-device noise model as prior for the burst's own fit (as HDR+);
+        // the native side declines when it is untrained for this ISO.
+        val noiseSource = WaveletDenoiser.NoiseSource.of(metadata)
+        LkrBridge.nativeSetNoiseModel(
+            noiseSource?.let { WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), it) },
+            noiseSource?.iso?.toFloat() ?: 0f)
         val t0 = SystemClock.elapsedRealtime()
         // packedBits >= 0: frames from LkrBridge.nativeStage (tight rows, packed when > 0).
         val rgb = (if (packedBits >= 0) LkrBridge.nativeMergeStaged(

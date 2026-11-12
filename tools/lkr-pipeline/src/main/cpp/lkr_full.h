@@ -33,6 +33,10 @@ struct FullParams {
   int overlap = 32;        // LR overlap between tiles (even)
   // Optional zero-initialised caller allocation for (w, h, 3) floats; null or a null result uses rgb_out.
   std::function<float*(int, int)> out_alloc;
+  // Optional: refines the burst's own noise fit (a, b in normalised raw units,
+  // bins = its confidence), e.g. with the app's learned per-device model.
+  // Returns false to keep the fit. Empty = burst fit only (desktop).
+  std::function<bool(float* a, float* b, int bins)> noise_refine;
   int workers = 3;
   // Cap on the summed per-worker solver buffers (MB, estimated from K, tile and s); 0 = no cap.
   // Each worker holds its own buffers, so large bursts drop to fewer workers instead of running out of memory.
@@ -86,6 +90,8 @@ struct FullParams {
 struct FullStats {
   int tiles = 0;
   float sigma = 0, a = 0, b = 0;
+  float fit_a = 0, fit_b = 0;   // the burst's own fit, before noise_refine
+  bool noise_learned = false;   // a, b came from noise_refine (learned model)
   double ms_noise = 0, ms_coarse = 0, ms_tiles = 0, ms_gpu = 0, ms_prior = 0, ms_total = 0;
   int prior_calls = 0;
   double ms_setup = 0, ms_wait = 0;   // extra Vulkan devices + all solver pipelines; workers waiting for their blend turn

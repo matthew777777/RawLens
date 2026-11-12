@@ -23,6 +23,7 @@
 #include "lkr_tuning.h"
 #include "lkr_resample.h"
 #include "lkr_sharpness.h"
+#include "noise_model.h"   // app/src/main/cpp/wavelet: learned per-device noise model
 
 #include <cmath>
 
@@ -36,6 +37,14 @@
 #endif
 
 namespace {
+
+// Learned per-device noise model for the NEXT merge on this thread
+// (nativeSetNoiseModel, consumed by Merge): store path + ISO, empty = none.
+struct NoiseModelRef {
+  std::string path;
+  float iso = 0;
+};
+thread_local NoiseModelRef g_noise_model;
 
 // stats layout (float[16]): tiles, sigma, a, b, ms_noise, ms_coarse, ms_tiles,
 // ms_gpu, ms_prior, ms_total, prior_calls, out_w, out_h, backend (0 none,
@@ -84,6 +93,26 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.tilelk", v) > 0 && v[0] == '0') prm.tile_lk = false;
   }
 #endif
+  const NoiseModelRef noise_model = g_noise_model;
+  g_noise_model = {};
+  if (!noise_model.path.empty() && noise_model.iso > 0) {
+    // Same mix as HDR+ (WaveletVulkan.combineNoise): model prior, this burst's fit as evidence.
+    prm.noise_refine = [noise_model](float* a, float* b, int bins) {
+      const auto model = rawlens_noise::fit(rawlens_noise::loadSamples(noise_model.path));
+      if (!model.supports(noise_model.iso)) {
+        LKR_LOG("noise: learned model untrained at ISO %.0f, burst fit a=%.3g b=%.3g", noise_model.iso, *a, *b);
+        return false;
+      }
+      const bool ok = std::isfinite(*a) && std::isfinite(*b) && *a >= 0 && *b >= 0;
+      const auto c = rawlens_noise::combine(model, noise_model.iso, *a, *b, bins, ok);
+      if (!(std::isfinite(c.a) && std::isfinite(c.b) && c.a >= 0 && c.b >= 0)) return false;
+      LKR_LOG("noise: burst a=%.3g b=%.3g (%d bins) + learned (ISO %.0f, %d samples) -> a=%.3g b=%.3g w=%.2f",
+              *a, *b, bins, noise_model.iso, model.samples, c.a, c.b, c.w);
+      *a = c.a;
+      *b = c.b;
+      return true;
+    };
+  }
   prm.s = s;
   prm.solve.dct_prior = dct;
   prm.tile = tile;
@@ -201,6 +230,18 @@ extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMe
     jint out_w, jint out_h) {
   return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, dct, stats, tuning, out_w,
                out_h);
+}
+
+// Learned noise model for the next merge on the calling thread (path null = none).
+extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetNoiseModel(JNIEnv* env, jclass,
+                                                                                       jstring path, jfloat iso) {
+  g_noise_model = {};
+  if (!path || !(iso > 0)) return;
+  const char* c = env->GetStringUTFChars(path, nullptr);
+  if (c) {
+    g_noise_model = {std::string(c), float(iso)};
+    env->ReleaseStringUTFChars(path, c);
+  }
 }
 
 // Native defaults of the LK-SR Lab table (lkr_tuning.h), shown by the app's sliders.

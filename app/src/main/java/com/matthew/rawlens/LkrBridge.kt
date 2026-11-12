@@ -83,6 +83,13 @@ internal object LkrBridge {
 
     @JvmStatic external fun nativeSetCacheDir(dir: String)
 
+    /**
+     * Learned per-device noise model (WaveletDenoiser store file, [iso]) for the next
+     * [nativeMerge] / [nativeMergeStaged] on the calling thread: it refines the burst's
+     * own noise fit as in HDR+. Null path = burst fit only. Consumed by that merge.
+     */
+    @JvmStatic external fun nativeSetNoiseModel(path: String?, iso: Float)
+
     /** Native defaults of the LK-R Lab table (index layout: lkr_tuning.h / [LkrTuning.Entry]). */
     @JvmStatic external fun nativeTuningDefaults(): FloatArray
 }

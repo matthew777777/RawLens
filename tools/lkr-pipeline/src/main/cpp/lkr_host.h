@@ -30,7 +30,8 @@ float NoiseSigma(const float* raw, int h, int w);
 
 // Poisson-Gaussian fit var = a x + b from one RGGB frame: block Laplacian
 // energy, binned by level, bias-corrected fifth percentile, weighted NNLS.
-void NoiseAB(const float* raw, int h, int w, float* a, float* b);
+// bins (optional): brightness levels the fit used, its confidence (learned-model evidence weight).
+void NoiseAB(const float* raw, int h, int w, float* a, float* b, int* bins = nullptr);
 
 // Grey image (mean of the bilinear demosaic) -- python lkr.grey.
 void Grey(const float* raw, int h, int w, float* out);

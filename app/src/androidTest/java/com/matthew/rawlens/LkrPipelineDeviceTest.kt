@@ -101,8 +101,12 @@ class LkrPipelineDeviceTest {
             Log.i(TAG, "loaded $n frames ${w}x$h in ${SystemClock.elapsedRealtime() - tLoad} ms")
             val dct = (args.getString("lkrDct") ?: "0") == "1"
             LkrBridge.nativeSetCacheDir(context.codeCacheDir.absolutePath)
+            // Optional learned noise model (rawlens-noise v2 store file) + the burst's ISO.
+            val noiseModel = args.getString("lkrNoiseModel")
+            val noiseIso = args.getString("lkrIso")?.toFloatOrNull() ?: 0f
             for (c in cases) {
                 val stats = FloatArray(LkrBridge.STATS_SIZE)
+                LkrBridge.nativeSetNoiseModel(noiseModel, noiseIso)
                 val t0 = SystemClock.elapsedRealtime()
                 val rgb = LkrBridge.nativeMerge(bufs.toTypedArray(), w, h, w, cfa, black, white, wb,
                     c.scale, 512, 32, c.crop, dct, stats, null, c.outW, c.outH)
@@ -117,6 +121,7 @@ class LkrPipelineDeviceTest {
                     stats[LkrBridge.STAT_MS_TILES], stats[LkrBridge.STAT_MS_GPU], stats[LkrBridge.STAT_MS_PRIOR],
                     stats[LkrBridge.STAT_PRIOR_CALLS].toInt(), stats[LkrBridge.STAT_BACKEND].toInt(),
                     stats[LkrBridge.STAT_SIGMA]))
+                Log.i(TAG, "%s noise a=%.3g b=%.3g".format(c.name, stats[LkrBridge.STAT_NOISE_A], stats[LkrBridge.STAT_NOISE_B]))
                 // Raw float dump for desktop comparison (crop cases only: small).
                 if (c.crop != null && c.outW == 0) {
                     val out = File(context.getExternalFilesDir(null), "lkr_${c.name}.f32")

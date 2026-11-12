@@ -99,7 +99,8 @@ float NoiseSigma(const float* raw, int h, int w) {
   return float(1.4826 * median(d) / std::sqrt(20.0));
 }
 
-void NoiseAB(const float* raw, int h, int w, float* a_out, float* b_out) {
+void NoiseAB(const float* raw, int h, int w, float* a_out, float* b_out, int* bins_out) {
+  if (bins_out) *bins_out = 0;
   constexpr int B = 8;
   std::vector<double> ms, vs;
   for (int plane = 0; plane < 2; ++plane) {          // greens at (0,1) and (1,0)
@@ -213,6 +214,7 @@ void NoiseAB(const float* raw, int h, int w, float* a_out, float* b_out) {
       if (r < best) { best = r; ba = a; bb = b; }
     }
   }
+  if (bins_out) *bins_out = int(X.size());
   *a_out = float(ba);
   *b_out = float(std::max(bb, 1e-10));
 }

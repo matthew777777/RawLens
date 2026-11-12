@@ -203,7 +203,14 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     std::vector<float> c(size_t(g.w) * g.h);
     LoadTile(frames[0], g, 0, 0, g.w, g.h, black, white, c.data());
     S.sigma = NoiseSigma(c.data(), g.h, g.w);
-    NoiseAB(c.data(), g.h, g.w, &S.a, &S.b);
+    int bins = 0;
+    NoiseAB(c.data(), g.h, g.w, &S.a, &S.b, &bins);
+    S.fit_a = S.a;
+    S.fit_b = S.b;
+    // Learned per-device model (app): prior mixed with this burst's fit by its
+    // confidence, as HDR+ does. Before the degenerate-fit fallback, so a
+    // trained model replaces a collapsed fit instead of the MAD sigma.
+    if (prm.noise_refine && prm.noise_refine(&S.a, &S.b, bins)) S.noise_learned = true;
     // Degenerate fit (too few unclipped flat blocks): a zero noise model makes
     // every robust / temporal test reject all frames. Fall back to the
     // level-independent MAD sigma as read noise.
