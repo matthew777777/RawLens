@@ -317,7 +317,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
         host.reportSaveState("${settings.label} MERGING")
         val tMerge0 = android.os.SystemClock.elapsedRealtime()
         val ordered = try {
-            MfsrMerge.prepare(selected) { frame ->
+            MfsrMerge.prepare(selected, settings.engine == MfsrEngine.LKR && settings.lkrMiddleReference) { frame ->
                 RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides)
             }
         } finally {
@@ -348,7 +348,10 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
             Log.i(LOG_TAG, "${settings.label} timing merge=${mergeMs}ms frames=${merged.keptCount}/${selected.size} " +
                 "${merged.width}x${merged.height}")
             val provenance = sharpMergeProvenance(merged, settings, selected.size,
-                ordered.take(merged.keptCount).map { it.metadata }, "auto (sharpness and blur rejection)")
+                ordered.take(merged.keptCount).map { it.metadata },
+                if (settings.engine == MfsrEngine.LKR && settings.lkrMiddleReference)
+                    "auto (sharpest of the middle three, blur rejection)"
+                else "auto (sharpness and blur rejection)")
             var referenceDng: String? = null
             if (outputFormat.includesDng) {
                 referenceDng = saveMfsrDng(merged, captureTimeMillis, captureGps, provenance)

@@ -54,6 +54,13 @@ class MfsrSettingsTest {
         assertEquals("MFSR\n×16", on.quickText(m, 30, 16, true, false))
     }
 
+    @Test fun lkrMiddleReferenceDefaultsOnAndRoundTrips() {
+        assertTrue(MfsrSettings().lkrMiddleReference)
+        assertTrue(MfsrSettings.fromPreferences(emptyMap<String, Any>()).lkrMiddleReference)
+        val off = MfsrSettings(lkrMiddleReference = false)
+        assertFalse(MfsrSettings.fromPreferences(off.toPreferences()).lkrMiddleReference)
+    }
+
     @Test fun lkrDefaultsToNoPrior() {
         assertFalse(MfsrSettings().lkrDctPrior)
         assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).lkrDctPrior)

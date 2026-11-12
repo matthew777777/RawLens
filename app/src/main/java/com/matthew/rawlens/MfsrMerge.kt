@@ -101,7 +101,11 @@ internal object MfsrMerge {
      * at full resolution; blurred frames dropped). Returns the frames in
      * merge order, reference first, or null when no frame is usable.
      */
-    fun prepare(frames: List<BufferedRawFrame>, metadataOf: (BufferedRawFrame) -> RawFrameMetadata): List<MfsrFrame>? {
+    fun prepare(
+        frames: List<BufferedRawFrame>,
+        middleReference: Boolean = false,
+        metadataOf: (BufferedRawFrame) -> RawFrameMetadata
+    ): List<MfsrFrame>? {
         if (frames.size < MfsrSettings.MIN_MERGE_FRAMES) return null
         val usable = frames.mapIndexedNotNull { index, frame ->
             try {
@@ -115,7 +119,7 @@ internal object MfsrMerge {
             }
         }
         if (usable.size < MfsrSettings.MIN_MERGE_FRAMES) return null
-        val refOrder = selectSharpest(usable) ?: return null
+        val refOrder = selectSharpest(usable, middleReference) ?: return null
         return refOrder.map { usable[it] }
     }
 
@@ -125,7 +129,7 @@ internal object MfsrMerge {
      * from each RAW16 plane (black-subtracted), reference = sharpest of
      * the newest three, blurred frames dropped. Returns merge order.
      */
-    private fun selectSharpest(frames: List<MfsrFrame>): List<Int>? {
+    private fun selectSharpest(frames: List<MfsrFrame>, middleReference: Boolean): List<Int>? {
         return try {
             val sharpness = frames.map { sharp ->
                 val plane = sharp.frame.image.planes[0]
@@ -141,7 +145,7 @@ internal object MfsrMerge {
                     (shorts.get(y * rowShorts + x * colShorts).toInt() and 0xffff) - norm.blackAt(x, y)
                 }
             }
-            val plan = BurstSharpness.plan(sharpness, MfsrSettings.MIN_MERGE_FRAMES)
+            val plan = BurstSharpness.plan(sharpness, MfsrSettings.MIN_MERGE_FRAMES, middleReference)
             logPlan("ZSL", frames.map { it.frame.timestampNanos }, sharpness, plan)
             plan.order
         } catch (failure: Exception) {

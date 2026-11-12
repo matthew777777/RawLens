@@ -65,11 +65,22 @@ internal object BurstSharpness {
      * remaining frames sharpest first; frames under [REJECT_BELOW] of the
      * reference are dropped unless that would leave fewer than [minFrames].
      * Returns indices, reference first.
+     *
+     * [middleReference] (LK-R): the candidates are the [REFERENCE_CANDIDATES]
+     * frames in the middle of the burst instead of the newest. A moving
+     * subject drifts further from the reference with every frame, so a
+     * middle reference halves the largest drift and more frames survive
+     * motion rejection (measured on 10 bursts: reference-only area 6.1 %
+     * to 2.7 % on a 16-frame burst). The photo then shows a moment half a
+     * burst before the shutter press.
      */
-    fun plan(sharpness: List<Double>, minFrames: Int): Plan {
+    fun plan(sharpness: List<Double>, minFrames: Int, middleReference: Boolean = false): Plan {
         require(sharpness.isNotEmpty())
-        val newest = sharpness.indices.reversed().take(REFERENCE_CANDIDATES)
-        val ref = newest.maxByOrNull { sharpness[it] } ?: sharpness.lastIndex
+        val count = minOf(REFERENCE_CANDIDATES, sharpness.size)
+        // Middle window, leaning to the newer side when it cannot be centred.
+        val first = if (middleReference) (sharpness.size - count + 1) / 2 else sharpness.size - count
+        val candidates = (first until first + count).reversed()
+        val ref = candidates.maxByOrNull { sharpness[it] } ?: sharpness.lastIndex
         val rest = sharpness.indices.filter { it != ref }.sortedByDescending { sharpness[it] }
         val refSharp = sharpness[ref]
         val sharpEnough = rest.filter { refSharp <= 0.0 || sharpness[it] >= REJECT_BELOW * refSharp }

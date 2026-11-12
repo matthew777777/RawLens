@@ -8,6 +8,17 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class RawZslFpsRangeTest {
+    @Test fun centredTakeWaitsHalfABurstUpToTheLatencyBound() {
+        val f30 = 33_333_333L
+        assertEquals(266L, ZslPolicy.centredTakeDelayMs(16, f30, 300L))
+        assertEquals(133L, ZslPolicy.centredTakeDelayMs(8, f30, 300L))
+        // Slow exposure: half a burst would be 800 ms; the wait stops at the bound.
+        assertEquals(300L, ZslPolicy.centredTakeDelayMs(16, 100_000_000L, 300L))
+        // Nothing to centre.
+        assertEquals(0L, ZslPolicy.centredTakeDelayMs(2, f30, 300L))
+        assertEquals(0L, ZslPolicy.centredTakeDelayMs(16, 0L, 300L))
+    }
+
     @Test
     fun prefersExactFixedThirtyFpsRange() {
         // Regression: the RAW stream must request a fixed 30 fps range (MotionCam

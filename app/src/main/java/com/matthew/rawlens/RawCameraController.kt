@@ -2486,6 +2486,32 @@ class RawCameraController(
                 // Both mergers need a consistent ring; no per-frame top-up saving.
                 if (rawZslStreaming) {
                     onState("SELECTING ${if (mfsrSettings.enabled) mfsrSettings.label else "HDR+"}")
+                    // LK-R middle reference: select half a burst after the press, so the
+                    // burst straddles it and the reference is the pressed moment.
+                    val centreDelayMs = if (activeMfsrSettings.enabled &&
+                        activeMfsrSettings.engine == MfsrEngine.LKR && activeMfsrSettings.lkrMiddleReference) {
+                        val result = latestPreviewResult
+                        val frameNs = maxOf(
+                            result?.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L,
+                            result?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+                        ).takeIf { it > 0L } ?: 33_333_333L
+                        ZslPolicy.centredTakeDelayMs(need, frameNs, ZSL_CENTRED_TAKE_MAX_DELAY_MS)
+                    } else 0L
+                    if (centreDelayMs > 0L) {
+                        val shot = captureSequence.get()
+                        val generation = lifecycleGeneration
+                        Log.i(LOG_TAG, "ZSL centred take: selecting $need frames ${centreDelayMs}ms after the press")
+                        cameraHandler.postDelayed({
+                            if (!isCurrent(generation) || shot != captureSequence.get() || !captureInProgress.get()) {
+                                return@postDelayed
+                            }
+                            if (selectAndSaveRawZsl(SystemClock.elapsedRealtimeNanos(), lastPreviewSensorTimestamp)) {
+                                return@postDelayed
+                            }
+                            retryZslSelectionUntil(SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS)
+                        }, centreDelayMs)
+                        return
+                    }
                     if (selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot)) return
                     val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
                     retryZslSelectionUntil(deadlineMs)
@@ -7318,6 +7344,8 @@ class RawCameraController(
         internal const val ZSL_PAIR_WINDOW_SLOTS = 6
         private const val ZSL_SELECTION_WAIT_MS = 120L
         private const val ZSL_RECOVERY_WAIT_MS = 3_000L
+        /** Longest wait after the press for a centred LK-R take ([ZslPolicy.centredTakeDelayMs]). */
+        private const val ZSL_CENTRED_TAKE_MAX_DELAY_MS = 300L
         /**
          * Empty-take ticks (≈120ms each) before the wait loop escalates to a
          * pure forward burst with top-up ON. ~1s covers one full ring fill at

@@ -36,6 +36,22 @@ internal object ZslPolicy {
     }
 
     /**
+     * Centred ZSL take (LK-R middle reference): the ring keeps streaming after the
+     * press, so waiting half a burst before selecting the newest [count] frames gives
+     * a selection that straddles the press. The middle frames, where LK-R picks its
+     * reference, are then the pressed moment, and every other frame is at most half a
+     * burst away from it in time (moving subjects drift half as far as with a
+     * pre-press burst). Returns the wait in ms: half the burst at [frameNanos] per
+     * frame, never more than [maxDelayMs] (a latency bound, so slow exposures centre
+     * only partly), 0 when centring does not apply.
+     */
+    internal fun centredTakeDelayMs(count: Int, frameNanos: Long, maxDelayMs: Long): Long {
+        if (count < 3 || frameNanos <= 0L || maxDelayMs <= 0L) return 0L
+        val halfBurstMs = (count / 2).toLong() * frameNanos / 1_000_000L
+        return halfBurstMs.coerceIn(0L, maxDelayMs)
+    }
+
+    /**
      * Pure ZSL selection size behind [RawCameraController.zslSelectedFrameCount].
      * Merge modes save one artifact (one save slot), so each uses its
      * own merge bounds and bypasses the per-frame JPEG queue cap;

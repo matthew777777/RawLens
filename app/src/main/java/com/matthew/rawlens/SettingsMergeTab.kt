@@ -98,6 +98,20 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             "Off (default): no denoiser, the most organic result. On: a fast GPU denoiser " +
                 "removes colour noise and a little luma noise during reconstruction."
         ))
+        content.addView(settingsCheck("LK-R reference: middle of the burst", mfsrSettings.lkrMiddleReference).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.lkrMiddleReference &&
+                    !applyMfsrSettings(mfsrSettings.copy(lkrMiddleReference = checked))) {
+                    isChecked = mfsrSettings.lkrMiddleReference
+                }
+            }
+        })
+        content.addView(sectionDesc(
+            "On (default): the burst is taken around the shutter press (half before, half " +
+                "after, up to 0.3 s after) and the sharpest of the three middle frames is the " +
+                "reference, so moving subjects keep more frames. Off: frames before the press " +
+                "only, reference = sharpest of the newest three."
+        ))
         val labPrefs = LkrTuning.prefs(this)
         val labBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(settingsCheck("Show LK-R Lab (expert tuning)",

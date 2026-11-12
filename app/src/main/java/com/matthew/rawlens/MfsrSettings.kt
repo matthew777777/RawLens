@@ -62,6 +62,12 @@ data class MfsrSettings(
     /** LK-R: regularise with the Vulkan sliding-DCT x-step; false (default) = no prior. */
     val lkrDctPrior: Boolean = false,
     /**
+     * LK-R: reference = sharpest of the middle three frames instead of the
+     * newest three ([BurstSharpness.plan]); more frames survive motion
+     * rejection, the photo shows a moment half a burst earlier.
+     */
+    val lkrMiddleReference: Boolean = true,
+    /**
      * LK-R zoom (viewfinder chip): 1x full frame at x1; 1.5x / 2x solve the
      * centre crop at x2 (1.5x then area-downsampled). Output is always the
      * sensor resolution.
@@ -83,6 +89,7 @@ data class MfsrSettings(
         "mfsr_zipper_fix" to zipperFix,
         "mfsr_engine" to engine.name,
         "lkr_dct_prior" to lkrDctPrior,
+        "lkr_middle_reference" to lkrMiddleReference,
         "lkr_zoom" to lkrZoom.name
     )
 
@@ -110,6 +117,7 @@ data class MfsrSettings(
             zipperFix = values["mfsr_zipper_fix"] as? Boolean ?: true,
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,
             lkrDctPrior = values["lkr_dct_prior"] as? Boolean ?: false,
+            lkrMiddleReference = values["lkr_middle_reference"] as? Boolean ?: true,
             lkrZoom = LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1
         )
 

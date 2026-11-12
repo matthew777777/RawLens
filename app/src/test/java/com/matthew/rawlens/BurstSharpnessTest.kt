@@ -35,6 +35,18 @@ class BurstSharpnessTest {
         assertTrue(plan.rejected.isEmpty())
     }
 
+    @Test fun middleReferenceIsSharpestOfMiddleThree() {
+        // 8 frames in capture order: middle window = frames 3, 4, 5; the sharper ends are not candidates.
+        val sharp = listOf(2.0, 1.0, 1.0, 1.05, 1.1, 1.08, 1.0, 2.0)
+        assertEquals(4, BurstSharpness.plan(sharp, minFrames = 2, middleReference = true).order.first())
+        assertEquals(7, BurstSharpness.plan(sharp, minFrames = 2).order.first())
+        // 16 frames: window 7, 8, 9. Short bursts: every frame is a candidate.
+        val long = List(16) { if (it == 9) 1.2 else 1.0 }
+        assertEquals(9, BurstSharpness.plan(long, minFrames = 2, middleReference = true).order.first())
+        assertEquals(0, BurstSharpness.plan(listOf(1.5, 1.0), minFrames = 2, middleReference = true).order.first())
+        assertEquals(16, BurstSharpness.plan(long, minFrames = 2, middleReference = true).order.size)
+    }
+
     @Test fun blurredFramesAreRejectedButMinimumIsKept() {
         val plan = BurstSharpness.plan(listOf(0.3, 0.5, 1.0), minFrames = 2)
         assertEquals(listOf(2), plan.order.take(1))
