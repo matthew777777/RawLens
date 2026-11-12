@@ -4757,7 +4757,14 @@ class RawCameraController(
         }
         virtualLensStore.all().filter { it.baseCameraId in rawCameraIds }.forEach { virtual ->
             val at = options.indexOfLast { it.cameraId == virtual.baseCameraId } + 1
-            options.add(at, LensOption(virtual.baseCameraId, virtual.switcherLabel,
+            // Blank or automatic big text ("4×" / "96mm" of the base lens) follows the
+            // zoom-or-focal switch; only text the user typed differently stays fixed.
+            val rear = rawCameraIds.filter { !isFrontCamera(it) }.map(::opticalMetric)
+            val metric = opticalMetric(virtual.baseCameraId)
+            val auto = virtual.zoom.isBlank() || virtual.zoom == LensZoom.label(metric, rear) ||
+                virtual.zoom == LensZoom.focalLabel(metric)
+            val shown = if (auto) virtual.copy(zoom = zoomLabel(virtual.baseCameraId)) else virtual
+            options.add(at, LensOption(virtual.baseCameraId, shown.switcherLabel,
                 virtual.id == active?.id, virtual.settingsKey,
                 virtual.description.ifBlank { "Custom lens on camera ${virtual.baseCameraId}" }))
         }

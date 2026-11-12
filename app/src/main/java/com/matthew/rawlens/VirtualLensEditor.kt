@@ -45,7 +45,7 @@ internal fun MainActivity.virtualLensSection(
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.HORIZONTAL
                     addView(TextView(context).apply {
-                        text = virtual.switcherLabel
+                        text = virtual.copy(zoom = virtual.zoom.ifBlank { base?.let(zoomOf).orEmpty() }).switcherLabel
                         setTextColor(getColor(R.color.text_primary))
                         textSize = 14f
                         typeface = Typeface.DEFAULT_BOLD
@@ -134,7 +134,7 @@ private fun MainActivity.showVirtualLensEditor(
     val baseRow = link("")
     fun refreshBase() { baseRow.text = "${zoomOf(base)} · ${base.title} · ID ${base.id} ▾" }
     refreshBase()
-    val zoomField = field(existing?.zoom ?: zoomOf(base), "1×", VirtualLens.MAX_ZOOM)
+    val zoomField = field(existing?.zoom?.ifBlank { null } ?: zoomOf(base), "Auto", VirtualLens.MAX_ZOOM)
     val tagField = field(existing?.tag ?: "", "NIGHT, 50 MP, PORTRAIT…", VirtualLens.MAX_TAG)
     val descField = field(existing?.description ?: "", "What this lens is for", VirtualLens.MAX_DESCRIPTION).apply {
         setSingleLine(false)
@@ -153,7 +153,8 @@ private fun MainActivity.showVirtualLensEditor(
 
     fun current() = VirtualLens(
         id, base.id,
-        zoomField.text.toString().trim().ifBlank { zoomOf(base) },
+        // Automatic text is stored blank so it follows the zoom / focal-length switch.
+        zoomField.text.toString().trim().takeUnless { it == zoomOf(base) }.orEmpty(),
         tagField.text.toString().trim().uppercase(),
         descField.text.toString().trim()
     )

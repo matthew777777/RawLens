@@ -22,7 +22,11 @@ data class VirtualLens(
     val description: String = ""
 ) {
     val settingsKey: String get() = settingsKeyOf(id)
-    val switcherLabel: String get() = if (tag.isBlank()) zoom else "$zoom · $tag"
+    val switcherLabel: String get() = when {
+        zoom.isBlank() -> tag.ifBlank { "Custom" }
+        tag.isBlank() -> zoom
+        else -> "$zoom · $tag"
+    }
 
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("base", baseCameraId).put("zoom", zoom)
@@ -39,7 +43,7 @@ data class VirtualLens(
             val base = json.optString("base").takeIf { it.isNotBlank() } ?: return null
             return VirtualLens(
                 id, base,
-                json.optString("zoom").ifBlank { "1×" }.take(MAX_ZOOM),
+                json.optString("zoom").take(MAX_ZOOM),
                 json.optString("tag").take(MAX_TAG),
                 json.optString("description").take(MAX_DESCRIPTION)
             )
