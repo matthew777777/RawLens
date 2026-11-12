@@ -925,19 +925,25 @@ bool Recorder::recordFinalize() {
     return true;
 }
 
+// Returns the view holding frame i's raw u16 codes, valid until the next
+// call for a different companion; VK_NULL_HANDLE (with err set) on failure.
+using FrameViews = std::function<VkImageView(std::uint32_t)>;
+
 // Drive loops mirroring AndroidBurstCoordinator::runHdrPlus /
 // runHdrPlusFrequency (same pass/companion/level order; the upstream chunk
 // submissions are collapsed into one command buffer — submission
 // boundaries only schedule work, they cannot change output bits).
 bool run_spatial(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd, Scratch& scratch,
                  const hp::Config& config, const hp::Geometry& geometry,
-                 const std::vector<VkImageView>& views, const std::vector<RawNormalization>& norms,
+                 const FrameViews& views, const std::vector<RawNormalization>& norms,
                  std::uint32_t ref, VkBuffer hotPixels, std::uint32_t hotPixelPairs,
                  const float* frameStrengths, MapBinding maps, std::string& err) {
     Recorder recorder(ctx, desc, cmd, scratch, config, geometry, frameStrengths, maps, err);
     if (hotPixels != VK_NULL_HANDLE && hotPixelPairs > 0) recorder.setHotPixels(hotPixels, hotPixelPairs);
-    const auto frameCount = std::uint32_t(views.size());
-    if (!recorder.recordReference(views[ref], norms[ref], frameCount)) return false;
+    const auto frameCount = std::uint32_t(norms.size());
+    const VkImageView refView = views(ref);
+    if (refView == VK_NULL_HANDLE) return false;
+    if (!recorder.recordReference(refView, norms[ref], frameCount)) return false;
     // Upstream zero-fills the final texture and adds every frame — reference
     // included — in frame order; the accumulator starts cleared here so the
     // reference lands at its own loop position with the same association.
@@ -959,7 +965,9 @@ bool run_spatial(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd,
             if (!recorder.recordReferenceAccumulate(frameCount)) return false;
             continue;
         }
-        if (!recorder.recordCompanionPrepare(views[i], norms[i])) return false;
+        const VkImageView view = views(i);
+        if (view == VK_NULL_HANDLE) return false;
+        if (!recorder.recordCompanionPrepare(view, norms[i])) return false;
         for (std::uint32_t level = recorder.levelCount(); level-- > 0;) {
             if (!recorder.recordCompanionAlignLevel(level)) return false;
         }
@@ -970,7 +978,7 @@ bool run_spatial(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd,
 
 bool run_frequency(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd, Scratch& scratch,
                    const hp::Config& config, const hp::FrequencyGeometry& geometry,
-                   const std::vector<VkImageView>& views, const std::vector<RawNormalization>& norms,
+                   const FrameViews& views, const std::vector<RawNormalization>& norms,
                    std::uint32_t ref, VkBuffer hotPixels, std::uint32_t hotPixelPairs,
                    const float* frameStrengths, MapBinding fastMaps, MapBinding hqMaps,
                    std::string& err) {
@@ -978,14 +986,18 @@ bool run_frequency(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cm
                                hqMaps, err);
     if (hotPixels != VK_NULL_HANDLE && hotPixelPairs > 0)
         recorder.alignment().setHotPixels(hotPixels, hotPixelPairs);
-    const auto frameCount = std::uint32_t(views.size());
+    const auto frameCount = std::uint32_t(norms.size());
     for (std::uint32_t pass = 0; pass < 4u; ++pass) {
         recorder.beginPass(pass);
-        if (!recorder.recordReference(views[ref], norms[ref])) return false;
+        const VkImageView refView = views(ref);
+        if (refView == VK_NULL_HANDLE) return false;
+        if (!recorder.recordReference(refView, norms[ref])) return false;
         for (std::uint32_t i = 0; i < frameCount; ++i) {
             if (i == ref) continue;
             // Upstream passes the frame index as the align-store slot.
-            if (!recorder.recordCompanionAlign(views[i], norms[i], i)) return false;
+            const VkImageView view = views(i);
+            if (view == VK_NULL_HANDLE) return false;
+            if (!recorder.recordCompanionAlign(view, norms[i], i)) return false;
             if (!recorder.recordCompanionMerge(frameCount, i)) return false;
         }
         if (!recorder.recordPassFinish(frameCount)) return false;
@@ -1081,19 +1093,26 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
         return fail(std::string("hdrplus geometry: ") + e.what());
     }
 
-    // Upload before allocating merge scratch. One reusable host-visible frame
-    // replaces the N-frame staging copy; input pixels and compute order are
-    // unchanged. Keep inputs in their own arena so the merge's UNDEFINED ->
-    // GENERAL transitions cannot discard the completed uploads.
+    // Inputs stream through two device slots instead of N resident frames:
+    // the reference lives in its own slot for the whole run, and companions
+    // share one slot refilled from the host frames right before use (the
+    // command buffer is split per companion; submission boundaries only
+    // schedule work, so output bits are unchanged). At 50 MP x8 this drops
+    // ~600 MB of the GPU peak (logcat 2026-11-12 lmkd system-wide kill).
+    // Inputs keep their own arena so the merge's UNDEFINED -> GENERAL
+    // transitions cannot discard the completed reference upload.
     RunArena inputArena(ctx->device, ctx->physical);
     const VkDeviceSize frameBytes = VkDeviceSize(W) * H * 2u;
-    std::vector<GpuImage*> inputs;
-    for (std::uint32_t i = 0; i < N; ++i) {
-        GpuImage* img = inputArena.image(VK_FORMAT_R16_UINT, W, H, err);
-        if (img == nullptr) return fail(err);
-        inputs.push_back(img);
+    const std::uint32_t refIdx = static_cast<std::uint32_t>(ref_index);
+    GpuImage* refSlot = inputArena.image(VK_FORMAT_R16_UINT, W, H, err);
+    if (refSlot == nullptr) return fail(err);
+    GpuImage* compSlot = inputArena.image(VK_FORMAT_R16_UINT, W, H, err);
+    if (compSlot == nullptr) return fail(err);
+    {
+        const std::vector<GpuImage*> refOnly{refSlot};
+        const uint16_t* refFrame[] = {frames[refIdx]};
+        if (!upload_frames(ctx, inputArena, refOnly, refFrame, frameBytes, err)) return fail(err);
     }
-    if (!upload_frames(ctx, inputArena, inputs, frames, frameBytes, err)) return fail(err);
 
     RunArena arena(ctx->device, ctx->physical);
     RunDescriptors desc(ctx->device);
@@ -1154,6 +1173,8 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
     }
     GpuBuffer* download = arena.staging(VkDeviceSize(W) * H * sizeof(float), err);
     if (download == nullptr) return fail(err);
+    GpuBuffer* frameStage = arena.staging(frameBytes, err);
+    if (frameStage == nullptr) return fail(err);
 
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkCommandBufferAllocateInfo cai{};
@@ -1241,16 +1262,66 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ctx->prof_pool, 0);
         }
 
-        std::vector<VkImageView> views;
         std::vector<RawNormalization> norms;
         for (std::uint32_t i = 0; i < N; ++i) {
-            views.push_back(inputs[i]->view);
             RawNormalization rn{};
             for (int k = 0; k < 4; ++k) rn.blackByPhase[k] = black_by_phase[i * 4 + k];
             rn.whiteLevel = white[i];
             norms.push_back(rn);
         }
-        const std::uint32_t ref = static_cast<std::uint32_t>(ref_index);
+        const std::uint32_t ref = refIdx;
+        // Companion loader: flush the recorded work, wait for it (the slot
+        // may still be read by it), refill the slot and keep recording.
+        std::uint32_t loaded = UINT32_MAX;
+        bool cmdOpen = true;
+        const FrameViews views = [&](std::uint32_t i) -> VkImageView {
+            if (i == ref) return refSlot->view;
+            if (i == loaded) return compSlot->view;
+            if (loaded != UINT32_MAX) {
+                if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
+                    err = "hdrplus: vkEndCommandBuffer (stream) failed";
+                    return VK_NULL_HANDLE;
+                }
+                cmdOpen = false;
+                VkSubmitInfo ssi{};
+                ssi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                ssi.commandBufferCount = 1;
+                ssi.pCommandBuffers = &cmd;
+                if (vkResetFences(ctx->device, 1, &fence) != VK_SUCCESS ||
+                    vkQueueSubmit(ctx->queue, 1, &ssi, fence) != VK_SUCCESS) {
+                    err = "hdrplus: vkQueueSubmit (stream) failed";
+                    return VK_NULL_HANDLE;
+                }
+                if (vkWaitForFences(ctx->device, 1, &fence, VK_TRUE, 60'000'000'000ull) != VK_SUCCESS) {
+                    vkDeviceWaitIdle(ctx->device);
+                    err = "hdrplus: GPU wait (stream) failed";
+                    return VK_NULL_HANDLE;
+                }
+                if (vkResetCommandBuffer(cmd, 0) != VK_SUCCESS ||
+                    vkBeginCommandBuffer(cmd, &bi) != VK_SUCCESS) {
+                    err = "hdrplus: vkBeginCommandBuffer (stream) failed";
+                    return VK_NULL_HANDLE;
+                }
+                cmdOpen = true;
+            }
+            std::memcpy(frameStage->mapped, frames[i], static_cast<size_t>(frameBytes));
+            VkMemoryBarrier pre{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+                                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                                VK_ACCESS_TRANSFER_WRITE_BIT};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 1, &pre, 0, nullptr, 0, nullptr);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {W, H, 1};
+            vkCmdCopyBufferToImage(cmd, frameStage->buffer, compSlot->image, VK_IMAGE_LAYOUT_GENERAL, 1,
+                                   &region);
+            VkMemoryBarrier post{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_ACCESS_SHADER_READ_BIT};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 1, &post, 0, nullptr, 0, nullptr);
+            loaded = i;
+            return compSlot->view;
+        };
         VkBuffer hotHandle = hotBuf != nullptr ? hotBuf->buffer : VK_NULL_HANDLE;
         // Buffers stay bound everywhere so descriptors never dangle;
         // use=false records mapOffset -1 (upstream path per dispatch).
@@ -1342,7 +1413,7 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
             vkCmdCopyImageToBuffer(cmd, cfa.image, VK_IMAGE_LAYOUT_GENERAL, download->buffer, 1,
                                    &region);
         }
-        ok = ok && vkEndCommandBuffer(cmd) == VK_SUCCESS;
+        ok = ok && cmdOpen && vkEndCommandBuffer(cmd) == VK_SUCCESS;
     } else {
         err = "hdrplus: vkBeginCommandBuffer failed";
     }
@@ -1352,7 +1423,8 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cmd;
-        ok = vkQueueSubmit(ctx->queue, 1, &si, fence) == VK_SUCCESS;
+        ok = vkResetFences(ctx->device, 1, &fence) == VK_SUCCESS &&
+             vkQueueSubmit(ctx->queue, 1, &si, fence) == VK_SUCCESS;
         if (!ok) err = "hdrplus: vkQueueSubmit failed";
     }
     if (ok) {

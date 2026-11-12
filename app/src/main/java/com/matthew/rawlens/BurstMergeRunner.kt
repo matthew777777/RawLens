@@ -119,9 +119,9 @@ internal class BurstMergeRunner(private val appContext: Context) {
             listener.onProgress(Progress(Stage.MERGE, 0, 1,
                 SystemClock.elapsedRealtime() - t0, null, inBytes, null))
             val completed = when (method) {
-                Method.MFSR -> runMfsr(take, frames, format, inputs, t0)
+                Method.MFSR -> runMfsr(take, frames, format, inputs, t0, listener)
                 Method.HDRPLUS -> runHdrPlus(take, frames, format, inputs, t0, listener)
-                Method.LKR -> runLkr(take, frames, format, inputs)
+                Method.LKR -> runLkr(take, frames, format, inputs, t0, listener)
             }
             listener.onProgress(Progress(Stage.SAVE, 1, 1,
                 SystemClock.elapsedRealtime() - t0, 0L, inBytes,
@@ -142,7 +142,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
         frames: List<OfflineBurstFrame>,
         format: CaptureFormat,
         inputs: Inputs,
-        t0: Long
+        t0: Long,
+        listener: Listener
     ): Completed {
         val captureId = take.lastModified()
         val ordered = MfsrMerge.prepareDecoded(frames)
@@ -152,6 +153,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
             ?: throw IllegalStateException("MFSR merge failed")
         try {
             val mergeMs = SystemClock.elapsedRealtime() - tMerge
+            reportSaving(listener, t0, take, merged.width, merged.height, format, Method.MFSR)
             val provenance = sharpMergeProvenance(merged, inputs.mfsr.copy(engine = MfsrEngine.MFSR), frames.size,
                 ordered.take(merged.keptCount).map { it.source.metadata }, "auto (sharpness and blur rejection)")
             val outputs = ArrayList<String>()
@@ -204,7 +206,9 @@ internal class BurstMergeRunner(private val appContext: Context) {
         take: File,
         frames: List<OfflineBurstFrame>,
         format: CaptureFormat,
-        inputs: Inputs
+        inputs: Inputs,
+        t0: Long,
+        listener: Listener
     ): Completed {
         val captureId = take.lastModified()
         val merged = LkrMerge.mergeDecoded(appContext, frames,
@@ -212,6 +216,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 zoom = inputs.mfsr.lkrZoom))
             ?: throw IllegalStateException("LK-Reloaded merge failed")
         try {
+            reportSaving(listener, t0, take, merged.width, merged.height, format, Method.LKR)
             val provenance = sharpMergeProvenance(merged, inputs.mfsr.copy(engine = MfsrEngine.LKR), frames.size,
                 frames.map { it.metadata }, "first frame of sampled burst")
             val outputs = ArrayList<String>()
@@ -249,6 +254,13 @@ internal class BurstMergeRunner(private val appContext: Context) {
         } finally {
             merged.release()
         }
+    }
+
+    private fun reportSaving(listener: Listener, t0: Long, take: File, width: Int, height: Int,
+                             format: CaptureFormat, method: Method) {
+        listener.onProgress(Progress(Stage.SAVE, 0, 1,
+            SystemClock.elapsedRealtime() - t0, null, take.length(),
+            estimateOutBytes(width, height, format, method)))
     }
 
     private fun runHdrPlus(

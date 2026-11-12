@@ -568,6 +568,7 @@ internal object MfsrMerge {
         verifiers: List<(Int, Int) -> Float> = emptyList()
     ): EngineOut? {
         val count = decoders.size
+        if (!fitsMemory(context, w, h)) return null
         try {
             SrpBridge.loadLibrary()
         } catch (e: UnsatisfiedLinkError) {
@@ -717,6 +718,45 @@ internal object MfsrMerge {
             SrpBridge.nativeDestroy(handle)
         }
     }
+
+    /**
+     * rawr-style arena gate (its MergeArenaEstimate): the engine streams
+     * frames just in time, so its footprint grows with geometry, not N —
+     * and at 50 MP it is ~4 GB of GPU/native memory, enough for lmkd to
+     * take the whole system down (logcat 2026-11-12 on the HDR+ twin).
+     * Checked against measured headroom before any work, so an oversized
+     * merge fails cleanly (caller's MFSR ERROR path) instead.
+     */
+    private fun fitsMemory(context: Context, w: Int, h: Int): Boolean {
+        val px = w.toDouble() * h
+        val native = px * NATIVE_BYTES_PER_PX * MergeMemoryBudget.ESTIMATE_MARGIN
+        val java = px * JAVA_BYTES_PER_PX * MergeMemoryBudget.ESTIMATE_MARGIN
+        val systemBudget = MergeMemoryBudget.systemHeadroomBytes(context)
+        val javaBudget = MergeMemoryBudget.javaHeapHeadroomBytes()
+        val mb = MergeMemoryBudget::mb
+        Log.i(LOG_TAG, "sharp merge memory plan ${w}x$h: native est ${mb(native)}MB " +
+            "budget ${systemBudget?.let { mb(it.toDouble()) } ?: "?"}MB, java est ${mb(java)}MB " +
+            "budget ${mb(javaBudget.toDouble())}MB")
+        if (systemBudget != null && native > systemBudget) {
+            Log.e(LOG_TAG, "sharp merge skipped: ${w}x$h needs ~${mb(native)}MB, " +
+                "only ${mb(systemBudget.toDouble())}MB free above the low-memory threshold")
+            return false
+        }
+        if (java > javaBudget) {
+            Log.e(LOG_TAG, "sharp merge skipped: ${w}x$h needs ~${mb(java)}MB Java heap, " +
+                "only ${mb(javaBudget.toDouble())}MB allocatable")
+            return false
+        }
+        return true
+    }
+
+    // Peak bytes per CFA pixel of tools/sr-pipeline VulkanPipeline.run at scale 1 (bayer):
+    // GPU residents means 3 + vars 3 + num 12 + den 12 + frame 4 + kernPre 4 + kernGrey 1
+    //   + grads 2 + cov 4 + S.3 map 1 = 46; pinned align spectra/statics ~4;
+    // native scratch frameBuf 4 + kernPre 4 + RGB output 12 = 20; init transients ~10.
+    private const val NATIVE_BYTES_PER_PX = 80.0
+    // Java heap rows: the decoded frame (4) + loop/grey rows (4) live together.
+    private const val JAVA_BYTES_PER_PX = 8.0
 
     private const val LOG_TAG = "MfsrMerge"
 }

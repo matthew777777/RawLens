@@ -99,7 +99,9 @@ class HdrPlusMerge(context: Context) {
         searchDistance: Int = HdrPlusSettings.SEARCH_DISTANCE,
         alignOnce: Boolean = true,
         /** Reference frame's key into the learned per-device noise model; null = burst estimate only. */
-        noiseSource: WaveletDenoiser.NoiseSource? = null
+        noiseSource: WaveletDenoiser.NoiseSource? = null,
+        /** Internal: true when [memoryPlan] already sized this call. */
+        budgetChecked: Boolean = false
     ): UnpackedRawCfa? {
         try {
             require(frames.size in 2..MAX_NATIVE_FRAMES) {
@@ -121,6 +123,14 @@ class HdrPlusMerge(context: Context) {
             if (HdrPlusVulkan.loadedShaderCount(handle) != HdrPlusVulkan.expectedShaderCount()) {
                 Log.w(LOG_TAG, "HDR+ shader modules incomplete, aborting merge")
                 return null
+            }
+            if (!budgetChecked) {
+                val plan = memoryPlan(width, height, frames.size, refIndex, settings)
+                    ?: return null
+                if (plan.window.first != 0 || plan.window.last != frames.lastIndex || plan.forceFast) {
+                    return mergeWithinBudget(plan, frames, refIndex, settings, tileSize,
+                        searchDistance, alignOnce, noiseSource)
+                }
             }
             val nativeBefore = MemoryLeakDiagnostics.nativeBufferOutstandingBytes()
             MemoryLeakDiagnostics.sample(
@@ -437,6 +447,71 @@ class HdrPlusMerge(context: Context) {
      * uploaded coordinates, while [RawNormalization.blackLevels] is in
      * sensor coordinates.
      */
+    /** Contiguous frame window (original indices) and path the memory budget allows. */
+    private data class MemoryPlan(val window: IntRange, val forceFast: Boolean)
+
+    /**
+     * Sizes the merge to what the device can hold right now. HDR+ has no
+     * tiling: every byte below is live at the GPU peak, and on unified
+     * memory it competes with the whole system — an unbounded 50 MP x8 HQ
+     * merge (~5 GB) drove lmkd to kill launcher, SystemUI and then RawLens
+     * (logcat 2026-11-12, RawLens RSS 3.3 GB at kill). The budget is the
+     * measured headroom above the kernel's kill threshold, never a constant.
+     * Degrades HQ -> fast, then trims frames around the reference; returns
+     * null (caller's HDR+ ERROR path) if even a 2-frame fast merge won't fit.
+     */
+    private fun memoryPlan(
+        width: Int, height: Int, frameCount: Int, refIndex: Int, settings: HdrPlusSettings
+    ): MemoryPlan? {
+        val budget = MergeMemoryBudget.systemHeadroomBytes(appContext)
+            ?: return MemoryPlan(0 until frameCount, false)
+        val px = width.toDouble() * height
+        fun bytes(n: Int, hq: Boolean): Double =
+            px * (FIXED_BYTES_PER_PX + n * PER_FRAME_BYTES_PER_PX +
+                (if (hq) HQ_SCRATCH_BYTES_PER_PX else FAST_SCRATCH_BYTES_PER_PX)) * MergeMemoryBudget.ESTIMATE_MARGIN
+        val wantsHq = if (settings.autoQuality) true else settings.highQuality
+        val hqFits = !wantsHq || bytes(frameCount, true) <= budget
+        if (hqFits) return MemoryPlan(0 until frameCount, false)
+        // Fast at full count, else the largest count that fits.
+        var n = frameCount
+        while (n >= HdrPlusSettings.MIN_MERGE_FRAMES && bytes(n, false) > budget) n--
+        val mb = MergeMemoryBudget::mb
+        if (n < HdrPlusSettings.MIN_MERGE_FRAMES) {
+            Log.e(LOG_TAG, "HDR+ skipped: ${width}x$height needs " +
+                "${mb(bytes(HdrPlusSettings.MIN_MERGE_FRAMES, false))}MB, budget ${mb(budget.toDouble())}MB")
+            return null
+        }
+        val start = (refIndex - n / 2).coerceIn(0, frameCount - n)
+        Log.w(LOG_TAG, "HDR+ memory budget ${mb(budget.toDouble())}MB: " +
+            "${if (wantsHq) "HQ->fast, " else ""}frames $frameCount->$n " +
+            "(est ${mb(bytes(n, false))}MB, HQ x$frameCount would need ${mb(bytes(frameCount, true))}MB)")
+        return MemoryPlan(start until start + n, forceFast = wantsHq)
+    }
+
+    /** Runs the budgeted merge and maps its decision back to the caller's indices. */
+    private fun mergeWithinBudget(
+        plan: MemoryPlan, frames: List<FrameInput>, refIndex: Int, settings: HdrPlusSettings,
+        tileSize: Int, searchDistance: Int, alignOnce: Boolean,
+        noiseSource: WaveletDenoiser.NoiseSource?
+    ): UnpackedRawCfa? {
+        val offset = plan.window.first
+        val sub = frames.subList(plan.window.first, plan.window.last + 1)
+        val subSettings = if (plan.forceFast) settings.copy(highQuality = false, autoQuality = false)
+        else settings
+        val out = merge(sub, (refIndex - offset).coerceIn(sub.indices), subSettings, tileSize,
+            searchDistance, alignOnce, noiseSource, budgetChecked = true) ?: return null
+        lastDecision = lastDecision?.let { d ->
+            val outside = frames.indices.filter { it !in plan.window }
+            d.copy(
+                keepIndices = d.keepIndices.map { it + offset },
+                droppedIndices = (d.droppedIndices.map { it + offset } + outside).sorted()
+            )
+        }
+        // Pair deltas are indexed by the sub-window; drop rather than misattribute.
+        lastMotion = null
+        return out
+    }
+
     private fun rotatedBlacks(frame: FrameInput, out: FloatArray, offset: Int) {
         val norm = frame.normalization
         val ox = frame.layout.sensorOriginX + frame.crop.left
@@ -452,5 +527,15 @@ class HdrPlusMerge(context: Context) {
         private const val U16_BYTES = 2L
         /** Upstream kMaxFrequencyFrames (align-store slots); spatial allows more. */
         const val MAX_NATIVE_FRAMES = 64
+        // Peak bytes per CFA pixel, from hdrplus_run.cpp allocations:
+        // fixed = native output 4 + Kotlin FloatArray 4 + download staging 4 + ref upload staging 2
+        //   + ref and companion R16 GPU slots 4 + companion frame staging 2 (inputs stream, see hdrplus_run.cpp);
+        // per frame = packed u16 copy 2;
+        // fast scratch = padded ref/comp 8 + aligned/blurs/accum/cfa 20 + pyramids/tmp ~4;
+        // HQ scratch = 3 RGBA32F half-res 12 + 3 double-width 24 + accum/cfa 8 + padded 8 + pyramids ~4.
+        private const val FIXED_BYTES_PER_PX = 20.0
+        private const val PER_FRAME_BYTES_PER_PX = 2.0
+        private const val FAST_SCRATCH_BYTES_PER_PX = 32.0
+        private const val HQ_SCRATCH_BYTES_PER_PX = 56.0
     }
 }

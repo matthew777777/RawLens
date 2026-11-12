@@ -8,6 +8,9 @@ import android.app.RecoverableSecurityException
 import android.content.SharedPreferences
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.widget.PopupWindow
@@ -39,6 +42,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * MERGES in Settings → Burst.
  */
 class MergesActivity : Activity() {
+    /** Same UI geometry at every system display-size / font-size setting. */
+    override fun attachBaseContext(newBase: android.content.Context) =
+        super.attachBaseContext(StableUiScale.wrap(newBase))
+
     private lateinit var listBox: LinearLayout
     private lateinit var detailLine: TextView
     private lateinit var progressLine: TextView
@@ -52,6 +59,14 @@ class MergesActivity : Activity() {
     private lateinit var developedJpeg: Button
     private lateinit var developedJxl: Button
     private lateinit var runButton: Button
+    private lateinit var processAllButton: Button
+
+    /** Remaining takes of a "Process all" run (null when no batch is active). */
+    private var batchQueue: ArrayDeque<Pair<File?, PublishedTake?>>? = null
+    private var batchTotal = 0
+    private var batchFailed = 0
+    private var batchOutputs = 0
+    private var batchLabel = ""
     private lateinit var zoomTitle: TextView
     private lateinit var zoomRow: LinearLayout
     private lateinit var zoomButtons: List<Pair<LkrZoom, Button>>
@@ -212,6 +227,10 @@ class MergesActivity : Activity() {
         runButton = optionButton("Select a burst").apply { setOnClickListener { runSelected() } }
         RawLensUi.styleButton(runButton, active = true)
         root.addView(runButton, LinearLayout.LayoutParams(-1, dp(56)).apply { topMargin = dp(12) })
+        processAllButton = optionButton("Process all").apply {
+            setOnClickListener { if (batchQueue != null) stopBatchAfterCurrent() else processAll() }
+        }
+        root.addView(processAllButton, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
         setContentView(root)
         // Decor view exists only after setContentView: applying earlier
         // crashes on API 30+ (null WindowInsetsController).
@@ -718,6 +737,12 @@ class MergesActivity : Activity() {
         runButton.isEnabled = hasSelection && !busy && validFrames
         if (!validFrames) methodHint.text = "Choose 2–${frameLimit()} source frames for ${methodLabel()}."
         runButton.text = if (busy) "Merging…" else if (hasSelection) "Merge with ${methodLabel()}" else "Select a burst"
+        val takeCount = rows.size + publishedRows.size
+        processAllButton.text = when {
+            batchQueue != null -> "Stop after this take"
+            else -> "Process all ($takeCount)"
+        }
+        processAllButton.isEnabled = if (batchQueue != null) true else !busy && takeCount > 0
         framesButton.text = when {
             frameSelection.manualIndices != null -> "Frames · ${frameSelection.manualIndices!!.size} selected  ›"
             frameSelection.count != null -> "Frames · ${minOf(frameSelection.count!!, frameLimit())} evenly spaced  ›"
@@ -744,7 +769,60 @@ class MergesActivity : Activity() {
         stylePick(developedJxl, developedFormat == DevelopedFormat.JXL)
     }
 
-    private fun runSelected() {
+    /**
+     * Merges every listed take in turn, each with its own saved per-take
+     * options (the same ones selecting it would load). Failures are counted
+     * and skipped so one bad take does not stop the batch.
+     */
+    private fun processAll() {
+        if (mergeRunning.get() || inspectingFrames) return
+        val queue = ArrayDeque<Pair<File?, PublishedTake?>>()
+        rows.forEach { queue.add(it.file to null) }
+        publishedRows.forEach { queue.add(null to it) }
+        if (queue.isEmpty()) return
+        batchQueue = queue
+        batchTotal = queue.size
+        batchFailed = 0
+        batchOutputs = 0
+        runNextInBatch()
+    }
+
+    private fun stopBatchAfterCurrent() {
+        batchQueue?.clear()
+        processAllButton.text = "Stopping after this take…"
+        processAllButton.isEnabled = false
+    }
+
+    private fun runNextInBatch() {
+        val queue = batchQueue ?: return
+        val next = queue.removeFirstOrNull()
+        if (next == null || isFinishing || isDestroyed) {
+            val done = batchTotal - queue.size
+            batchQueue = null
+            batchLabel = ""
+            refreshOptions()
+            statusLine.text = "Processed ${done - batchFailed} take${if (done - batchFailed == 1) "" else "s"}" +
+                (if (batchFailed > 0) " • $batchFailed failed" else "") +
+                " • $batchOutputs output${if (batchOutputs == 1) "" else "s"}"
+            return
+        }
+        choose(next.first, next.second)
+        val index = batchTotal - queue.size
+        batchLabel = "Take $index/$batchTotal • "
+        val validFrames = frameSelection.manualIndices?.size?.let { it in 2..frameLimit() } ?: true
+        if (!validFrames) {
+            batchFailed++
+            runNextInBatch()
+            return
+        }
+        runSelected { ok, outputs ->
+            if (!ok) batchFailed++
+            batchOutputs += outputs
+            runNextInBatch()
+        }
+    }
+
+    private fun runSelected(onFinished: ((ok: Boolean, outputs: Int) -> Unit)? = null) {
         val published = selectedPublished
         val stagedNow = selected
         if (stagedNow == null && published == null) return
@@ -773,19 +851,16 @@ class MergesActivity : Activity() {
                 // Published takes have no local path: copy back into the
                 // stage dir first (the published original is kept).
                 val take = if (published != null) {
-                    runOnUiThread { progressLine.text = "${published.displayName}\nCopying to stage…" }
+                    runOnUiThread { progressLine.text = "$batchLabel${published.displayName}\nCopying to stage…" }
                     BurstMergeTakes.restage(contentResolver, published, stageDir())
                 } else {
                     requireNotNull(stagedNow)
                 }
                 val result = BurstMergeRunner(workContext).run(take, selectedMethod, selectedFormat, inputs) { progress ->
-                    runOnUiThread {
-                        progressLine.text = progressText(take, progress)
-                        progressBar.isIndeterminate = progress.total <= 0
-                        if (progress.total > 0) progressBar.progress = (100L * progress.done / progress.total).toInt()
-                    }
+                    runOnUiThread { showProgress(take, progress, SystemClock.elapsedRealtime()) }
                 }
                 runOnUiThread {
+                    stopProgressTicker()
                     reloadTakes()
                     mergeRunning.set(false)
                     progressBar.visibility = View.GONE
@@ -801,14 +876,17 @@ class MergesActivity : Activity() {
                             "${result.width}×${result.height} • " +
                             "${result.mergeMs}ms merge • " +
                             result.outputs.joinToString(" • ")
+                    onFinished?.invoke(true, result.outputs.size)
                 }
             } catch (failure: Exception) {
                 runOnUiThread {
+                    stopProgressTicker()
                     mergeRunning.set(false)
                     progressBar.visibility = View.GONE
                     renderList()
                     progressLine.text = "Merge failed"
                     statusLine.text = (failure.message ?: failure.javaClass.simpleName).take(160)
+                    onFinished?.invoke(false, 0)
                 }
             } finally {
                 ProcessingWork.end(workContext)
@@ -816,13 +894,57 @@ class MergesActivity : Activity() {
         }, "BurstMerge").start()
     }
 
-    private fun progressText(take: File, progress: BurstMergeRunner.Progress): String {
-        val pct = if (progress.total > 0) (100 * progress.done / progress.total) else 0
-        val eta = progress.etaMs?.let { " • ETA ${it / 1000}s" } ?: ""
+    /**
+     * The runner reports only at stage boundaries during MERGE/SAVE (one
+     * native call each), so a 1 s ticker keeps the elapsed time moving and
+     * those stages show an indeterminate bar instead of a frozen 0%.
+     */
+    private val progressHandler = Handler(Looper.getMainLooper())
+    private var progressTicker: Runnable? = null
+
+    private fun showProgress(take: File, progress: BurstMergeRunner.Progress, receivedAt: Long) {
+        val pending = progress.total <= 0 || progress.done < progress.total &&
+            progress.stage != BurstMergeRunner.Stage.DECODE
+        val extraMs = SystemClock.elapsedRealtime() - receivedAt
+        progressLine.text = progressText(take, progress, extraMs, pending)
+        progressBar.isIndeterminate = pending
+        if (!pending) progressBar.progress = (100L * progress.done / progress.total).toInt()
+        progressTicker?.let { progressHandler.removeCallbacks(it) }
+        val tick = Runnable { if (mergeRunning.get()) showProgress(take, progress, receivedAt) }
+        progressTicker = tick
+        progressHandler.postDelayed(tick, 1000L)
+    }
+
+    private fun stopProgressTicker() {
+        progressTicker?.let { progressHandler.removeCallbacks(it) }
+        progressTicker = null
+    }
+
+    override fun onDestroy() {
+        stopProgressTicker()
+        super.onDestroy()
+    }
+
+    private fun progressText(
+        take: File,
+        progress: BurstMergeRunner.Progress,
+        extraMs: Long,
+        pending: Boolean
+    ): String {
         val est = progress.outEstimateBytes?.let { " • est ${"%.1f".format(it / 1e6)}MB" } ?: ""
         val mb = progress.inBytes / 1e6
-        return "${take.nameWithoutExtension}\n${progress.stage} ${progress.done}/${progress.total} " +
-            "($pct%) • ${progress.elapsedMs / 1000}s$eta • in ${"%.1f".format(mb)}MB$est"
+        val elapsedS = (progress.elapsedMs + extraMs) / 1000
+        val stage = when (progress.stage) {
+            BurstMergeRunner.Stage.DECODE -> "Decoding"
+            BurstMergeRunner.Stage.MERGE -> "Merging"
+            BurstMergeRunner.Stage.SAVE -> "Saving"
+        }
+        val counter = if (pending) "…" else {
+            val pct = 100 * progress.done / progress.total
+            val eta = progress.etaMs?.let { " • ETA ${maxOf(0L, it - extraMs) / 1000}s" } ?: ""
+            " ${progress.done}/${progress.total} ($pct%)$eta"
+        }
+        return "$batchLabel${take.nameWithoutExtension}\n$stage$counter • ${elapsedS}s • in ${"%.1f".format(mb)}MB$est"
     }
 
     private fun title(text: String): TextView = TextView(this).apply {
