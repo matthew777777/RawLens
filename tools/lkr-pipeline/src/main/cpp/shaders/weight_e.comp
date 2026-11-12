@@ -20,7 +20,18 @@ void main() {
   int iu = clamp(ii - 2, 0, pc.h - 1), id = clamp(ii + 2, 0, pc.h - 1);
   float gx = (y[base + ii * pc.w + jr] - y[base + ii * pc.w + jl]) * 0.25;
   float gy = (y[base + id * pc.w + jj] - y[base + iu * pc.w + jj]) * 0.25;
-  float edge = pc.f3 * pc.f3 * (gx * gx + gy * gy);
+  // Thin ridges (wires, railing bars) have ~0 central gradient but the same
+  // misregistration sensitivity as an edge: also use the same-colour 3x3 range,
+  // scaled like the gradient (a step H gives H/4 for both), so static lines
+  // are not rejected as motion. Step edges keep their old tolerance.
+  float lo = y[t], hi = lo;
+  for (int di = -2; di <= 2; di += 2)
+    for (int dj = -2; dj <= 2; dj += 2) {
+      float v = y[base + clamp(ii + di, 0, pc.h - 1) * pc.w + clamp(jj + dj, 0, pc.w - 1)];
+      lo = min(lo, v); hi = max(hi, v);
+    }
+  float rg = (hi - lo) * 0.25;
+  float edge = pc.f3 * pc.f3 * max(gx * gx + gy * gy, rg * rg);
   float var = max(pc.rob_a * max(y[t], 0.0) + pc.rob_b + edge, 1e-12);
   float rv = r[t];
   e[t] = rv * rv / var;

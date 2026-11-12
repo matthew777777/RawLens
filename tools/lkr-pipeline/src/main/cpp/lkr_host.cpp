@@ -159,6 +159,22 @@ void NoiseAB(const float* raw, int h, int w, float* a_out, float* b_out) {
     Y.push_back(std::max(quantile(sv, 0.05) / 0.67, 1e-10));
     Wt.push_back(std::sqrt(double(sm.size())));
   }
+  // Noise variance never falls as the level rises. A bin at < half the variance
+  // of every brighter bin is corrupt (crushed / smoothed shadows); with the 1/Y
+  // weights it alone pulled b to the 1e-10 floor (074919: 1.2e-7 vs 1.5e-6 next),
+  // underestimating shadow noise ~3.6x and rejecting static detail as motion.
+  {
+    std::vector<double> X2, Y2, W2;
+    double floor_above = 1e300;
+    std::vector<bool> keep(X.size(), true);
+    for (size_t i = X.size(); i-- > 0;) {
+      if (Y[i] < 0.5 * floor_above) keep[i] = floor_above == 1e300;
+      floor_above = std::min(floor_above, Y[i]);
+    }
+    for (size_t i = 0; i < X.size(); ++i)
+      if (keep[i]) { X2.push_back(X[i]); Y2.push_back(Y[i]); W2.push_back(Wt[i]); }
+    if (X2.size() >= 2) { X.swap(X2); Y.swap(Y2); Wt.swap(W2); }
+  }
   // Weighted NNLS on rows (X, 1) * (Wt/Y) = Wt: 2 unknowns, so enumerate the
   // active sets {a,b}, {a}, {b} and keep the best feasible one.
   auto fit = [&](bool ua, bool ub, double* a, double* b) {
