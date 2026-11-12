@@ -8,7 +8,6 @@ import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.os.Build
 import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.params.BlackLevelPattern
 import android.media.Image
 import android.os.SystemClock
 
@@ -170,7 +169,7 @@ internal class LiveScopes(
         val dynamicBlack = (physical?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
             ?: result?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL))
             ?.takeIf { it.size == 4 && it.all(Float::isFinite) }
-            ?.let { levels -> BlackLevelPattern(IntArray(4) { levels[it].toInt() }) }
+            ?.let { levels -> IntArray(4) { levels[it].toInt() } }
         val scanStartNs = System.nanoTime()
         guard.run("scope") {
             if (mode == ScopeMode.WAVEFORM) {

@@ -148,14 +148,16 @@ android {
 
     defaultConfig {
         applicationId = "com.matthew.rawlens"
-        // Floor is Android 11: the viewfinder (RGBA8) and stills
-        // (GLES/CPU) pipelines run there, and the startup VulkanSupport
+        manifestPlaceholders["appLabel"] = "RawLens"
+        // Floor is Android 10 (lowered from 11 on 2026-11-12 for a Poco M3
+        // on Android 10; API 30+ call sites are SDK-guarded, but the camera
+        // pipelines are not yet validated on 10). The startup VulkanSupport
         // gate informs users whose device fails it instead of failing
         // silently. The GPU record/RCD path additionally needs RGBA_FP16
         // HardwareBuffers (Android 13+); those call sites guard with
         // VulkanSupport.isFp16BufferSupported and fall back with a
         // user-visible status. Do not raise without re-checking.
-        minSdk = 30
+        minSdk = 29
         targetSdk = 35
         versionCode = appVersionCode
         versionName = appVersionName
@@ -266,6 +268,10 @@ android {
 
     buildTypes {
         release {
+            if (project.hasProperty("lapisStandalone")) {
+                applicationIdSuffix = ".redmi"
+                manifestPlaceholders["appLabel"] = "RawLens Redmi"
+            }
             // R8 for every release (GitHub and F-Droid ship the same code):
             // dex 9.8 -> 1.4 MB. JNI entry points and layout-inflated views
             // are covered by proguard-rules.pro; enum names (stored in

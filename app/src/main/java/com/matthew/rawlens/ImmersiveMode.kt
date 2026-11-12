@@ -34,6 +34,8 @@ object ImmersiveMode {
      * @param sdkInt injectable only for JVM tests (`Build.VERSION.SDK_INT`
      * is 0 under `unitTests.isReturnDefaultValues`).
      */
+    // NewApi: guarded by the injectable sdkInt check below, which lint cannot follow.
+    @android.annotation.SuppressLint("NewApi")
     fun apply(window: Window, sdkInt: Int = Build.VERSION.SDK_INT) {
         if (sdkInt >= Build.VERSION_CODES.R) {
             WindowCompat.setDecorFitsSystemWindows(window, false)

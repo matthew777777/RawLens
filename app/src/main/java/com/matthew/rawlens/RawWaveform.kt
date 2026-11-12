@@ -4,7 +4,6 @@
 package com.matthew.rawlens
 
 import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.params.BlackLevelPattern
 import android.media.Image
 import java.nio.ByteOrder
 import kotlin.math.pow
@@ -84,7 +83,7 @@ object RawWaveformSampler {
          * the linear-RAW (DNG) path ignores it, staying bit-exact.
          */
         exposureEv: Double = 0.0,
-        dynamicBlack: BlackLevelPattern? = null,
+        dynamicBlack: IntArray? = null,
         dynamicWhite: Int? = null
     ): RgbWaveform? {
         val plane = image.planes.singleOrNull() ?: return null
@@ -93,7 +92,12 @@ object RawWaveformSampler {
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
             ?: return null
         if (cfa !in 0..3) return null
-        val black = dynamicBlack ?: characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
+        // Keep dynamic levels as values: constructing BlackLevelPattern is unavailable
+        // on older Android runtimes (including Android 11).
+        val black = dynamicBlack?.takeIf { it.size == 4 }
+            ?: characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)?.let { pattern ->
+                IntArray(4) { i -> pattern.getOffsetForIndex(i % 2, i / 2) }
+            }
         val white = (dynamicWhite?.takeIf { it > 0 }
             ?: characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL))
             ?.coerceAtLeast(1) ?: return null
@@ -110,7 +114,7 @@ object RawWaveformSampler {
         image: Image,
         plane: Image.Plane,
         cfa: Int,
-        black: BlackLevelPattern?,
+        black: IntArray?,
         white: Int,
         scopeLut: FloatArray?,
         exposureEv: Double
@@ -135,7 +139,7 @@ object RawWaveformSampler {
         val bulkRows = plane.pixelStride == 2 && plane.rowStride % 2 == 0
         val rowEven = if (bulkRows) ShortArray(image.width) else null
         val rowOdd = if (bulkRows) ShortArray(image.width) else null
-        val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
+        val blackLut = IntArray(4) { i -> black?.getOrNull(i) ?: 0 }
         val invLut = DoubleArray(4) { i -> 1.0 / (white - blackLut[i]).coerceAtLeast(1) }
         val colorLut = IntArray(4) { i -> colorAt(cfa, i % 2, i / 2) }
         // Hoisted out of the pixel loop: 2^EV is the scene-referred gain
