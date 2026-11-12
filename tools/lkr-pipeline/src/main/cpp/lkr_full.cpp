@@ -244,7 +244,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   t = now_ms();
   const PriorFn prior = make_prior ? make_prior(S.a, S.b, S.sigma, wb) : PriorFn();
   // The DCT x-step needs the solved tile (s * tile) to be a multiple of 4.
-  const int tile = std::min({prm.tile, g.w, g.h}) & ((prm.solve.dct_prior && prm.s == 1) ? ~3 : ~1);
+  const int tile = std::min({prm.tile, g.w, g.h}) & (((prm.solve.dct_prior || prm.solve.dct_fallback) && prm.s == 1) ? ~3 : ~1);
   const int ov = std::min(prm.overlap, tile / 4) & ~1;
   const int step = tile - ov;
   auto starts = [&](int len) {

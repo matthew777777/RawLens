@@ -271,7 +271,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     std::memcpy(z0.map, up.data(), nHR * 4);
   }
 
-  const bool dct = prm.dct_prior && !prior;
+  const bool dct = (prm.dct_prior || prm.dct_fallback) && !prior;   // pipelines and buffers
   if (dct && ((H & 3) || (W & 3))) return LKR_FAIL("dct x-step needs H, W % 4 == 0");
   const int dct_ny = dct ? (H - 8) / 4 + 1 : 0, dct_nx = dct ? (W - 8) / 4 + 1 : 0;
   Buffer& dct_ns = cached(dct ? size_t(H) * W * 4 : 16), &dct_iw = cached(dct ? size_t(H + W + 8) * 4 : 16),
@@ -568,11 +568,13 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       temporal_stale = true;
     }
     const bool use_prior = prior_here(t);
-    if (use_prior && !prior && !dct) gpu_->copy(z, x, nHR * 4);    // 'none': x = z
-    if (use_prior && (prior || dct)) gpu_->copy(z, zc, nHR * 4);            // prior input to the CPU side
+    // dct_fallback without dct_prior: one x-step, after the last iteration, for the frames lost only.
+    const bool dct_t = dct && (prm.dct_prior || t == last_prior);
+    if (use_prior && !prior && !dct_t) gpu_->copy(z, x, nHR * 4);    // 'none': x = z
+    if (use_prior && (prior || dct_t)) gpu_->copy(z, zc, nHR * 4);            // prior input to the CPU side
     // Weighted coverage feeds the x-step's noise map and, after the last one, the finishing
     // (FinishLook, debug maps): without an x-step only that last map is ever read.
-    const bool cov_now = use_prior && eq && q.rob_on > 0.5f && (prior || dct || t == last_prior);
+    const bool cov_now = use_prior && eq && q.rob_on > 0.5f && (prior || dct_t || t == last_prior);
     if (cov_now) {
       d_scatter(sSW, sSWq, q);
       Push q1 = q; q1.mode = 1;
@@ -616,7 +618,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
         }
       }
     }
-    if (use_prior && (prior || dct)) {                             // PnP x-step
+    if (use_prior && (prior || dct_t)) {                             // PnP x-step
       const double tp = now_ms();
       const float* ns = nullptr;
       if (!nscale.empty()) ns = nscale.data();
@@ -639,13 +641,33 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
         }
       }
       trace("iter" + std::to_string(t) + "_z", zc.as<float>(), nHR);
-      if (dct) {
+      // Fallback cleanup: remove only the noise a pixel has in excess of fully merged ones
+      // (variance factor ns^2 - 1); tiles where every frame was used skip the pass.
+      std::vector<float> nfb;
+      bool fb_skip = false;
+      if (dct && !prm.dct_prior) {
+        float mx = 0.0f;
+        if (ns) {
+          nfb.resize(size_t(H) * W);
+          for (size_t i = 0; i < nfb.size(); ++i) {
+            nfb[i] = std::sqrt(std::max(ns[i] * ns[i] - 1.0f, 0.0f));
+            mx = std::max(mx, nfb[i]);
+          }
+          ns = nfb.data();
+        }
+        fb_skip = mx <= 0.0f;
+        if (fb_skip) std::memcpy(xc.map, zc.map, nHR * 4);
+      }
+      if (fb_skip) {
+      } else if (dct) {
         if (ns) std::memcpy(dct_ns.map, ns, size_t(H) * W * 4);
-        const float sg = sig[t] * prm.prior_gain;
+        const float sg = prm.dct_prior ? sig[t] * prm.prior_gain
+                                       : prm.sigma_noise / std::sqrt(float(K));   // fallback: merged level; x (ns^2 - 1) = the excess
         const float denom = prm.noise_a * 0.18f + prm.noise_b;
         DctPush d{H, W, dct_ny, dct_nx, 0, 0, H / 4, ns ? 1 : 0, sg * sg,
                   denom > 0 ? prm.noise_a / denom : 0.0f, denom > 0 ? prm.noise_b / denom : 1.0f,
-                  prm.dct_luma * prm.dct_luma, prm.dct_chroma * prm.dct_chroma,
+                  prm.dct_prior ? prm.dct_luma * prm.dct_luma : 0.0f,   // fallback: colour only, luma grain untouched
+                  prm.dct_chroma * prm.dct_chroma,
                   prm.wb[0], prm.wb[1], prm.wb[2], prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma};
         gpu_->begin();
         gpu_->fill(x, 0);

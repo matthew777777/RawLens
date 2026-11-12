@@ -37,6 +37,9 @@ struct SolveParams {
   std::vector<int> prior_at;   // empty = every iteration
   // Non-learned x-step on the prior iterations (shaders/dct_x.comp). H and W must be multiples of 4.
   bool dct_prior = false;
+  // Without dct_prior: one DCT pass at the end, only on tiles that lost frames and only for the
+  // noise those pixels have in excess of fully merged ones (EXPERIMENT).
+  bool dct_fallback = false;
   float dct_luma = 1.0f, dct_chroma = 16.0f;   // luma 1.5-2 flattened asphalt and foliage at 2x; colour carries the cleaning   // shrinkage thresholds, multiples of the noise level
   // Dark blocks (mean luma below dct_dark_level, full effect below a quarter) use their measured
   // AC energy as the noise level when it exceeds the model, up to dct_dark_cap x (1 = off).
