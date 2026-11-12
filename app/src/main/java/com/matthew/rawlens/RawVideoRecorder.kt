@@ -191,6 +191,7 @@ internal class RawVideoRecorder(
      */
     @Volatile private var vfView: VfEngine? = null
     private var vfChars: CameraCharacteristics? = null
+    @Volatile private var vfLevels: DngMetadataOverrides? = null
 
     fun attachViewfinder(view: VfEngine?) {
         vfView = view
@@ -457,6 +458,12 @@ internal class RawVideoRecorder(
         val chars = videoRoute.characteristics
         lapisLease?.let { LapisRootSession.bind(chars,it.spec) }
         vfChars = chars
+        // DCG14: frames are RAW14 but the HAL reports 10-bit static levels and
+        // the VF gets no CaptureResult here, so it would clip everything white.
+        vfLevels = if (LapisRootSession.spec(chars)?.dcg == true)
+            EncodedVideoRecorder.blackWhite(chars, null).let { (lv, wh) ->
+                DngMetadataOverrides(blackLevels = lv.map { it.toDouble() }, whiteLevel = wh.toDouble())
+            } else null
         val sensorCfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         binActive = binningActive(binning, sensorCfa, frameSize.width)
         binRgbActive = binningRgb
@@ -602,6 +609,7 @@ internal class RawVideoRecorder(
                     try {
                         RawImageOwnership.adopt(img, rd)
                         try {
+                            vfLevels?.let { view.setSensorLevels(it) }
                             view.offer(img, chars, null)
                             previewFramesOffered++
                         } catch (e: Exception) {
