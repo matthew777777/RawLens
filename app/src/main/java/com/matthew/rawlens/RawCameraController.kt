@@ -4713,20 +4713,20 @@ class RawCameraController(
         val extended = LapisRootProfile.enabled(context) && "0" in rawCameraIds
         val mode = LapisRootProfile.mode(context)
         val options=rawCameraIds.map { id ->
-            if(extended && id=="0") LensOption(id,"1× · 12.5 MP",id==selectedCameraId && mode==LapisRootProfile.Mode.NORMAL,
+            if(extended && id=="0") LensOption(id,"${mainLabel()} · 12.5 MP",id==selectedCameraId && mode==LapisRootProfile.Mode.NORMAL,
                 "normal","Main camera, 12.5 megapixel RAW")
             else LensOption(id,zoomLabel(id),id==selectedCameraId)
         }.toMutableList()
         if(extended) {
             val at=options.indexOfFirst { it.cameraId=="0" }+1
-            options.add(at,LensOption("0","1× · 50 MP",selectedCameraId=="0" && mode==LapisRootProfile.Mode.FULL,
+            options.add(at,LensOption("0","${mainLabel()} · 50 MP",selectedCameraId=="0" && mode==LapisRootProfile.Mode.FULL,
                 "50mp","Main camera, 50 megapixel RAW"))
-            options.add(at+1,LensOption("0","2× · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X,
+            options.add(at+1,LensOption("0","${mainLabel(2f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X,
                 "2x","Main camera, 2× in-sensor crop RAW"))
             options.add(at+2,LensOption("0","4× · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_4X,
                 "4x","Main camera, 4× in-sensor crop RAW"))
         }
-        if(extended) options.add(LensOption("0","1× · DCG14",selectedCameraId=="0" && mode==LapisRootProfile.Mode.DCG14,
+        if(extended) options.add(LensOption("0","${mainLabel()} · DCG14",selectedCameraId=="0" && mode==LapisRootProfile.Mode.DCG14,
             "dcg14","DCG/DSG 14-bit RAW, automatic exposure, 30 fps sensor mode"))
         if(photoControlsBeforeVideo!=null) options.removeAll { it.readout=="50mp" || it.readout=="2x" }
         return disambiguatedLensLabels(options)
@@ -7521,7 +7521,13 @@ class RawCameraController(
         // 1× is the rear lens nearest a main-camera field of view, never camera ID "0" by
         // assumption and never an ultra-wide just because no main lens is selected.
         val rear = rawCameraIds.filter { !isFrontCamera(it) }.map(::opticalMetric)
-        return LensZoom.label(opticalMetric(cameraId), rear)
+        return LensZoom.display(opticalMetric(cameraId), rear, LensZoom.focalLabels(context))
+    }
+
+    /** Label for main camera "0" scaled by an in-sensor [crop], in the user's switcher style. */
+    private fun mainLabel(crop: Float = 1f): String {
+        val rear = rawCameraIds.filter { !isFrontCamera(it) }.map(::opticalMetric)
+        return if (crop == 1f) zoomLabel("0") else LensZoom.display(opticalMetric("0"), rear, LensZoom.focalLabels(context), crop)
     }
 
     private fun cameraAccessReason(failure: CameraAccessException): String = when (failure.reason) {

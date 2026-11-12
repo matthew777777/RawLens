@@ -158,7 +158,8 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     val available = lenses.filter { it.kind != LensRouteKind.UNAVAILABLE }
     val rearMetrics = available.filter { it.role != LensRole.FRONT }.map { it.opticalMetric }
     fun zoomOf(lens: DiscoveredLens): String =
-        if (lens.role == LensRole.FRONT) "F" else LensZoom.label(lens.opticalMetric, rearMetrics)
+        if (lens.role == LensRole.FRONT) "F"
+        else LensZoom.display(lens.opticalMetric, rearMetrics, LensZoom.focalLabels(this))
     val sameLens: Map<String, List<DiscoveredLens>> = available.groupBy(::opticFingerprint)
         .values.flatMap { routes -> routes.map { it.id to routes } }.toMap()
     val recommended = recommendedLensIds(lenses)
@@ -209,6 +210,26 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         setTextColor(getColor(R.color.text_secondary))
         textSize = 12f
         setPadding(0, dp(4), 0, dp(8))
+    })
+    // Switcher label style: zoom factors (0.6×, 1×, 3×) or 35 mm-equivalent focal lengths.
+    val zoomTitles = mutableListOf<Pair<TextView, DiscoveredLens>>()
+    container.addView(LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, 0, 0, dp(8))
+        addView(TextView(context).apply {
+            text = "Show focal length (24mm) instead of zoom (1×)"
+            setTextColor(getColor(R.color.text_primary))
+            textSize = 13f
+        }, LinearLayout.LayoutParams(0, wrapContent(), 1f))
+        addView(SettingsSwitch(context).apply {
+            isChecked = LensZoom.focalLabels(this@showLensSelection)
+            setOnCheckedChangeListener { _, focal ->
+                lensPreferences().edit().putBoolean(LensZoom.KEY_FOCAL_LABELS, focal).apply()
+                zoomTitles.forEach { (view, lens) -> view.text = "${zoomOf(lens)} · ${lens.title}" }
+                refreshLensSwitcher()
+            }
+        })
     })
 
     val quickRow = LinearLayout(this).apply {
@@ -318,6 +339,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         }
         topRow.addView(TextView(this).apply {
             text = if (lens.kind == LensRouteKind.UNAVAILABLE) lens.title else "${zoomOf(lens)} · ${lens.title}"
+            if (lens.kind != LensRouteKind.UNAVAILABLE) zoomTitles += this to lens
             setTextColor(getColor(R.color.text_primary))
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD

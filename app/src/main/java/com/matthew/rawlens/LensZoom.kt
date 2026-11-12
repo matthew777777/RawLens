@@ -28,6 +28,22 @@ internal object LensZoom {
         return if (nearest != null && nearest * 36f in MAIN_RANGE_MM) nearest else MAIN_METRIC
     }
 
+    /** Main-preferences key: switcher shows 35 mm-equivalent focal lengths instead of zoom. */
+    const val KEY_FOCAL_LABELS = "lens_labels_focal_mm"
+
+    fun focalLabels(context: android.content.Context): Boolean =
+        context.getSharedPreferences(SettingsBackup.STORE_MAIN, android.content.Context.MODE_PRIVATE)
+            .getBoolean(KEY_FOCAL_LABELS, false)
+
+    /** "24mm" from the optical metric (focal / sensor width × 36 mm), times [crop]. */
+    fun focalLabel(metric: Float, crop: Float = 1f): String? =
+        if (isKnown(metric)) "${round(metric * 36f * crop).toInt()}mm" else null
+
+    /** Zoom or focal-length label, per the user's switcher style. */
+    fun display(metric: Float, rearMetrics: Collection<Float>, focal: Boolean, crop: Float = 1f): String =
+        (if (focal) focalLabel(metric, crop) else null)
+            ?: if (crop == 1f) label(metric, rearMetrics) else "${round(crop).toInt()}×"
+
     /** "?" marks a lens whose optics the camera does not report, unless it is the only one. */
     fun label(metric: Float, rearMetrics: Collection<Float>): String {
         if (!isKnown(metric)) return if (rearMetrics.size <= 1) "1×" else "?"
