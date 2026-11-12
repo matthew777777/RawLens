@@ -7,6 +7,10 @@ import android.view.HapticFeedbackConstants
 import android.view.View
 import android.widget.TextView
 
+internal fun MainActivity.redmiRootMode(): LapisRootProfile.Mode =
+    if (controllerIfReady?.activeCameraId() == "0" && (!isVideoMode || LapisRootProfile.mode(this)==LapisRootProfile.Mode.DCG14)) LapisRootProfile.mode(this)
+    else LapisRootProfile.Mode.NORMAL
+
 /**
  * LK-R zoom chip (viewfinder bottom-right corner, opposite the scope;
  * independent of the lens count) and matching preview zoom. The chip shows only

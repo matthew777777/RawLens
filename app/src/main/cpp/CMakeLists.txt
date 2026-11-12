@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(dngCreator)
 
+add_library(rawLensLapis SHARED lapis_root_camera_jni.cpp)
+target_link_options(rawLensLapis PRIVATE "-Wl,-z,max-page-size=16384")
+
 # Independently implemented FP32 public-source RCD validation route. No retired
 # backend or optional FP16 arithmetic. Tile-local product fusion is gated against
 # the separate public baseline. Shader source is generated

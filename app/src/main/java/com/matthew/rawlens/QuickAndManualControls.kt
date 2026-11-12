@@ -223,7 +223,7 @@ internal fun MainActivity.refreshLensSwitcher() {
     if (options.isEmpty()) return
     // Rebuilding the switcher view hierarchy on every controls publication is
     // wasted layout work; only rebuild when the lens set or selection changed.
-    val signature = options.joinToString("|") { "${it.cameraId}:${it.selected}" }
+    val signature = options.joinToString("|") { "${it.cameraId}:${it.readout}:${it.selected}" }
     if (signature == lastLensSwitcherSignature && lensSwitcher.childCount > 0) return
     lastLensSwitcherSignature = signature
     lensSwitcher.removeAllViews()
@@ -239,7 +239,15 @@ internal fun MainActivity.refreshLensSwitcher() {
     var selectedButton: View? = null
     options.forEachIndexed { index, option ->
         val button = RotatingTextView(this).apply {
-            text = option.label
+            // Tied zoom labels carry " · <camera id>": stack the id under the zoom so
+            // it stays readable inside the disc instead of being clipped off.
+            val zoom = option.label.substringBefore(" · ")
+            val routeId = option.label.substringAfter(" · ", "")
+            text = if (routeId.isEmpty()) zoom else android.text.SpannableString("$zoom\n$routeId").apply {
+                setSpan(android.text.style.RelativeSizeSpan(0.62f), zoom.length + 1, length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            setLineSpacing(0f, 0.85f)
             setTextColor(getColor(if (option.selected) R.color.accent else R.color.text_secondary))
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, if (option.selected) 13f else 12f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -252,12 +260,13 @@ internal fun MainActivity.refreshLensSwitcher() {
             minimumWidth = discSize
             minimumHeight = discSize
             setPadding(0, 0, 0, 0)
-            maxLines = 1
+            maxLines = if (routeId.isEmpty()) 1 else 2
             if (!option.selected) {
                 scaleX = 0.88f
                 scaleY = 0.88f
             }
-            contentDescription = "Switch to ${option.label} lens"
+            contentDescription = if (routeId.isEmpty()) "Switch to $zoom lens" else "Switch to $zoom lens, camera $routeId"
+            option.description?.let { contentDescription=it }
             setOnClickListener {
                 // The recorder owns the camera mid-take: lens is fixed until stop.
                 if (videoRecording) {
@@ -267,7 +276,7 @@ internal fun MainActivity.refreshLensSwitcher() {
                 performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                 hideManualControl()
                 lensPreferences().edit().putString(KEY_LAST_CAMERA_ID, option.cameraId).apply()
-                controller.selectLens(option.cameraId)
+                controller.selectLens(option.cameraId,option.readout)
             }
         }
         lensSwitcher.addView(button, LinearLayout.LayoutParams(discSize, discSize).apply {

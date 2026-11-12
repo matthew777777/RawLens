@@ -18,6 +18,9 @@
     native <methods>;
 }
 
+# Invoked by the dedicated root app_process, outside normal Java reachability.
+-keep class com.matthew.rawlens.LapisRootCameraWorker { public static void main(java.lang.String[]); }
+
 # Custom views inflated from res/layout XML by name (LayoutInflater
 # reflects on the class name); keep them plus the AttributeSet
 # constructors (whether or not R8's own layout analysis covers them).

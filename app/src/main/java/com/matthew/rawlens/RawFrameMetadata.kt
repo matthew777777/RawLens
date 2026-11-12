@@ -129,7 +129,9 @@ data class RawFrameMetadata(
      */
     val whiteBalanceFallback: Boolean = false,
     /** Sensor limit used to distinguish analog from digital noise gain. */
-    val maxAnalogSensitivityIso: Int? = null
+    val maxAnalogSensitivityIso: Int? = null,
+    /** Verified session-specific geometry; independent of the vendor's stale mode/result tags. */
+    val sensorReadoutProfile: String? = null
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null
@@ -401,7 +403,9 @@ object RawFrameMetadataFactory {
                 characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
                     ?.toDouble()?.let { steps * it }?.takeIf(Double::isFinite)
             },
-            digitalZoomRatio = result.get(CaptureResult.CONTROL_ZOOM_RATIO)
+            // CONTROL_ZOOM_RATIO is API 30; Android 10 has no zoom-ratio key.
+            digitalZoomRatio = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                result.get(CaptureResult.CONTROL_ZOOM_RATIO) else null)
                 ?.takeIf { it.isFinite() && it >= 1f &&
                     capabilities?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) != true },
             lensMake = LensExifIdentity.make(Build.MANUFACTURER),
@@ -424,7 +428,7 @@ object RawFrameMetadataFactory {
             whiteBalanceFallback = fallbackNeutral != null
         )
         logColorDiag(cameraId, metadata, physicalId, result)
-        return metadata
+        return LapisRootSession.normalized(metadata,characteristics)
     }
 
     private var lastColorDiagCamera: String? = null

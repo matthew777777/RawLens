@@ -104,7 +104,7 @@ internal object BurstCrawStore {
     ): BurstDumpStats {
         require(frames.isNotEmpty()) { "Empty ZSL ring" }
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
-        val bitDepth = CrawWriter.bitDepthFor(characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL))
+        val bitDepth = CrawWriter.bitDepthFor(LapisRootSession.storageWhite(characteristics))
         require(cfa != null && cfa in 0..3) { "CRAW requires a Bayer sensor" }
         val ordered = frames.sortedBy { it.timestampNanos }
         val originNs = ordered.first().timestampNanos

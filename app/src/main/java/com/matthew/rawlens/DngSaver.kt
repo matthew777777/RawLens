@@ -181,7 +181,11 @@ class DngSaver(private val context: Context) {
         val platformGeometryMatches = PlatformDngCompatibility.matches(
             image.width, image.height, preCorrection?.width(), preCorrection?.height(),
             pixelArray?.width, pixelArray?.height)
-        val effectiveBackend = if (!platformGeometryMatches && backend != DngWriterBackend.TINY_DNG) {
+        val effectiveBackend = if (metadata.sensorReadoutProfile != null) {
+            // The source frame carries verified mode geometry; Camera2's maximum-resolution
+            // declaration still describes the unrelated 200MP sensor coordinate space.
+            DngWriterBackend.TINY_DNG
+        } else if (!platformGeometryMatches && backend != DngWriterBackend.TINY_DNG) {
             Log.w(LOG_TAG, "RAW ${image.width}x${image.height} differs from platform DNG sensor dimensions; forcing TinyDNG for $displayName")
             DngWriterBackend.TINY_DNG
         } else if (levelsSampled && !userPinnedLevels && backend != DngWriterBackend.TINY_DNG) {

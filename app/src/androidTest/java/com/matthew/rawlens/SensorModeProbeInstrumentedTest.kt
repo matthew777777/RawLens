@@ -66,20 +66,28 @@ class SensorModeProbeInstrumentedTest {
 
     private inner class Route(val device: CameraDevice, val watchKeys: List<String>, extras: (CaptureRequest.Builder) -> Unit = {}) : AutoCloseable {
         val c = manager.getCameraCharacteristics(device.id)
-        val size = c[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP]!!.getOutputSizes(ImageFormat.RAW_SENSOR)!!
+        private val args = InstrumentationRegistry.getArguments()
+        val size = args.getString("probeWidth")?.let { width ->
+            android.util.Size(width.toInt(), requireNotNull(args.getString("probeHeight")).toInt())
+        } ?: c[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP]!!.getOutputSizes(ImageFormat.RAW_SENSOR)!!
             .maxBy { it.width.toLong() * it.height }
-        val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.RAW_SENSOR, 4)
+        val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.RAW_SENSOR,
+            if (size.width.toLong() * size.height > 50_000_000L) 2 else 4)
         val session: CameraCaptureSession
         val applyExtras = extras
         init {
             val f = CompletableFuture<CameraCaptureSession>()
             try {
-                device.createCaptureSession(SessionConfiguration(SessionConfiguration.SESSION_REGULAR,
+                val sessionConfig = SessionConfiguration(SessionConfiguration.SESSION_REGULAR,
                     listOf(OutputConfiguration(reader.surface)),
                     { r -> handler.post(r) }, object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(s: CameraCaptureSession) { if (!f.complete(s)) s.close() }
                         override fun onConfigureFailed(s: CameraCaptureSession) { s.close(); f.completeExceptionally(Exception("configure rejected")) }
-                    }))
+                    })
+                if (InstrumentationRegistry.getArguments().getString("probeSessionParameters") == "true") {
+                    sessionConfig.setSessionParameters(device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply(extras).build())
+                }
+                device.createCaptureSession(sessionConfig)
                 session = f.waitFor()
                 log("CONFIGURED ${device.id} RAW=$size")
             } catch (e: Exception) { f.cancel(false); reader.close(); throw e }
@@ -91,22 +99,23 @@ class SensorModeProbeInstrumentedTest {
                     try {
                         val plane = image.planes[0]
                         val b = plane.buffer.order(ByteOrder.LITTLE_ENDIAN)
-                        val bytes = ByteArray(b.remaining())
-                        b.duplicate().get(bytes)
-                        File(outputDir, "$label.raw16").writeBytes(bytes)
-                        var sum = 0.0; var n = 0L; var min = 65535; var max = 0
+                        File(outputDir, "$label.raw16").outputStream().channel.use { channel ->
+                            val remaining = b.duplicate()
+                            while (remaining.hasRemaining()) channel.write(remaining)
+                        }
+                        var sum = 0.0; var n = 0L; var min = 65535; var max = 0; var bitOr = 0
                         var y = image.height / 4
                         while (y < image.height * 3 / 4) {
                             var x = image.width / 4
                             while (x < image.width * 3 / 4) {
                                 val v = b.getShort(y * plane.rowStride + x * plane.pixelStride).toInt() and 65535
-                                sum += v; n++; min = minOf(min, v); max = maxOf(max, v)
+                                sum += v; n++; min = minOf(min, v); max = maxOf(max, v); bitOr = bitOr or v
                                 x += 8
                             }
                             y += 8
                         }
                         imageFuture.complete(Triple(image.width, image.height,
-                            "mean=${"%.1f".format(sum / n)} min=$min max=$max stride=${plane.rowStride} pxStride=${plane.pixelStride}"))
+                            "mean=${"%.1f".format(sum / n)} min=$min max=$max bitOr=0x${bitOr.toString(16)} stride=${plane.rowStride} pxStride=${plane.pixelStride}"))
                     } catch (e: Exception) { imageFuture.completeExceptionally(e) }
                 }
             }, handler)
@@ -129,6 +138,7 @@ class SensorModeProbeInstrumentedTest {
             val r = result.waitFor()
             val (w, h, stats) = imageFuture.waitFor()
             log("IMAGE $label ${w}x$h echoIso=${r[CaptureResult.SENSOR_SENSITIVITY]} echoExp=${r[CaptureResult.SENSOR_EXPOSURE_TIME]} $stats")
+            log("DYNAMIC $label white=${r[CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL]} black=${r[CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL]?.contentToString()} duration=${r[CaptureResult.SENSOR_FRAME_DURATION]} crop=${r[CaptureResult.SCALER_CROP_REGION]} zoom=${r[CaptureResult.CONTROL_ZOOM_RATIO]}")
             for (name in watchKeys) log("RESULT $label $name ${probeResult(r, name)}")
             return r
         }
@@ -206,6 +216,67 @@ class SensorModeProbeInstrumentedTest {
     }
     private fun setIntArray(builder: CaptureRequest.Builder, name: String, v: IntArray): Boolean {
         return try { builder.set(CaptureRequest.Key(name, IntArray::class.java), v); log("SET $name int[]=${v.contentToString()} ok"); true } catch (e: Exception) { log("SET $name int[] FAIL $e"); false }
+    }
+
+    /** Targeted, headless root/HAL experiments. A request echo alone is not a mode transition. */
+    @Test fun rootFeatureProbe() {
+        outputDir.mkdirs()
+        val args = InstrumentationRegistry.getArguments()
+        var captured = false
+        try {
+            val c = manager.getCameraCharacteristics("0")
+            val requestNames = c.availableCaptureRequestKeys.map { it.name }.toSet()
+            val watch = c.availableCaptureResultKeys.map { it.name }.filter { name ->
+                listOf("sensorScenario", "sensormode", "insensorzoom", "remosaic", "dcg", "hdr", "quad").any { name.contains(it, true) }
+            }
+            val mode = args.getString("probeSensorMode")?.toInt()
+            val scenario = args.getString("probeScenario")?.toInt()
+            val pairMode = args.getString("probeForcePair") == "true"
+            val hdr = args.getString("probeHdrMode")?.toInt()
+            val sessionHdr = args.getString("probeSessionHdrMode")?.toInt()
+            val zoom = args.getString("probeZoom")?.toFloat() ?: 1f
+            val hints = args.getString("probeIszHints")?.toInt()
+            val quad = args.getString("probeQuadRaw")?.toInt()
+            val fps = args.getString("probeFps")?.toInt()
+            log("ROOT_PROBE mode=$mode pair=$pairMode scenario=$scenario hdr=$hdr sessionHdr=$sessionHdr zoom=$zoom hints=$hints quad=$quad fps=$fps session=${args.getString("probeSessionParameters")}")
+            log("STATIC white=${c[CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL]} black=${c[CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN]} sizes=${c[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP]!!.getOutputSizes(ImageFormat.RAW_SENSOR)!!.contentToString()}")
+            log("STATIC_ARRAY active=${c[CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE]} pixels=${c[CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE]} maxRaw=${c[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION]?.getOutputSizes(ImageFormat.RAW_SENSOR)?.contentToString()}")
+            log("SESSION_KEYS ${c.availableSessionKeys?.map { it.name }?.filter { name -> listOf("sensor", "hdr", "raw").any { name.contains(it, true) } }}")
+            if (args.getString("probeMetadataOnly") == "true") return
+            attempt("rootFeature") {
+                Route(open("0"), watch) { b ->
+                    b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+                    if (fps != null) {
+                        b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, android.util.Range(fps, fps))
+                        b.set(CaptureRequest.SENSOR_FRAME_DURATION, 1_000_000_000L / fps)
+                    }
+                    fun optional(name: String, value: Int?) {
+                        if (value != null && name in requestNames) setInt(b, name, value)
+                    }
+                    val forceName = "com.mediatek.seamlessfeature.forceSensorMode"
+                    if (pairMode && mode != null && forceName in requestNames) {
+                        check(setIntArray(b, forceName, intArrayOf(0, mode)))
+                    } else optional(forceName, mode)
+                    if (scenario != null) {
+                        check(setIntArray(b, "com.mediatek.seamlessfeature.sensorScenario", intArrayOf(0, scenario)))
+                    }
+                    optional("com.mediatek.hdrfeature.hdrMode", hdr)
+                    optional("com.mediatek.hdrfeature.SessionParamhdrMode", sessionHdr)
+                    optional("com.mediatek.insensorzoomfeature.insensorzoomEnableHints", hints)
+                    optional("xiaomi.quadraw.mode", quad)
+                }.use { route ->
+                    val frames = args.getString("probeFrames")?.toInt() ?: 3
+                    require(frames in 1..3)
+                    repeat(frames) { route.capture("root-feature-$it", 400, 20_000_000L) }
+                    captured = true
+                }
+            }
+        } finally {
+            devices.toList().forEach { it.close() }
+            File(outputDir, "root-feature-report.txt").writeText(report.toString())
+            thread.quitSafely()
+        }
+        check(captured) { "No successful RAW capture; inspect sensormode-probe/root-feature-report.txt" }
     }
 
     @Test fun probeSensorMode() {

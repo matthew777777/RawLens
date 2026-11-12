@@ -17,8 +17,8 @@ internal object CrawMetadata {
         require(cfa != null && cfa in 0..3) { "CRAW requires a Bayer sensor" }
         json.put("sensorArrangment", arrayOf("rggb", "grbg", "gbrg", "bggr")[cfa])
         val black = requireNotNull(chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN))
-        json.put("blackLevel", JSONArray(List(4) { black.getOffsetForIndex(it % 2, it / 2) }))
-        json.put("whiteLevel", requireNotNull(chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)))
+        json.put("blackLevel", JSONArray(List(4) { LapisRootSession.storageBlack(chars,it) }))
+        json.put("whiteLevel", requireNotNull(LapisRootSession.storageWhite(chars)))
         fun matrix(name: String, value: ColorSpaceTransform?) {
             if (value != null) json.put(name, JSONArray(List(9) {
                 value.getElement(it % 3, it / 3).toDouble()
@@ -92,7 +92,8 @@ internal object CrawMetadata {
                 "aeMode" to if (controlsOff) 0 else result.get(CaptureResult.CONTROL_AE_MODE),
                 "awbMode" to if (controlsOff) 0 else result.get(CaptureResult.CONTROL_AWB_MODE),
                 "exposureCompensationSteps" to result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION),
-                "digitalZoomRatio" to result.get(CaptureResult.CONTROL_ZOOM_RATIO),
+                "digitalZoomRatio" to if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R)
+                    result.get(CaptureResult.CONTROL_ZOOM_RATIO) else null,
                 "rollingShutterSkew" to result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW)
             ), estimateNeutral = estimateNeutral,
             // Camera2 SENSOR_NOISE_PROFILE, flattened (S0,O0,S1,O1,...) in CFA-layout

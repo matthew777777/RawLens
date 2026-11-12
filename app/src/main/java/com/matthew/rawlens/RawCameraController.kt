@@ -101,7 +101,8 @@ data class ManualControlRange(
     val automatic: Boolean
 )
 
-data class LensOption(val cameraId: String, val label: String, val selected: Boolean)
+data class LensOption(val cameraId: String, val label: String, val selected: Boolean,
+                      val readout: String? = null, val description: String? = null)
 
 /**
  * Duplicate zoom pills (same optic reachable via several routes) keep their
@@ -405,6 +406,9 @@ class RawCameraController(
     private var rawHistogramDisabledForSession = false
     @Volatile private var lastPreviewSensorTimestamp = Long.MIN_VALUE
     private var latestPreviewResult: TotalCaptureResult? = null
+    @Volatile private var lapisLeaseKey: String? = null
+    @Volatile private var lapisPreparedMode: LapisRootProfile.Mode? = null
+    @Volatile private var lapisSessionSpec: LapisRootSession.Spec? = null
     private val motionTracker = CameraMotionTracker(context)
     private var lastIso = 100
     private var lastExposureNanos = 10_000_000L
@@ -595,6 +599,36 @@ class RawCameraController(
     @SuppressLint("MissingPermission")
     private fun open() {
         if (!running || destroyed || opening || camera != null) return
+        if (LapisRootProfile.supported()) {
+            val intended = selectedCameraId ?: preferredCameraId() ?: "0"
+            val requested = LapisRootProfile.mode(context)
+            val desired = if (intended == "0" && (photoControlsBeforeVideo == null || requested==LapisRootProfile.Mode.DCG14))
+                requested else LapisRootProfile.Mode.NORMAL
+            if (lapisPreparedMode != desired) {
+                opening = true
+                val generation = lifecycleGeneration
+                val key = java.util.UUID.randomUUID().toString()
+                lapisLeaseKey = key
+                onState(if (desired == LapisRootProfile.Mode.NORMAL) "RESTORING CAMERA" else "SELECTING ${desired.label.uppercase()}")
+                LapisRootSessionControl.prepare(context, key, desired) { result -> cameraHandler.post {
+                    if (!isCurrent(generation) || lapisLeaseKey != key) {
+                        LapisRootSessionControl.release(key)
+                        return@post
+                    }
+                    opening = false
+                    result.fold(onSuccess = { spec ->
+                        lapisPreparedMode = desired; lapisSessionSpec = spec
+                        if(spec?.dcg==true) { flashStillMode=FlashStillMode.OFF;torchEnabled=false }
+                        cameraRouteCache.clear()
+                        open()
+                    }, onFailure = { failure ->
+                        Log.e(LOG_TAG,"Redmi sensor-session setup failed",failure)
+                        onState("REDMI SENSOR ROOT UNAVAILABLE • ${failure.message}")
+                    })
+                } }
+                return
+            }
+        }
         opening = true
         val generation = lifecycleGeneration
         try {
@@ -632,6 +666,7 @@ class RawCameraController(
             val openCameraId = effectiveRoute.openCameraId
             activePhysicalCameraId = effectiveRoute.physicalCameraId
             characteristics = effectiveRoute.characteristics
+            if (id == "0") lapisSessionSpec?.let { LapisRootSession.bind(effectiveRoute.characteristics,it) }
             vendorKeyCharacteristics = if (effectiveRoute.physicalCameraId == null) effectiveRoute.characteristics
                 else runCatching { cameraManager.getCameraCharacteristics(openCameraId) }
                     .getOrDefault(effectiveRoute.characteristics)
@@ -889,7 +924,9 @@ class RawCameraController(
         // choice degrades to today's behavior with a log line.
         val sessionRawFormat = effectiveRawFormat(selectedCameraId, map)
         lastSessionRawFormat = sessionRawFormat
-        val rawSizes = map.getOutputSizes(sessionRawFormat)?.toList()
+        val rawSizes = if (lapisSessionSpec != null && selectedCameraId == "0")
+            listOf(Size(lapisSessionSpec!!.width,lapisSessionSpec!!.height))
+        else map.getOutputSizes(sessionRawFormat)?.toList()
         if (rawSizes.isNullOrEmpty()) {
             Log.e(LOG_TAG, "Session aborted: no RAW size for format $sessionRawFormat")
             onState("RAW UNAVAILABLE")
@@ -1150,6 +1187,17 @@ class RawCameraController(
             do {
                 drained++
                 val image = reader.acquireNextImage() ?: break
+                val rootSpec = lapisSessionSpec
+                if (rootSpec != null) {
+                    val accepted = try { rootSpec.accepts(image) } catch (failure: Exception) {
+                        image.close()
+                        Log.e(LOG_TAG, "Redmi sensor verification failed", failure)
+                        onState("REDMI SENSOR VERIFICATION FAILED")
+                        stop()
+                        return
+                    }
+                    if (!accepted) { image.close(); continue }
+                }
                 lastRawImageReceivedMs = SystemClock.elapsedRealtime()
                 if (!vendorModeRawArrived) {
                     vendorModeRawArrived = true
@@ -1481,6 +1529,12 @@ class RawCameraController(
      * caught here; asynchronous session-configuration failures use normal recovery.
      */
     private fun attachVendorSessionParams(device: CameraDevice, config: SessionConfiguration) {
+        lapisSessionSpec?.takeIf { it.dcg && selectedCameraId=="0" }?.let { spec ->
+            val parameters=device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+            spec.applyRequest(parameters)
+            config.setSessionParameters(parameters.build())
+            return
+        }
         val routeId = selectedCameraId ?: return
         val profile = try {
             vendorKeys(routeId)
@@ -1661,7 +1715,8 @@ class RawCameraController(
     private fun sessionComboCount(characteristics: CameraCharacteristics): Int {
         val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?: return 1
-        val rawSizes = map.getOutputSizes(effectiveRawFormat(selectedCameraId, map))?.toList().orEmpty()
+        val rawSizes = lapisSessionSpec?.takeIf { selectedCameraId=="0" }?.let { listOf(Size(it.width,it.height)) }
+            ?: map.getOutputSizes(effectiveRawFormat(selectedCameraId, map))?.toList().orEmpty()
         val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
         if (rawSizes.isEmpty()) return 1
         val mapRawSizes = rawSizes.map { SessionStreamSize(it.width, it.height) }
@@ -3900,7 +3955,7 @@ class RawCameraController(
 
     fun isTorchEnabled(): Boolean = torchEnabled
 
-    fun isFlashAvailable(): Boolean =
+    fun isFlashAvailable(): Boolean = lapisSessionSpec?.dcg!=true &&
         characteristics?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
 
     fun isOisSupported(): Boolean = characteristics
@@ -4512,9 +4567,26 @@ class RawCameraController(
         restartCameraForConfigurationChange()
     }
 
-    fun lensOptions(): List<LensOption> = disambiguatedLensLabels(rawCameraIds.map { id ->
-        LensOption(id, zoomLabel(id), id == selectedCameraId)
-    })
+    fun lensOptions(): List<LensOption> {
+        val extended = LapisRootProfile.enabled(context) && "0" in rawCameraIds
+        val mode = LapisRootProfile.mode(context)
+        val options=rawCameraIds.map { id ->
+            if(extended && id=="0") LensOption(id,"1× · 12.5 MP",id==selectedCameraId && mode==LapisRootProfile.Mode.NORMAL,
+                "normal","Main camera, 12.5 megapixel RAW")
+            else LensOption(id,zoomLabel(id),id==selectedCameraId)
+        }.toMutableList()
+        if(extended) {
+            val at=options.indexOfFirst { it.cameraId=="0" }+1
+            options.add(at,LensOption("0","1× · 50 MP",selectedCameraId=="0" && mode==LapisRootProfile.Mode.FULL,
+                "50mp","Main camera, 50 megapixel RAW"))
+            options.add(at+1,LensOption("0","2× · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X,
+                "2x","Main camera, 2× in-sensor crop RAW"))
+        }
+        if(extended) options.add(LensOption("0","1× · DCG14",selectedCameraId=="0" && mode==LapisRootProfile.Mode.DCG14,
+            "dcg14","DCG/DSG 14-bit RAW, automatic exposure, 30 fps sensor mode"))
+        if(photoControlsBeforeVideo!=null) options.removeAll { it.readout=="50mp" || it.readout=="2x" }
+        return disambiguatedLensLabels(options)
+    }
 
     fun activeCameraId(): String? = selectedCameraId
 
@@ -4680,18 +4752,26 @@ class RawCameraController(
         }
     }
 
-    fun selectLens(cameraId: String) {
+    fun selectLens(cameraId: String, readout: String? = null) {
         if (!isOnCameraThread()) {
-            cameraHandler.post { selectLens(cameraId) }
+            cameraHandler.post { selectLens(cameraId,readout) }
             return
         }
-        if ((cameraId == selectedCameraId && (camera != null || opening)) ||
-            cameraId !in rawCameraIds || captureInProgress.get()) return
+        if(cameraId !in rawCameraIds || captureInProgress.get()) return
+        val previous=LapisRootProfile.mode(context)
+        if(cameraId=="0" && readout!=null && LapisRootProfile.enabled(context)) {
+            val picked=LapisRootProfile.fromArgument(readout)?:return
+            LapisRootProfile.select(context,picked)
+            rawSizePreferenceStore.set("0",if(picked==LapisRootProfile.Mode.FULL) "8160x6120" else "4080x3060")
+        }
+        val changedReadout=previous!=LapisRootProfile.mode(context)
+        if(cameraId==selectedCameraId && (camera!=null||opening) && !changedReadout)return
         deviceFaultRecovery.reset()
         selectedCameraId = cameraId
         afRegion = null; aeRegion = null
         updateDevelopFocus(null)
         ladder.reset()
+        publishControls()
         restartCameraForConfigurationChange()
     }
 
@@ -4707,6 +4787,7 @@ class RawCameraController(
     }
 
     fun manualControlRange(control: ManualControl): ManualControlRange? {
+        if(lapisSessionSpec?.dcg==true && (control==ManualControl.ISO || control==ManualControl.SHUTTER))return null
         return when (control) {
         ManualControl.ISO -> {
             if (!supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)) return null
@@ -4759,6 +4840,10 @@ class RawCameraController(
     fun setManualControl(control: ManualControl, value: Long?) {
         if (!isOnCameraThread()) {
             cameraHandler.post { setManualControl(control, value) }
+            return
+        }
+        if(lapisSessionSpec?.dcg==true && (control==ManualControl.ISO || control==ManualControl.SHUTTER)) {
+            onState("DCG14 USES AUTO EXPOSURE")
             return
         }
         when (control) {
@@ -5327,6 +5412,7 @@ class RawCameraController(
         // flash, AF) after the standard controls. Individually guarded: a bad
         // key skips itself and never fails capture.
         applyVendorRequestKeys(builder)
+        if (selectedCameraId == "0") lapisSessionSpec?.applyRequest(builder)
     }
 
     private fun applyVendorRequestKeys(builder: CaptureRequest.Builder) {
@@ -5411,6 +5497,7 @@ class RawCameraController(
      * intent explicitly.
      */
     private fun applyStillFlash(builder: CaptureRequest.Builder) {
+        lapisSessionSpec?.takeIf { it.dcg }?.let { it.applyRequest(builder);return }
         builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_STILL_CAPTURE)
         if (!isFlashAvailable() || flashStillMode == FlashStillMode.OFF) {
             builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
@@ -6615,7 +6702,8 @@ class RawCameraController(
         ).orEmpty()
         // Camera2 only accepts advertised ranges, so map the fixed-rate match back
         // to the exact published Range object.
-        val target = selectedCameraId?.let { runCatching { vendorKeys(it).rawPreviewFps }.getOrDefault(0) } ?: 0
+        val target = if(lapisSessionSpec!=null && selectedCameraId=="0") lapisSessionSpec!!.fps
+            else selectedCameraId?.let { runCatching { vendorKeys(it).rawPreviewFps }.getOrDefault(0) } ?: 0
         val selected = if (target != 0) VendorKeyProfile(rawPreviewFps = target)
             .rawPreviewRange(ranges.map { it.lower..it.upper })?.let { Range(it.first, it.last) }
         else ZslPolicy.selectRawZslFpsRange(
@@ -6909,6 +6997,19 @@ class RawCameraController(
     /** True while the camera session is up; read by background citizenship audits. */
     fun isRunning(): Boolean = running
 
+    internal fun stopForRawVideo(): LapisRecordingLease? {
+        val transfer=synchronized(cameraStateLock) {
+            val key=lapisLeaseKey
+            val spec=lapisSessionSpec
+            if(key!=null && spec?.dcg==true) {
+                lapisLeaseKey=null
+                LapisRecordingLease(key,spec)
+            } else null
+        }
+        stop()
+        return transfer
+    }
+
     fun stop() {
         scopes.stopPeaking()
         rawExposureAssist.clear()
@@ -6957,6 +7058,9 @@ class RawCameraController(
         latestPreviewResult = null
         lastRawZslStatus = null
         clearFaceState()
+        val rootKey = lapisLeaseKey
+        lapisLeaseKey = null; lapisPreparedMode = null; lapisSessionSpec = null
+        rootKey?.let(LapisRootSessionControl::release)
     }
 
     fun destroy() {
@@ -7030,11 +7134,11 @@ class RawCameraController(
         val step = c?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
         val evStops = if (step == null) 0f else exposureCompensation * step.toFloat()
         val lens = zoomLabel(selectedCameraId)
-        val flashAvailable = c?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+        val flashAvailable = lapisSessionSpec?.dcg!=true && c?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
         onControls(
-            selectedIso?.let { "ISO $it" }
+            if(lapisSessionSpec?.dcg==true) "ISO $lastIso · A" else selectedIso?.let { "ISO $it" }
                 ?: if (hasPreviewMetadata) "ISO $lastIso" else "ISO A",
-            selectedExposureNanos?.let(::formatExposure)
+            if(lapisSessionSpec?.dcg==true) formatExposure(lastExposureNanos)+" · A" else selectedExposureNanos?.let(::formatExposure)
                 ?: if (hasPreviewMetadata) formatExposure(lastExposureNanos) else "S A",
             whiteBalanceLabel(),
             selectedFocusDistanceDiopters?.let(::formatFocusDistance) ?: "AF",
@@ -7217,6 +7321,7 @@ class RawCameraController(
         cameraId: String?,
         map: android.hardware.camera2.params.StreamConfigurationMap
     ): Int {
+        if (lapisSessionSpec != null && cameraId == "0") return android.graphics.ImageFormat.RAW_SENSOR
         val available = listOf(
             android.graphics.ImageFormat.RAW_SENSOR,
             android.graphics.ImageFormat.RAW10,
@@ -7268,24 +7373,10 @@ class RawCameraController(
     private fun zoomLabel(cameraId: String?): String {
         if (cameraId == null) return "1×"
         if (isFrontCamera(cameraId)) return "F"
-        val current = opticalMetric(cameraId)
-        if (!current.isFinite() || rawCameraIds.isEmpty()) return "1×"
-        // Pick the optical route closest to the conventional phone main-camera field of view
-        // (~24 mm full-frame equivalent). This avoids assuming that camera ID "0" is the main
-        // lens, while still producing intuitive 0.5× / 0.7× / 1× / tele labels across vendors.
-        val targetMainMetric = 24f / 36f
-        val mainId = rawCameraIds
-            .filter { !isFrontCamera(it) && opticalMetric(it).isFinite() }
-            .minByOrNull { kotlin.math.abs(opticalMetric(it) - targetMainMetric) }
-            ?: cameraId
-        val baseline = opticalMetric(mainId)
-        if (!baseline.isFinite() || baseline <= 0f) return "1×"
-        val zoom = current / baseline
-        return if (kotlin.math.abs(zoom - kotlin.math.round(zoom)) < 0.08f) {
-            "${kotlin.math.round(zoom).toInt()}×"
-        } else {
-            String.format(java.util.Locale.US, "%.1f×", zoom)
-        }
+        // 1× is the rear lens nearest a main-camera field of view, never camera ID "0" by
+        // assumption and never an ultra-wide just because no main lens is selected.
+        val rear = rawCameraIds.filter { !isFrontCamera(it) }.map(::opticalMetric)
+        return LensZoom.label(opticalMetric(cameraId), rear)
     }
 
     private fun cameraAccessReason(failure: CameraAccessException): String = when (failure.reason) {

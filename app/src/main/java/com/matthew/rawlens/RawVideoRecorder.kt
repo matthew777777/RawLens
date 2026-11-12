@@ -79,6 +79,7 @@ internal class RawVideoRecorder(
     private val cameraId: String,
     val frameSize: Size,
     private val appContext: Context? = null,
+    private val lapisLease: LapisRecordingLease? = null,
 ) {
     data class Stats(
         val framesAcquired: Int,
@@ -454,12 +455,13 @@ internal class RawVideoRecorder(
         startRealtimeMs = SystemClock.elapsedRealtime()
 
         val chars = videoRoute.characteristics
+        lapisLease?.let { LapisRootSession.bind(chars,it.spec) }
         vfChars = chars
         val sensorCfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         binActive = binningActive(binning, sensorCfa, frameSize.width)
         binRgbActive = binningRgb
         binCfa = if (sensorCfa != null && sensorCfa in 0..3) sensorCfa else 0
-        crawBitDepth = CrawWriter.bitDepthFor(chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL))
+        crawBitDepth = CrawWriter.bitDepthFor(LapisRootSession.storageWhite(chars))
         if (binning && !binActive) {
             Log.w(
                 TAG, "binning off for this take: cfa=$sensorCfa " +
@@ -580,6 +582,13 @@ internal class RawVideoRecorder(
                 if (!accepting) {
                     RawImageOwnership.release(img)
                     continue
+                }
+                val rootSpec=lapisLease?.spec
+                if(rootSpec!=null) {
+                    val verified=try { rootSpec.accepts(img) } catch (failure:Exception) {
+                        RawImageOwnership.release(img);failRecording(failure);break
+                    }
+                    if(!verified) { RawImageOwnership.release(img);continue }
                 }
                 acquired.incrementAndGet()
                 // Viewfinder fan-out (camera thread, the VF's own contract):
@@ -935,6 +944,7 @@ internal class RawVideoRecorder(
             streamMinFrameDurationNanos = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?.getOutputMinFrameDuration(android.graphics.ImageFormat.RAW_SENSOR, frameSize) ?: 0L,
         )
+        lapisLease?.spec?.applyRequest(builder)
     }
 
     fun snapshot(): VideoStats = VideoStats(
@@ -1498,7 +1508,12 @@ internal class RawVideoRecorder(
             )
             null
         }
-        if (config != null) device!!.createCaptureSession(config)
+        if (config != null) {
+            lapisLease?.let { lease -> config.setSessionParameters(device!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                lease.spec.applyRequest(this)
+            }.build()) }
+            device!!.createCaptureSession(config)
+        }
         check(latch.await(10, TimeUnit.SECONDS)) { "Session configure timed out" }
         if (configured == null) throw IllegalStateException("Session failed: $error")
         return configured
@@ -1518,6 +1533,7 @@ internal class RawVideoRecorder(
         } catch (_: Exception) {
         }
         device = null
+        lapisLease?.close()
         try {
             reader?.close()
         } catch (_: Exception) {

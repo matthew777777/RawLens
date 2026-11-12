@@ -943,7 +943,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     "rowStride=${plane.rowStride} w=${image.width} h=${image.height}")
             }
             val active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-            val crop = result?.get(CaptureResult.SCALER_CROP_REGION) ?: active
+            val crop = LapisRootSession.previewCrop(c, result?.get(CaptureResult.SCALER_CROP_REGION) ?: active, image.width, image.height)
             val longEdge = VfResolution.effectiveEdge(targetLongEdge, recordMode, powerSave)
             val gpuGeo = RawPreviewGeometry.quadGeometry(image.width, image.height, crop, longEdge)
             statRawWidth = image.width
@@ -1197,6 +1197,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private fun snapshotLens(
         c: CameraCharacteristics, result: CaptureResult?, imageWidth: Int, imageHeight: Int
     ): VfLensSnapshot {
+        if (LapisRootSession.spec(c)?.metadataVerified == true)
+            return VfLensSnapshot(null, 1, 1, 0, 0, imageWidth, imageHeight, false, null, null)
         val alreadyApplied =
             c.get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) == true
         if (alreadyApplied) {

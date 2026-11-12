@@ -102,12 +102,12 @@ internal object ScopeMeterNative {
         ) ?: return null
         if (cfa !in 0..3) return null
         val black = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
-        val white = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
+        val white = LapisRootSession.storageWhite(characteristics)
             ?: return null
         val rotation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val mirrored = characteristics.get(CameraCharacteristics.LENS_FACING) ==
             CameraCharacteristics.LENS_FACING_FRONT
-        fun offset(i: Int): Int = black?.getOffsetForIndex(i % 2, i / 2) ?: 0
+        fun offset(i: Int): Int = LapisRootSession.storageBlack(characteristics,i)
         return MeterCalibration(cfa, offset(0), offset(1), offset(2), offset(3), white,
             rotation, mirrored)
     }
