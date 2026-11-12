@@ -99,14 +99,14 @@ internal fun MainActivity.updateVideoQuickControls() {
 
 /** Shares the per-lens sensor AE range with the vendor-key editor. */
 internal fun MainActivity.rawVideoFrameRateLabel(): String {
-    val cameraId = controller.activeCameraId() ?: return "Default"
+    val cameraId = controller.activeSettingsKey() ?: return "Default"
     val fps = vendorKeyStore.get(cameraId).rawPreviewFps
     return if (fps == 0) "Default" else "$fps FPS"
 }
 
 internal fun MainActivity.chooseRawVideoFrameRate(onChanged: () -> Unit = {}) {
     if (videoRecording || videoRecorder != null || encodedVideoRecorder != null) return
-    val cameraId = controller.activeCameraId() ?: return
+    val cameraId = controller.activeSettingsKey() ?: return
     val profile = vendorKeyStore.get(cameraId)
     val rates = listOf(0) + controller.vendorRawPreviewFpsOptions()
     val labels = rates.map { fps ->
@@ -118,7 +118,7 @@ internal fun MainActivity.chooseRawVideoFrameRate(onChanged: () -> Unit = {}) {
     }.toTypedArray()
     showRawFrameRateDialog(labels, rates.indexOf(profile.rawPreviewFps)) { dialog, which ->
             if (videoRecording || videoRecorder != null || encodedVideoRecorder != null ||
-                controller.activeCameraId() != cameraId) {
+                controller.activeSettingsKey() != cameraId) {
                 dialog.dismiss()
                 return@showRawFrameRateDialog
             }

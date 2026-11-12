@@ -165,7 +165,7 @@ class RawCameraController(
     initialProgramAeProfile: ProgramAeProfile = ProgramAeProfile(),
     private val dngWriterBackend: () -> DngWriterBackend,
     private val dngCompression: () -> DngCompression = { DngCompression.UNCOMPRESSED },
-    private val dngMetadataOverrides: (cameraId: String?) -> DngMetadataOverrides,
+    private val dngMetadataOverridesByKey: (settingsKey: String?) -> DngMetadataOverrides,
     private val onRawZslStatus: (RawZslStatus) -> Unit,
     private val onDebugState: (String) -> Unit,
     private val onMeteringReleased: () -> Unit,
@@ -188,8 +188,26 @@ class RawCameraController(
     private val onRawExposureAssist: (RawExposureAssistFrame?) -> Unit = {},
     initialFacePriorityEnabled: Boolean = false,
     private val onFaces: (List<FaceOverlayBox>) -> Unit = { },
-    private val vendorKeys: (cameraId: String?) -> VendorKeyProfile = { VendorKeyProfile() }
+    private val vendorKeysByKey: (settingsKey: String?) -> VendorKeyProfile = { VendorKeyProfile() }
 ) {
+    private val virtualLensStore = VirtualLensStore(context)
+
+    /**
+     * Key per-lens settings are stored under: the active virtual lens when it sits on
+     * [cameraId], otherwise the camera ID itself.
+     */
+    fun settingsKey(cameraId: String?): String? =
+        virtualLensStore.activeOn(cameraId)?.settingsKey ?: cameraId
+
+    fun activeSettingsKey(): String? = settingsKey(selectedCameraId)
+
+    fun activeVirtualLens(): VirtualLens? = virtualLensStore.activeOn(selectedCameraId)
+
+    private fun vendorKeys(cameraId: String?): VendorKeyProfile = vendorKeysByKey(settingsKey(cameraId))
+
+    private fun dngMetadataOverrides(cameraId: String?): DngMetadataOverrides =
+        dngMetadataOverridesByKey(settingsKey(cameraId))
+
     private val cameraManager = context.getSystemService(CameraManager::class.java)
     private val cameraExecutor = Executor { command ->
         if (!cameraHandler.post(command)) throw RejectedExecutionException("RawCamera handler is stopped")
@@ -4728,7 +4746,21 @@ class RawCameraController(
         }
         if(extended) options.add(LensOption("0","${mainLabel()} · DCG14",selectedCameraId=="0" && mode==LapisRootProfile.Mode.DCG14,
             "dcg14","DCG/DSG 14-bit RAW, automatic exposure, 30 fps sensor mode"))
-        if(photoControlsBeforeVideo!=null) options.removeAll { it.readout=="50mp" || it.readout=="2x" }
+        if(photoControlsBeforeVideo!=null) options.removeAll { it.readout=="50mp" || it.readout=="2x" || it.readout=="4x" }
+        // User-made virtual lenses sit right after their base route; the base itself
+        // only reads as selected while no virtual lens on it is active.
+        val active = virtualLensStore.activeOn(selectedCameraId)
+        if (active != null) {
+            options.replaceAll { option ->
+                if (option.cameraId == active.baseCameraId && option.selected) option.copy(selected = false) else option
+            }
+        }
+        virtualLensStore.all().filter { it.baseCameraId in rawCameraIds }.forEach { virtual ->
+            val at = options.indexOfLast { it.cameraId == virtual.baseCameraId } + 1
+            options.add(at, LensOption(virtual.baseCameraId, virtual.switcherLabel,
+                virtual.id == active?.id, virtual.settingsKey,
+                virtual.description.ifBlank { "Custom lens on camera ${virtual.baseCameraId}" }))
+        }
         return disambiguatedLensLabels(options)
     }
 
@@ -4903,12 +4935,21 @@ class RawCameraController(
         }
         if(cameraId !in rawCameraIds || captureInProgress.get()) return
         val previous=LapisRootProfile.mode(context)
-        if(cameraId=="0" && readout!=null && LapisRootProfile.enabled(context)) {
+        val previousVirtual=virtualLensStore.activeId()
+        val virtualId=VirtualLens.idFromReadout(readout)?.takeIf { virtualLensStore.get(it)?.baseCameraId==cameraId }
+        virtualLensStore.setActive(virtualId)
+        if(cameraId=="0" && virtualId!=null && LapisRootProfile.enabled(context) &&
+            previous!=LapisRootProfile.Mode.NORMAL) {
+            // A virtual lens is a plain Camera2 route: drop any root readout mode.
+            LapisRootProfile.select(context,LapisRootProfile.Mode.NORMAL)
+            rawSizePreferenceStore.set("0","4080x3060")
+        }
+        if(cameraId=="0" && readout!=null && virtualId==null && LapisRootProfile.enabled(context)) {
             val picked=LapisRootProfile.fromArgument(readout)?:return
             LapisRootProfile.select(context,picked)
             rawSizePreferenceStore.set("0",if(picked==LapisRootProfile.Mode.FULL) "8160x6120" else "4080x3060")
         }
-        val changedReadout=previous!=LapisRootProfile.mode(context)
+        val changedReadout=previous!=LapisRootProfile.mode(context) || previousVirtual!=virtualId
         if(cameraId==selectedCameraId && (camera!=null||opening) && !changedReadout)return
         deviceFaultRecovery.reset()
         selectedCameraId = cameraId
@@ -7475,7 +7516,7 @@ class RawCameraController(
         ).filter { format ->
             runCatching { map.getOutputSizes(format)?.isNotEmpty() == true }.getOrDefault(false)
         }.toSet()
-        val resolved = SessionStreamSelection.resolveRawFormatPreference(cameraId?.let(rawFormatPreferenceStore::get), available)
+        val resolved = SessionStreamSelection.resolveRawFormatPreference(settingsKey(cameraId)?.let(rawFormatPreferenceStore::get), available)
         if (resolved != android.graphics.ImageFormat.RAW_SENSOR) {
             Log.i(LOG_TAG, "Packed RAW session format $resolved for $cameraId")
         }
@@ -7493,7 +7534,7 @@ class RawCameraController(
         cameraId: String?,
         mapSizes: List<SessionStreamSize>
     ): SessionStreamSize? {
-        val parsed = SessionStreamSelection.parseRawSizePreference(cameraId?.let(rawSizePreferenceStore::get))
+        val parsed = SessionStreamSelection.parseRawSizePreference(settingsKey(cameraId)?.let(rawSizePreferenceStore::get))
             ?: return null
         if (mapSizes.none { it == parsed }) {
             Log.i(LOG_TAG, "Ignoring stale RAW size ${parsed.width}x${parsed.height} for $cameraId")

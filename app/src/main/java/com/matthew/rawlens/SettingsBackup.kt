@@ -28,7 +28,8 @@ object SettingsBackup {
         STORE_MAIN,
         DngMetadataOverrideStore.PREFS_NAME,
         ProgramAeProfileStore.PREFS_NAME,
-        VendorKeyStore.PREFS_NAME
+        VendorKeyStore.PREFS_NAME,
+        VirtualLensStore.PREFS_NAME
     )
 
     /** Deterministic export of [stores] (store name to its `SharedPreferences.all`). */

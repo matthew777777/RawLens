@@ -667,7 +667,7 @@ class MainActivity : Activity() {
                     )
                 }
             },
-            vendorKeys = { cameraId -> vendorKeyStore.get(cameraId) }
+            vendorKeysByKey = { key -> vendorKeyStore.get(key) }
         )
         controller.onVfRouteChanged = { isBgu ->
             runOnUiThread {
@@ -3630,7 +3630,7 @@ class MainActivity : Activity() {
     }
 
     internal fun activeProfileLensId(): String? =
-        controllerIfReady?.activeCameraId()
+        controllerIfReady?.activeSettingsKey()
             ?: lensPreferences().getString(KEY_LAST_CAMERA_ID, null)
 
     internal val controllerIfReady: RawCameraController?

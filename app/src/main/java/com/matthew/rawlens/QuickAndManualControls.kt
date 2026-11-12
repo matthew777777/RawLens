@@ -223,7 +223,7 @@ internal fun MainActivity.refreshLensSwitcher() {
     if (options.isEmpty()) return
     // Rebuilding the switcher view hierarchy on every controls publication is
     // wasted layout work; only rebuild when the lens set or selection changed.
-    val signature = options.joinToString("|") { "${it.cameraId}:${it.readout}:${it.selected}" }
+    val signature = options.joinToString("|") { "${it.cameraId}:${it.readout}:${it.label}:${it.description}:${it.selected}" }
     if (signature == lastLensSwitcherSignature && lensSwitcher.childCount > 0) return
     lastLensSwitcherSignature = signature
     lensSwitcher.removeAllViews()

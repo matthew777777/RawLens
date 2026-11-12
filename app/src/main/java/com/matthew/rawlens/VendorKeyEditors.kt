@@ -105,8 +105,9 @@ internal fun MainActivity.vendorEntryButton(entry: VendorKeyEntry, action: () ->
     )
 
 /** Per-lens vendor key/tag editor: session-early keys plus per-request keys. */
-internal fun MainActivity.showVendorKeysEditor() {
-    val cameraId = controller.activeCameraId()
+internal fun MainActivity.showVendorKeysEditor(settingsKey: String? = null) {
+    val cameraId = settingsKey ?: controller.activeSettingsKey()
+    val virtual = VirtualLens.idFromReadout(cameraId)?.let { VirtualLensStore(this).get(it) }
     if (cameraId == null) {
         setStatus("WAIT FOR CAMERA")
         return
@@ -116,13 +117,13 @@ internal fun MainActivity.showVendorKeysEditor() {
     var editor: AlertDialog? = null
     fun edit(entry: VendorKeyEntry?) {
         editor?.dismiss()
-        showVendorKeyEditDialog(cameraId, entry) { showVendorKeysEditor() }
+        showVendorKeyEditDialog(cameraId, entry) { showVendorKeysEditor(settingsKey) }
     }
     val content = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(20), 0, dp(20), 0)
         addView(TextView(this@showVendorKeysEditor).apply {
-            text = "Camera $cameraId • ${profile.entries.size} keys ($onCount on)\n" +
+            text = "${virtual?.let { "${it.switcherLabel} (camera ${it.baseCameraId})" } ?: "Camera $cameraId"} • ${profile.entries.size} keys ($onCount on)\n" +
                 "Session keys load before the session opens. " +
                 "Request keys ride every capture. Black/white levels are not camera " +
                 "keys — set them under Sensor levels."
@@ -188,7 +189,7 @@ internal fun MainActivity.showVendorKeysEditor() {
                 val incoming = vendorKeyStore.getPreset(name)
                 if (updateVendorKeys(cameraId) { it.mergedWith(incoming) }) {
                     editor?.dismiss()
-                    showVendorKeysEditor()
+                    showVendorKeysEditor(settingsKey)
                 }
             }
         })
@@ -197,7 +198,7 @@ internal fun MainActivity.showVendorKeysEditor() {
                 vendorKeyStore.deletePreset(name)
                 setStatus("PRESET DELETED")
                 editor?.dismiss()
-                showVendorKeysEditor()
+                showVendorKeysEditor(settingsKey)
             }
         })
     }
@@ -207,7 +208,7 @@ internal fun MainActivity.showVendorKeysEditor() {
                 .filter { preset -> profile.entries.none { it.name == preset.name } }
             if (updateVendorKeys(cameraId) { current -> current.mergedWith(VendorKeyProfile(missing)) }) {
                 editor?.dismiss()
-                showVendorKeysEditor()
+                showVendorKeysEditor(settingsKey)
             }
         })
     }
@@ -230,7 +231,7 @@ internal fun MainActivity.showVendorKeysEditor() {
                 if (updateVendorKeys(cameraId) { it.copy(rawPreviewFps = rates[which]) }) {
                     dialog.dismiss()
                     editor?.dismiss()
-                    showVendorKeysEditor()
+                    showVendorKeysEditor(settingsKey)
                 }
             }.setNegativeButton("Cancel", null).show()
     })
@@ -242,7 +243,7 @@ internal fun MainActivity.showVendorKeysEditor() {
     content.addView(twoLineChipButton("Session operating mode", opmodeDetail, profile.operatingMode != 0) {
         showOperatingModeDialog(cameraId, profile) {
             editor?.dismiss()
-            showVendorKeysEditor()
+            showVendorKeysEditor(settingsKey)
         }
     })
     content.addView(vendorSectionHeader("Share"))
@@ -491,7 +492,7 @@ internal fun MainActivity.showVendorDiscoveryDialog(cameraId: String) {
                 ) {
                     list?.dismiss()
                     showVendorKeyEditDialog(cameraId, null, found.name, found.scopeHint) {
-                        showVendorKeysEditor()
+                        showVendorKeysEditor(cameraId)
                     }
                 }
             )
@@ -655,7 +656,7 @@ internal fun MainActivity.showVendorImportDialog(cameraId: String) {
         }
         if (updateVendorKeys(cameraId) { it.mergedWith(incoming) }) {
             dialog.dismiss()
-            showVendorKeysEditor()
+            showVendorKeysEditor(cameraId)
         }
     }
 }

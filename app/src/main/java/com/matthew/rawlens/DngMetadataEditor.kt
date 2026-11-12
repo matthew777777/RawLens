@@ -56,7 +56,7 @@ import android.os.SystemClock
 // Per-lens DNG calibration overrides (levels, noise, matrices). Moved verbatim from MainActivity.
 
 internal fun MainActivity.showDngMetadataOverrideEditor() {
-    val cameraId = controller.activeCameraId()
+    val cameraId = controller.activeSettingsKey()
     if (cameraId == null) {
         setStatus("WAIT FOR CAMERA")
         return

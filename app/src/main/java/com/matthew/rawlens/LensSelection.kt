@@ -482,6 +482,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
             }
         }
     }
+    listBody.addView(virtualLensSection(lenses, ::zoomOf) { id -> checked[id] == true })
     container.addView(listScroll)
     container.addView(TextView(this).apply {
         text = "Use direct physical IDs first. Greyed routes remain selectable for features unavailable directly, such as Xiaomi sensor modes or zoom."
