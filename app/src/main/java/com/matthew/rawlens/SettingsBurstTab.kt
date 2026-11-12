@@ -78,7 +78,7 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
             "Staged IMG_<ts>_BURST.craw takes merge here later via MFSR, LK-R or HDR+, " +
                 "to DNG, JPEG, or both. RAW Video never lists."
         ))
-        content.addView(settingsButton("OPEN MERGES").apply {
+        content.addView(settingsButton("Open merges").apply {
             setOnClickListener { openMerges() }
         })
         content.addView(SettingsSwitch(this).apply {
@@ -144,13 +144,11 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
             })
         })
         var hybridTopup = lensPreferences().getBoolean(KEY_ZSL_HYBRID_TOPUP, true)
-        content.addView(Button(this).apply {
-            text = zslHybridTopupText(hybridTopup)
-            setOnClickListener {
-                hybridTopup = !hybridTopup
+        content.addView(settingsCheck("Top-up: complete a thin ring with fresh frames", hybridTopup).apply {
+            setOnCheckedChangeListener { _, enabled ->
+                hybridTopup = enabled
                 lensPreferences().edit().putBoolean(KEY_ZSL_HYBRID_TOPUP, hybridTopup).apply()
                 controller.setZslHybridTopup(hybridTopup)
-                text = zslHybridTopupText(hybridTopup)
                 setStatus(if (hybridTopup) "ZSL TOP-UP ON" else "ZSL TOP-UP OFF")
             }
         })

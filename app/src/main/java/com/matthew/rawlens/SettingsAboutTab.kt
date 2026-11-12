@@ -80,7 +80,7 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
                 val notices = listOf("raw-exposure-NOTICE.txt", "GPL-2.0.txt", "Apache-2.0.txt",
                     "BSD-2-Clause-libcamera.txt", "bakinglab-aces.txt")
                     .joinToString("\n\n") { name -> assets.open("licenses/$name").bufferedReader().use { it.readText() } }
-                RawLensDialogBuilder(this@showAboutSettings).setTitle("Open-source licences")
+                RawLensDialogBuilder(this@showAboutSettings).setTitle("Open-source licences").asPage()
                     .setMessage(notices).setPositiveButton("Close", null).show()
             }
         })
@@ -89,7 +89,7 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
             setOnClickListener {
                 val licenseText = assets.open("LICENSE").bufferedReader().use { it.readText() }
                 RawLensDialogBuilder(this@showAboutSettings)
-                    .setTitle("GNU General Public License v3")
+                    .setTitle("GNU General Public License v3").asPage()
                     .setMessage(licenseText)
                     .setPositiveButton("Close", null)
                     .show()

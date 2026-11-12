@@ -175,6 +175,8 @@
         android:textStyle="bold"
         android:visibility="gone" />
 
+
+
     <!-- Top bar: opaque black island, edge-to-edge with rounded bottom corners
          mirroring the bottom panel. Single controls row in photo mode; the
          capture info line lives in the bottom panel in both modes so the

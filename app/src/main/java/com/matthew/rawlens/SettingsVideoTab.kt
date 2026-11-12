@@ -85,7 +85,10 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             isEnabled = !videoRecording
             fun refresh() { text = "Encoded Video crop: ${encodedVideoCrop().label}" }
             refresh()
-            setOnClickListener { cycleEncodedVideoCrop(); refresh() }
+            setOnClickListener {
+                p.kit.pickByStepping("Encoded Video crop", listOf(VideoCrop.WIDE_16_9, VideoCrop.SCOPE_2_39, VideoCrop.UNIVISIUM_2_00).map { it.label },
+                    { encodedVideoCrop().label }, { cycleEncodedVideoCrop() }) { refresh() }
+            }
         })
         content.addView(SettingsSwitch(this).apply {
             text = "Encoded Video"
@@ -104,8 +107,8 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             }
             refresh()
             setOnClickListener {
-                cycleEncodedVideoProfile()
-                refresh()
+                p.kit.pickByStepping("Output profile", EncodedVideoProfile.entries.map { it.description },
+                    { encodedVideoProfile().description }, { cycleEncodedVideoProfile() }) { refresh() }
             }
         })
         content.addView(Button(this).apply {
@@ -114,8 +117,8 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             }
             refresh()
             setOnClickListener {
-                cycleEncodedVideoFps()
-                refresh()
+                p.kit.pickByStepping("Frame rate", listOf("24FPS", "30FPS"),
+                    { "${encodedVideoFpsPref()}FPS" }, { cycleEncodedVideoFps() }) { refresh() }
             }
         })
         content.addView(Button(this).apply {
@@ -125,8 +128,10 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             }
             refresh()
             setOnClickListener {
-                cycleEncodedVideoRes()
-                refresh()
+                fun sizeLabel(size: EncodedVideoProbe.EncodeSize) = "${size.width}x${size.height}"
+                p.kit.pickByStepping("Resolution",
+                    listOf("HD1080", "QHD1440", "UHD4K").map { sizeLabel(EncodedVideoProbe.encodeSizeForRes(it)) },
+                    { sizeLabel(encodedVideoResPref()) }, { cycleEncodedVideoRes() }) { refresh() }
             }
         })
         content.addView(Button(this).apply {
@@ -135,10 +140,11 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             }
             refresh()
             setOnClickListener {
-                val next = videoDemosaic().next()
-                lensPreferences().edit().putString(KEY_VIDEO_DEMOSAIC, next.name).apply()
-                refresh()
-                setStatus("ENCODED VIDEO DEMOSAIC • ${next.label} — NEXT TAKE")
+                p.kit.chooseEnum("Demosaic", videoDemosaic(), { it.label }) { next ->
+                    lensPreferences().edit().putString(KEY_VIDEO_DEMOSAIC, next.name).apply()
+                    refresh()
+                    setStatus("ENCODED VIDEO DEMOSAIC • ${next.label} — NEXT TAKE")
+                }
             }
         })
         content.addView(sectionDesc("MHC is the default video demosaic. The former video RCD backend has been removed; saved RCD choices use MHC. Super pixel bins each 2x2 Bayer quad into one pixel: faster processing with half the detail."))
@@ -172,7 +178,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         content.addView(sectionTitle("Monitoring & LUTs"))
         content.addView(sectionDesc("ACES fitted is a baked filmic approximation in Rec.709 gamma 2.4, not ACES scene data. S-Log3 uses S-Gamut3.Cine primaries; interpret data levels as Video/limited."))
         content.addView(Button(this).apply {
-            text = "S-Log3 LUT library: choose assist / LUT"
+            text = "S-Log3 LUT library: choose assist or LUT"
             isEnabled = !videoRecording
             setOnClickListener { chooseEncodedVideoMonitorLut() }
         })
@@ -237,14 +243,12 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             refresh()
             setOnClickListener {
                 val current = CrawWriter.normalizeCodec(lensPreferences().getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE))
-                // Live (default) -> Live v1 — Legacy -> Balanced -> Live
-                val next = when (current) {
-                    CrawWriter.CODEC_LIVE -> CrawWriter.CODEC_LIVE_V1
-                    CrawWriter.CODEC_LIVE_V1 -> CrawWriter.CODEC_FAST
-                    else -> CrawWriter.CODEC_LIVE
+                // Live (default), Live v1 — Legacy, Balanced
+                p.kit.choose("Compression", listOf(CrawWriter.CODEC_LIVE, CrawWriter.CODEC_LIVE_V1, CrawWriter.CODEC_FAST),
+                    current, { CrawWriter.codecDisplayName(it) }) { next ->
+                    lensPreferences().edit().putInt(MainActivity.KEY_VIDEO_CODEC, next).apply()
+                    refresh()
                 }
-                lensPreferences().edit().putInt(MainActivity.KEY_VIDEO_CODEC, next).apply()
-                refresh()
             }
         })
         content.addView(sectionDesc("All modes preserve every RAW sample. CRAW Live is the default recording mode. CRAW Balanced trades more CPU for potentially smaller files. CRAW Live v1 — Legacy is retained for compatibility. Speed and size depend on the scene and device. Applies to the next take."))
@@ -254,8 +258,13 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             }
             refresh()
             setOnClickListener {
-                cycleVideoCrop()
-                refresh()
+                // Same options and side effects as the quick tile's step-to-next.
+                if (encodedVideoEnabled) p.kit.pickByStepping("Encoded Video crop", listOf(VideoCrop.WIDE_16_9, VideoCrop.SCOPE_2_39, VideoCrop.UNIVISIUM_2_00).map { it.label },
+                    { encodedVideoCrop().label }, { cycleVideoCrop() }) { refresh() }
+                else {
+                    p.kit.pickByStepping("RAW Video crop", VideoCrop.entries.map { videoCropShort(it) },
+                        { videoCropShort() }, { cycleVideoCrop() }) { refresh() }
+                }
             }
         })
         content.addView(sectionDesc("Recording crop. Encoded Video: 16:9, 2.39:1, or 2.00:1; changes apply to the next take."))
@@ -278,9 +287,12 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             refresh()
             setOnClickListener {
                 val cfaMode = lensPreferences().getString(MainActivity.KEY_VIDEO_BINNING_MODE, MainActivity.BINNING_RGB) == MainActivity.BINNING_CFA
-                lensPreferences().edit().putString(MainActivity.KEY_VIDEO_BINNING_MODE,
-                    if (cfaMode) MainActivity.BINNING_RGB else MainActivity.BINNING_CFA).apply()
-                refresh()
+                p.kit.choose("Binning output", listOf(false, true), cfaMode,
+                    { if (it) "CFA (cheap)" else "RGB (best)" }) { cfa ->
+                    lensPreferences().edit().putString(MainActivity.KEY_VIDEO_BINNING_MODE,
+                        if (cfa) MainActivity.BINNING_CFA else MainActivity.BINNING_RGB).apply()
+                    refresh()
+                }
             }
         })
         content.addView(sectionDesc("RGB (best): each 2x2 block is demosaiced once on the phone (edge-directed), so editors never re-demosaic a binned mosaic: no magenta/green fringes, ~90 % of full-res detail. CFA (cheap): half-res Bayer remosaiced from the RGB bin (as camera ISPs rescale raw), a quarter of the samples of RGB and smaller files; any half-res mosaic still fringes a little once your editor demosaics it. Applies to the next take; N/A in Encoded Video."))

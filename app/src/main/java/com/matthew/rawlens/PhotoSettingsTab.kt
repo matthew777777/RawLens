@@ -44,6 +44,23 @@ internal class PhotoSettingsTab(
     fun show() {
         host.clearTabStatusViews()
         kit.content.removeAllViews()
+        if (LapisRootProfile.supported()) {
+            val profile = LapisRootProfile.preferences(activity)
+            kit.content.addView(kit.sectionTitle("Redmi Note 15 Pro 5G"))
+            kit.content.addView(kit.settingsCheck("Redmi sensor modes", LapisRootProfile.enabled(activity)).apply {
+                setOnCheckedChangeListener { _, checked ->
+                    profile.edit().putBoolean(LapisRootProfile.ENABLED, checked).apply()
+                    (activity as? MainActivity)?.let { it.updateQuickControls(); it.refreshCaptureFormatControl() }
+                    host.controller.reopenCamera()
+                    host.setStatus(if (checked) "REDMI SENSOR MODES ON" else "REDMI SENSOR MODES OFF")
+                    host.reshow()
+                }
+            })
+            if (LapisRootProfile.enabled(activity)) {
+                kit.content.addView(kit.sectionDesc("Choose 12.5 MP, 50 MP, 2× sensor RAW or DCG14 in the lens switcher. Root must be active and granted to RawLens. Sensor setup is automatic; camera settings are restored when the session closes."))
+                kit.content.addView(kit.sectionDesc("DCG14: 12.5 MP DCG/DSG RAW14 output at 30 fps; automatic exposure is required. Manual ISO/shutter and flash are unavailable in this mode. 50 MP: verified RAW10. 2×: RAW14 sensor interface, delivered as 10-bit RAW; extra precision is unverified. Firmware: ${LapisRootProfile.FIRMWARE}."))
+            }
+        }
         // JPEG XL container options, mirroring darktable's export panel:
         // bit depth, 16-bit pixel type, quality, encoding effort, and
         // decoding-speed tier. The develop look (AgX) is shared with JPEG.
@@ -53,11 +70,10 @@ internal class PhotoSettingsTab(
                 text = "Format: ${host.developedFormat.label}"
             }
             refresh()
-            setOnClickListener {
-                val next = host.developedFormat.next()
+            setOnClickListener { kit.chooseEnum("Format", host.developedFormat, { it.label }) { next ->
                 if (!host.controller.setDevelopedFormat(next)) {
                     host.setStatus("SETTINGS AFTER SAVES")
-                    return@setOnClickListener
+                    return@chooseEnum
                 }
                 host.developedFormat = next
                 host.lensPreferences().edit().putString(MainActivity.KEY_DEVELOPED_FORMAT, next.name).apply()
@@ -65,7 +81,7 @@ internal class PhotoSettingsTab(
                 host.refreshCaptureFormatControl()
                 host.setStatus("DEVELOPED • ${next.label}")
                 host.reshow()
-            }
+            } }
         })
         if (host.developedFormat == DevelopedFormat.JXL) {
         var currentJxlSettings = host.jxlOutputSettings()
@@ -95,14 +111,12 @@ internal class PhotoSettingsTab(
                 text = "HDR transfer: ${currentJxlSettings.hdrTransfer.label}"
             }
             refresh()
-            setOnClickListener {
-                if (applyJxlOutputSettings(
-                    currentJxlSettings.copy(hdrTransfer = currentJxlSettings.hdrTransfer.next())
-                )) {
+            setOnClickListener { kit.chooseEnum("HDR transfer", currentJxlSettings.hdrTransfer, { it.label }) { picked ->
+                if (applyJxlOutputSettings(currentJxlSettings.copy(hdrTransfer = picked))) {
                     refresh()
                     host.setStatus("JXL TRANSFER • ${currentJxlSettings.hdrTransfer.label}")
                 }
-            }
+            } }
         })
         kit.content.addView(kit.sectionDesc("SDR is the classic still. HDR PQ keeps scene highlights above SDR white as true HDR (ST2084, 10+ bit, needs an HDR display); the AgX look stays shared."))
         kit.content.addView(kit.sectionDesc("Stills carry EXIF/XMP: Ultra HDR gainmaps apply to JPEG output only, and the AgX photo look below is shared."))
@@ -116,31 +130,27 @@ internal class PhotoSettingsTab(
             visibility =
                 if (currentJxlSettings.bitDepth == JxlBitDepth.BIT_16) Button.VISIBLE
                 else Button.GONE
-            setOnClickListener {
-                if (applyJxlOutputSettings(
-                    currentJxlSettings.copy(pixelType = currentJxlSettings.pixelType.next())
-                )) {
+            setOnClickListener { kit.chooseEnum("JXL pixel type", currentJxlSettings.pixelType, { it.label }) { picked ->
+                if (applyJxlOutputSettings(currentJxlSettings.copy(pixelType = picked))) {
                     refresh()
                     host.setStatus("JXL PIXEL TYPE • ${currentJxlSettings.pixelType.label}")
                 }
-            }
+            } }
         }
         val depthButton = Button(activity).apply {
             fun refresh() {
                 text = "JXL bit depth: ${currentJxlSettings.bitDepth.label}"
             }
             refresh()
-            setOnClickListener {
-                if (applyJxlOutputSettings(
-                    currentJxlSettings.copy(bitDepth = currentJxlSettings.bitDepth.next())
-                )) {
+            setOnClickListener { kit.chooseEnum("JXL bit depth", currentJxlSettings.bitDepth, { it.label }) { picked ->
+                if (applyJxlOutputSettings(currentJxlSettings.copy(bitDepth = picked))) {
                     refresh()
                     pixelTypeButton.visibility =
                         if (currentJxlSettings.bitDepth == JxlBitDepth.BIT_16) Button.VISIBLE
                         else Button.GONE
                     host.setStatus("JXL DEPTH • ${currentJxlSettings.bitDepth.label}")
                 }
-            }
+            } }
         }
         kit.content.addView(depthButton)
         kit.content.addView(pixelTypeButton)
@@ -286,9 +296,9 @@ internal class PhotoSettingsTab(
             fun refresh() { text = "Active D-Lighting: ${currentJpegSettings.activeDLighting.label}" }
             refresh()
             setOnClickListener {
-                val levels = ActiveDLighting.values()
-                val next = levels[(currentJpegSettings.activeDLighting.ordinal + 1) % levels.size]
-                if (applyJpegOutputSettings(currentJpegSettings.copy(activeDLighting = next))) refresh()
+                kit.chooseEnum("Active D-Lighting", currentJpegSettings.activeDLighting, { it.label }) { next ->
+                    if (applyJpegOutputSettings(currentJpegSettings.copy(activeDLighting = next))) refresh()
+                }
             }
         })
         kit.content.addView(kit.sectionDesc("Protects highlights in PROGRAM/ETTR and lifts JPEG/JXL shadows and midtones. RAW exposure changes; RAW pixel development stays untouched. Off preserves the existing look."))
@@ -337,13 +347,12 @@ internal class PhotoSettingsTab(
                 text = "JPEG chroma subsampling: ${currentJpegSettings.chromaSubsampling.label}"
             }
             refresh()
-            setOnClickListener {
-                val next = currentJpegSettings.chromaSubsampling.next()
+            setOnClickListener { kit.chooseEnum("JPEG chroma subsampling", currentJpegSettings.chromaSubsampling, { it.label }) { next ->
                 if (applyJpegOutputSettings(currentJpegSettings.copy(chromaSubsampling = next))) {
                     refresh()
                     host.setStatus("JPEG CHROMA • ${next.label}")
                 }
-            }
+            } }
         }
         if (host.developedFormat == DevelopedFormat.JPEG) kit.content.addView(chromaButton)
         val demosaicButton = Button(activity).apply {
@@ -351,13 +360,12 @@ internal class PhotoSettingsTab(
                 text = "Demosaic: ${currentJpegSettings.demosaic.label}"
             }
             refresh()
-            setOnClickListener {
-                val next = currentJpegSettings.demosaic.next()
+            setOnClickListener { kit.chooseEnum("Demosaic", currentJpegSettings.demosaic, { it.label }) { next ->
                 if (applyJpegOutputSettings(currentJpegSettings.copy(demosaic = next))) {
                     refresh()
                     host.setStatus("JPEG DEMOSAIC • ${next.label}")
                 }
-            }
+            } }
         }
         kit.content.addView(demosaicButton)
         kit.content.addView(kit.sectionDesc("AMaZE (GLES) is the default still demosaic; RCD runs the Vulkan RCD modes and imports the result back. Quad-Bayer always uses AMaZE."))
@@ -368,10 +376,13 @@ internal class PhotoSettingsTab(
             refresh()
             setOnClickListener {
                 val cleanup = currentJpegSettings.chromaCleanup
-                val next = cleanup.copy(falseColorSuppression = !cleanup.falseColorSuppression)
-                if (applyJpegOutputSettings(currentJpegSettings.copy(chromaCleanup = next))) {
-                    refresh()
-                    host.setStatus("FALSE COLOR • ${if (next.falseColorSuppression) "ON" else "OFF"}")
+                kit.choose("False-color suppression", listOf(false, true), cleanup.falseColorSuppression,
+                    { if (it) "ON" else "OFF" }) { enabled ->
+                    val next = cleanup.copy(falseColorSuppression = enabled)
+                    if (applyJpegOutputSettings(currentJpegSettings.copy(chromaCleanup = next))) {
+                        refresh()
+                        host.setStatus("FALSE COLOR • ${if (next.falseColorSuppression) "ON" else "OFF"}")
+                    }
                 }
             }
         }
@@ -385,11 +396,13 @@ internal class PhotoSettingsTab(
             refresh()
             setOnClickListener {
                 val cleanup = currentJpegSettings.chromaCleanup
-                val index = defringeSteps.indexOfFirst { it >= cleanup.defringeStrength - 1e-3f }
-                val next = cleanup.copy(defringeStrength = defringeSteps[(index + 1) % defringeSteps.size])
-                if (applyJpegOutputSettings(currentJpegSettings.copy(chromaCleanup = next))) {
-                    refresh()
-                    host.setStatus("DEFRINGE • ${label(next.defringeStrength)}")
+                val index = defringeSteps.indexOfFirst { it >= cleanup.defringeStrength - 1e-3f }.coerceAtLeast(0)
+                kit.pick("Purple defringe", defringeSteps.map { label(it) }, index) { which ->
+                    val next = cleanup.copy(defringeStrength = defringeSteps[which])
+                    if (applyJpegOutputSettings(currentJpegSettings.copy(chromaCleanup = next))) {
+                        refresh()
+                        host.setStatus("DEFRINGE • ${label(next.defringeStrength)}")
+                    }
                 }
             }
         }

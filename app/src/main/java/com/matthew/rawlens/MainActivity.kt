@@ -55,6 +55,10 @@ import android.os.Build
 import android.os.SystemClock
 
 class MainActivity : Activity() {
+    /** Same UI geometry at every system display-size / font-size setting. */
+    override fun attachBaseContext(newBase: android.content.Context) =
+        super.attachBaseContext(StableUiScale.wrap(newBase))
+
     internal lateinit var controller: RawCameraController
     private lateinit var status: TextView
 
@@ -117,6 +121,8 @@ class MainActivity : Activity() {
     private var vfEngineButton: TextView? = null
     internal var rawZslStatus = RawZslStatus(RawZslState.OFF, "Disabled in settings")
     internal var rawZslSettingsStatus: TextView? = null
+    /** The open Settings screen, if any; reopening replaces it instead of stacking. */
+    internal var settingsDialog: android.app.Dialog? = null
     internal var gridEnabled = true
     internal var histogramEnabled = true
     internal var levelEnabled = false
@@ -1623,8 +1629,9 @@ class MainActivity : Activity() {
         // Its labels rotate inside the view, so no quarter-turn bounding-box lift is needed.
         findViewById<View>(R.id.lkrZoomChip)?.let { chip ->
             (chip.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                if (params.bottomMargin != baseBottomMargin) {
-                    params.bottomMargin = baseBottomMargin
+                val chipBottom = baseBottomMargin
+                if (params.bottomMargin != chipBottom) {
+                    params.bottomMargin = chipBottom
                     chip.layoutParams = params
                 }
             }
@@ -2214,8 +2221,9 @@ class MainActivity : Activity() {
         val meteredFocus = runCatching { controller.snapshotVideoMeteredFocus() }.getOrNull()
         val recordLocks = videoRecordLocks()
         hideManualControl()
-        controller.stop()
+        val lapisRecordingLease=controller.stopForRawVideo()
         if (!CrawWriter.available) {
+            lapisRecordingLease?.close()
             setStatus("RAW VIDEO: CRAW NOT AVAILABLE")
             controller.start()
             return
@@ -2225,11 +2233,12 @@ class MainActivity : Activity() {
                 "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.craw", "application/octet-stream")
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Recording destination unavailable", e)
+            lapisRecordingLease?.close()
             setStatus("CANNOT RECORD HERE • ${e.message}")
             controller.start()
             return
         }
-        val recorder = RawVideoRecorder(manager, cameraId, size, this).apply {
+        val recorder = RawVideoRecorder(manager, cameraId, size, this, lapisRecordingLease).apply {
             crop = videoCrop
             compressionCodec = CrawWriter.normalizeCodec(lensPreferences().getInt(KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE))
             binning = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
@@ -2269,6 +2278,7 @@ class MainActivity : Activity() {
             recorder.start(file, videoContainerMeta(manager, cameraId, size))
         } catch (e: Exception) {
             try { file.finish(false) } catch (_: Exception) {}
+            lapisRecordingLease?.close()
             Log.w(LOG_TAG, "video start failed: ${e.message}")
             setStatus(if (e is RawVideoRecorder.StorageFullException) "STORAGE FULL" else "REC FAILED")
             controller.start()
@@ -2340,18 +2350,19 @@ class MainActivity : Activity() {
             }
         } else null
         hideManualControl()
-        controller.stop()
+        val lapisRecordingLease = controller.stopForRawVideo()
         val suffix = if (bakedLut != null) "_LUT709" else profile.fileSuffix
         val file = try {
             DirectRecordingOutput.create(this,
                 "${CaptureFileNames.stem(System.currentTimeMillis())}$suffix.mp4", "video/mp4")
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Recording destination unavailable", e)
+            lapisRecordingLease?.close()
             setStatus("CANNOT RECORD HERE • ${e.message}")
             controller.start()
             return
         }
-        val recorder = EncodedVideoRecorder(manager, cameraId, applicationContext).apply {
+        val recorder = EncodedVideoRecorder(manager, cameraId, applicationContext, lapisRecordingLease).apply {
             captureGps = currentGpsLocation()
             audioEnabled = withAudio
             // Direct single-file recording never starts a second re-encode/sidecar.
@@ -2954,7 +2965,7 @@ class MainActivity : Activity() {
         )
     }
 
-    internal fun videoCropShort(): String = when (videoCrop) {
+    internal fun videoCropShort(crop: VideoCrop = videoCrop): String = when (crop) {
         VideoCrop.OPEN_GATE -> "GATE"
         VideoCrop.WIDE_16_9 -> "16:9"
         VideoCrop.SCOPE_2_39 -> "2.39"
@@ -3341,8 +3352,14 @@ class MainActivity : Activity() {
 
     /** Badge-style pairing label: developed container plus DNG when paired. */
     private fun captureBadgeLabel(): String =
-        if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng)
-        else "DNG"
+        when (redmiRootMode()) {
+            LapisRootProfile.Mode.FULL -> "50 MP • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
+            LapisRootProfile.Mode.DCG14 -> "DCG14 • AUTO AE • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
+            LapisRootProfile.Mode.CROP_2X -> "2× • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
+            LapisRootProfile.Mode.DCG14 -> "DCG14 • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
+            LapisRootProfile.Mode.NORMAL -> if (captureFormat.includesJpeg)
+                developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
+        }
 
     /** Short status tokens for the format switch; JPEG default matches legacy. */
     private fun captureStatusLabel(): String = when {
@@ -3353,15 +3370,23 @@ class MainActivity : Activity() {
 
     /** Shutter-side WYSIWYG switch: FOLLOW -> RAW -> JPEG -> FOLLOW. */
     internal fun cycleVfPreviewMode() {
-        vfPreviewMode = when (vfPreviewMode) {
+        selectVfPreviewMode(when (vfPreviewMode) {
             VfPreviewMode.FOLLOW -> VfPreviewMode.RAW
             VfPreviewMode.RAW -> VfPreviewMode.JPEG
             VfPreviewMode.JPEG -> VfPreviewMode.FOLLOW
-        }
+        })
+    }
+
+    internal fun selectVfPreviewMode(mode: VfPreviewMode) {
+        vfPreviewMode = mode
         lensPreferences().edit().putString(KEY_VF_PREVIEW_MODE, vfPreviewMode.name).apply()
         controller.setVfPreviewMode(vfPreviewMode)
         setStatus("VF • ${vfPreviewMode.name}")
     }
+
+    /** Current preview mode and every mode with its label for the active capture format. */
+    internal fun vfPreviewModeChoice(): Pair<VfPreviewMode, (VfPreviewMode) -> String> =
+        vfPreviewMode to { mode -> mode.label(captureFormat) }
 
     /** RAW VF debug-overlay tap: cycle the engine AUTO -> GPU -> CPU -> BGU -> BGU_CPU. */
     private fun cycleVfEngineMode() {
@@ -3405,6 +3430,10 @@ class MainActivity : Activity() {
             VfResolution.HIGH -> VfResolution.MAX
             else -> VfResolution.MIN
         }
+        selectVfResolution(next)
+    }
+
+    internal fun selectVfResolution(next: Int) {
         vfResolution = next
         lensPreferences().edit().putInt(KEY_VF_RESOLUTION, next).apply()
         controller.setVfTargetLongEdge(next)

@@ -73,21 +73,15 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
         content.removeAllViews()
         content.addView(sectionTitle("RAW capture"))
         content.addView(Button(this).apply {
-            text = "DNG sensor calibration (levels • noise • color)"
+            text = "DNG sensor calibration: levels, noise, color"
             setOnClickListener { showDngMetadataOverrideEditor() }
         })
         content.addView(Button(this).apply {
-            text = "Vendor keys (per lens • session + request)"
+            text = "Vendor keys: per lens, session + request"
             setOnClickListener { showVendorKeysEditor() }
         })
-        content.addView(TextView(this).apply {
-            text = "DNG writer backend"
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 13f
-            setPadding(0, dp(12), 0, 0)
-        })
         content.addView(Button(this).apply {
-            fun refresh() { text = dngWriterBackend().label }
+            fun refresh() { text = "DNG writer backend: ${dngWriterBackend().label}" }
             refresh()
             setOnClickListener {
                 val entries = DngWriterBackend.entries.toTypedArray()
@@ -111,14 +105,8 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             setTextColor(getColor(R.color.text_secondary))
             textSize = 11f
         })
-        content.addView(TextView(this).apply {
-            text = "DNG compression"
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 13f
-            setPadding(0, dp(12), 0, 0)
-        })
         content.addView(Button(this).apply {
-            fun refresh() { text = dngCompression().label }
+            fun refresh() { text = "DNG compression: ${dngCompression().label}" }
             refresh()
             setOnClickListener {
                 val entries = DngCompression.entries.toTypedArray()
@@ -150,23 +138,30 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
         content.addView(Button(this).apply {
             text = "Preview resolution: ${vfResolution}px"
             setOnClickListener {
-                cycleVfResolution()
-                text = "Preview resolution: ${vfResolution}px"
+                p.kit.choose("Preview resolution", VfResolution.OPTIONS.toList(), vfResolution, { "${it}px" }) { picked ->
+                    selectVfResolution(picked)
+                    text = "Preview resolution: ${vfResolution}px"
+                }
             }
         })
         content.addView(Button(this).apply {
             text = "Preview: " + vfPreviewModeText().substringAfter("(").removeSuffix(")")
             setOnClickListener {
-                cycleVfPreviewMode()
-                text = "Preview: " + vfPreviewModeText().substringAfter("(").removeSuffix(")")
+                val (mode, modeLabel) = vfPreviewModeChoice()
+                p.kit.chooseEnum("Preview", mode, modeLabel) { picked ->
+                    selectVfPreviewMode(picked)
+                    text = "Preview: " + vfPreviewModeText().substringAfter("(").removeSuffix(")")
+                }
             }
         })
         content.addView(Button(this).apply {
             fun refresh() { text = "Exposure overlay: ${rawExposureSettings.overlay.label}" }
             refresh()
             setOnClickListener {
-                saveRawExposureAssist(rawExposureSettings.copy(overlay = rawExposureSettings.overlay.next()))
-                refresh()
+                p.kit.chooseEnum("Exposure overlay", rawExposureSettings.overlay, { it.label }) { picked ->
+                    saveRawExposureAssist(rawExposureSettings.copy(overlay = picked))
+                    refresh()
+                }
             }
         })
         content.addView(SettingsSwitch(this).apply {
@@ -178,8 +173,10 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             fun refresh() { text = "RAW meter: ${rawExposureSettings.meterMode.label}" }
             refresh()
             setOnClickListener {
-                saveRawExposureAssist(rawExposureSettings.copy(meterMode = rawExposureSettings.meterMode.next()))
-                refresh()
+                p.kit.chooseEnum("RAW meter", rawExposureSettings.meterMode, { it.label }) { picked ->
+                    saveRawExposureAssist(rawExposureSettings.copy(meterMode = picked))
+                    refresh()
+                }
             }
         })
         content.addView(sectionDesc("RAW values before white balance, tone mapping or LOG gain. Spot follows the photo AE target; recording uses centre. Average shows the whole frame's mean EV and estimated clipped area (any RAW channel); recording measures its crop. Sparse sampling can miss tiny clipped highlights. This readout does not change exposure. Zebras mark clipping and the black/noise floor with diagonal stripes. False colour maps −10 to 0 RAW EV. Waiting means no fresh RAW data."))
@@ -204,12 +201,14 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             }
             refresh()
             setOnClickListener {
-                focusPeakingColor = focusPeakingColor.next()
-                lensPreferences().edit()
-                    .putString(KEY_FOCUS_PEAKING_COLOR, focusPeakingColor.preferenceValue).apply()
-                focusPeakingOverlay.peakingColor = focusPeakingColor
-                refresh()
-                setStatus("PEAKING • ${focusPeakingColor.label}")
+                p.kit.chooseEnum("Peaking color", focusPeakingColor, { it.label }) { picked ->
+                    focusPeakingColor = picked
+                    lensPreferences().edit()
+                        .putString(KEY_FOCUS_PEAKING_COLOR, focusPeakingColor.preferenceValue).apply()
+                    focusPeakingOverlay.peakingColor = focusPeakingColor
+                    refresh()
+                    setStatus("PEAKING • ${focusPeakingColor.label}")
+                }
             }
         })
         content.addView(sectionDesc("Overlays, logs, and capture debug output live under the Debug tab."))

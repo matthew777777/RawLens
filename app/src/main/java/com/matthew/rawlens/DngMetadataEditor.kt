@@ -104,7 +104,7 @@ internal fun MainActivity.showDngMetadataOverrideEditor() {
         programAeProfileStore.hasProfile(cameraId)) { showProgramPanel() }
     row("Vendor keys", "Session + request tags for this lens",
         vendorKeyStore.get(cameraId).activeEntries().isNotEmpty()) { showVendorKeysEditor() }
-    RawLensDialogBuilder(this).setTitle("RAW DNG calibration")
+    RawLensDialogBuilder(this).setTitle("RAW DNG calibration").asPage()
         .setView(ScrollView(this).apply { addView(content) })
         .setNeutralButton("Reset all", null).setNegativeButton("Close", null)
         .show().also { dialog ->

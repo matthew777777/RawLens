@@ -70,19 +70,17 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             text = "Capture sharpening\nRestores detail lost to the lens and demosaic. Developed photos only."
             isChecked = settings.captureSharpening.enabled
         }
-        val sharpChoices = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        // Strength is one row with a list picker, like every other value in Settings.
+        val sharpChoices = p.kit.settingsButton("")
         fun refreshSharp() {
-            sharpChoices.removeAllViews()
-            CaptureSharpeningLevel.entries.forEach { level ->
-                sharpChoices.addView(p.kit.settingsButton(level.label, settings.captureSharpening.level == level).apply {
-                    contentDescription = "Capture sharpening ${level.label}"
-                    isEnabled = settings.captureSharpening.enabled
-                    isSelected = settings.captureSharpening.level == level
-                    setOnClickListener {
-                        val next = settings.copy(captureSharpening = settings.captureSharpening.copy(level = level))
-                        if (persistDenoiseSettings(next)) { settings = next; refreshSharp() }
-                    }
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            sharpChoices.text = "Sharpening strength: ${settings.captureSharpening.level.label}"
+            sharpChoices.isEnabled = settings.captureSharpening.enabled
+            sharpChoices.alpha = if (sharpChoices.isEnabled) 1f else 0.45f
+        }
+        sharpChoices.setOnClickListener {
+            p.kit.chooseEnum("Sharpening strength", settings.captureSharpening.level, { it.label }) { level ->
+                val next = settings.copy(captureSharpening = settings.captureSharpening.copy(level = level))
+                if (persistDenoiseSettings(next)) { settings = next; refreshSharp() }
             }
         }
         sharpToggle.setOnCheckedChangeListener { button, enabled ->

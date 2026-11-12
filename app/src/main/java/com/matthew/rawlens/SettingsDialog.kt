@@ -51,80 +51,157 @@ import java.util.Locale
 import android.os.Build
 import android.os.SystemClock
 
-// The Settings dialog shell (tab chips, paging, swipe) around the Settings*Tab pages. Moved verbatim from MainActivity.
+// The Settings screen shell (category list, page header, back navigation) around the Settings*Tab pages.
+
+/** [showSettings] page index for the category list itself. */
+internal const val SETTINGS_ROOT = -1
+
+/** [showSettings] index of Lenses: not a page, the list row opens lens discovery itself. */
+internal const val SETTINGS_LENSES_TAB = 7
 
 /**
- * Settings sheet. [initialTab] selects the opening page (see
- * [SETTINGS_VIDEO_TAB]). The settings button opens Video in video mode,
- * Exposure in PROGRAM, and General otherwise.
+ * Fullscreen Settings. Opens on the category list, like system settings: a row per
+ * page, tap to open it, back to return. [initialTab] opens one page directly (see
+ * [SETTINGS_VIDEO_TAB]); the settings button uses that for Video in video mode and
+ * Exposure in PROGRAM. Back from such a page still leads to the category list.
  */
-internal fun MainActivity.showSettings(initialTab: Int = 0) {
+internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
+    settingsDialog?.dismiss()
+    fun selectableBackground(borderless: Boolean): Int = android.util.TypedValue().also {
+        theme.resolveAttribute(
+            if (borderless) android.R.attr.selectableItemBackgroundBorderless
+            else android.R.attr.selectableItemBackground, it, true)
+    }.resourceId
     val container = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(12), dp(4), dp(12), dp(4))
+        setBackgroundColor(getColor(R.color.surface))
     }
-    // Modern chip tab row (mirrors PROGRAM AE panel styling): scrollable so
-    // seven tabs fit without squeezing. Active tab uses the accent chip.
-    val tabRow = LinearLayout(this).apply {
+    val backButton = TextView(this).apply {
+        text = "←"
+        textSize = 22f
+        gravity = Gravity.CENTER
+        setTextColor(getColor(R.color.text_primary))
+        setBackgroundResource(selectableBackground(borderless = true))
+        isClickable = true
+        isFocusable = true
+    }
+    val titleView = TextView(this).apply {
+        textSize = 26f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        letterSpacing = -0.01f
+        setTextColor(getColor(R.color.text_primary))
+        maxLines = 1
+        isAccessibilityHeading = true
+        setPadding(dp(12), 0, dp(4), 0)
+    }
+    val header = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
-        showDividers = LinearLayout.SHOW_DIVIDER_NONE
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(12), 0, dp(4))
+        addView(backButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        addView(titleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
     }
-    val tabScroll = HorizontalScrollView(this).apply {
-        isHorizontalScrollBarEnabled = false
-        addView(tabRow, ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-    }
-    fun chipTab(label: String): Button = Button(this).apply {
-        text = label
-        RawLensUi.styleTab(this, active = false)
-    }.also { button ->
-        val params = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        params.marginEnd = dp(10)
-        tabRow.addView(button, params)
-    }
-    val generalTab = chipTab("General")
-    val jpegTab = chipTab("Photo")
-    val videoTab = chipTab("Video")
-    val exposureTab = chipTab("Exposure")
-    val burstTab = chipTab("Burst")
-    val mergeTab = chipTab("Merge")
-    val denoiseTab = chipTab("Denoise")
-    val lensesTab = chipTab("Lenses")
-    val debugTab = chipTab("Debug")
-    val aboutTab = chipTab("About")
-    val allTabs = listOf(generalTab, jpegTab, videoTab, exposureTab, burstTab, mergeTab, denoiseTab, lensesTab, debugTab, aboutTab)
-    fun markActive(active: Button) {
-        allTabs.forEach {
-            RawLensUi.styleTab(it, active = it === active)
-        }
-    }
-    val content = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(0, dp(4), 0, dp(4))
-    }
-    val kit = SettingsKit(this, content) { button, active -> styleSettingsButton(button, active) }
-    fun sectionTitle(text: String): TextView = kit.sectionTitle(text)
-    fun sectionDesc(text: String): TextView = kit.sectionDesc(text)
-    fun settingsButton(label: String, active: Boolean = false): Button = kit.settingsButton(label, active)
-    fun settingsCheck(label: String, checked: Boolean): SettingsSwitch = kit.settingsCheck(label, checked)
-    fun polish() = kit.polish()
-    // MATCH_PARENT so the full chip row scrolls inside the dialog instead of
-    // stretching the window beyond the screen edges.
-    container.addView(tabScroll, LinearLayout.LayoutParams(
+    container.addView(header, LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+    // Name and one-line summary per page, in page-index order.
+    val pageInfo = listOf(
+        "General" to "RAW capture, viewfinder, location, backup & restore",
+        "Photo" to "File format and photo output",
+        "Video" to "RAW and encoded video, audio, stabilization, monitoring",
+        "Exposure" to "PROGRAM auto exposure, HDR brackets, face priority",
+        "Burst" to "Zero shutter lag, gyro sidecars, offline merges",
+        "Merge" to "HDR+, MFSR and LK-R burst merges",
+        "Denoise" to "AI RAW denoise, wavelet denoise, capture sharpening",
+        "Lenses" to "",
+        "Debug" to "App log, camera diagnostics, debug frames",
+        "About" to "Version, licences, updates",
+    )
+    val pageIcons = listOf(
+        R.drawable.ic_tune, R.drawable.ic_set_photo, R.drawable.ic_set_video, R.drawable.ic_set_exposure,
+        R.drawable.ic_set_burst, R.drawable.ic_set_merge, R.drawable.ic_set_denoise, R.drawable.ic_set_lenses,
+        R.drawable.ic_set_debug, R.drawable.ic_set_about,
+    )
+    // The list as cards: a heading and the page indices under it.
+    val pageGroups = listOf(
+        "Capture" to listOf(0, 1, 2, 3),
+        "Processing" to listOf(4, 5, 6),
+        "Camera" to listOf(SETTINGS_LENSES_TAB),
+        "App" to listOf(8, 9),
+    )
+    // Page handles: the Settings*Tab pages identify themselves by these when they
+    // report that they have filled the content column. They are never displayed.
+    val allTabs = pageInfo.map { (name, _) -> Button(this).apply { text = name } }
+    val jpegTab = allTabs[1]
+    // A page's sub-page (see SettingsKit.collapseRange) takes over the content area.
+    var subTitle: String? = null
+    var subBody: View? = null
+    var pageTitle: CharSequence = ""
+    var pageScrollY = 0
+    lateinit var closeSubPage: () -> Unit
+    lateinit var subPageStillValid: () -> Boolean
+    fun markActive(active: Button) {
+        pageTitle = active.text
+        if (subTitle == null) titleView.text = pageTitle
+        // The page rebuilt itself; if it no longer offers the open sub-page, leave it.
+        else titleView.post { if (subTitle != null && !subPageStillValid()) closeSubPage() }
+    }
+    val content = SettingsCardColumn(this).apply { setPadding(0, 0, 0, dp(24)) }
+    val kit = SettingsKit(this, content) { button, active -> styleSettingsButton(button, active) }
+    fun polish() = kit.polish()
     val settingsScroll = ScrollView(this).apply {
         isVerticalScrollBarEnabled = false
         isHorizontalScrollBarEnabled = false
         scrollIndicators = 0
         isFillViewport = true
-        addView(content)
+        // Scrolled rows dissolve under the header instead of being sliced by it.
+        isVerticalFadingEdgeEnabled = true
+        setFadingEdgeLength(dp(20))
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(content)
+        })
+    }
+    val subHost = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, 0, 0, dp(24))
+        visibility = View.GONE
+    }
+    (settingsScroll.getChildAt(0) as LinearLayout).addView(subHost)
+    closeSubPage = {
+        subHost.removeAllViews()
+        subHost.visibility = View.GONE
+        content.visibility = View.VISIBLE
+        subTitle = null
+        subBody = null
+        titleView.text = pageTitle
+        settingsScroll.post { settingsScroll.scrollTo(0, pageScrollY) }
+    }
+    subPageStillValid = { subBody != null && kit.subPages[subTitle] === subBody }
+    kit.openSubPageTitle = { subTitle }
+    kit.openSubPage = { title, body ->
+        val refresh = subTitle == title
+        if (!refresh) pageScrollY = settingsScroll.scrollY
+        subHost.removeAllViews()
+        (body.parent as? ViewGroup)?.removeView(body)
+        subHost.addView(body)
+        subTitle = title
+        subBody = body
+        content.visibility = View.GONE
+        subHost.visibility = View.VISIBLE
+        titleView.text = title
+        if (!refresh) {
+            settingsScroll.scrollTo(0, 0)
+            content.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        }
     }
     container.addView(settingsScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-    lateinit var dialog: AlertDialog
-    var currentTab = 0
+    // The activity theme, not a dialog theme: a real fullscreen window like the camera itself.
+    val dialog = android.app.Dialog(this, R.style.Theme_RawLens)
+    var currentTab = SETTINGS_ROOT
     val page = SettingsPage(content, kit, ::markActive, allTabs)
+    page.dialog = dialog
     fun showGeneralTab() = showGeneralSettings(page)
     lateinit var photoTab: PhotoSettingsTab
     fun showJpegTab() {
@@ -151,115 +228,88 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
             showJpegTab()
         }
     })
-    fun showVideoTab() = showVideoSettings(page)
-    fun showExposureTab() = showExposureSettings(page)
-    fun showBurstTab() = showBurstSettings(page)
-    fun showMergeTab() = showMergeSettings(page)
-    fun showDenoiseTab() = showDenoiseSettings(page)
-    fun showLensesTab() = showLensesSettings(page)
-    fun showDebugTab() = showDebugSettings(page)
-    fun showAboutTab() = showAboutSettings(page)
     val tabPages: List<() -> Unit> = listOf(
         { showGeneralTab() },
         { showJpegTab() },
-        { showVideoTab() },
-        { showExposureTab() },
-        { showBurstTab() },
-        { showMergeTab() },
-        { showDenoiseTab() },
-        { showLensesTab() },
-        { showDebugTab() },
-        { showAboutTab() }
+        { showVideoSettings(page) },
+        { showExposureSettings(page) },
+        { showBurstSettings(page) },
+        { showMergeSettings(page) },
+        { showDenoiseSettings(page) },
+        { },
+        { showDebugSettings(page) },
+        { showAboutSettings(page) }
     )
-    fun goTab(index: Int) {
-        val clamped = index.coerceIn(tabPages.indices)
-        val changed = clamped != currentTab
-        currentTab = clamped
-        tabPages[clamped]()
-        settingsScroll.scrollTo(0, 0)
-        if (changed) content.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        // Keep the top tab strip following the page (taps and swipes alike)
-        // so the active tab is always visible, centered when possible.
-        tabRow.post {
-            val active = allTabs[clamped]
-            val centered = active.left - (tabScroll.width - active.width) / 2
-            tabScroll.smoothScrollTo(centered.coerceAtLeast(0), 0)
-        }
-    }
-    generalTab.setOnClickListener { goTab(0) }
-    jpegTab.setOnClickListener { goTab(1) }
-    videoTab.setOnClickListener { goTab(2) }
-    exposureTab.setOnClickListener { goTab(3) }
-    burstTab.setOnClickListener { goTab(4) }
-    mergeTab.setOnClickListener { goTab(5) }
-    denoiseTab.setOnClickListener { goTab(6) }
-    lensesTab.setOnClickListener { goTab(7) }
-    debugTab.setOnClickListener { goTab(8) }
-    aboutTab.setOnClickListener { goTab(9) }
-    // Swipe left/right anywhere on background space (tab strip, labels, gaps,
-    // dialog padding) flips tabs like book pages: left goes forward, right
-    // goes back. Touches that start on buttons, sliders, or checkboxes are
-    // consumed by those controls, so they never reach this detector. Both
-    // fast flings and slow drags count (DOWN/UP distance check), and the
-    // listeners always return false so scrolling is unaffected.
-    val swipeDistance = dp(64).toFloat()
-    var swipeDownX = 0f
-    var swipeDownY = 0f
-    var swipeTracking = false
-    val swipeTouch = View.OnTouchListener { _, event ->
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                swipeDownX = event.x
-                swipeDownY = event.y
-                swipeTracking = true
-            }
-            MotionEvent.ACTION_UP -> {
-                if (swipeTracking) {
-                    swipeTracking = false
-                    val dx = event.x - swipeDownX
-                    val dy = event.y - swipeDownY
-                    if (kotlin.math.abs(dx) >= swipeDistance &&
-                        kotlin.math.abs(dx) >= kotlin.math.abs(dy) * 1.5f
-                    ) {
-                        if (dx < 0f && currentTab < tabPages.lastIndex) goTab(currentTab + 1)
-                        else if (dx > 0f && currentTab > 0) goTab(currentTab - 1)
-                    }
+    lateinit var goTab: (Int) -> Unit
+    /** Category list: grouped cards, a row per page with its icon, name and summary. */
+    fun showRoot() {
+        rawZslSettingsStatus = null
+        sidecarSettingsStatus = null
+        content.removeAllViews()
+        titleView.text = "Settings"
+        pageGroups.forEach { (group, pages) ->
+            content.addView(kit.sectionTitle(group))
+            pages.forEach { index ->
+                val (name, pageSummary) = pageInfo[index]
+                val summary = if (index != SETTINGS_LENSES_TAB) pageSummary else {
+                    val count = selectedLensIds().size
+                    "$count RAW lens${if (count == 1) "" else "es"} enabled · discover and choose"
                 }
+                content.addView(kit.navRow(name, summary, pageIcons[index]) { goTab(index) },
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             }
-            MotionEvent.ACTION_CANCEL -> swipeTracking = false
         }
-        false
     }
-    settingsScroll.setOnTouchListener(swipeTouch)
-    content.setOnTouchListener(swipeTouch)
-    tabScroll.setOnTouchListener(swipeTouch)
-    tabRow.setOnTouchListener(swipeTouch)
-    container.setOnTouchListener(swipeTouch)
-    tabScroll.contentDescription = "Settings tabs. Swipe left or right anywhere to flip tabs."
-    goTab(initialTab)
-    dialog = RawLensDialogBuilder(this)
-        .setTitle("Settings")
-        .setView(container)
-        .setNegativeButton("Close", null)
-        .create()
-    page.dialog = dialog
-    dialog.setOnDismissListener { rawZslSettingsStatus = null }
-    // Match the island design language: same 16dp panel + stroke as the
-    // photo chrome instead of the default dialog frame.
-    dialog.window?.setBackgroundDrawableResource(R.drawable.quick_panel)
-    // Keep the sheet compact and floating: fixed width with side margins
-    // and capped height instead of stretching edge to edge.
-    dialog.show()
-    dialog.window?.let { window ->
-        // Use the same immersive bounds as the camera, so system-bar insets
-        // cannot shift the floating panel away from the screen centre.
-        ImmersiveMode.apply(window)
-        window.setGravity(Gravity.CENTER)
-        window.attributes = window.attributes.apply { x = 0; y = 0 }
-        val metrics = resources.displayMetrics
-        val targetWidth = (metrics.widthPixels - dp(24)).coerceAtLeast(dp(280))
-        val targetHeight = (metrics.heightPixels * 0.85f).toInt()
-        window.setLayout(targetWidth, targetHeight)
+    goTab = { index ->
+        if (index == SETTINGS_LENSES_TAB) {
+            // Lenses has no page of its own: the row opens lens discovery over the list.
+            content.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            showLensDiscovery(firstRun = false)
+        } else {
+            val target = if (index in tabPages.indices) index else SETTINGS_ROOT
+            val changed = target != currentTab
+            if (changed || subTitle != null) {
+                if (subTitle != null) closeSubPage()
+                kit.subPages.clear()
+                pageScrollY = 0
+            }
+            currentTab = target
+            if (target == SETTINGS_ROOT) showRoot() else tabPages[target]()
+            backButton.contentDescription = if (target == SETTINGS_ROOT) "Close settings" else "Back"
+            settingsScroll.scrollTo(0, 0)
+            if (changed) content.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        }
+    }
+    // One back rule everywhere: a sub-page returns to its page, a page to the list,
+    // and the list closes Settings.
+    fun goBack() {
+        when {
+            subTitle != null -> closeSubPage()
+            currentTab == SETTINGS_ROOT -> dialog.dismiss()
+            else -> goTab(SETTINGS_ROOT)
+        }
+    }
+    backButton.setOnClickListener { goBack() }
+    dialog.setOnKeyListener { _, keyCode, event ->
+        if (keyCode == KeyEvent.KEYCODE_BACK && currentTab != SETTINGS_ROOT) {
+            if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) goBack()
+            true
+        } else false
+    }
+    goTab(if (initialTab == SETTINGS_LENSES_TAB) SETTINGS_ROOT else initialTab)
+    settingsDialog = dialog
+    dialog.setOnDismissListener {
+        rawZslSettingsStatus = null
+        sidecarSettingsStatus = null
+        if (settingsDialog === dialog) settingsDialog = null
+    }
+    container.setPadding(dp(12), 0, dp(12), 0)
+    RawLensUi.showFullscreen(dialog, container)
+    if (initialTab == SETTINGS_LENSES_TAB) goTab(SETTINGS_LENSES_TAB)
+    // Coming back from lens discovery: the Lenses row shows the saved selection.
+    dialog.window?.decorView?.viewTreeObserver?.addOnWindowFocusChangeListener { focused ->
+        if (focused && currentTab == SETTINGS_ROOT && dialog.isShowing) showRoot()
     }
 }
 

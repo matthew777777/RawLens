@@ -37,13 +37,11 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
         }
         content.addView(settingsButton(mfsrKernelText(mfsrSettings.kernel)).apply {
             setOnClickListener {
-                val next = when (mfsrSettings.kernel) {
-                    MfsrKernel.KERNELNET -> MfsrKernel.WRONSKI
-                    MfsrKernel.WRONSKI -> MfsrKernel.KERNELNET
-                }
-                if (applyMfsrSettings(mfsrSettings.copy(kernel = next))) {
-                    text = mfsrKernelText(next)
-                    setStatus("MFSR ${mfsrKernelText(next).uppercase(Locale.US)}")
+                p.kit.chooseEnum("Kernel", mfsrSettings.kernel, { mfsrKernelText(it) }) { next ->
+                    if (applyMfsrSettings(mfsrSettings.copy(kernel = next))) {
+                        text = mfsrKernelText(next)
+                        setStatus("MFSR ${mfsrKernelText(next).uppercase(Locale.US)}")
+                    }
                 }
             }
         })
@@ -126,12 +124,15 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
         buildLkrLab(p, labBox)
         content.addView(sectionTitle("HDR+ merge"))
         content.addView(sectionDesc(
-            "Auto, Program and Manual capture a fresh burst; ZSL merges buffered frames. " +
-                "Noise-reduction strength " +
-                "${HdrPlusSettings.MIN_STRENGTH.toInt()}–${HdrPlusSettings.MAX_STRENGTH.toInt()}. " +
-                "Higher merges harder: cleaner stills, more ghosting on motion. " +
-                "AUTO matches the strength to the measured noise, higher for still scenes " +
-                "and lower where frames move, and ignores the slider."
+            "HDR+ takes a burst of RAW frames on one shutter press and merges them into a " +
+                "single photo. Combining the aligned frames lowers noise, so shadows are " +
+                "cleaner and more of the scene's dynamic range is usable than in one frame.\n\n" +
+                "Strength (${HdrPlusSettings.MIN_STRENGTH.toInt()}–${HdrPlusSettings.MAX_STRENGTH.toInt()}) " +
+                "sets how hard the frames are merged: higher is cleaner on still scenes but " +
+                "can ghost on motion. Auto strength picks it from the measured noise and " +
+                "motion and ignores the slider.\n\n" +
+                "Auto, Program and Manual capture a fresh burst; ZSL merges the frames " +
+                "already buffered."
         ))
         fun strengthRowText(value: Float): String =
             HdrPlusSettings.strengthSliderText(value) +
@@ -266,7 +267,7 @@ private fun MainActivity.buildLkrLab(p: SettingsPage, box: LinearLayout) {
             setPadding(dp(12), 0, dp(12), dp(6))
         })
     }
-    box.addView(p.kit.settingsButton("RESET LK-R LAB TO DEFAULTS").apply {
+    box.addView(p.kit.settingsButton("Reset LK-R Lab to defaults").apply {
         setOnClickListener {
             LkrTuning.resetAll(prefs)
             refreshers.forEach { it() }

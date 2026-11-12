@@ -34,6 +34,10 @@ import android.widget.TextView
  * still lacks it.
  */
 class WelcomeActivity : Activity() {
+    /** Same UI geometry at every system display-size / font-size setting. */
+    override fun attachBaseContext(newBase: android.content.Context) =
+        super.attachBaseContext(StableUiScale.wrap(newBase))
+
 
     private var step = WelcomeFlow.Step.WELCOME
 

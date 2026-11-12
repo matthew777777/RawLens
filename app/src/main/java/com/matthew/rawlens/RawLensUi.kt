@@ -39,19 +39,110 @@ internal object RawLensUi {
     fun styleTab(button: Button, active: Boolean = button.isSelected) {
         styleButton(button, active)
         val context = button.context
-        button.minWidth = dp(context, 88)
-        button.minimumWidth = dp(context, 88)
-        button.textSize = 14f
+        // Narrow windows get tighter chips so a fourth tab stays in view.
+        val compact = compactTabs(context)
+        val minWidth = dp(context, if (compact) 64 else 88)
+        val sidePadding = dp(context, if (compact) 12 else 20)
+        button.minWidth = minWidth
+        button.minimumWidth = minWidth
+        button.textSize = if (compact) 13f else 14f
         button.maxLines = 1
         button.includeFontPadding = false
         button.typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
-        button.setPadding(dp(context, 20), 0, dp(context, 20), 0)
+        button.setPadding(sidePadding, 0, sidePadding, 0)
+    }
+
+    /** True when the screen is too narrow for full-size tab chips. */
+    fun compactTabs(context: Context): Boolean =
+        context.resources.configuration.screenWidthDp in 1 until 380
+
+    /**
+     * Shows [dialog] as a full-screen page like the camera itself: it covers the cutout
+     * and status-bar strip, while [root] is padded clear of the camera hole, any visible
+     * system bar and the keyboard. The dialog must use the activity theme.
+     */
+    /** System bars + cutout + IME, via the compat layer so Android 10 (API 29) works too. */
+    private fun safeInsets(insets: android.view.WindowInsets, view: View): androidx.core.graphics.Insets =
+        androidx.core.view.WindowInsetsCompat.toWindowInsetsCompat(insets, view).getInsets(
+            androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+                androidx.core.view.WindowInsetsCompat.Type.displayCutout() or
+                androidx.core.view.WindowInsetsCompat.Type.ime())
+
+    /** MODE_ALWAYS is API 30; SHORT_EDGES is the closest Android 10 mode (portrait camera UI). */
+    private fun cutoutModeAlways(): Int =
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R)
+            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+
+    fun showFullscreen(dialog: android.app.Dialog, root: View) {
+        val context = dialog.context
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setContentView(root)
+        val base = intArrayOf(root.paddingLeft, root.paddingTop, root.paddingRight, root.paddingBottom)
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            val safe = safeInsets(insets, view)
+            view.setPadding(base[0] + safe.left, base[1] + safe.top, base[2] + safe.right, base[3] + safe.bottom)
+            insets
+        }
+        // Size and place the window before it is shown, so it never appears at one
+        // size and snaps to another.
+        dialog.window?.let { window ->
+            window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(context.getColor(R.color.surface)))
+            window.setWindowAnimations(R.style.Animation_RawLens_Dialog)
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = cutoutModeAlways()
+            }
+            window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            ImmersiveMode.apply(window)
+        }
+        dialog.show()
+        dialog.window?.let { ImmersiveMode.apply(it) }
+        dialog.window?.decorView?.let { StableUiScale.followSystemText(it) }
+    }
+
+    /**
+     * Turns a shown alert dialog into a full-screen page (see [RawLensDialogBuilder.asPage]):
+     * header on top, the content filling the height, the buttons pinned to the bottom.
+     */
+    fun pageDialog(dialog: AlertDialog) {
+        val context = dialog.context
+        val window = dialog.window ?: return
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(context.getColor(R.color.surface)))
+        window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = cutoutModeAlways()
+        }
+        window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        ImmersiveMode.apply(window)
+        val content = window.decorView.findViewById<ViewGroup>(android.R.id.content) ?: return
+        val panel = content.getChildAt(0) as? ViewGroup ?: return
+        panel.layoutParams = panel.layoutParams.apply { height = ViewGroup.LayoutParams.MATCH_PARENT }
+        // Stretch whichever section holds the body (custom view or message) so the
+        // button bar sits at the bottom of the screen, not under short content.
+        val body: View? = window.decorView.findViewById(android.R.id.custom)
+            ?: window.decorView.findViewById(android.R.id.message)
+        var section = body
+        while (section != null && section.parent !== panel) section = section.parent as? View
+        (section?.layoutParams as? LinearLayout.LayoutParams)?.let { params ->
+            params.height = 0
+            params.weight = 1f
+            section!!.layoutParams = params
+        }
+        content.setOnApplyWindowInsetsListener { view, insets ->
+            val safe = safeInsets(insets, view)
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
+            insets
+        }
+        content.requestApplyInsets()
     }
 
     fun styleDialog(dialog: AlertDialog) {
         val context = dialog.context
         val window = dialog.window ?: return
         window.setBackgroundDrawableResource(R.drawable.quick_panel)
+        // Dialog text follows the system font and display size (the camera chrome does not).
+        StableUiScale.followSystemText(window.decorView)
         // Dialogs rely on platform resize behavior when the keyboard opens.
         @Suppress("DEPRECATION")
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
@@ -134,8 +225,22 @@ internal object RawLensUi {
 
 /** All app-owned alerts share styling while callers retain their existing callbacks. */
 internal class RawLensDialogBuilder(context: Context) : AlertDialog.Builder(context, R.style.ThemeOverlay_RawLens_Dialog) {
+    private var page = false
+    private var titleText: CharSequence? = null
+
+    /**
+     * Presents this dialog as a full-screen page with a back arrow, like the Settings
+     * pages. For screens people browse or edit at length; short forms, confirmations and
+     * value pickers stay floating dialogs.
+     */
+    fun asPage(): RawLensDialogBuilder {
+        page = true
+        return this
+    }
+
     override fun setTitle(title: CharSequence?): RawLensDialogBuilder {
         super.setTitle(title)
+        titleText = title
         super.setCustomTitle(TextView(context).apply {
             text = title
             textSize = 22f
@@ -149,8 +254,42 @@ internal class RawLensDialogBuilder(context: Context) : AlertDialog.Builder(cont
 
     override fun setTitle(titleId: Int): RawLensDialogBuilder = setTitle(context.getText(titleId))
 
-    override fun create(): AlertDialog = super.create().also { dialog ->
-        dialog.create()
-        RawLensUi.styleDialog(dialog)
+    override fun create(): AlertDialog {
+        val back = if (!page) null else TextView(context).apply {
+            text = "←"
+            textSize = 22f
+            gravity = Gravity.CENTER
+            setTextColor(context.getColor(R.color.text_primary))
+            contentDescription = "Back"
+            isClickable = true
+            isFocusable = true
+        }
+        if (back != null) super.setCustomTitle(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(RawLensUi.dp(context, 12), RawLensUi.dp(context, 12), RawLensUi.dp(context, 12), RawLensUi.dp(context, 4))
+            addView(back, LinearLayout.LayoutParams(RawLensUi.dp(context, 48), RawLensUi.dp(context, 48)))
+            addView(TextView(context).apply {
+                text = titleText
+                textSize = 22f
+                typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+                setTextColor(context.getColor(R.color.text_primary))
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                isAccessibilityHeading = true
+                setPadding(RawLensUi.dp(context, 12), 0, RawLensUi.dp(context, 4), 0)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        })
+        return super.create().also { dialog ->
+            dialog.create()
+            RawLensUi.styleDialog(dialog)
+            if (back != null) {
+                back.setOnClickListener { dialog.dismiss() }
+                // Full-screen from the first frame: stretching it once shown made the
+                // page appear as a small dialog and then jump.
+                RawLensUi.pageDialog(dialog)
+                dialog.setOnShowListener { dialog.window?.let { ImmersiveMode.apply(it) } }
+            }
+        }
     }
 }

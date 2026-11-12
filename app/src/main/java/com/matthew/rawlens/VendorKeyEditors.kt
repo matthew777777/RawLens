@@ -253,7 +253,7 @@ internal fun MainActivity.showVendorKeysEditor() {
         editor?.dismiss()
         showVendorImportDialog(cameraId)
     })
-    editor = RawLensDialogBuilder(this).setTitle("Vendor keys • $cameraId")
+    editor = RawLensDialogBuilder(this).setTitle("Vendor keys • $cameraId").asPage()
         .setView(ScrollView(this).apply { addView(content) })
         .setNeutralButton("Reset all", null).setNegativeButton("Close", null)
         .show().also { dialog ->
@@ -509,7 +509,7 @@ internal fun MainActivity.showVendorDiscoveryDialog(cameraId: String) {
         override fun afterTextChanged(s: android.text.Editable?) = refreshRows()
     })
     refreshRows()
-    list = RawLensDialogBuilder(this).setTitle("Advertised keys • $cameraId")
+    list = RawLensDialogBuilder(this).setTitle("Advertised keys • $cameraId").asPage()
         .setView(ScrollView(this).apply { addView(body) })
         .setNegativeButton("Close", null).show()
 }

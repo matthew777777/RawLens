@@ -122,16 +122,16 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         fun applyProgramSettings() = saveProgramProfile(programSettings)
         val curveControls = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL }
         content.addView(Button(this).apply {
-            fun refresh() { text = "Scene brightness: ${programSettings.brightnessTuning.label} • tap to switch" }
+            fun refresh() { text = "Scene brightness: ${programSettings.brightnessTuning.label}" }
             refresh()
             setOnClickListener {
-                val modes = ProgramBrightnessTuning.values()
-                programSettings = programSettings.copy(
-                    brightnessTuning = modes[(programSettings.brightnessTuning.ordinal + 1) % modes.size]
-                )
-                applyProgramSettings()
-                curveControls.visibility = if (programSettings.brightnessTuning == ProgramBrightnessTuning.FIXED) View.GONE else View.VISIBLE
-                refresh()
+                p.kit.choose("Scene brightness", ProgramBrightnessTuning.values().toList(),
+                    programSettings.brightnessTuning, { it.label }) { mode ->
+                    programSettings = programSettings.copy(brightnessTuning = mode)
+                    applyProgramSettings()
+                    curveControls.visibility = if (programSettings.brightnessTuning == ProgramBrightnessTuning.FIXED) View.GONE else View.VISIBLE
+                    refresh()
+                }
             }
         })
         content.addView(sectionDesc("Natural preserves darker scenes by adapting the exposure target to scene brightness. Fixed uses the same target in every scene. Protect highlights also limits bright areas. Adaptive curves are experimental. Saved per lens."))
@@ -232,51 +232,57 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             programMeteringButton.isEnabled = manualSensor
         }
         programLockButton.setOnClickListener {
-            programSettings = seedLockedValuesFor(programSettings.copy(lockMode = when (programSettings.lockMode) {
-                ProgramLockMode.NONE -> ProgramLockMode.ISO_LOCK
-                ProgramLockMode.ISO_LOCK -> ProgramLockMode.SHUTTER_LOCK
-                ProgramLockMode.SHUTTER_LOCK -> ProgramLockMode.NONE
-            }))
-            refreshProgramButtons(); applyProgramSettings()
+            p.kit.choose("Lock", listOf(ProgramLockMode.NONE, ProgramLockMode.ISO_LOCK, ProgramLockMode.SHUTTER_LOCK),
+                programSettings.lockMode, { programLockText(it) }) { mode ->
+                programSettings = seedLockedValuesFor(programSettings.copy(lockMode = mode))
+                refreshProgramButtons(); applyProgramSettings()
+            }
         }
         programIsoMinButton.setOnClickListener {
-            val values = listOf(0, 100, 200, 400, 800)
-            programSettings = programSettings.copy(isoMin = values[
-                (values.indexOf(programSettings.isoMin).takeIf { it >= 0 } ?: 0).let { (it + 1) % values.size }])
-            refreshProgramButtons(); applyProgramSettings()
+            p.kit.choose("ISO min", listOf(0, 100, 200, 400, 800), programSettings.isoMin,
+                { programIsoBoundText(it, isMin = true) }) { value ->
+                programSettings = programSettings.copy(isoMin = value)
+                refreshProgramButtons(); applyProgramSettings()
+            }
         }
         programIsoMaxButton.setOnClickListener {
-            val values = listOf(0, 400, 800, 1600, 3200, 6400)
-            programSettings = programSettings.copy(isoMax = values[
-                (values.indexOf(programSettings.isoMax).takeIf { it >= 0 } ?: 0).let { (it + 1) % values.size }])
-            refreshProgramButtons(); applyProgramSettings()
+            p.kit.choose("ISO max", listOf(0, 400, 800, 1600, 3200, 6400), programSettings.isoMax,
+                { programIsoBoundText(it, isMin = false) }) { value ->
+                programSettings = programSettings.copy(isoMax = value)
+                refreshProgramButtons(); applyProgramSettings()
+            }
         }
         programShutterMinButton.setOnClickListener {
             val values = listOf(0L, 1_000_000_000L / 1000, 1_000_000_000L / 500,
                 1_000_000_000L / 250, 1_000_000_000L / 125, 1_000_000_000L / 60)
-            programSettings = programSettings.copy(shutterMinNanos = values[
-                (values.indexOf(programSettings.shutterMinNanos).takeIf { it >= 0 } ?: 0).let { (it + 1) % values.size }])
-            refreshProgramButtons(); applyProgramSettings()
+            p.kit.choose("Shutter min", values, programSettings.shutterMinNanos,
+                { programShutterBoundText(it, isMin = true, autoSafe = false) }) { value ->
+                programSettings = programSettings.copy(shutterMinNanos = value)
+                refreshProgramButtons(); applyProgramSettings()
+            }
         }
         programShutterMaxButton.setOnClickListener {
             val values = listOf(0L, 1_000_000_000L / 15, 1_000_000_000L / 30,
                 1_000_000_000L / 60, 1_000_000_000L / 125, 1_000_000_000L / 250)
-            if (programSettings.useAutoSafeShutter) {
-                programSettings = programSettings.copy(useAutoSafeShutter = false, shutterMaxNanos = 0L)
-            } else {
-                val next = values[(values.indexOf(programSettings.shutterMaxNanos).takeIf { it >= 0 } ?: 0)
-                    .let { (it + 1) % values.size }]
-                programSettings = programSettings.copy(
-                    shutterMaxNanos = next, useAutoSafeShutter = next == 0L)
+            // Auto-safe first, then the fixed limits (0 = no limit), as (autoSafe, nanos).
+            val options = listOf(true to 0L) + values.map { false to it }
+            p.kit.choose("Shutter max", options,
+                programSettings.useAutoSafeShutter to (if (programSettings.useAutoSafeShutter) 0L else programSettings.shutterMaxNanos),
+                { (autoSafe, nanos) -> programShutterBoundText(nanos, isMin = false, autoSafe = autoSafe) }) { (autoSafe, nanos) ->
+                programSettings = programSettings.copy(useAutoSafeShutter = autoSafe, shutterMaxNanos = nanos)
+                refreshProgramButtons(); applyProgramSettings()
             }
-            refreshProgramButtons(); applyProgramSettings()
         }
         refreshProgramButtons()
         content.addView(programLockButton)
         content.addView(programMeteringButton)
         programMeteringButton.setOnClickListener {
-            programSettings = programSettings.copy(metering = nextProgramMetering(programSettings.metering))
-            refreshProgramButtons(); applyProgramSettings()
+            val modes = listOf(ProgramMetering.CENTER_WEIGHTED, ProgramMetering.AVERAGE,
+                ProgramMetering.SPOT, ProgramMetering.HIGHLIGHT_WEIGHTED)
+            p.kit.choose("Metering", modes, programSettings.metering, { programMeteringLabel(it) }) { mode ->
+                programSettings = programSettings.copy(metering = mode)
+                refreshProgramButtons(); applyProgramSettings()
+            }
         }
         content.addView(programIsoMinButton)
         content.addView(programIsoMaxButton)
@@ -321,16 +327,16 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         }
         ettrHeadroomButton.setOnClickListener {
             // Magic Lantern auto-ETTR levels: never closer than -0.5 EV, default -0.5 EV.
-            val values = floatArrayOf(0.5f, 1f, 1.5f, 2f)
-            val next = (values.indexOfFirst { it == ettr.headroomEv }.takeIf { it >= 0 } ?: 0)
-            ettr = ettr.copy(headroomEv = values[(next + 1) % values.size])
-            applyEttr(); refreshEttrButtons()
+            p.kit.choose("Highlight headroom", listOf(0.5f, 1f, 1.5f, 2f), ettr.headroomEv, { ettrHeadroomText(it) }) { value ->
+                ettr = ettr.copy(headroomEv = value)
+                applyEttr(); refreshEttrButtons()
+            }
         }
         ettrIsoLimitButton.setOnClickListener {
-            val values = intArrayOf(0, 400, 800, 1600, 3200, 6400)
-            val next = (values.indexOf(ettr.isoLimit).takeIf { it >= 0 } ?: 0)
-            ettr = ettr.copy(isoLimit = values[(next + 1) % values.size])
-            applyEttr(); refreshEttrButtons()
+            p.kit.choose("ISO ceiling", listOf(0, 400, 800, 1600, 3200, 6400), ettr.isoLimit, { ettrIsoLimitText(it) }) { value ->
+                ettr = ettr.copy(isoLimit = value)
+                applyEttr(); refreshEttrButtons()
+            }
         }
         refreshEttrButtons()
         content.addView(ettrHeadroomButton)
