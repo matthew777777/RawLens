@@ -75,10 +75,12 @@ enum class VideoDemosaic(val label: String) {
  * Video + audio are recorded; full-take gyro is captured when [stabEnabled]
  * for the post-record Vulkan warp pass ([StabSidecar]).
  */
-class EncodedVideoRecorder(
+class EncodedVideoRecorder internal constructor(
     private val cameraManager: CameraManager,
     private val cameraId: String,
     private val appContext: Context,
+    /** Redmi DCG14 root lease handed over from the preview; released at teardown. */
+    private val lapisLease: LapisRecordingLease? = null,
 ) {
     /** Optional location frozen by the caller when the take starts. */
     var captureGps: GpsLocation? = null
@@ -576,6 +578,8 @@ class EncodedVideoRecorder(
     }
 
     private fun startTake(output: File?) {
+        // DCG14 is a fixed 30 fps sensor scenario; other rates would break the root mode.
+        lapisLease?.spec?.let { fps = it.fps }
         require(fps == 24 || fps == 30) { "take fps must be 24 or 30 (got $fps)" }
         require(VfEglImport.available) { "rawLensVfEgl native library unavailable" }
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
@@ -680,6 +684,7 @@ class EncodedVideoRecorder(
     /** Stage 2: characteristics, colour, thermal ladder, crop and export size. */
     private fun resolveGeometry(): TakeGeometry {
         val c = videoRoute.characteristics
+        lapisLease?.let { LapisRootSession.bind(c, it.spec) }
         chars = c
         // Static CCM floor: per-frame COLOR_CORRECTION results usually miss
         // on the record path, and the old identity fallback rendered as a
@@ -734,7 +739,11 @@ class EncodedVideoRecorder(
             Log.w(TAG, "heat degrade: thermal=$heatThermalStatus rung=${rung.label}->${effRung.label} " +
                 "step=$computeStep->$effStep mhc=$preferMhc->$effPreferMhc")
         }
-        val size = EncodedVideoLadder.resolve(rawSizes, effRung)
+        // DCG14 exists only at its verified readout; any other RAW size is not that mode.
+        val size = lapisLease?.spec?.let { spec ->
+            rawSizes.firstOrNull { it.width == spec.width && it.height == spec.height }
+                ?: error("DCG14 RAW size ${spec.width}x${spec.height} unavailable")
+        } ?: EncodedVideoLadder.resolve(rawSizes, effRung)
         Log.i(TAG, "ladder rung=${effRung.label} selected=${size.width}x${size.height} " +
             "(${"%.2f".format(EncodedVideoLadder.megapixels(size))} MP)")
         require(size.width % 2 == 0 && size.height % 2 == 0) { "Odd sensor size ${size.width}x${size.height}" }
@@ -1406,6 +1415,8 @@ class EncodedVideoRecorder(
         } catch (_: IllegalArgumentException) {
             Log.w(TAG, "lens-shading map request rejected; take runs unshaded")
         }
+        // Last: DCG14 owns AE/fps/HDR keys and overrides manual exposure.
+        lapisLease?.spec?.applyRequest(builder)
     }
 
     private fun startAudio() {
@@ -1759,6 +1770,18 @@ class EncodedVideoRecorder(
 
     /** Let result callbacks run before grading; never wait inside the camera callback. */
     private fun queueForResult(rd: ImageReader, image: Image) {
+        val rootSpec = lapisLease?.spec
+        if (rootSpec != null) {
+            val verified = try { rootSpec.accepts(image) } catch (failure: Exception) {
+                try { image.close() } catch (_: Exception) {}
+                failRecording(failure)
+                return
+            }
+            if (!verified) {
+                try { image.close() } catch (_: Exception) {}
+                return
+            }
+        }
         if (pendingResultFrames.size >= 2) {
             val oldest = pendingResultFrames.removeFirst()
             processOne(oldest.reader, oldest.image)
@@ -3267,7 +3290,12 @@ class EncodedVideoRecorder(
             )
             null
         }
-        if (config != null) device!!.createCaptureSession(config)
+        if (config != null) {
+            lapisLease?.let { lease -> config.setSessionParameters(device!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                lease.spec.applyRequest(this)
+            }.build()) }
+            device!!.createCaptureSession(config)
+        }
         check(latch.await(10, TimeUnit.SECONDS)) { "Session configure timed out" }
         if (configured == null) throw IllegalStateException("Session failed: $error")
         return configured
@@ -3297,6 +3325,7 @@ class EncodedVideoRecorder(
         session = null
         try { device?.close() } catch (_: Exception) {}
         device = null
+        lapisLease?.close()
         try { reader?.close() } catch (_: Exception) {}
         reader = null
         try { camThread?.quitSafely() } catch (_: Exception) {}
@@ -3547,6 +3576,10 @@ class EncodedVideoRecorder(
 
         /** Black levels (dynamic ?: static pattern) + white (dynamic ?: static). */
         fun blackWhite(c: CameraCharacteristics, result: CaptureResult?): Pair<FloatArray, Float> {
+            // DCG14 stores RAW14 while the HAL still reports 10-bit levels.
+            if (LapisRootSession.spec(c)?.dcg == true)
+                return FloatArray(4) { LapisRootSession.storageBlack(c, it).toFloat() } to
+                    LapisRootSession.storageWhite(c)!!.toFloat()
             val black = c.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
             val dynamicBlack = result?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
             val white = (result?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
