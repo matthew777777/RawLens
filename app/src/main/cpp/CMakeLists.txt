@@ -526,6 +526,11 @@ if(ANDROID_ABI STREQUAL "armeabi-v7a")
     target_compile_options(rawLensVfEgl PRIVATE -mfpu=neon)
 endif()
 
+# RAW Video (.craw) temporal 4x4 DCT denoiser: own Vulkan device (vf_rawdct.comp).
+add_library(rawLensRawDct SHARED rawdct/raw_dct_vulkan.cpp)
+target_link_libraries(rawLensRawDct PRIVATE android log vulkan)
+target_link_options(rawLensRawDct PRIVATE "-Wl,-z,max-page-size=16384")
+
 # Release optimization for every first-party target defined above:
 # -O3 (overriding any target-local -O2; the last -O flag wins) plus
 # link-time optimization where the toolchain supports it. Imported

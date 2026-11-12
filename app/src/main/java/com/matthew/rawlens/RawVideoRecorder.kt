@@ -164,6 +164,13 @@ internal class RawVideoRecorder(
     /** 2x binning request, set before [start]. Take-const: see [binActive]. */
     var binning: Boolean = false
 
+    /** GPU temporal 4x4 DCT denoise before encode ([RawDct]), set before [start]. Default off. */
+    var dctDenoise: Boolean = false
+    @Volatile private var dct: RawDct? = null
+    private var dctLevels = FloatArray(4)
+    private var dctWhite = 1023f
+    private var dctGreenQuad = 1
+
     /** Binning output: true RGB (best), false half-res Bayer (cheap). Take-const. */
     var binningRgb: Boolean = true
     private var binRgbActive = true
@@ -299,6 +306,8 @@ internal class RawVideoRecorder(
         val timestampNs: Long,
         val frameJson: String,
         val shading: CrawLensShading.Grid?,
+        /** [RawDct] slot holding the denoised crop rows, or -1 (encode [src] as is). */
+        val dctSlot: Int = -1,
     )
 
     private data class PendingFrame(
@@ -469,6 +478,19 @@ internal class RawVideoRecorder(
         binRgbActive = binningRgb
         binCfa = if (sensorCfa != null && sensorCfa in 0..3) sensorCfa else 0
         crawBitDepth = CrawWriter.bitDepthFor(LapisRootSession.storageWhite(chars))
+        dct = null
+        if (dctDenoise && appContext != null) {
+            val dctCrop = crop.resolve(frameSize.width, frameSize.height, binActive)
+            val (lv, wh) = EncodedVideoRecorder.blackWhite(chars, null)
+            dctLevels = lv
+            dctWhite = wh
+            // First green of the sensor CFA at absolute quad phase (RGGB/BGGR -> 1, GRBG/GBRG -> 0).
+            dctGreenQuad = if (binCfa == 0 || binCfa == 3) 1 else 0
+            dct = RawDct.create(appContext, frameSize.width, dctCrop.height,
+                (workers + 2).coerceAtMost(5))
+            Log.i(TAG, "dct denoise ${if (dct != null) "on" else "UNAVAILABLE"} " +
+                "${frameSize.width}x${dctCrop.height}@${dctCrop.top}")
+        }
         if (binning && !binActive) {
             Log.w(
                 TAG, "binning off for this take: cfa=$sensorCfa " +
@@ -667,6 +689,15 @@ internal class RawVideoRecorder(
                 // correctly (`originalWidth`/`rowStride` derive from these).
                 val encW = if (binActive) frameSize.width / 2 else frameSize.width
                 val encH = if (binActive) resolved.height / 2 else resolved.height
+                var dctSlot = -1
+                dct?.let { d ->
+                    if (resolved.height == d.height) {
+                        val slot = d.acquire()
+                        if (slot >= 0 && d.submit(slot, plane.buffer, plane.rowStride, resolved.top,
+                                dctLevels, dctWhite, dctGreenQuad)) dctSlot = slot
+                        else if (slot < 0) d.resetHistory()
+                    }
+                }
                 val task = EncodeTask(
                     seq = nextSeq++,
                     image = img,
@@ -684,18 +715,20 @@ internal class RawVideoRecorder(
                         "\"crop\":\"${crop.name}\"" +
                         "}",
                     shading = shadingGrid,
+                    dctSlot = dctSlot,
                 )
                 if (!encodeQueue.offer(task)) {
                     // Latest-wins for video: drop the oldest queued frame.
                     // (Poison only enters after accepting=false, when nothing
                     // is offered anymore — but never drop it if seen.)
                     when (val old = encodeQueue.poll()) {
-                        is EncodeTask -> RawImageOwnership.release(old.image)
+                        is EncodeTask -> { releaseDct(old); RawImageOwnership.release(old.image) }
                         null -> Unit
                         else -> encodeQueue.offer(old)
                     }
                     dropped.incrementAndGet()
                     if (!encodeQueue.offer(task)) {
+                        releaseDct(task)
                         RawImageOwnership.release(img)
                         dropped.incrementAndGet()
                     }
@@ -747,6 +780,10 @@ internal class RawVideoRecorder(
      * committer polls a writer that teardown closes underneath it. Both
      * loops exit on interrupt; queued frames go back to the reader.
      */
+    private fun releaseDct(task: EncodeTask) {
+        if (task.dctSlot >= 0) dct?.release(task.dctSlot)
+    }
+
     private fun abortPipelineThreads() {
         accepting = false
         for (t in encodeThreads) t?.interrupt()
@@ -757,7 +794,7 @@ internal class RawVideoRecorder(
         try { commitThread?.join(2_000) } catch (_: InterruptedException) {}
         while (true) {
             val item = encodeQueue.poll() ?: break
-            if (item is EncodeTask) RawImageOwnership.release(item.image)
+            if (item is EncodeTask) { releaseDct(item); RawImageOwnership.release(item.image) }
         }
     }
 
@@ -1036,10 +1073,19 @@ internal class RawVideoRecorder(
                     continue
                 }
                 val t0 = SystemClock.elapsedRealtimeNanos()
+                stage = "DCT denoise"
+                // Denoised frames are compact: crop row 0 at buffer row 0, tight stride.
+                val denoised = if (task.dctSlot >= 0) dct?.awaitOutput(task.dctSlot) else null
+                if (task.dctSlot >= 0 && denoised == null) Log.w(TAG, "dct output missing seq=${task.seq}; encoding raw")
+                val encSrc = denoised ?: task.src
+                val encSize = denoised?.capacity() ?: task.size
+                val encStride = if (denoised != null) task.width * 2 else task.stride
+                val encTop = if (denoised != null) 0 else task.cropTop
+                val encHeight = if (denoised != null) task.cropHeight else task.height
                 stage = "RAW encoding"
                 val bytes = CrawWriter.encodeFrame(
-                    task.src, task.size, task.width, task.height, task.stride,
-                    task.cropTop, task.cropHeight, buf, binActive, binCfa, crawBitDepth,
+                    encSrc, encSize, task.width, encHeight, encStride,
+                    encTop, task.cropHeight, buf, binActive, binCfa, crawBitDepth,
                     takeCodec, binRgbActive
                 )
                 val ms = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
@@ -1075,8 +1121,8 @@ internal class RawVideoRecorder(
                         val white = chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
                         if (cfa == null || black == null || white == null) null else
                             RawWhiteBalanceFallback.estimate(
-                                task.src.duplicate().order(java.nio.ByteOrder.nativeOrder()), task.stride, 2,
-                                task.width, task.height, cfa,
+                                encSrc.duplicate().order(java.nio.ByteOrder.nativeOrder()), encStride, 2,
+                                task.width, encHeight, cfa,
                                 FloatArray(4) { black.getOffsetForIndex(it % 2, it / 2).toFloat() },
                                 white.toFloat(), RawWhiteBalanceFallback.locusFor(chars))
                     }
@@ -1104,6 +1150,7 @@ internal class RawVideoRecorder(
                     failRecording(java.io.IOException("RAW Video failed at $stage: ${e.message}", e))
                 }
             } finally {
+                releaseDct(task)
                 inflightSeq.set(index, -1L)
                 // Registry-aware: closes directly when never adopted for
                 // the VF, waits out the GPU lease when borrowed.
@@ -1556,10 +1603,13 @@ internal class RawVideoRecorder(
             synchronized(resultLock) { captureResults.clear() }
             while (true) {
                 val task = encodeQueue.poll() ?: break
-                if (task is EncodeTask) RawImageOwnership.release(task.image)
+                if (task is EncodeTask) { releaseDct(task); RawImageOwnership.release(task.image) }
             }
             audioQueue.clear()
             lastShading = null
+            // Workers are gone: no slot can still be read.
+            dct?.close()
+            dct = null
         }
         encodeThreads = emptyArray()
         commitThread = null

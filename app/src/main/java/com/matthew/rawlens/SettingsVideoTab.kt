@@ -296,6 +296,16 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc("RGB (best): each 2x2 block is demosaiced once on the phone (edge-directed), so editors never re-demosaic a binned mosaic: no magenta/green fringes, ~90 % of full-res detail. CFA (cheap): half-res Bayer remosaiced from the RGB bin (as camera ISPs rescale raw), a quarter of the samples of RGB and smaller files; any half-res mosaic still fringes a little once your editor demosaics it. Applies to the next take; N/A in Encoded Video."))
+        content.addView(SettingsSwitch(this).apply {
+            text = "DCT denoise (RAW Video)"
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = lensPreferences().getBoolean(MainActivity.KEY_VIDEO_RAW_DCT_DENOISE, false)
+            setOnCheckedChangeListener { _, enabled ->
+                lensPreferences().edit().putBoolean(MainActivity.KEY_VIDEO_RAW_DCT_DENOISE, enabled).apply()
+                setStatus(if (enabled) "DCT DENOISE ON — NEXT TAKE" else "DCT DENOISE OFF")
+            }
+        })
+        content.addView(sectionDesc("Temporal + spatial 4x4 DCT Wiener on the GPU, applied to the Bayer data before it is written to .craw. Noise is measured from the frames themselves. The denoise is baked into the file. Off by default; applies to the next take; N/A in Encoded Video."))
         content.addView(sectionTitle("Locks on record"))
         content.addView(SettingsSwitch(this).apply {
             text = "Lock exposure on record"

@@ -1,0 +1,206 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Raw-video CFA denoiser: temporal + spatial Wiener in a sliding 4x4 DCT,
+// per Bayer plane, CFA in -> CFA out (same byte layout as the camera RAW16
+// plane, so MHC / the craw encoder consume the result unchanged).
+//
+// One invocation = one 2x2 Bayer quad. For each of its 4 sites it takes the
+// 4x4 same-colour block whose (1,1) element is the site (plane offsets
+// -1..+2), forward-DCTs the current frame and the previous DENOISED frame
+// (recursive filter: no motion compensation, a per-block DC motion gate
+// stops ghosting), merges them coefficient-wise (temporal Wiener), shrinks
+// the AC coefficients (empirical spatial Wiener) and evaluates the inverse
+// DCT at the (1,1) element only (16 FMAs, not a full inverse).
+//
+// 4-point orthonormal DCT-II butterfly:
+//   s0=x0+x3 s1=x1+x2 d0=x0-x3 d1=x1-x2
+//   X0=(s0+s1)/2  X2=(s0-s1)/2  X1=c1*d0+c3*d1  X3=c3*d0-c1*d1
+// with c1=cos(pi/8)/sqrt2, c3=sin(pi/8)/sqrt2. Basis at n=1: [1/2, c3, -1/2, -c1].
+//
+// Noise: never from Camera2 metadata. Every 4th quad (both axes) adds the
+// green block's highest-frequency energy (u,v in {2,3}) into 16 sqrt-level
+// bins (64-bit fixed point via carry); the host fits var = a*mean + b and
+// feeds it back next frame. Blocks above 3x the current model are rejected
+// (structure, not noise), so the fit converges onto flat-region statistics.
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_rawdct.comp -o vf_rawdct.spv
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+layout(local_size_x = 16, local_size_y = 8) in;
+
+layout(binding = 0) readonly buffer Cur { uint cur[]; };
+layout(binding = 1) readonly buffer Prev { uint prv[]; };
+layout(binding = 2) writeonly buffer Out { uint outw[]; };
+// 16 bins x (sumLo, sumHi, count)
+layout(binding = 3) buffer Stats { uint stats[48]; };
+// Per-tile prev->cur shift in quads from vf_rawdct_align.comp (flag 8).
+layout(binding = 4) readonly buffer Mv { ivec2 mv[]; };
+
+// Mirrors RawDctParams in vf_vulkan_vf_rawdct.inc (96 bytes).
+layout(push_constant) uniform Params {
+    ivec2 rOrigin;   // denoised region, sensor px, even
+    ivec2 rSize;     // even, >= 8
+    int pitch;       // row stride in pixels (even)
+    int flags;       // 1 = prev valid, 2 = noise model valid, 4 = collect stats, 8 = aligned
+    int grQuad;      // absolute quad index of the stats green site
+    int pad0;
+    vec4 normBias;   // per absolute quad: norm = code*invRange + normBias
+    vec4 invRange;
+    float a;         // var = a*mean + b (normalized units)
+    float b;
+    float kmax;      // temporal strength (max blend toward prev), 0..0.95
+    float spatial;   // spatial Wiener multiplier, 0 = off
+    float motion;    // DC motion gate in noise sigmas
+    float statClamp; // max accepted stat sample without a model
+    float pad1, pad2;
+} p;
+
+const float C1 = 0.65328148;  // cos(pi/8)/sqrt(2)
+const float C3 = 0.27059805;  // sin(pi/8)/sqrt(2)
+const float STAT_SCALE = 1073741824.0;  // 2^30
+
+const int TW = 38;  // 32 + 2 left + 4 right
+const int TH = 22;  // 16 + 2 top + 4 bottom
+const int RW = 32;  // run starts per row (block element (0,0) x in 0..31)
+// Same-colour horizontal runs (x, x+2, x+4, x+6): one vec4 load per block row.
+shared vec4 rc[TH * RW];
+shared vec4 rp[TH * RW];
+
+int mirX(int x) {
+    int lo = p.rOrigin.x, hi = p.rOrigin.x + p.rSize.x;
+    if (x < lo) x += 2 * ((lo - x + 1) >> 1);
+    if (x >= hi) x -= 2 * (((x - hi) >> 1) + 1);
+    return x;
+}
+int mirY(int y) {
+    int lo = p.rOrigin.y, hi = p.rOrigin.y + p.rSize.y;
+    if (y < lo) y += 2 * ((lo - y + 1) >> 1);
+    if (y >= hi) y -= 2 * (((y - hi) >> 1) + 1);
+    return y;
+}
+
+void dct4(inout float x0, inout float x1, inout float x2, inout float x3) {
+    float s0 = x0 + x3, s1 = x1 + x2, d0 = x0 - x3, d1 = x1 - x2;
+    x0 = 0.5 * (s0 + s1);
+    x2 = 0.5 * (s0 - s1);
+    x1 = C1 * d0 + C3 * d1;
+    x3 = C3 * d0 - C1 * d1;
+}
+
+void dct2d(inout float v[16]) {
+    [[unroll]] for (int r = 0; r < 4; ++r) dct4(v[r * 4], v[r * 4 + 1], v[r * 4 + 2], v[r * 4 + 3]);
+    [[unroll]] for (int c = 0; c < 4; ++c) dct4(v[c], v[c + 4], v[c + 8], v[c + 12]);
+}
+
+void main() {
+    const ivec2 lq = ivec2(gl_LocalInvocationID.xy);
+    const ivec2 tileBase = p.rOrigin + ivec2(gl_WorkGroupID.xy) * ivec2(32, 16) - 2;
+    const bool hasPrev = (p.flags & 1) != 0;
+
+    // Stage same-colour runs straight from global: 88 tasks = 22 rows x 4
+    // segments of 8 run starts; each loads its 14 pixels (7 words) once into
+    // registers and writes 8 vec4 runs (no scalar tile, one barrier).
+    const int tid = int(gl_LocalInvocationIndex);
+    // Even pixel shift: CFA phase (and the row's quad pair) is preserved.
+    const ivec2 pshift = (p.flags & 9) == 9
+        ? mv[gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x] * 2 : ivec2(0);
+    if (tid < TH * 4) {
+        int ty = tid >> 2;
+        int x0 = (tid & 3) * 8;
+        int sy = mirY(tileBase.y + ty);
+        int psy = mirY(tileBase.y + ty + pshift.y);
+        bool odd = (sy & 1) != 0;
+        vec2 sc = odd ? p.invRange.zw : p.invRange.xy;
+        vec2 bs = odd ? p.normBias.zw : p.normBias.xy;
+        int rowBase = sy * p.pitch;
+        int prowBase = psy * p.pitch;
+        float c[14], v[14];
+        [[unroll]] for (int k = 0; k < 7; ++k) {
+            int sx = mirX(tileBase.x + x0 + 2 * k);  // even -> even
+            uint idx = uint(rowBase + sx) >> 1u;
+            uint wc = cur[idx];
+            c[2 * k] = float(wc & 0xffffu) * sc.x + bs.x;
+            c[2 * k + 1] = float(wc >> 16u) * sc.y + bs.y;
+            int psx = mirX(tileBase.x + x0 + 2 * k + pshift.x);
+            uint wp = hasPrev ? prv[uint(prowBase + psx) >> 1u] : 0u;
+            v[2 * k] = float(wp & 0xffffu) * sc.x + bs.x;
+            v[2 * k + 1] = float(wp >> 16u) * sc.y + bs.y;
+        }
+        int r0 = ty * RW + x0;
+        [[unroll]] for (int k = 0; k < 8; ++k) {
+            rc[r0 + k] = vec4(c[k], c[k + 2], c[k + 4], c[k + 6]);
+            rp[r0 + k] = vec4(v[k], v[k + 2], v[k + 4], v[k + 6]);
+        }
+    }
+    barrier();
+
+    const ivec2 gq = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 site = p.rOrigin + gq * 2;  // absolute, even
+    if (site.x >= p.rOrigin.x + p.rSize.x || site.y >= p.rOrigin.y + p.rSize.y) return;
+
+    const bool modelOk = (p.flags & 2) != 0;
+    const bool sampleStats = (p.flags & 4) != 0 && ((gq.x | gq.y) & 3) == 0;
+    const float wv[4] = float[](0.5, C3, -0.5, -C1);
+    const float steady = (1.0 - p.kmax) / (1.0 + p.kmax);
+    vec4 res;
+
+    [[unroll]] for (int q = 0; q < 4; ++q) {
+        const int dx = q & 1, dy = q >> 1;
+        // Tile coords of block element (0,0): site + (dx,dy) - 2 - tileBase.
+        const int bx = lq.x * 2 + dx;
+        const int by = lq.y * 2 + dy;
+        float C[16], P[16];
+        [[unroll]] for (int j = 0; j < 4; ++j) {
+            int r = (by + 2 * j) * RW + bx;
+            vec4 c4 = rc[r];
+            vec4 p4 = hasPrev ? rp[r] : vec4(0.0);
+            C[j * 4] = c4.x; C[j * 4 + 1] = c4.y; C[j * 4 + 2] = c4.z; C[j * 4 + 3] = c4.w;
+            P[j * 4] = p4.x; P[j * 4 + 1] = p4.y; P[j * 4 + 2] = p4.z; P[j * 4 + 3] = p4.w;
+        }
+        const float centre = C[5];
+        dct2d(C);
+
+        const float mean = max(C[0] * 0.25, 0.0);
+        if (sampleStats && q == p.grQuad && mean > 0.002) {
+            float e = 0.25 * (C[10] * C[10] + C[11] * C[11] + C[14] * C[14] + C[15] * C[15]);
+            float lim = modelOk ? 3.0 * (p.a * mean + p.b) : p.statClamp;
+            if (e < lim) {
+                int bin = min(15, int(sqrt(mean) * 16.0));
+                uint add = uint(min(e, 0.0039) * STAT_SCALE);
+                uint old = atomicAdd(stats[bin * 3], add);
+                if (old + add < old) atomicAdd(stats[bin * 3 + 1], 1u);
+                atomicAdd(stats[bin * 3 + 2], 1u);
+            }
+        }
+
+        // No prev frame -> kg = 0 -> K = 0: pure spatial (branch-free).
+        float s2 = max(p.a * mean + p.b, 1e-9);
+        dct2d(P);
+        float dDC = C[0] - P[0];
+        float gate = exp(-(dDC * dDC) / (2.0 * s2 * p.motion * p.motion));
+        float kg = hasPrev ? p.kmax * gate : 0.0;
+        float o = 0.0;
+        [[unroll]] for (int j = 0; j < 4; ++j) {
+            [[unroll]] for (int i = 0; i < 4; ++i) {
+                int k = j * 4 + i;
+                float d = P[k] - C[k];
+                float K = kg * (2.0 * s2) / (2.0 * s2 + d * d);
+                float f = C[k] + K * d;
+                if (k != 0) {
+                    float vk = s2 * ((1.0 - K) * (1.0 - K) + K * K * steady);
+                    float f2 = f * f;
+                    f *= f2 / (f2 + p.spatial * vk + 1e-20);
+                }
+                o += wv[j] * wv[i] * f;
+            }
+        }
+        res[q] = modelOk ? o : centre;
+    }
+
+    // Back to sensor codes (unbiased below black down to code 0).
+    uvec4 codes = uvec4(clamp(round((res - p.normBias) / p.invRange), 0.0, 65535.0));
+    uint i0 = uint(site.y * p.pitch + site.x) >> 1u;
+    outw[i0] = codes.x | (codes.y << 16u);
+    outw[i0 + uint(p.pitch >> 1)] = codes.z | (codes.w << 16u);
+}

@@ -2243,6 +2243,7 @@ class MainActivity : Activity() {
             compressionCodec = CrawWriter.normalizeCodec(lensPreferences().getInt(KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE))
             binning = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
             binningRgb = lensPreferences().getString(KEY_VIDEO_BINNING_MODE, BINNING_RGB) != BINNING_CFA
+            dctDenoise = lensPreferences().getBoolean(KEY_VIDEO_RAW_DCT_DENOISE, false)
             lensShading = lensShadingSnapshot
             audioEnabled = withAudio
             configureVideoManual(videoSnapshot, meteredIso, meteredShutter, meteredFocus, recordLocks)
@@ -4357,6 +4358,8 @@ class MainActivity : Activity() {
         const val KEY_VIDEO_CROP = "video_crop"
         const val KEY_VIDEO_CODEC = "video_craw_codec"
         const val KEY_VIDEO_BINNING = "video_binning"
+        /** RAW Video (.craw) temporal 4x4 DCT denoise on the GPU before encode. Default off. */
+        const val KEY_VIDEO_RAW_DCT_DENOISE = "video_raw_dct_denoise"
         /** Binning output: [BINNING_RGB] (best quality) or [BINNING_CFA] (cheap half-res Bayer). */
         const val KEY_VIDEO_BINNING_MODE = "video_binning_mode"
         const val BINNING_RGB = "rgb"

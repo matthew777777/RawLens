@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Motion search for vf_rawdct.comp: one workgroup per denoise tile (16x8
+// quads = 32x16 px). Finds the integer-QUAD shift of the previous denoised
+// frame that best matches the current frame (quad shifts keep CFA phase, so
+// the merge needs no resampling). Luma = sum of the 4 codes of a quad
+// (black offsets cancel in the SAD).
+//
+// Search: coarse 9x9 candidates at step 3 quads (+-12) on a 2x-subsampled
+// grid, then +-2 quads exhaustive on a checkerboard of the 128 quads, all from a shared-memory
+// window (tile +-14 quads). A shift wins only if it beats zero motion by 5%,
+// so pure noise never draws random vectors in flat areas.
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_rawdct_align.comp -o vf_rawdct_align.spv
+#version 450
+layout(local_size_x = 64) in;
+
+layout(binding = 0) readonly buffer Cur { uint cur[]; };
+layout(binding = 1) readonly buffer Prev { uint prv[]; };
+layout(binding = 4) writeonly buffer Mv { ivec2 mv[]; };
+
+// Same 96-byte push block as vf_rawdct.comp (only the fields used here).
+layout(push_constant) uniform Params {
+    ivec2 rOrigin;
+    ivec2 rSize;
+    int pitch;
+    int flags;
+    int grQuad;
+    int pad0;
+    vec4 normBias;
+    vec4 invRange;
+    float a, b, kmax, spatial, motion, statClamp, pad1, pad2;
+} p;
+
+const int TQX = 16, TQY = 8;      // tile in quads
+const int R = 14;                 // window margin in quads
+const int WX = TQX + 2 * R;       // 44
+const int WY = TQY + 2 * R;       // 36
+shared float wl[WY * WX];         // prev luma window
+shared float cl[TQY * TQX];       // cur luma tile
+shared float part[162];
+shared float cost[81];
+shared ivec2 best;
+
+float quadLuma(bool usePrev, ivec2 q) {
+    ivec2 nq = p.rSize / 2;
+    q = clamp(q, ivec2(0), nq - 1);
+    ivec2 s = p.rOrigin + q * 2;
+    uint i0 = uint(s.y * p.pitch + s.x) >> 1u;
+    uint i1 = i0 + uint(p.pitch >> 1);
+    uint w0 = usePrev ? prv[i0] : cur[i0];
+    uint w1 = usePrev ? prv[i1] : cur[i1];
+    return float((w0 & 0xffffu) + (w0 >> 16u) + (w1 & 0xffffu) + (w1 >> 16u));
+}
+
+void main() {
+    const int tid = int(gl_LocalInvocationIndex);
+    const ivec2 tile = ivec2(gl_WorkGroupID.xy);
+    const ivec2 q0 = tile * ivec2(TQX, TQY);
+
+    for (int i = tid; i < WY * WX; i += 64) {
+        int y = i / WX;
+        wl[i] = quadLuma(true, q0 + ivec2(i - y * WX, y) - R);
+    }
+    for (int i = tid; i < TQY * TQX; i += 64) {
+        int y = i / TQX;
+        cl[i] = quadLuma(false, q0 + ivec2(i - y * TQX, y));
+    }
+    barrier();
+
+    // Coarse: 81 candidates, 2x-subsampled tile (32 quads).
+    // 162 tasks = 81 candidates x 2 row halves (balanced over 64 threads).
+    for (int t = tid; t < 162; t += 64) {
+        int c = t >> 1;
+        int cy = c / 9;
+        ivec2 d = ivec2(c - cy * 9, cy) * 3 - 12;
+        int y0 = (t & 1) * 4;
+        float s = 0.0;
+        for (int y = y0; y < y0 + 4; y += 2)
+            for (int x = 0; x < TQX; x += 2)
+                s += abs(cl[y * TQX + x] - wl[(y + d.y + R) * WX + x + d.x + R]);
+        part[t] = s;
+    }
+    barrier();
+    if (tid == 0) {
+        int bi = 40;  // centre = zero motion
+        for (int c = 0; c < 81; ++c) cost[c] = part[2 * c] + part[2 * c + 1];
+        for (int c = 0; c < 81; ++c) if (cost[c] < cost[bi]) bi = c;
+        int by = bi / 9;
+        best = ivec2(bi - by * 9, by) * 3 - 12;
+    }
+    barrier();
+
+    // Fine: +-2 around the coarse winner, checkerboard over the tile; slot 25 = zero motion.
+    const ivec2 cb = best;
+    // 26 candidates x 2 row halves = 52 tasks.
+    if (tid < 52) {
+        int c = tid >> 1;
+        ivec2 d = c < 25 ? cb + ivec2(c % 5, c / 5) - 2 : ivec2(0);
+        d = clamp(d, ivec2(-R), ivec2(R));
+        int y0 = (tid & 1) * 4;
+        float s = 0.0;
+        for (int y = y0; y < y0 + 4; ++y)
+            for (int x = (y & 1); x < TQX; x += 2)  // checkerboard: half the samples, every row
+                s += abs(cl[y * TQX + x] - wl[(y + d.y + R) * WX + x + d.x + R]);
+        part[tid] = s;
+    }
+    barrier();
+    if (tid == 0) {
+        for (int c = 0; c < 26; ++c) cost[c] = part[2 * c] + part[2 * c + 1];
+        int bi = 0;
+        for (int c = 1; c < 25; ++c) if (cost[c] < cost[bi]) bi = c;
+        ivec2 d = clamp(cb + ivec2(bi % 5, bi / 5) - 2, ivec2(-R), ivec2(R));
+        if (cost[bi] > 0.95 * cost[25]) d = ivec2(0);
+        mv[tile.y * int(gl_NumWorkGroups.x) + tile.x] = d;
+    }
+}
