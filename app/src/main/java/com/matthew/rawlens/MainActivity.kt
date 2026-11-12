@@ -2369,6 +2369,16 @@ class MainActivity : Activity() {
             // Direct single-file recording never starts a second re-encode/sidecar.
             stabEnabled = false
             exposureEv = encodedVideoGainPref()
+            saturation = encodedVideoSaturationPref()
+            vibrance = encodedVideoVibrancePref()
+            orientationHintDegrees = runCatching {
+                val chars = manager.getCameraCharacteristics(cameraId)
+                CaptureOrientation.degrees(
+                    chars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
+                    deviceOrientationDegrees,
+                    chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
+                )
+            }.getOrDefault(0)
             fps = encodedVideoFpsPref()
             val res = encodedVideoResPref()
             width = res.width
@@ -2835,6 +2845,14 @@ class MainActivity : Activity() {
      * auto-exposing; the recorder applies 2^value per frame. */
     internal fun encodedVideoGainPref(): Float =
         lensPreferences().getFloat(KEY_ENCODED_VIDEO_GAIN, 0f).coerceIn(-2f, 4f)
+
+    /** Persisted Encoded Video grade saturation, 1.0 neutral (0..2). Per-phone CCMs differ. */
+    internal fun encodedVideoSaturationPref(): Float =
+        lensPreferences().getFloat(KEY_ENCODED_VIDEO_SATURATION, 1f).coerceIn(0f, 2f)
+
+    /** Persisted Encoded Video grade vibrance, 0 neutral (-1..+1). */
+    internal fun encodedVideoVibrancePref(): Float =
+        lensPreferences().getFloat(KEY_ENCODED_VIDEO_VIBRANCE, 0f).coerceIn(-1f, 1f)
 
     /** Persisted Encoded Video frame rate: 24 or 30, 30 out of the box. Any
      * other stored value heals to 30. Applies to the next take (encoder
@@ -4372,6 +4390,8 @@ class MainActivity : Activity() {
         // not carried over.
         // Stored key keeps the legacy name so existing values survive the LOG EV -> LOG gain rename.
         const val KEY_ENCODED_VIDEO_GAIN = "encoded_video_ev_v2"
+        const val KEY_ENCODED_VIDEO_SATURATION = "encoded_video_saturation"
+        const val KEY_ENCODED_VIDEO_VIBRANCE = "encoded_video_vibrance"
         const val KEY_ENCODED_VIDEO_FPS = "encoded_video_fps"
         const val KEY_ENCODED_VIDEO_RES = "encoded_video_res"
         const val KEY_ENCODED_VIDEO = "encoded_video_enabled"

@@ -175,6 +175,19 @@ class EncodedVideoRecorder internal constructor(
      * writes on the UI thread, the camera thread reads per frame.
      */
     @Volatile var exposureEv: Float = 0f
+
+    /** User grade saturation (1 = neutral), folded into the CCM per frame; live. */
+    @Volatile var saturation: Float = VfVideoGrade.DEFAULT_SATURATION
+
+    /** User grade vibrance (0 = neutral), applied in the record shader; live. */
+    @Volatile var vibrance: Float = VfVideoGrade.DEFAULT_VIBRANCE
+
+    /**
+     * Display rotation written to the MP4 (0/90/180/270, clockwise), frozen
+     * at take start from the device orientation. Frames are encoded in
+     * sensor orientation, so players need this tkhd matrix to show them upright.
+     */
+    var orientationHintDegrees: Int = 0
     /**
      * Output profile for the take (BT709/SLOG3/HLG). Decided at take
      * start (the encoder format is fixed then); the HUD toggle applies
@@ -2114,7 +2127,7 @@ class EncodedVideoRecorder internal constructor(
             return submitFused(f)
         }
         val (dims, parameters) = VfVideoGrade.packGrade(intArrayOf(width, height),
-            wbGains(f.result), ccmMatrix(f.result, staticCcm), exposureEv, false, profile = sessionProfile)
+            wbGains(f.result), ccmMatrix(f.result, staticCcm), exposureEv, false, saturation = saturation, profile = sessionProfile, vibrance = vibrance)
         photoRcdTrace?.record(6, image.timestamp, f.slotIndex.toLong(), SystemClock.elapsedRealtimeNanos() - renderStarted)
         if (photoRcdTrace != null) renderer.frameCosts().forEachIndexed { i, ms -> photoRcdTrace?.record(10+i,image.timestamp,value=(ms*1e6).toLong()) }
         val fd = VfVideoGrade.gradeYuvSubmitNative(rgb, f.p010Buf, dims,
@@ -2139,7 +2152,7 @@ class EncodedVideoRecorder internal constructor(
     /** Frame-global fused path: RCD + grade + P010 in one engine submit. Cube-LUT sessions never come here. */
     private fun submitPhotoRcdFused(renderer: PhotoRcdRenderer, image: Image, f: FrameSubmit, renderStarted: Long): Int? {
         val (_, parameters) = VfVideoGrade.packGrade(intArrayOf(width, height),
-            wbGains(f.result), ccmMatrix(f.result, staticCcm), exposureEv, false, profile = sessionProfile)
+            wbGains(f.result), ccmMatrix(f.result, staticCcm), exposureEv, false, saturation = saturation, profile = sessionProfile, vibrance = vibrance)
         val fd = try {
             renderer.renderP010(image, f.crop.left, f.crop.top, f.crop.width, f.crop.height,
                 channels, f.levels, f.white, wbGains(f.result).copyOf(3), f.shadeD, f.shadeG,
@@ -2197,7 +2210,7 @@ class EncodedVideoRecorder internal constructor(
         )
         val (gidims, gfparams) = VfVideoGrade.packGrade(
             intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
-            profile = sessionProfile
+            saturation = saturation, profile = sessionProfile, vibrance = vibrance
         )
         val fd = submitRaw(f) { input ->
             VfVideoGrade.fusedYuvSubmitNative(
@@ -2241,7 +2254,7 @@ class EncodedVideoRecorder internal constructor(
         }
         val (gidims, gfparams) = VfVideoGrade.packGrade(
             intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
-            profile = sessionProfile
+            saturation = saturation, profile = sessionProfile, vibrance = vibrance
         )
         val fd = VfVideoGrade.gradeYuvSubmitNative(
             expBuf, p010Buf, gidims, intArrayOf(expW, expH), gfparams, strides, slotIndex, 0
@@ -3062,6 +3075,7 @@ class EncodedVideoRecorder internal constructor(
         if (audioRequired && audioFormat == null) return
         val mux = muxer ?: return
         try {
+            if (orientationHintDegrees != 0) mux.setOrientationHint(orientationHintDegrees)
             videoTrack = mux.addTrack(vf)
             if (audioRequired) {
                 audioTrack = mux.addTrack(audioFormat!!)

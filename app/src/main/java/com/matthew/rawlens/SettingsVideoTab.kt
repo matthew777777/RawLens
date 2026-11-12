@@ -10,6 +10,8 @@ import com.matthew.rawlens.MainActivity.Companion.KEY_VIDEO_BINNING
 import com.matthew.rawlens.MainActivity.Companion.KEY_VIDEO_AUDIO
 
 import com.matthew.rawlens.MainActivity.Companion.KEY_ENCODED_VIDEO_GAIN
+import com.matthew.rawlens.MainActivity.Companion.KEY_ENCODED_VIDEO_SATURATION
+import com.matthew.rawlens.MainActivity.Companion.KEY_ENCODED_VIDEO_VIBRANCE
 
 import com.matthew.rawlens.MainActivity.Companion.KEY_VIDEO_DEMOSAIC
 
@@ -175,6 +177,41 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             })
         })
         content.addView(sectionDesc("Digital gain folded into the grade (×1.0 = neutral): brightens the encoded image without touching sensor exposure. Applies live, including mid-take."))
+        // Saturation 0..2 (1 neutral) and vibrance -1..+1 (0 neutral), 0.05 steps.
+        // Phones ship different color calibration, so the static CCM can land
+        // flat on some; these tune the look per device. Live, including mid-take.
+        fun gradeSlider(name: String, key: String, initial: Float, min: Float, maxValue: Float,
+                        apply: (EncodedVideoRecorder, Float) -> Unit) {
+            var value = initial
+            fun text(v: Float) = "Encoded Video $name: " + String.format(java.util.Locale.US, "%.2f", v)
+            val label = TextView(this).apply {
+                text = text(value)
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(dp(12), dp(4), dp(12), 0)
+            }
+            content.addView(label)
+            content.addView(SettingsSlider(this).apply {
+                max = ((maxValue - min) * 20f).toInt()
+                progress = ((value - min) * 20f).toInt().coerceIn(0, max)
+                setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                    override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
+                        if (!fromUser) return
+                        value = min + progress / 20f
+                        label.text = text(value)
+                        encodedVideoRecorder?.let { apply(it, value) }
+                    }
+                    override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                    override fun onStopTrackingTouch(seekBar: SettingsSlider) {
+                        lensPreferences().edit().putFloat(key, value).apply()
+                        setStatus("${name.uppercase()} • " + String.format(java.util.Locale.US, "%.2f", value))
+                    }
+                })
+            })
+        }
+        gradeSlider("saturation", KEY_ENCODED_VIDEO_SATURATION, encodedVideoSaturationPref(), 0f, 2f) { r, v -> r.saturation = v }
+        gradeSlider("vibrance", KEY_ENCODED_VIDEO_VIBRANCE, encodedVideoVibrancePref(), -1f, 1f) { r, v -> r.vibrance = v }
+        content.addView(sectionDesc("Saturation scales all color about luma (1.00 = neutral). Vibrance boosts muted colors more than already-saturated ones (0.00 = neutral). Different phones calibrate color differently; tune per device. Applies live, including mid-take."))
         content.addView(sectionTitle("Monitoring & LUTs"))
         content.addView(sectionDesc("ACES fitted is a baked filmic approximation in Rec.709 gamma 2.4, not ACES scene data. S-Log3 uses S-Gamut3.Cine primaries; interpret data levels as Video/limited."))
         content.addView(Button(this).apply {

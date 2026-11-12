@@ -28,7 +28,7 @@ class VfVideoGradeTest {
         assertEquals(0f, fp[13], 0f) // exposure
         assertEquals(0f, fp[14], 0f) // bypass
         assertEquals(1f, fp[15], 0f) // contrast default
-        assertEquals(1f, fp[16], 0f) // saturation default
+        assertEquals(0f, fp[16], 0f) // vibrance default (saturation folds into the CCM)
         assertEquals(0f, fp[17], 0f) // BT709 wire id default
     }
 
@@ -36,10 +36,11 @@ class VfVideoGradeTest {
     fun packCarriesExplicitKnobs() {
         val (_, fp) = VfVideoGrade.packGrade(
             intArrayOf(8, 8), floatArrayOf(1f, 1f, 1f, 1f),
-            VfVideoGrade.IDENTITY_CCM, 0f, false, 1.2f, 0.8f
+            VfVideoGrade.IDENTITY_CCM, 0f, false, 1.2f, 0.8f, vibrance = 0.3f
         )
         assertEquals(1.2f, fp[15], 0f)
-        assertEquals(0.8f, fp[16], 0f)
+        assertEquals(0.3f, fp[16], 0f)
+        assertEquals(VfVideoGrade.saturateCcm(VfVideoGrade.IDENTITY_CCM, 0.8f)[0], fp[4], 0f)
     }
 
     @Test

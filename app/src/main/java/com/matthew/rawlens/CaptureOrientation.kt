@@ -31,6 +31,15 @@ object CaptureOrientation {
         }
     }
 
+    /** Clockwise display rotation (0/90/180/270) for the same EXIF code, e.g. an MP4 orientation hint. */
+    fun degrees(sensorOrientationDegrees: Int, deviceOrientationDegrees: Int, frontFacing: Boolean): Int =
+        when (exif(sensorOrientationDegrees, deviceOrientationDegrees, frontFacing)) {
+            6 -> 90
+            3 -> 180
+            8 -> 270
+            else -> 0
+        }
+
     private fun normalizeQuarterTurn(value: Int): Int =
         ((((value % 360) + 360) % 360 + 45) / 90 * 90) % 360
 }

@@ -37,8 +37,10 @@ internal object VfVideoGrade {
     /**
      * Pack grade params. C++ reads dims[2] + up to 18 floats
      * (gains[4], ccm row-major[9], exposure, bypass01, contrast,
-     * saturation, outMode). Slots 15/16 (contrast/saturation) are RESERVED:
-     * the record shaders ignore them (direct encode, no look). Slot 17 is
+     * vibrance, outMode). Slot 15 (contrast) is RESERVED. [saturation] is
+     * folded into the CCM rows here (exact: a linear blend about BT.709 luma
+     * on the developed linear-sRGB value); slot 16 carries [vibrance], which
+     * the record shaders apply per pixel (0 = neutral). Slot 17 is
      * the [EncodedVideoProfile] wire id (record submits only; the probe-only
      * loggrade stage reads the first 15 and always outputs log).
      */
@@ -51,16 +53,17 @@ internal object VfVideoGrade {
         contrast: Float = DEFAULT_CONTRAST,
         saturation: Float = DEFAULT_SATURATION,
         profile: EncodedVideoProfile = EncodedVideoProfile.BT709,
+        vibrance: Float = DEFAULT_VIBRANCE,
     ): Pair<IntArray, FloatArray> {
         require(dims.size == 2 && gains.size == 4 && ccm.size == 9)
         val iparams = intArrayOf(dims[0], dims[1])
         val fparams = FloatArray(18)
         gains.copyInto(fparams, 0)
-        ccm.copyInto(fparams, 4)
+        saturateCcm(ccm, saturation).copyInto(fparams, 4)
         fparams[13] = exposureEv
         fparams[14] = if (bypass) 1f else 0f
         fparams[15] = contrast
-        fparams[16] = saturation
+        fparams[16] = vibrance
         fparams[17] = profile.wireId.toFloat()
         return iparams to fparams
     }
@@ -68,6 +71,31 @@ internal object VfVideoGrade {
     /** Neutral grade knobs: 1 = no-op for both (mirrors the JPEG sliders). */
     const val DEFAULT_CONTRAST = 1f
     const val DEFAULT_SATURATION = 1f
+    /** Neutral vibrance (shader: chroma-weighted saturation, 0 = no-op). */
+    const val DEFAULT_VIBRANCE = 0f
+
+    /** BT.709 luma weights (linear sRGB). */
+    private val LUMA_709 = floatArrayOf(0.2126f, 0.7152f, 0.0722f)
+
+    /**
+     * Left-multiplies the camera->linear-sRGB [ccm] (row-major) by a
+     * saturation matrix S = (1 - s) * 1·lumaᵀ + s * I, so the developed
+     * value becomes luma + s * (rgb - luma). s = 1 returns [ccm] unchanged.
+     */
+    fun saturateCcm(ccm: FloatArray, saturation: Float): FloatArray {
+        if (saturation == 1f || !saturation.isFinite()) return ccm
+        val s = saturation.coerceAtLeast(0f)
+        val out = FloatArray(9)
+        for (r in 0 until 3) for (c in 0 until 3) {
+            var acc = 0f
+            for (k in 0 until 3) {
+                val sk = (1f - s) * LUMA_709[k] + if (k == r) s else 0f
+                acc += sk * ccm[k * 3 + c]
+            }
+            out[r * 3 + c] = acc
+        }
+        return out
+    }
 
     /** Cut point shared by the GLSL and this reference. */
     const val LOG_CUT = 0.01125f
