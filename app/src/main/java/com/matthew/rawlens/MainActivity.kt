@@ -1320,6 +1320,9 @@ class MainActivity : Activity() {
     }
 
     private var wideCaptureViewport = false
+
+    /** Pixel count of the live RAW stream; labels the LK-R resolution chip. */
+    internal var captureRawPixels = 0L
     private var viewportLayoutPosted = false
 
     private fun positionViewfinderOverlays() {
@@ -1353,6 +1356,10 @@ class MainActivity : Activity() {
         // as an unconstrained tall TextureView. Camera stream selection can then use stable 4:3
         // portrait geometry from its very first frame.
         controller.onCaptureSurfaceSize = { width, height ->
+            if (captureRawPixels != width.toLong() * height) {
+                captureRawPixels = width.toLong() * height
+                updateLkrZoomChip()
+            }
             val wide = kotlin.math.abs(width.toDouble() / height - 16.0 / 9.0) < 0.02
             if (wideCaptureViewport != wide) {
                 wideCaptureViewport = wide
@@ -1513,6 +1520,7 @@ class MainActivity : Activity() {
             }
         }
         (findViewById<View>(R.id.lkrZoomChip) as? RotatingContent)?.contentRotation = controlRotationDegrees
+        (findViewById<View>(R.id.lkrResChip) as? RotatingContent)?.contentRotation = controlRotationDegrees
         positionQuickPanel()
         positionWholeRotatedPanels()
     }

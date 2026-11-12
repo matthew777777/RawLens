@@ -177,6 +177,7 @@
 
 
 
+
     <!-- Top bar: opaque black island, edge-to-edge with rounded bottom corners
          mirroring the bottom panel. Single controls row in photo mode; the
          capture info line lives in the bottom panel in both modes so the
@@ -637,6 +638,24 @@
                     android:includeFontPadding="false"
                     android:textColor="@color/text_secondary"
                     android:textSize="8sp" />
+
+                <!-- LK-R output resolution: sensor MP <-> x2 super-resolution.
+                     Round like its OFF / AUTO neighbours; shown only while
+                     LK-R is the active merge in photo mode. -->
+                <com.matthew.rawlens.RotatingTextView
+                    android:id="@+id/lkrResChip"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/control_chip_round"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:lineSpacingMultiplier="0.9"
+                    android:text="12.5\nMP"
+                    android:textColor="@color/text_primary"
+                    android:textSize="9sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
 
                 <!-- RAW VF engine: shows the current engine, tap cycles it
                      (same as tapping the RAW VF debug overlay). -->

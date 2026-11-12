@@ -213,7 +213,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
         val captureId = take.lastModified()
         val merged = LkrMerge.mergeDecoded(appContext, frames,
             LkrMerge.Settings(dctPrior = inputs.mfsr.lkrDctPrior, tuning = LkrTuning.overrides(appContext),
-                zoom = inputs.mfsr.lkrZoom))
+                zoom = inputs.mfsr.lkrZoom, fullRes = inputs.mfsr.lkrFullRes))
             ?: throw IllegalStateException("LK-Reloaded merge failed")
         try {
             reportSaving(listener, t0, take, merged.width, merged.height, format, Method.LKR)

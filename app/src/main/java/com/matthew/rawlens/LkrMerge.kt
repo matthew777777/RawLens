@@ -34,7 +34,9 @@ internal object LkrMerge {
         /** LK-R Lab overrides (Settings -> Merge), NaN = code default; null = all defaults. */
         val tuning: FloatArray? = null,
         /** Zoom: 1.5x / 2x solve the centre crop at x2; output stays the sensor size. Overrides scale / crop. */
-        val zoom: LkrZoom = LkrZoom.X1
+        val zoom: LkrZoom = LkrZoom.X1,
+        /** Keep the x2 solve: 1x -> whole frame at x2; 1.5x / 2x -> crop at x2, no downsample. */
+        val fullRes: Boolean = false
     )
 
     fun mergeDecoded(
@@ -148,11 +150,11 @@ internal object LkrMerge {
         val zoomed = requested.zoom == LkrZoom.X1_5 || requested.zoom == LkrZoom.X2
         val settings = when {
             zoomed -> requested.copy(scale = 2, crop = requested.zoom.crop(w, h))
-            requested.zoom == LkrZoom.FULL_2X -> requested.copy(scale = 2, crop = null)
+            requested.zoom == LkrZoom.FULL_2X || requested.fullRes -> requested.copy(scale = 2, crop = null)
             else -> requested
         }
-        val outW = if (zoomed) w else 0
-        val outH = if (zoomed) h else 0
+        val outW = if (zoomed && !requested.fullRes) w else 0
+        val outH = if (zoomed && !requested.fullRes) h else 0
         val cfa = MfsrMerge.dngCodesFor(norm.sensorPattern)
         val neutral = metadata.neutralColorPoint?.toDoubleArray()
         val wb = if (neutral != null && neutral.size == 3 && neutral[0] > 0 && neutral[2] > 0)

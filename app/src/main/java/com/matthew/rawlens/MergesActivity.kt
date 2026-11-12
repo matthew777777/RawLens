@@ -834,7 +834,7 @@ class MergesActivity : Activity() {
         progressLine.text = "Starting…"
         val prefs = prefs()
         val inputs = BurstMergeRunner.Inputs(
-            mfsr = tuningMfsr.copy(lkrZoom = lkrZoom),
+            mfsr = tuningMfsr.copy(lkrZoom = lkrZoom, lkrFullRes = false),
             hdrPlus = tuningHdr,
             jpeg = MergeScreenSettings.jpeg(prefs),
             denoise = MergeScreenSettings.denoise(prefs),

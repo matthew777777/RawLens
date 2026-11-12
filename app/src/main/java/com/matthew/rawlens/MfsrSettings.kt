@@ -72,13 +72,19 @@ data class MfsrSettings(
      * centre crop at x2 (1.5x then area-downsampled). Output is always the
      * sensor resolution.
      */
-    val lkrZoom: LkrZoom = LkrZoom.X1
+    val lkrZoom: LkrZoom = LkrZoom.X1,
+    /**
+     * LK-R resolution (viewfinder round button), independent of [lkrZoom]:
+     * keep the x2 solve instead of returning to sensor size. 1x -> 4x the
+     * sensor pixels; 1.5x -> crop x2 (~2.25x pixels); 2x -> sensor size.
+     */
+    val lkrFullRes: Boolean = false
 ) {
     /** Quick-tile / status label of the active engine. */
     val label: String get() = if (engine == MfsrEngine.LKR) "LK-R" else "MFSR"
     /** Follow the shared burst / ZSL frame count, up to the active engine's ceiling. */
     fun activeFrameCount(configuredCount: Int): Int =
-        configuredCount.coerceIn(MIN_MERGE_FRAMES, maxFrames(engine, lkrZoom))
+        configuredCount.coerceIn(MIN_MERGE_FRAMES, maxFrames(engine, if (lkrFullRes && lkrZoom == LkrZoom.X1) LkrZoom.FULL_2X else lkrZoom))
 
     fun toPreferences(): Map<String, Any> = mapOf(
         "mfsr_enabled" to enabled,
@@ -90,7 +96,8 @@ data class MfsrSettings(
         "mfsr_engine" to engine.name,
         "lkr_dct_prior" to lkrDctPrior,
         "lkr_middle_reference" to lkrMiddleReference,
-        "lkr_zoom" to lkrZoom.name
+        "lkr_zoom" to lkrZoom.name,
+        "lkr_full_res" to lkrFullRes
     )
 
     /** True when the sharp merge is on with [which] as its engine (that engine's tile is active). */
@@ -118,7 +125,10 @@ data class MfsrSettings(
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,
             lkrDctPrior = values["lkr_dct_prior"] as? Boolean ?: false,
             lkrMiddleReference = values["lkr_middle_reference"] as? Boolean ?: true,
-            lkrZoom = LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1
+            // Legacy FULL_2X (zoom and resolution in one value) splits into 1x + full res.
+            lkrZoom = (LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1)
+                .let { if (it == LkrZoom.FULL_2X) LkrZoom.X1 else it },
+            lkrFullRes = values["lkr_full_res"] as? Boolean ?: (values["lkr_zoom"] == LkrZoom.FULL_2X.name)
         )
 
         const val MIN_MERGE_FRAMES = 2
@@ -154,6 +164,9 @@ enum class LkrZoom(val factor: Float, val label: String) {
     FULL_2X(1f, "Full 2×");
 
     fun next(): LkrZoom = entries[(ordinal + 1) % entries.size]
+
+    /** Viewfinder zoom chip cycle: 1x -> 1.5x -> 2x -> 1x (resolution is separate). */
+    fun nextZoom(): LkrZoom = when (this) { X1 -> X1_5; X1_5 -> X2; else -> X1 }
 
     /** Centre crop `[x, y, w, h]` (even) of a [w]x[h] sensor, or null at 1x. */
     fun crop(w: Int, h: Int): IntArray? {

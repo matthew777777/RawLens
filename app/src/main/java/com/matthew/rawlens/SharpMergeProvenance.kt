@@ -18,7 +18,7 @@ internal fun sharpMergeProvenance(
         if (lkr) {
             append("- Merge: LK-R (LK-Reloaded reconstruction)\n")
             append("- Zoom: ${settings.lkrZoom.factor}x\n")
-            append("- Reconstruction scale: ${if (settings.lkrZoom == LkrZoom.X1) 1 else 2}x\n")
+            append("- Reconstruction scale: ${if (settings.lkrZoom == LkrZoom.X1 && !settings.lkrFullRes) 1 else 2}x\n")
             append("- LK prior: ${if (settings.lkrDctPrior) "Sliding DCT" else "None"}\n")
         } else {
             append("- Merge: MFSR (robust multi-frame reconstruction)\n")
