@@ -778,6 +778,8 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   }
   trace("local_final", dloc.as<float>(), size_t(K) * nb * 2);
   trace("final_z", zc.as<float>(), nHR);
+  // Each frame minus the model's prediction of it (K x h x w, invalid = 0): host/lkr_align_overlay.py.
+  trace("final_resid", rr.as<float>(), nLR);
   trace("final_x", x_out->data(), nHR);
   const double t_fin = now_ms();
   FinishLook(zc.as<float>(), x_out->data(), H, W, prm, nscale.empty() ? nullptr : nscale.data(),
