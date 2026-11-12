@@ -219,7 +219,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // ratio of medians of the binned grey frames -- an uncompensated step
   // biases the merge and makes every robust / temporal test see "motion".
   std::vector<float> gain(K, 1.0f);
-  auto median_of = [](std::vector<float> v) {
+  auto median_of = [](const std::vector<float>& v) {
     std::vector<float> u;
     u.reserve(v.size());
     for (float x : v) if (x > 0.01f && x < 0.9f) u.push_back(x);

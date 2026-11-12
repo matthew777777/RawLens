@@ -30,6 +30,36 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class LkrPipelineDeviceTest {
+    @Test
+    fun nativeSharpnessMatchesSelectionScore() {
+        val random = java.util.Random(82)
+        for ((w, h) in listOf(64 to 48, 67 to 51, 128 to 96, 4096 to 3072)) {
+            val stride = w + 8
+            val raw = ByteBuffer.allocateDirect(stride * h * 2).order(ByteOrder.nativeOrder())
+            val shorts = raw.asShortBuffer()
+            repeat(stride * h) { shorts.put(it, random.nextInt(65536).toShort()) }
+            val black = floatArrayOf(63.25f, 64.5f, 65.75f, 66f)
+            for (cfa in listOf(intArrayOf(0, 1, 1, 2), intArrayOf(1, 0, 2, 1),
+                intArrayOf(1, 2, 0, 1), intArrayOf(2, 1, 1, 0))) {
+                val start = SystemClock.elapsedRealtimeNanos()
+                val expected = BurstSharpness.measure(w, h,
+                    { x, y -> cfa[(y and 1) * 2 + (x and 1)] == 1 }) { x, y ->
+                    (shorts.get(y * stride + x).toInt() and 0xffff) - black[(y and 1) * 2 + (x and 1)]
+                }
+                val kotlinNs = SystemClock.elapsedRealtimeNanos() - start
+                val nativeStart = SystemClock.elapsedRealtimeNanos()
+                val actual = LkrBridge.nativeSharpness(raw, w, h, stride, cfa, black)
+                val nativeNs = SystemClock.elapsedRealtimeNanos() - nativeStart
+                org.junit.Assert.assertEquals(expected, actual, 0.0)
+                if (w == 4096) Log.i(TAG, "sharpness ${w}x$h Kotlin=${kotlinNs / 1e6}ms native=${nativeNs / 1e6}ms exact=true")
+            }
+            shorts.clear()
+            repeat(stride * h) { shorts.put(0.toShort()) }
+            org.junit.Assert.assertEquals(0.0, LkrBridge.nativeSharpness(raw, w, h, stride,
+                intArrayOf(0, 1, 1, 2), black), 0.0)
+        }
+    }
+
     private data class Case(val name: String, val scale: Int, val crop: IntArray?, val outW: Int = 0, val outH: Int = 0)
 
     @Test

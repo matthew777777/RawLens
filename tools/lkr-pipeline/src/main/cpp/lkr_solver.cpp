@@ -152,7 +152,11 @@ bool Solver::Optional(const SolveParams& prm, bool dct) {
     ok = ok && need(residq_, spv::resid_q, sizeof(spv::resid_q), 5, sizeof(Push)) &&
          need(radjwq_, spv::resid_adj_w_q, sizeof(spv::resid_adj_w_q), 6, sizeof(Push)) &&
          need(scatq_, spv::scatter_q, sizeof(spv::scatter_q), 4, sizeof(Push));
-  if (prm.pack_taps)
+  if (prm.half_taps)   // same slots and bindings as the packed-tap variant
+    ok = ok && need(zpack_, spv::zhalf, sizeof(spv::zhalf), 2, sizeof(Push)) &&
+         need(residzq_, spv::resid_zh, sizeof(spv::resid_zh), 5, sizeof(Push)) &&
+         need(radjwzq_, spv::resid_adj_w_zh, sizeof(spv::resid_adj_w_zh), 6, sizeof(Push));
+  else if (prm.pack_taps)
     ok = ok && need(zpack_, spv::zpack, sizeof(spv::zpack), 2, sizeof(Push)) &&
          need(residzq_, spv::resid_zq, sizeof(spv::resid_zq), 5, sizeof(Push)) &&
          need(radjwzq_, spv::resid_adj_w_zq, sizeof(spv::resid_adj_w_zq), 6, sizeof(Push));
@@ -237,7 +241,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   Buffer& ebuf = cached(nLR * 4);
   Buffer& wmtmp = ebuf;
   // Packed 2x2 taps of z / z0 (zpack.comp); only the off-by-default pack_taps path reads them.
-  const size_t zq_bytes = prm.pack_taps ? nHR * 16 : 16;
+  const size_t zq_bytes = prm.half_taps ? nHR * 2 : prm.pack_taps ? nHR * 16 : 16;
   Buffer& zq = cached(zq_bytes), &z0q = cached(zq_bytes);
   { float* f = wtr.as<float>(); for (size_t i = 0; i < nLR; ++i) f[i] = 1.0f; }
   // Local motion field: K x nby x nbx vec2 (+ Jacobi scratch, block normal eqs).
@@ -250,7 +254,15 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   // Weighted coverage sum_k U_k^T (valid w) (acc2 -> cw) and plain coverage
   // U^T 1 (cov, = v after the L bound), host-cached copies for the prior map.
   Buffer& acc2 = cached(nHR * 4), &cw = cached(nHR * 4);
-  Buffer& cwc = cached(nHR * 4, true), &covc = cached(nHR * 4, true);
+  // Without an x-step, zc / xc are first written by the final readback,
+  // after the last coverage map has been consumed. Reuse them for coverage
+  // until then: two fewer HR RGB allocations per worker (24 MiB at x2).
+  // Keep the cache slots stable when switching prior modes on one Solver.
+  const bool separate_coverage = bool(prior) || prm.dct_prior || prm.dct_fallback;
+  Buffer& cw_stage = cached(separate_coverage ? nHR * 4 : 16, true);
+  Buffer& cov_stage = cached(separate_coverage ? nHR * 4 : 16, true);
+  Buffer& cwc = separate_coverage ? cw_stage : xc;
+  Buffer& covc = separate_coverage ? cov_stage : zc;
   std::memset(acc2.map, 0, nHR * 4);
   if (!y.map || !pb.map || !z.map || !x.map || !acc.map || !g.map || !part.map || !v.map || !z0.map || !wtr.map ||
       !rrt.map || !acc2.map || !cwc.map || !covc.map)
@@ -350,7 +362,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   VkDescriptorSet sRWq = oset(radjwq_, {&z, &y, &pb, &acc, &dloc, &wtb});
   VkDescriptorSet sSq = oset(scatq_, {&rwb, &pb, &acc, &dloc});
   VkDescriptorSet sSWq = oset(scatq_, {&wvb, &pb, &acc2, &dloc});
-  const bool packz = prm.pack_taps && !quad;
+  const bool packz = (prm.pack_taps || prm.half_taps) && !quad;
   VkDescriptorSet sZP = oset(zpack_, {&z, &zq}), sZ0P = oset(zpack_, {&z0, &z0q});
   VkDescriptorSet sRzq = oset(residzq_, {&zq, &y, &pb, &rr, &dloc});
   VkDescriptorSet sRTzq = oset(residzq_, {&z0q, &y, &pb, &rrt, &dloc});
@@ -907,7 +919,10 @@ void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, 
   // measured in the data fit itself). Strength follows the contributing-frame
   // factor: 0 where every frame contributed (static detail untouched).
   if (prm.notch && noise_scale) {
-    std::vector<float> Lx(HW), Ln;
+    // The chroma notch has consumed L/C; reuse those planes for the luma
+    // notch. Grain and shadow processing below recompute their own luma.
+    std::vector<float>& Lx = L;
+    std::vector<float>& Ln = C;
     for (size_t i = 0; i < HW; ++i) Lx[i] = q[0] * x[i] + q[1] * x[HW + i] + q[2] * x[2 * HW + i];
     Ln = Lx;
     NotchBayerPeriod(Ln.data(), H, W);
@@ -937,16 +952,15 @@ void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, 
   if (shadow && prm.shadow_chroma > 0.0f) {
     for (size_t i = 0; i < HW; ++i) L[i] = q[0] * x[i] + q[1] * x[HW + i] + q[2] * x[2 * HW + i];
     std::vector<float> tmp;
-    std::vector<float> Cc[3];
+    std::vector<float> Cc(HW);
     for (int c = 0; c < 3; ++c) {
-      Cc[c].resize(HW);
-      for (size_t i = 0; i < HW; ++i) Cc[c][i] = prm.wb[c] * x[c * HW + i] - L[i];
-      C = Cc[c];
+      for (size_t i = 0; i < HW; ++i) Cc[i] = prm.wb[c] * x[c * HW + i] - L[i];
+      C = Cc;
       BoxBlur(C.data(), H, W, 3, tmp);
       BoxBlur(C.data(), H, W, 3, tmp);
       for (size_t i = 0; i < HW; ++i) {
         const float t = prm.shadow_chroma * shadow[i];
-        x[c * HW + i] = (L[i] + Cc[c][i] + t * (C[i] - Cc[c][i])) / prm.wb[c];
+        x[c * HW + i] = (L[i] + Cc[i] + t * (C[i] - Cc[i])) / prm.wb[c];
       }
     }
   }
@@ -955,17 +969,14 @@ void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, 
   // contain valid colour. Do not expand this mask into coloured neighbours.
   if (prm.highlight_desat) {
     const float lo = 0.92f * prm.clip, hi = prm.clip;
-    std::vector<float> m(HW);
     for (size_t i = 0; i < HW; ++i) {
       const float mn = std::min(x[i], std::min(x[HW + i], x[2 * HW + i]));
-      m[i] = std::clamp((mn - lo) / std::max(hi - lo, 1e-6f), 0.0f, 1.0f);
-    }
-    for (size_t i = 0; i < HW; ++i) {
-      if (m[i] <= 0.0f) continue;
+      const float m = std::clamp((mn - lo) / std::max(hi - lo, 1e-6f), 0.0f, 1.0f);
+      if (m <= 0.0f) continue;
       const float L = q[0] * x[i] + q[1] * x[HW + i] + q[2] * x[2 * HW + i];   // wb-space luma
       for (int c = 0; c < 3; ++c) {
         const float neutral = L / prm.wb[c];
-        x[c * HW + i] += m[i] * (neutral - x[c * HW + i]);
+        x[c * HW + i] += m * (neutral - x[c * HW + i]);
       }
     }
   }

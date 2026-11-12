@@ -1,0 +1,17 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_shader_16bit_storage : require
+// SPDX-License-Identifier: Apache-2.0
+// EXPERIMENT: half-float copy of the HR image for the scattered bilinear reads of the residual /
+// adjoint passes (half the bytes per tap; those passes are bound by cache footprint on Mali).
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) writeonly buffer ZH { float16_t zh[]; };
+
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y), c = int(gl_GlobalInvocationID.z);
+  if (X >= pc.W || Y >= pc.H) return;
+  int o = (c * pc.H + Y) * pc.W + X;
+  zh[o] = float16_t(z[o]);
+}

@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
     else if (k == "--quad") prm.solve.quad = std::atoi(argv[++i]) != 0;
     else if (k == "--mev") prm.solve.motion_every = std::atoi(argv[++i]);
     else if (k == "--pack") prm.solve.pack_taps = std::atoi(argv[++i]) != 0;
+    else if (k == "--half") prm.solve.half_taps = std::atoi(argv[++i]) != 0;
     else if (k == "--eqday") prm.equalize_day = float(std::atof(argv[++i]));
     else if (k == "--sublk") prm.sub_lk = std::atoi(argv[++i]);
     else if (k == "--sc") prm.solve.shadow_chroma = float(std::atof(argv[++i]));

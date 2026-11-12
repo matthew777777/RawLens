@@ -399,3 +399,16 @@ Precision loss traced to AppConfigUtil::extractDNGFormatInfo using static MTK_SE
 Core selector diagnostic in progress: original libmtkcam_hal_core_utils.so SHA256287418474d0ddb781e5c6c33f4c38367e690061617a0bb599ddedb836a8bd8cc, extractDNGFormatInfo VA0x41410. Temporary bind copy returns format0x2217 (BAYER14_UNPAK) instead of deciding from static10-bit white. This changes the requested format, not pixel values or reported white. All properties/binds have automatic restore traps; no permanent vendor writes. Result recorded below when complete.
 
 Added tools/lapis-profile/analyze_precision.py for per-Bayer-phase code distributions and10-bit lattice checks. It explicitly does not certify sensor precision from code histograms. Driver DCG saturation structures specify gain_ratio16000, OB1024, saturation16368 and adc_bit10: composed DCG14 is not the same claim as a native14-bit ADC. Real range/precision must be measured, including exposure/noise response, not inferred from a14-bit label.
+
+
+## 2026-11-12: manual DCG and corrected crop/full scenario investigation
+
+Confirmed earlier core-format RAW14 success: 300 actual scenario9 frames at30.0324fps, source RAW14 unpacked. Original core-library hash restored after each test.
+
+Warmed-up manual experiment: initialize DCG RAW14 with AE ON for45frames, switch CONTROL_AE_MODE_OFF with ISO400/10ms while retaining logical12/DCG settings. Logged SWITCH_REQUEST frame45 ae0; provider terminated, no completed120-frame manual sequence. Warm initialization alone does not fix standard manual AE. This is not proof all vendor/manual implementations are impossible.
+
+AE lock comparison:120frames, lock at45, measured30.078018477fps. Timestamp-matched final result aeMode1, aeLocktrue, ISO12800/30.007ms; white15424, black~1024; actual driver0x1009301a. Exposure can be frozen through supported AE lock, but this is explicitly AE ON, not arbitrary manual ISO/shutter.
+
+Request key discovery includes Xiaomi stagger exposure/gain/ISO lists, but their applicability/units are unverified; no arbitrary setters or HAL assertion suppression applied. The practical supported DCG path remains AE ON, optionally locked.
+
+Corrected4×logical19 + actualmode8 with camera-engine override still fails initial kBinMode registration. Adding startup.sensorScenario19 + startup.forceSensorMode8 and removing cameng gets past configuration, but no completed RAW sequence yet; capture errors and request-level logs saved. 200MPlogical3 + sensor11 still fails kBinMode with cameng. Next bounded200MPtest sets startup.sensorScenario3 + startup.forceSensorMode11 without cameng, with original metadata exposure patch; automatic rollback retained.

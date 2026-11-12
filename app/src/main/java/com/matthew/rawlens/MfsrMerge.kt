@@ -104,6 +104,7 @@ internal object MfsrMerge {
     fun prepare(
         frames: List<BufferedRawFrame>,
         middleReference: Boolean = false,
+        nativeSharpness: Boolean = false,
         metadataOf: (BufferedRawFrame) -> RawFrameMetadata
     ): List<MfsrFrame>? {
         if (frames.size < MfsrSettings.MIN_MERGE_FRAMES) return null
@@ -119,7 +120,7 @@ internal object MfsrMerge {
             }
         }
         if (usable.size < MfsrSettings.MIN_MERGE_FRAMES) return null
-        val refOrder = selectSharpest(usable, middleReference) ?: return null
+        val refOrder = selectSharpest(usable, middleReference, nativeSharpness) ?: return null
         return refOrder.map { usable[it] }
     }
 
@@ -129,7 +130,7 @@ internal object MfsrMerge {
      * from each RAW16 plane (black-subtracted), reference = sharpest of
      * the newest three, blurred frames dropped. Returns merge order.
      */
-    private fun selectSharpest(frames: List<MfsrFrame>, middleReference: Boolean): List<Int>? {
+    private fun selectSharpest(frames: List<MfsrFrame>, middleReference: Boolean, nativeSharpness: Boolean): List<Int>? {
         return try {
             val sharpness = frames.map { sharp ->
                 val plane = sharp.frame.image.planes[0]
@@ -138,6 +139,12 @@ internal object MfsrMerge {
                 val colShorts = plane.pixelStride / 2
                 val pattern = sharp.norm.sensorPattern
                 val norm = sharp.norm
+                if (nativeSharpness && plane.pixelStride == 2) {
+                    val score = LkrBridge.nativeSharpness(plane.buffer.duplicate().also { it.rewind() },
+                        sharp.metadata.imageWidth, sharp.metadata.imageHeight, rowShorts,
+                        dngCodesFor(pattern), norm.blackLevels.toFloatArray())
+                    if (score.isFinite()) return@map score
+                }
                 BurstSharpness.measure(
                     sharp.metadata.imageWidth, sharp.metadata.imageHeight,
                     { x, y -> pattern.colorAt(x, y) == CfaColor.GREEN }

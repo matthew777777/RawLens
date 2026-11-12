@@ -22,6 +22,7 @@
 #include "lkr_pack.h"
 #include "lkr_tuning.h"
 #include "lkr_resample.h"
+#include "lkr_sharpness.h"
 
 #include <cmath>
 
@@ -108,6 +109,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.rgather", v) > 0) prm.solve.robust_gather = v[0] != '0';
     if (__system_property_get("debug.lkr.mev", v) > 0) prm.solve.motion_every = std::atoi(v);
     if (__system_property_get("debug.lkr.pack", v) > 0) prm.solve.pack_taps = v[0] != '0';
+    if (__system_property_get("debug.lkr.half", v) > 0) prm.solve.half_taps = v[0] != '0';
     if (__system_property_get("debug.lkr.quad", v) > 0) prm.solve.quad = v[0] != '0';
     if (__system_property_get("debug.lkr.rob", v) > 0 && v[0] == '0') prm.solve.robust = false;
     if (__system_property_get("debug.lkr.eq", v) > 0 && v[0] == '0') prm.solve.equalize_noise = false;
@@ -178,6 +180,19 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
 }
 
 }  // namespace
+
+extern "C" JNIEXPORT jdouble JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSharpness(
+    JNIEnv* env, jclass, jobject src, jint w, jint h, jint stride, jintArray cfa_j, jfloatArray black_j) {
+  const auto* raw = src ? static_cast<const uint16_t*>(env->GetDirectBufferAddress(src)) : nullptr;
+  if (!raw || w < 4 || h < 4 || stride < w ||
+      env->GetDirectBufferCapacity(src) < (jlong(stride) * (h - 1) + w) * 2 ||
+      !cfa_j || env->GetArrayLength(cfa_j) != 4 || !black_j || env->GetArrayLength(black_j) != 4)
+    return NAN;
+  int cfa[4]; float black[4];
+  env->GetIntArrayRegion(cfa_j, 0, 4, cfa);
+  env->GetFloatArrayRegion(black_j, 0, 4, black);
+  return lkr::RawSharpness(raw, w, h, stride, cfa, black);
+}
 
 extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMerge(
     JNIEnv* env, jclass, jobjectArray frames, jint w, jint h, jint row_stride_px, jintArray cfa, jfloatArray black,

@@ -20,6 +20,9 @@ public class RootRawProbe {
   static final java.util.List<Long> frameTimes=java.util.Collections.synchronizedList(new java.util.ArrayList<Long>());
   static final java.util.Map<Long,TotalCaptureResult> frameResults=new java.util.concurrent.ConcurrentHashMap<>();
   static volatile long selectedTimestamp;
+  static CameraCaptureSession liveSession;
+  static CaptureRequest.Builder liveRequest;
+  static CameraCaptureSession.CaptureCallback liveCallback;
   static void log(String s){System.out.println(s);System.out.flush();}
   static int integer(String k,int fallback){return opt.containsKey(k)?Integer.decode(opt.get(k)):fallback;}
   static <T> T waitFor(CompletableFuture<T> f)throws Exception{return f.get(15,TimeUnit.SECONDS);}
@@ -71,6 +74,7 @@ public class RootRawProbe {
     log("HIGH_RES_RAW "+Arrays.toString(c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP).getHighResolutionOutputSizes(ImageFormat.RAW_SENSOR)));
     log("STATIC id="+id+" raw="+Arrays.toString(sizes)+" white="+c.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)+" active="+c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE));
     try{int[] full=c.get(new CameraCharacteristics.Key<int[]>("com.xiaomi.scaler.availableSuperResolutionStreamConfigurations",int[].class));log("SUPER_RES "+Arrays.toString(full));}catch(Exception e){log("SUPER_RES_ERROR "+e);}
+    if(opt.containsKey("keys"))for(CaptureRequest.Key<?> key:c.getAvailableCaptureRequestKeys())if(key.getName().toLowerCase().matches(".*(hdr|exposure|gain|ae\\.).*"))log("REQUEST_KEY "+key.getName());
     if(!opt.containsKey("capture")){System.exit(0);return;}
     thread.start();handler=new Handler(thread.getLooper());
     CompletableFuture<CameraDevice> opened=new CompletableFuture<>();
@@ -83,6 +87,17 @@ public class RootRawProbe {
     reader.setOnImageAvailableListener(r->{try(Image image=r.acquireNextImage()){
       if(image==null || imageReady.isDone())return;
       frameTimes.add(image.getTimestamp());
+      if(frameTimes.size()==integer("switchAfter",-1)) {
+        if(opt.containsKey("lockAfter")) liveRequest.set(CaptureRequest.CONTROL_AE_LOCK,true);
+        else {
+          liveRequest.set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_OFF);
+          if(opt.containsKey("lockWithManual"))liveRequest.set(CaptureRequest.CONTROL_AE_LOCK,true);
+          liveRequest.set(CaptureRequest.SENSOR_SENSITIVITY,integer("iso",400));
+          liveRequest.set(CaptureRequest.SENSOR_EXPOSURE_TIME,Long.parseLong(opt.getOrDefault("exposure","20000000")));
+        }
+        liveSession.setRepeatingRequest(liveRequest.build(),liveCallback,handler);
+        log("SWITCH_REQUEST frame="+frameTimes.size()+" ae="+liveRequest.get(CaptureRequest.CONTROL_AE_MODE)+" lock="+liveRequest.get(CaptureRequest.CONTROL_AE_LOCK));
+      }
       if(frameTimes.size()<integer("frames",1))return;
       selectedTimestamp=image.getTimestamp();
       Image.Plane plane=image.getPlanes()[0];ByteBuffer data=plane.getBuffer().order(ByteOrder.LITTLE_ENDIAN);
@@ -102,7 +117,9 @@ public class RootRawProbe {
     CaptureRequest.Builder request=device.createCaptureRequest(integer("template",CameraDevice.TEMPLATE_STILL_CAPTURE));settings(request);request.addTarget(reader.getSurface());
     CompletableFuture<TotalCaptureResult> result=new CompletableFuture<>();
     java.lang.reflect.Method submit=CameraCaptureSession.class.getMethod(opt.containsKey("repeat")?"setRepeatingRequest":"capture",CaptureRequest.class,CameraCaptureSession.CaptureCallback.class,Handler.class);
-    submit.invoke(session,request.build(),new CameraCaptureSession.CaptureCallback(){public void onCaptureCompleted(CameraCaptureSession s,CaptureRequest q,TotalCaptureResult r){Long ts=r.get(CaptureResult.SENSOR_TIMESTAMP);if(ts!=null)frameResults.put(ts,r);result.complete(r);}public void onCaptureFailed(CameraCaptureSession s,CaptureRequest q,CaptureFailure f){result.completeExceptionally(new Exception("capture failed "+f.getReason()));}},handler);
+    liveSession=session;liveRequest=request;
+    liveCallback=new CameraCaptureSession.CaptureCallback(){public void onCaptureCompleted(CameraCaptureSession s,CaptureRequest q,TotalCaptureResult r){Long ts=r.get(CaptureResult.SENSOR_TIMESTAMP);if(ts!=null)frameResults.put(ts,r);result.complete(r);}public void onCaptureFailed(CameraCaptureSession s,CaptureRequest q,CaptureFailure f){result.completeExceptionally(new Exception("capture failed "+f.getReason()));}};
+    submit.invoke(session,request.build(),liveCallback,handler);
     log(waitFor(imageReady));
     long deadline=SystemClock.elapsedRealtime()+5000;
     while(!frameResults.containsKey(selectedTimestamp) && SystemClock.elapsedRealtime()<deadline)Thread.sleep(10);
@@ -112,7 +129,12 @@ public class RootRawProbe {
       long first=frameTimes.get(0),last=frameTimes.get(frameTimes.size()-1);
       log("CADENCE frames="+frameTimes.size()+" first="+first+" last="+last+" fps="+((frameTimes.size()-1)*1e9/(last-first)));
     }
-    log("RESULT timestamp="+metadata.get(CaptureResult.SENSOR_TIMESTAMP)+" iso="+metadata.get(CaptureResult.SENSOR_SENSITIVITY)+" exposure="+metadata.get(CaptureResult.SENSOR_EXPOSURE_TIME)+" white="+metadata.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)+" black="+Arrays.toString(metadata.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)));
+    log("RESULT aeMode="+metadata.get(CaptureResult.CONTROL_AE_MODE)+" aeLock="+metadata.get(CaptureResult.CONTROL_AE_LOCK)+" timestamp="+metadata.get(CaptureResult.SENSOR_TIMESTAMP)+" iso="+metadata.get(CaptureResult.SENSOR_SENSITIVITY)+" exposure="+metadata.get(CaptureResult.SENSOR_EXPOSURE_TIME)+" white="+metadata.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)+" black="+Arrays.toString(metadata.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)));
+    if(opt.containsKey("keys"))for(CaptureResult.Key<?> key:metadata.getKeys())if(key.getName().toLowerCase().matches(".*(stagger|exposure|gainlist|isolist).*")) {
+      Object value=metadata.get(key);
+      String rendered=value==null?"null":value.getClass().isArray()?Arrays.deepToString(new Object[]{value}):value.toString();
+      log("RESULT_KEY "+key.getName()+" type="+(value==null?"null":value.getClass().getName())+" value="+rendered);
+    }
     for(String name:new String[]{"com.mediatek.seamlessfeature.sensorScenario","xiaomi.streaming.sensormode","xiaomi.insensorzoom.status"}){try{log("MODE "+name+"="+metadata.get(new CaptureResult.Key<Integer>(name,Integer.class)));}catch(Exception e){log("MODE_ERROR "+name+" "+e);}}
     try{
       java.lang.Process sensor=new ProcessBuilder("/data/local/tmp/rawlens-sensor-enum","/dev/v4l-subdev24").redirectErrorStream(true).start();

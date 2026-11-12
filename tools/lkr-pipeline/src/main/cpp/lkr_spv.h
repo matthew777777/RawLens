@@ -76,6 +76,15 @@ static const uint32_t resid_zq[] = {
 static const uint32_t resid_adj_w_zq[] = {
 #include "resid_adj_w_zq.inc"
 };
+static const uint32_t zhalf[] = {
+#include "zhalf.inc"
+};
+static const uint32_t resid_zh[] = {
+#include "resid_zh.inc"
+};
+static const uint32_t resid_adj_w_zh[] = {
+#include "resid_adj_w_zh.inc"
+};
 static const uint32_t weight_t[] = {
 #include "weight_t.inc"
 };

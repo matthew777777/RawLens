@@ -133,6 +133,9 @@ struct SolveParams {
   // copy is 4x the bytes and misses cache; the 4 scalar taps share lines.
   // These passes are cache/bandwidth bound, not instruction bound. A/B only.
   bool pack_taps = false;
+  // EXPERIMENT: the residual / adjoint passes read a half-float copy of z (zhalf.comp): half the
+  // bytes per bilinear tap. Rounds z to 11 bits for those reads, so not bit-identical.
+  bool half_taps = false;
   // Motion refinement (Eq. 7, global + local) on every iteration for the first
   // motion_warmup iterations, then every motion_every-th (1 = paper: always).
   int motion_every = 2;

@@ -37,6 +37,11 @@ internal object LkrBridge {
     const val STAT_BACKEND = 13
     const val STATS_SIZE = 16
 
+    /** Same full-resolution green-gradient score as BurstSharpness.measure; NaN for unsupported buffers. */
+    @JvmStatic external fun nativeSharpness(
+        src: ByteBuffer, width: Int, height: Int, rowStridePx: Int, cfa: IntArray, black: FloatArray
+    ): Double
+
     /**
      * @param frames reference first; each holds `rowStridePx * height` uint16.
      * @param cfa LibRaw codes of the 2x2 cell, row-major (0 R, 1 G, 2 B).

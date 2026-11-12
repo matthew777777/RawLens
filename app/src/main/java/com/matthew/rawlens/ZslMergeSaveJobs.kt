@@ -317,12 +317,15 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
         host.reportSaveState("${settings.label} MERGING")
         val tMerge0 = android.os.SystemClock.elapsedRealtime()
         val ordered = try {
-            MfsrMerge.prepare(selected, settings.engine == MfsrEngine.LKR && settings.lkrMiddleReference) { frame ->
+            MfsrMerge.prepare(selected, settings.engine == MfsrEngine.LKR && settings.lkrMiddleReference,
+                nativeSharpness = settings.engine == MfsrEngine.LKR) { frame ->
                 RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides)
             }
         } finally {
             // Images stay open for the just-in-time decode inside merge.
         }
+        if (settings.engine == MfsrEngine.LKR) Log.i(LOG_TAG,
+            "LK-R selection=${android.os.SystemClock.elapsedRealtime() - tMerge0}ms frames=${selected.size}")
         if (ordered.isNullOrEmpty()) {
             Log.e(LOG_TAG, "${settings.label} prepare produced no usable frames")
             host.reportSaveState("${settings.label} ERROR")
