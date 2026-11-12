@@ -352,6 +352,7 @@ class RawCameraController(
     private var rawReaderMaxImages = 0
     private var rawReaderHasZslBudget = true
     private var previewSurface: Surface? = null
+    private var vfMergeQuiet = false
     private var previewSize: Size? = null
     private var selectedCameraId: String? = null
     private var rawCameraIds: List<String> = emptyList()
@@ -1305,6 +1306,12 @@ class RawCameraController(
                 }
                 // Histogram delivery follows RAW arrival, independent of ZSL pairing
                 // and capture/save state. VF-only repeating frames are useful too.
+                val mergeQuiet = MergeGpuQuiet.active
+                if (mergeQuiet != vfMergeQuiet) {
+                    vfMergeQuiet = mergeQuiet
+                    activeVf()?.setMonitoringSuspended(mergeQuiet)
+                }
+                if (!mergeQuiet) {
                 characteristics?.let { publishRawScopeIfDue(image, it) }
                 // Focus peaking rides the same RAW VF stream at its own throttle,
                 // gated by the manual/tap-focus auto-show policy.
@@ -1317,6 +1324,7 @@ class RawCameraController(
                         setSensorLevels(dngMetadataOverrides(selectedCameraId))
                         offer(image, it, latestPreviewResult)
                     }
+                }
                 }
                 if (pairing.consumePreviewRaw(image.timestamp)) {
                     RawImageOwnership.release(image)
