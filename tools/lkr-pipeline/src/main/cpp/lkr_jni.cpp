@@ -145,6 +145,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.wskip", v) > 0) prm.solve.weight_skip = v[0] != '0';
     if (__system_property_get("debug.lkr.jfuse", v) > 0) prm.solve.jac_fuse = v[0] != '0';
     if (__system_property_get("debug.lkr.rob", v) > 0 && v[0] == '0') prm.solve.robust = false;
+    if (__system_property_get("debug.lkr.guide", v) > 0) prm.solve.guide_confidence = float(std::atof(v));   // 0 = residual confidence
     if (__system_property_get("debug.lkr.eq", v) > 0 && v[0] == '0') prm.solve.equalize_noise = false;
     if (__system_property_get("debug.lkr.loc", v) > 0 && v[0] == '0') prm.solve.local_block = 0;
   }
