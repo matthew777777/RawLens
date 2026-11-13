@@ -1,0 +1,8 @@
+16 frames 4080x3060 -> 4080x3060 s=1 tiles 63  sigma 0.00242 a 1.18e-05 b 9.97e-07  prior none
+reference frame 0 (sharpest)
+look: prior 0.35 grain 0.00 (auto from noise)  local lambda 0.10
+ms: load 217 noise 187 coarseLK 499 tiles 14745 (gpu 28816 prior 0, 0 calls) TOTAL(merge) 15244
+workers 3, tile sums ms: solve 32266 (gpu 28816 prior 0 init 751 finish 797 other 1902) prep 11128 (load 485) blend 130 | setup 70 wait 0
+gpu profile: resid_adj_w 3984.2, resid 2940.6, weight_th 1633.5, weight_t 1627.5, scatter 1539.5, jac 1535.8, zstep 1487.5, weight_tv 1264.7, weight_min 1214.8, jacblk 1191.7, weight_td 1087.7, weight_minh 1005.2, weight_e 963.3, weight_tdet 718.9, weight 616.9, resid_adj 435.3, solve 344.2, solveblk 259.5,
+GPU host totals: alloc 105 (792.8 MiB cumulative, 792.8 MiB summed peaks) 8.6 ms; pipelines 57 63.5 ms; sets 1638 4.0 ms
+GPU work totals: submissions 315 dispatches 9576 copies 882; record 8.4 queue 232.0 fenceWait 30255.6 coherency 0.0 query 3.3 ms

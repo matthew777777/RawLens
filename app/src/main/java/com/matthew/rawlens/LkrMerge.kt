@@ -5,7 +5,6 @@ package com.matthew.rawlens
 
 import android.content.Context
 import android.os.SystemClock
-import android.util.Log
 import com.rawlens.srpipeline.SrpBridge
 import java.nio.ByteOrder
 
@@ -19,7 +18,7 @@ import java.nio.ByteOrder
  * NoiseProfile). Reference = first frame of [frames].
  */
 internal object LkrMerge {
-    private const val LOG_TAG = "RawLensLkr"
+    private const val LOG_TAG = "RawLensCamera"
     /** Sensors deeper than this are staged as plain 16-bit: packing 14 bits saves only an eighth. */
     private const val MAX_PACKED_BITS = 12
 
@@ -169,21 +168,29 @@ internal object LkrMerge {
             noiseSource?.iso?.toFloat() ?: 0f)
         val t0 = SystemClock.elapsedRealtime()
         // packedBits >= 0: frames from LkrBridge.nativeStage (tight rows, packed when > 0).
-        val rgb = (if (packedBits >= 0) LkrBridge.nativeMergeStaged(
-            buffers.toTypedArray(), w, h, packedBits, cfa, norm.blackLevels.toFloatArray(),
-            norm.whiteLevel, wb, settings.scale, settings.tile, settings.overlap, settings.crop,
-            settings.dctPrior,
-            stats,
-            settings.tuning,
-            outW, outH
-        ) else LkrBridge.nativeMerge(
-            buffers.toTypedArray(), w, h, rowStrideBytes / 2, cfa, norm.blackLevels.toFloatArray(),
-            norm.whiteLevel, wb, settings.scale, settings.tile, settings.overlap, settings.crop,
-            settings.dctPrior,
-            stats,
-            settings.tuning,
-            outW, outH
-        )) ?: return null
+        val diagnostics = LkrMergeDiagnostics(context)
+        val rgb = try {
+            if (packedBits >= 0) LkrBridge.nativeMergeStaged(
+                buffers.toTypedArray(), w, h, packedBits, cfa, norm.blackLevels.toFloatArray(),
+                norm.whiteLevel, wb, settings.scale, settings.tile, settings.overlap, settings.crop,
+                settings.dctPrior,
+                stats,
+                settings.tuning,
+                outW, outH
+            ) else LkrBridge.nativeMerge(
+                buffers.toTypedArray(), w, h, rowStrideBytes / 2, cfa, norm.blackLevels.toFloatArray(),
+                norm.whiteLevel, wb, settings.scale, settings.tile, settings.overlap, settings.crop,
+                settings.dctPrior,
+                stats,
+                settings.tuning,
+                outW, outH
+            )
+        } finally {
+            diagnostics.close()
+            LkrBridge.nativeLastProfile().lineSequence().filter { it.isNotBlank() }.forEach {
+                Log.i(LOG_TAG, "LK-R native: $it")
+            }
+        } ?: return null
         val mergeMs = SystemClock.elapsedRealtime() - t0
         rgb.order(ByteOrder.nativeOrder())
         val ow = stats[LkrBridge.STAT_OUT_W].toInt()

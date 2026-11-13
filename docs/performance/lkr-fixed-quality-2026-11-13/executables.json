@@ -1,0 +1,10 @@
+{
+  "baseline": {
+    "path": "/private/tmp/rawlens-lkr-perf-20261113/instrumented-baseline-run",
+    "sha256": "d43f55e587b69a7218039782a48eda44cb6daa7350b8d788e88aa3e921e15104"
+  },
+  "candidate": {
+    "path": "/private/tmp/rawlens-lkr-perf-20261113/candidate-run",
+    "sha256": "7032d6cfdd56b48be32ca243b2ac0f9e7112d6ecb535bae1a692774e5e018ccb"
+  }
+}

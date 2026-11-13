@@ -948,9 +948,18 @@ class RawCameraController(
     }
 
     private var lastSessionWaitStatusMs = 0L
+    // Guard the asynchronous gap before onConfigured publishes session.
+    private var configuringSessionGeneration: Int? = null
 
     private fun createSession(device: CameraDevice, generation: Int) {
-        if (!isCurrent(generation) || camera !== device || session != null) return
+        // Surface callbacks arrive on main; device/session callbacks arrive on RawCamera.
+        // Serialize both before inspecting or allocating any session outputs.
+        if (!isOnCameraThread()) {
+            cameraHandler.post { createSession(device, generation) }
+            return
+        }
+        if (!isCurrent(generation) || camera !== device || session != null ||
+            configuringSessionGeneration == generation) return
         // Camera open and SurfaceView availability are independent asynchronous events. On a
         // cold launch the device can open first; wait for the surface and let its listener call
         // us again instead of leaving an open camera with no session until the next Activity.
@@ -1196,6 +1205,7 @@ class RawCameraController(
             }
             rawReader = reader
             previewSurface = surface
+            configuringSessionGeneration = generation
             try {
                 createPerformanceSession(device, surface, reader.surface, generation)
             } catch (failure: CameraAccessException) {
@@ -1466,6 +1476,7 @@ class RawCameraController(
 
     /** Releases the RAW reader and preview surface of a session that failed to configure. */
     private fun discardSessionOutputs(reader: ImageReader, surface: Surface?) {
+        configuringSessionGeneration = null
         rawReader = null
         rawReaderMaxImages = 0
         previewSurface = null
@@ -1672,6 +1683,7 @@ class RawCameraController(
                     return
                 }
                 try {
+                    configuringSessionGeneration = null
                     session = configured
                     // Candidate for stream verification: confirmed only when
                     // this session's first RAW frame actually arrives below.
@@ -7261,6 +7273,7 @@ class RawCameraController(
             running = false
             opening = false
             lifecycleGeneration++
+            configuringSessionGeneration = null
             touchFocus.resetForStop()
             publishPeakingActiveIfChanged()
             touchFocus.cancelTimers()

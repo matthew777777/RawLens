@@ -44,6 +44,15 @@ struct Pipeline {
   uint32_t push = 0;
 };
 
+// CPU wall times: fence wait includes GPU execution and must not be added to
+// timestamp shader time. Totals across independent workers overlap in wall time.
+struct GpuStats {
+  uint64_t allocations = 0, allocated_bytes = 0, live_bytes = 0, peak_bytes = 0;
+  uint64_t pipelines = 0, sets = 0, submissions = 0, dispatches = 0, copies = 0;
+  double alloc_ms = 0, pipeline_ms = 0, sets_ms = 0, record_ms = 0;
+  double queue_ms = 0, wait_ms = 0, coherency_ms = 0, query_ms = 0;
+};
+
 class Gpu {
  public:
   Gpu();
@@ -78,6 +87,8 @@ class Gpu {
   uint64_t dispatches() const { return ndispatch_; }
   // GPU timestamp profiling per pipeline (ms accumulated over submits).
   void profile(bool on);
+  bool profiling() const { return qpool_ != VK_NULL_HANDLE; }
+  const GpuStats& stats() const { return stats_; }
   std::string profileReport() const;
 
  private:
@@ -93,6 +104,8 @@ class Gpu {
   VkPipelineCache pcache_ = VK_NULL_HANDLE;   // seeded from / saved to a process-wide blob
   VkPhysicalDeviceMemoryProperties memprops_{};
   bool recording_ = false;
+  double record_start_ms_ = 0;
+  GpuStats stats_;
   std::vector<Buffer> noncoherent_;   // flushed before / invalidated after each submit
   uint64_t ndispatch_ = 0;
   VkQueryPool qpool_ = VK_NULL_HANDLE;

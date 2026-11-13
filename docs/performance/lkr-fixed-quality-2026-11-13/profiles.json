@@ -1,0 +1,106 @@
+{
+  "12mp16": {
+    "baseline": {
+      "shaders_ms": {
+        "resid_adj_w": 4053.0,
+        "resid": 3718.0,
+        "zstep": 2592.5,
+        "weight_t": 1440.3,
+        "weight_tv": 1342.7,
+        "weight_tdet": 1331.8,
+        "weight_th": 1149.2,
+        "weight_td": 1122.7,
+        "weight_e": 1076.5,
+        "weight_min": 1036.4,
+        "scatter": 1010.0,
+        "weight": 987.1,
+        "jac": 938.1,
+        "weight_minh": 747.0,
+        "jacblk": 511.0,
+        "resid_adj": 480.8,
+        "solve": 376.8,
+        "solveblk": 102.0
+      },
+      "shader_sum_ms": 24015.9,
+      "host_totals": "GPU host totals: alloc 105 (792.8 MiB cumulative, 792.8 MiB summed peaks) 4.2 ms; pipelines 57 120.6 ms; sets 1638 1.8 ms",
+      "work_totals": "GPU work totals: submissions 693 dispatches 9576 copies 882; record 13.4 queue 263.3 fenceWait 37796.5 coherency 0.1 query 6.6 ms"
+    },
+    "candidate": {
+      "shaders_ms": {
+        "resid_adj_w": 3984.2,
+        "resid": 2940.6,
+        "weight_th": 1633.5,
+        "weight_t": 1627.5,
+        "scatter": 1539.5,
+        "jac": 1535.8,
+        "zstep": 1487.5,
+        "weight_tv": 1264.7,
+        "weight_min": 1214.8,
+        "jacblk": 1191.7,
+        "weight_td": 1087.7,
+        "weight_minh": 1005.2,
+        "weight_e": 963.3,
+        "weight_tdet": 718.9,
+        "weight": 616.9,
+        "resid_adj": 435.3,
+        "solve": 344.2,
+        "solveblk": 259.5
+      },
+      "shader_sum_ms": 23850.8,
+      "host_totals": "GPU host totals: alloc 105 (792.8 MiB cumulative, 792.8 MiB summed peaks) 8.6 ms; pipelines 57 63.5 ms; sets 1638 4.0 ms",
+      "work_totals": "GPU work totals: submissions 315 dispatches 9576 copies 882; record 8.4 queue 232.0 fenceWait 30255.6 coherency 0.0 query 3.3 ms"
+    }
+  },
+  "50mp24": {
+    "baseline": {
+      "shaders_ms": {
+        "resid_adj_w": 37639.9,
+        "resid": 15973.0,
+        "scatter": 10470.7,
+        "jac": 6237.5,
+        "jacblk": 6058.8,
+        "zstep": 2964.1,
+        "weight_t": 2638.5,
+        "weight_th": 2109.2,
+        "resid_adj": 1895.5,
+        "weight_min": 1813.6,
+        "weight_minh": 1335.7,
+        "weight_e": 1321.7,
+        "weight_tv": 1147.2,
+        "weight_td": 965.1,
+        "weight_tdet": 893.3,
+        "weight": 685.1,
+        "solve": 259.1,
+        "solveblk": 8.6
+      },
+      "shader_sum_ms": 94416.6,
+      "host_totals": "GPU host totals: alloc 70 (928.6 MiB cumulative, 928.6 MiB summed peaks) 1.3 ms; pipelines 38 28.4 ms; sets 1638 1.9 ms",
+      "work_totals": "GPU work totals: submissions 693 dispatches 9576 copies 882; record 15.1 queue 369.5 fenceWait 112962.5 coherency 0.1 query 7.6 ms"
+    },
+    "candidate": {
+      "shaders_ms": {
+        "resid_adj_w": 19398.2,
+        "resid": 12183.2,
+        "scatter": 7770.2,
+        "jac": 5848.3,
+        "jacblk": 4534.2,
+        "zstep": 2633.8,
+        "weight_t": 1865.7,
+        "weight_th": 1637.3,
+        "weight_min": 1495.1,
+        "weight_minh": 1168.8,
+        "resid_adj": 1140.8,
+        "weight_tv": 1134.9,
+        "weight_e": 1020.9,
+        "weight_td": 769.8,
+        "weight_tdet": 719.6,
+        "weight": 583.9,
+        "solve": 261.6,
+        "solveblk": 124.2
+      },
+      "shader_sum_ms": 64290.5,
+      "host_totals": "GPU host totals: alloc 70 (928.6 MiB cumulative, 928.6 MiB summed peaks) 1.6 ms; pipelines 38 65.4 ms; sets 1638 1.8 ms",
+      "work_totals": "GPU work totals: submissions 315 dispatches 9576 copies 882; record 6.3 queue 231.8 fenceWait 73518.3 coherency 0.0 query 2.8 ms"
+    }
+  }
+}

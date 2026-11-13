@@ -599,6 +599,12 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   bool z0_packed = false;
   int motion_steps = 0;
   bool temporal_stale = true;
+  // With no CPU/DCT prior, the intermediate iterations only touch GPU
+  // buffers. Keep their existing barriers and arithmetic, but wait only at
+  // readback points (and at most four iterations per command buffer).
+  const bool batch_iterations = !prior && !dct && prm.debug_prefix.empty();
+  bool iteration_recording = false;
+  double iteration_gpu_start = 0;
   for (int t = 0; t < prm.T; ++t) {
     const float mu = float(prm.lam * double(prm.sigma_noise) * prm.sigma_noise / (double(sig[t]) * sig[t]));
     Push q = pc;
@@ -613,8 +619,11 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     q.rob_k = prm.robust_k;
     q.f3 = prm.robust_tau;
     q.rob_on = (prm.robust && prm.noise_b > 0 && t >= prm.robust_start) ? std::max(1.0f, prm.robust_pow) : 0.0f;
-    const double tg = now_ms();
-    gpu_->begin();
+    if (!iteration_recording) {
+      iteration_gpu_start = now_ms();
+      gpu_->begin();
+      iteration_recording = true;
+    }
     if (x_from_staging) { gpu_->copy(xc, x, nHR * 4); x_from_staging = false; }   // previous prior's output
     // Temporal weights depend on the fixed z0 and the motion only: recompute after a motion step.
     if (temporal && q.rob_on > 0.5f && temporal_stale) {
@@ -668,13 +677,16 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       gpu_->dispatch(zstep_, sZW, &q1, gHR1);
       gpu_->copy(cw, cwc, nHR * 4);
     }
+    const bool flush_iteration = !batch_iterations || cov_now || t + 1 == prm.T || (t + 1) % 4 == 0;
+    if (!flush_iteration) continue;
     if (!gpu_->submit()) {
       char m[96];
       std::snprintf(m, sizeof(m), "iteration %d submit, vk %d, wtemp pipe %p", t, gpu_->last_error, (void*)wtemp_.pipe);
       return LKR_FAIL(m);
     }
     ++S.submits;
-    S.gpu_ms += now_ms() - tg;
+    iteration_recording = false;
+    S.gpu_ms += now_ms() - iteration_gpu_start;
     // Coverage is also needed by no-prior motion-region Bayer cleanup.
     if (use_prior) {
       if (cov_now) {

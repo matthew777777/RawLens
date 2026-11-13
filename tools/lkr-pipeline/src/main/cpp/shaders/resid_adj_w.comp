@@ -46,6 +46,10 @@ void main() {
   float sf = float(pc.s);
   float invn = 1.0 / (sf * sf);
   float sum = 0.0;
+  // s is 1 or 2. Reuse the exact forward taps for the transpose instead of
+  // evaluating the affine/local warp twice for every sub-sample.
+  int offsets[4];
+  vec2 fractions[4];
   for (int oy = 0; oy < pc.s; ++oy)
     for (int ox = 0; ox < pc.s; ++ox) {
       vec2 u = subPos(i, j, ox, oy);
@@ -53,6 +57,8 @@ void main() {
       ivec2 x0; vec2 a;
       if (!taps(q, x0, a)) return;                    // invalid LR pixel
       int o = base + x0.y * pc.W + x0.x;
+      offsets[oy * pc.s + ox] = o;
+      fractions[oy * pc.s + ox] = a;
       sum += (z[o] * (1.0 - a.x) + z[o + 1] * a.x) * (1.0 - a.y) +
              (z[o + pc.W] * (1.0 - a.x) + z[o + pc.W + 1] * a.x) * a.y;
     }
@@ -64,11 +70,8 @@ void main() {
   float rs = r * wk * invn * pc.scale;
   for (int oy = 0; oy < pc.s; ++oy)
     for (int ox = 0; ox < pc.s; ++ox) {
-      vec2 u = subPos(i, j, ox, oy);
-      precise vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
-      ivec2 x0; vec2 a;
-      taps(q, x0, a);
-      int o = base + x0.y * pc.W + x0.x;
+      int o = offsets[oy * pc.s + ox];
+      vec2 a = fractions[oy * pc.s + ox];
       // A sample that lands exactly on an HR pixel (every reference sample: identity motion) puts
       // its whole weight on one tap; the other three would add 0.
       if (a.x == 0.0 && a.y == 0.0) { atomicAdd(acc[o], int(round(rs))); continue; }

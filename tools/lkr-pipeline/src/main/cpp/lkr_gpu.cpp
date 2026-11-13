@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lkr_gpu.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -12,6 +14,15 @@
 namespace lkr {
 
 namespace {
+double NowMs() {
+  return std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+struct Timed {
+  double& total;
+  double start = NowMs();
+  ~Timed() { total += NowMs() - start; }
+};
 constexpr uint32_t kMaxSets = 256;
 constexpr uint32_t kMaxBindings = 12;
 // Compiled pipelines of earlier devices in this process (every merge creates up to three devices
@@ -118,6 +129,7 @@ Gpu::~Gpu() {
 std::string Gpu::info() const { return srp::DeviceInfo(ctx_); }
 
 Buffer Gpu::alloc(size_t bytes, bool host_read) {
+  Timed timer{stats_.alloc_ms};
   Buffer b;
   if (bytes == 0) bytes = 4;
   VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -152,6 +164,10 @@ Buffer Gpu::alloc(size_t bytes, bool host_read) {
   vkBindBufferMemory(dev_, b.buf, b.mem, 0);
   vkMapMemory(dev_, b.mem, 0, VK_WHOLE_SIZE, 0, &b.map);
   b.bytes = bytes;
+  ++stats_.allocations;
+  stats_.allocated_bytes += bytes;
+  stats_.live_bytes += bytes;
+  stats_.peak_bytes = std::max(stats_.peak_bytes, stats_.live_bytes);
   const VkMemoryPropertyFlags got = memprops_.memoryTypes[type].propertyFlags;
   b.cached = (got & CA) != 0;
   b.coherent = (got & HC) != 0;
@@ -161,6 +177,7 @@ Buffer Gpu::alloc(size_t bytes, bool host_read) {
 
 void Gpu::free(Buffer& b) {
   if (b.buf == VK_NULL_HANDLE) return;
+  stats_.live_bytes -= b.bytes;
   for (size_t i = 0; i < noncoherent_.size(); ++i)
     if (noncoherent_[i].buf == b.buf) { noncoherent_.erase(noncoherent_.begin() + long(i)); break; }
   vkUnmapMemory(dev_, b.mem);
@@ -170,6 +187,8 @@ void Gpu::free(Buffer& b) {
 }
 
 Pipeline Gpu::pipeline(const uint32_t* spv, size_t spv_bytes, uint32_t nbind, uint32_t push_bytes) {
+  Timed timer{stats_.pipeline_ms};
+  ++stats_.pipelines;
   Pipeline p;
   p.nbind = nbind;
   p.push = push_bytes;
@@ -209,6 +228,8 @@ void Gpu::destroy(Pipeline& p) {
 }
 
 VkDescriptorSet Gpu::set(const Pipeline& p, std::initializer_list<const Buffer*> bufs) {
+  Timed timer{stats_.sets_ms};
+  ++stats_.sets;
   VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
   ai.descriptorPool = dpool_;
   ai.descriptorSetCount = 1;
@@ -260,6 +281,7 @@ std::string Gpu::profileReport() const {
 }
 
 void Gpu::begin() {
+  record_start_ms_ = NowMs();
   vkResetCommandBuffer(cmd_, 0);
   VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -294,9 +316,11 @@ void Gpu::dispatch(const Pipeline& p, VkDescriptorSet s, const void* push, uint3
   }
   barrier();
   ++ndispatch_;
+  ++stats_.dispatches;
 }
 
 void Gpu::copy(const Buffer& src, const Buffer& dst, size_t bytes) {
+  ++stats_.copies;
   VkBufferCopy r{0, 0, bytes};
   vkCmdCopyBuffer(cmd_, src.buf, dst.buf, 1, &r);
   barrier();
@@ -317,6 +341,8 @@ bool Gpu::submit() {
   vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                        VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
   vkEndCommandBuffer(cmd_);
+  stats_.record_ms += NowMs() - record_start_ms_;
+  ++stats_.submissions;
   recording_ = false;
   VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   si.commandBufferCount = 1;
@@ -324,15 +350,24 @@ bool Gpu::submit() {
   std::vector<VkMappedMemoryRange> ranges;
   for (const Buffer& b : noncoherent_)
     ranges.push_back({VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, b.mem, 0, VK_WHOLE_SIZE});
+  const double t_flush = NowMs();
   if (!ranges.empty()) vkFlushMappedMemoryRanges(dev_, uint32_t(ranges.size()), ranges.data());   // CPU writes -> GPU
+  stats_.coherency_ms += NowMs() - t_flush;
   vkResetFences(dev_, 1, &fence_);
+  const double t_queue = NowMs();
   const VkResult rs = vkQueueSubmit(queue_, 1, &si, fence_);
+  stats_.queue_ms += NowMs() - t_queue;
   if (rs != VK_SUCCESS) { last_error = int(rs); return false; }
+  const double t_wait = NowMs();
   const VkResult rw = vkWaitForFences(dev_, 1, &fence_, VK_TRUE, UINT64_MAX);
+  stats_.wait_ms += NowMs() - t_wait;
   if (rw != VK_SUCCESS) last_error = 1000 + int(rw);
   const bool ok = rw == VK_SUCCESS;
+  const double t_invalidate = NowMs();
   if (ok && !ranges.empty()) vkInvalidateMappedMemoryRanges(dev_, uint32_t(ranges.size()), ranges.data());   // GPU writes -> CPU
+  stats_.coherency_ms += NowMs() - t_invalidate;
   if (ok && qpool_ && nq_) {
+    Timed timer{stats_.query_ms};
     std::vector<uint64_t> ts(nq_);
     vkGetQueryPoolResults(dev_, qpool_, 0, nq_, nq_ * 8, ts.data(), 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
     for (size_t i = 0; i < qwho_.size(); ++i) {

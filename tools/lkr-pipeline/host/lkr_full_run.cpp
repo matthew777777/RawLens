@@ -140,6 +140,7 @@ int main(int argc, char** argv) {
   if (m.has_as_shot_neutral) wb = {float(m.as_shot_neutral[1] / m.as_shot_neutral[0]), 1.0f, float(m.as_shot_neutral[1] / m.as_shot_neutral[2])};
   lkr::Gpu gpu;
   if (!gpu.ok()) return 1;
+  std::printf("device: %s\n", gpu.info().c_str());
   gpu.profile(profile);
   prm.solve.dct_prior = dct_prior;
   const lkr::PriorFactory make;
@@ -192,6 +193,14 @@ int main(int argc, char** argv) {
               st.workers, st.ms_solve, st.ms_gpu, st.ms_prior, st.ms_init, st.ms_finish,
               st.ms_solve - st.ms_gpu - st.ms_prior - st.ms_init - st.ms_finish, st.ms_prep, st.ms_load, st.ms_blend, st.ms_setup, st.ms_wait);
   if (!st.gpu_profile.empty()) std::printf("gpu profile: %s\n", st.gpu_profile.c_str());
+  const auto& gs = st.gpu_stats;
+  std::printf("GPU host totals: alloc %llu (%.1f MiB cumulative, %.1f MiB summed peaks) %.1f ms; pipelines %llu %.1f ms; sets %llu %.1f ms\n",
+      (unsigned long long)gs.allocations, gs.allocated_bytes / 1048576.0, gs.peak_bytes / 1048576.0, gs.alloc_ms,
+      (unsigned long long)gs.pipelines, gs.pipeline_ms, (unsigned long long)gs.sets, gs.sets_ms);
+  std::printf("GPU work totals: submissions %llu dispatches %llu copies %llu; record %.1f queue %.1f fenceWait %.1f coherency %.1f query %.1f ms\n",
+      (unsigned long long)gs.submissions, (unsigned long long)gs.dispatches, (unsigned long long)gs.copies,
+      gs.record_ms, gs.queue_ms, gs.wait_ms, gs.coherency_ms, gs.query_ms);
+
   if (!st.holdout.empty()) {
     // Held-out frame: residual energy against the expected noise, per 16 x 16 block of its samples.
     const int hw = st.holdout_w, hh = st.holdout_h, B = 16;

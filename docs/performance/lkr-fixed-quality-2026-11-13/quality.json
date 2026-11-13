@@ -1,0 +1,416 @@
+{
+  "12mp16": {
+    "width": 4080,
+    "height": 3060,
+    "finite": true,
+    "baseline_sha256": "c6bc0b9866c8e10c92cc0db697e37462f4ce2af7e71c459e0bec6feb3941ae92",
+    "candidate_sha256": "c6bc0b9866c8e10c92cc0db697e37462f4ce2af7e71c459e0bec6feb3941ae92",
+    "changed_float_samples": 0,
+    "total_float_samples": 37454400,
+    "max_abs_error": 0.0,
+    "rmse": 0.0,
+    "psnr_db": null,
+    "psnr_infinite": true,
+    "byte_identical": true,
+    "display_exposure": 3.911909627975624,
+    "regions": [
+      {
+        "name": "crop-0-0",
+        "box": [
+          452,
+          299,
+          772,
+          619
+        ],
+        "baseline": {
+          "mean": 0.06912705302238464,
+          "std": 0.0076242354698479176,
+          "gradient_rms": 0.000738144270144403,
+          "laplacian_rms": 0.0024006045423448086
+        },
+        "candidate": {
+          "mean": 0.06912705302238464,
+          "std": 0.0076242354698479176,
+          "gradient_rms": 0.000738144270144403,
+          "laplacian_rms": 0.0024006045423448086
+        }
+      },
+      {
+        "name": "crop-0-1",
+        "box": [
+          1880,
+          299,
+          2200,
+          619
+        ],
+        "baseline": {
+          "mean": 0.14586836099624634,
+          "std": 0.01393679529428482,
+          "gradient_rms": 0.0011015767231583595,
+          "laplacian_rms": 0.0034541336353868246
+        },
+        "candidate": {
+          "mean": 0.14586836099624634,
+          "std": 0.01393679529428482,
+          "gradient_rms": 0.0011015767231583595,
+          "laplacian_rms": 0.0034541336353868246
+        }
+      },
+      {
+        "name": "crop-0-2",
+        "box": [
+          3308,
+          299,
+          3628,
+          619
+        ],
+        "baseline": {
+          "mean": 0.15942233800888062,
+          "std": 0.0171249657869339,
+          "gradient_rms": 0.0011719103204086423,
+          "laplacian_rms": 0.003721997607499361
+        },
+        "candidate": {
+          "mean": 0.15942233800888062,
+          "std": 0.0171249657869339,
+          "gradient_rms": 0.0011719103204086423,
+          "laplacian_rms": 0.003721997607499361
+        }
+      },
+      {
+        "name": "crop-1-0",
+        "box": [
+          452,
+          1370,
+          772,
+          1690
+        ],
+        "baseline": {
+          "mean": 0.022051524370908737,
+          "std": 0.01652069017291069,
+          "gradient_rms": 0.005486610345542431,
+          "laplacian_rms": 0.010915452614426613
+        },
+        "candidate": {
+          "mean": 0.022051524370908737,
+          "std": 0.01652069017291069,
+          "gradient_rms": 0.005486610345542431,
+          "laplacian_rms": 0.010915452614426613
+        }
+      },
+      {
+        "name": "crop-1-1",
+        "box": [
+          1880,
+          1370,
+          2200,
+          1690
+        ],
+        "baseline": {
+          "mean": 0.060119401663541794,
+          "std": 0.027888696640729904,
+          "gradient_rms": 0.009375780820846558,
+          "laplacian_rms": 0.01957184635102749
+        },
+        "candidate": {
+          "mean": 0.060119401663541794,
+          "std": 0.027888696640729904,
+          "gradient_rms": 0.009375780820846558,
+          "laplacian_rms": 0.01957184635102749
+        }
+      },
+      {
+        "name": "crop-1-2",
+        "box": [
+          3308,
+          1370,
+          3628,
+          1690
+        ],
+        "baseline": {
+          "mean": 0.0387728214263916,
+          "std": 0.046754058450460434,
+          "gradient_rms": 0.005622887052595615,
+          "laplacian_rms": 0.008160038851201534
+        },
+        "candidate": {
+          "mean": 0.0387728214263916,
+          "std": 0.046754058450460434,
+          "gradient_rms": 0.005622887052595615,
+          "laplacian_rms": 0.008160038851201534
+        }
+      },
+      {
+        "name": "crop-2-0",
+        "box": [
+          452,
+          2441,
+          772,
+          2761
+        ],
+        "baseline": {
+          "mean": 0.004295134451240301,
+          "std": 0.003178269835188985,
+          "gradient_rms": 0.0013689587358385324,
+          "laplacian_rms": 0.003017304465174675
+        },
+        "candidate": {
+          "mean": 0.004295134451240301,
+          "std": 0.003178269835188985,
+          "gradient_rms": 0.0013689587358385324,
+          "laplacian_rms": 0.003017304465174675
+        }
+      },
+      {
+        "name": "crop-2-1",
+        "box": [
+          1880,
+          2441,
+          2200,
+          2761
+        ],
+        "baseline": {
+          "mean": 0.013823914341628551,
+          "std": 0.013147866353392601,
+          "gradient_rms": 0.0060231504030525684,
+          "laplacian_rms": 0.011961578391492367
+        },
+        "candidate": {
+          "mean": 0.013823914341628551,
+          "std": 0.013147866353392601,
+          "gradient_rms": 0.0060231504030525684,
+          "laplacian_rms": 0.011961578391492367
+        }
+      },
+      {
+        "name": "crop-2-2",
+        "box": [
+          3308,
+          2441,
+          3628,
+          2761
+        ],
+        "baseline": {
+          "mean": 0.019302062690258026,
+          "std": 0.024532871320843697,
+          "gradient_rms": 0.008995279669761658,
+          "laplacian_rms": 0.0158372912555933
+        },
+        "candidate": {
+          "mean": 0.019302062690258026,
+          "std": 0.024532871320843697,
+          "gradient_rms": 0.008995279669761658,
+          "laplacian_rms": 0.0158372912555933
+        }
+      }
+    ],
+    "quality_limit": "Byte identity proves this optimization preserves every baseline pixel; it does not establish that the baseline is artifact-free. Texture statistics mix real detail and noise and are not independent noise estimates without ground truth."
+  },
+  "50mp24": {
+    "width": 8160,
+    "height": 6120,
+    "finite": true,
+    "baseline_sha256": "669bbc6d420372655866c02c1fbbb1b213332e865b6ad13238e7ee92b68bbaf9",
+    "candidate_sha256": "669bbc6d420372655866c02c1fbbb1b213332e865b6ad13238e7ee92b68bbaf9",
+    "changed_float_samples": 0,
+    "total_float_samples": 149817600,
+    "max_abs_error": 0.0,
+    "rmse": 0.0,
+    "psnr_db": null,
+    "psnr_infinite": true,
+    "byte_identical": true,
+    "display_exposure": 4.185338220780173,
+    "regions": [
+      {
+        "name": "crop-0-0",
+        "box": [
+          1064,
+          758,
+          1384,
+          1078
+        ],
+        "baseline": {
+          "mean": 0.06434287875890732,
+          "std": 0.006163191050291061,
+          "gradient_rms": 0.0009721338865347207,
+          "laplacian_rms": 0.0027724173851311207
+        },
+        "candidate": {
+          "mean": 0.06434287875890732,
+          "std": 0.006163191050291061,
+          "gradient_rms": 0.0009721338865347207,
+          "laplacian_rms": 0.0027724173851311207
+        }
+      },
+      {
+        "name": "crop-0-1",
+        "box": [
+          3920,
+          758,
+          4240,
+          1078
+        ],
+        "baseline": {
+          "mean": 0.16995513439178467,
+          "std": 0.023757921531796455,
+          "gradient_rms": 0.0015040917787700891,
+          "laplacian_rms": 0.0038083093240857124
+        },
+        "candidate": {
+          "mean": 0.16995513439178467,
+          "std": 0.023757921531796455,
+          "gradient_rms": 0.0015040917787700891,
+          "laplacian_rms": 0.0038083093240857124
+        }
+      },
+      {
+        "name": "crop-0-2",
+        "box": [
+          6776,
+          758,
+          7096,
+          1078
+        ],
+        "baseline": {
+          "mean": 0.08416372537612915,
+          "std": 0.00482808006927371,
+          "gradient_rms": 0.0009130489197559655,
+          "laplacian_rms": 0.002544641960412264
+        },
+        "candidate": {
+          "mean": 0.08416372537612915,
+          "std": 0.00482808006927371,
+          "gradient_rms": 0.0009130489197559655,
+          "laplacian_rms": 0.002544641960412264
+        }
+      },
+      {
+        "name": "crop-1-0",
+        "box": [
+          1064,
+          2900,
+          1384,
+          3220
+        ],
+        "baseline": {
+          "mean": 0.007670132908970118,
+          "std": 0.006185635924339294,
+          "gradient_rms": 0.0007890451233834028,
+          "laplacian_rms": 0.0019281106069684029
+        },
+        "candidate": {
+          "mean": 0.007670132908970118,
+          "std": 0.006185635924339294,
+          "gradient_rms": 0.0007890451233834028,
+          "laplacian_rms": 0.0019281106069684029
+        }
+      },
+      {
+        "name": "crop-1-1",
+        "box": [
+          3920,
+          2900,
+          4240,
+          3220
+        ],
+        "baseline": {
+          "mean": 0.03434736281633377,
+          "std": 0.016877392306923866,
+          "gradient_rms": 0.0036736843176186085,
+          "laplacian_rms": 0.005311527289450169
+        },
+        "candidate": {
+          "mean": 0.03434736281633377,
+          "std": 0.016877392306923866,
+          "gradient_rms": 0.0036736843176186085,
+          "laplacian_rms": 0.005311527289450169
+        }
+      },
+      {
+        "name": "crop-1-2",
+        "box": [
+          6776,
+          2900,
+          7096,
+          3220
+        ],
+        "baseline": {
+          "mean": 0.03035399131476879,
+          "std": 0.019319145008921623,
+          "gradient_rms": 0.0014421208761632442,
+          "laplacian_rms": 0.0017772868741303682
+        },
+        "candidate": {
+          "mean": 0.03035399131476879,
+          "std": 0.019319145008921623,
+          "gradient_rms": 0.0014421208761632442,
+          "laplacian_rms": 0.0017772868741303682
+        }
+      },
+      {
+        "name": "crop-2-0",
+        "box": [
+          1064,
+          5042,
+          1384,
+          5362
+        ],
+        "baseline": {
+          "mean": 0.018084784969687462,
+          "std": 0.00491408770903945,
+          "gradient_rms": 0.0021374039351940155,
+          "laplacian_rms": 0.0038229457568377256
+        },
+        "candidate": {
+          "mean": 0.018084784969687462,
+          "std": 0.00491408770903945,
+          "gradient_rms": 0.0021374039351940155,
+          "laplacian_rms": 0.0038229457568377256
+        }
+      },
+      {
+        "name": "crop-2-1",
+        "box": [
+          3920,
+          5042,
+          4240,
+          5362
+        ],
+        "baseline": {
+          "mean": 0.03201485425233841,
+          "std": 0.009720243513584137,
+          "gradient_rms": 0.004493911750614643,
+          "laplacian_rms": 0.007331827189773321
+        },
+        "candidate": {
+          "mean": 0.03201485425233841,
+          "std": 0.009720243513584137,
+          "gradient_rms": 0.004493911750614643,
+          "laplacian_rms": 0.007331827189773321
+        }
+      },
+      {
+        "name": "crop-2-2",
+        "box": [
+          6776,
+          5042,
+          7096,
+          5362
+        ],
+        "baseline": {
+          "mean": 0.017360951751470566,
+          "std": 0.005717621650546789,
+          "gradient_rms": 0.002410185756161809,
+          "laplacian_rms": 0.0040414826944470406
+        },
+        "candidate": {
+          "mean": 0.017360951751470566,
+          "std": 0.005717621650546789,
+          "gradient_rms": 0.002410185756161809,
+          "laplacian_rms": 0.0040414826944470406
+        }
+      }
+    ],
+    "quality_limit": "Byte identity proves this optimization preserves every baseline pixel; it does not establish that the baseline is artifact-free. Texture statistics mix real detail and noise and are not independent noise estimates without ground truth."
+  }
+}

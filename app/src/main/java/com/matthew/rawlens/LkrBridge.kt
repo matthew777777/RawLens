@@ -20,6 +20,9 @@ internal object LkrBridge {
         System.loadLibrary("lkrpipeline")
     }
 
+    /** Consumes diagnostics of the last merge on this calling thread, including failures. */
+    @JvmStatic external fun nativeLastProfile(): String
+
     /** Indices into the `stats` array filled by [nativeMerge]. */
     const val STAT_TILES = 0
     const val STAT_SIGMA = 1

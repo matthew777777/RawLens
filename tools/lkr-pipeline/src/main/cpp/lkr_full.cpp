@@ -412,7 +412,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   std::condition_variable cv;
   size_t ticket = 0;
   bool failed = false;
-  std::string fail_msg, prof_names;
+  std::string fail_msg;
+  std::map<std::string, double> shader_ms;
   // A finished tile: blended strictly in job order (deterministic sums where tiles overlap), but
   // by whichever worker closes the gap, so nobody idles waiting for an earlier tile.
   struct Done {
@@ -475,12 +476,12 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       cv.notify_all();
       return;
     }
-    if (wg == gpu) { std::lock_guard<std::mutex> l(mu); prof_names = solver.profileNames(); }
+    wg->profile(gpu->profiling());
     std::vector<float> tf(size_t(K) * n * n), x, field;
     BlockSearch bsearch(wg);
     for (;;) {
       const size_t ji = next.fetch_add(1);
-      if (ji >= jobs.size()) return;
+      if (ji >= jobs.size()) break;
       const TileJob& jb = jobs[ji];
       const double tprep = now_ms();
       const int gx = jb.gx, gy = jb.gy;
@@ -661,6 +662,25 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       S.ms_blend += now_ms() - t_blend;
       cv.notify_all();
     }
+    // Resolve names while this worker's Solver pipelines still exist. Profile
+    // every worker; reporting just worker 1 misranks a full-frame tiled merge.
+    const std::string report = wg->profileReport(), names = solver.profileNames();
+    std::lock_guard<std::mutex> lock(mu);
+    size_t pos = 0;
+    while (pos < report.size()) {
+      const size_t end = report.find(' ', pos), colon = report.find(':', pos);
+      const std::string ptr = report.substr(pos, colon - pos);
+      const size_t at = names.find("=" + ptr);
+      std::string name = ptr;
+      if (at != std::string::npos) {
+        const size_t begin = names.rfind(' ', at);
+        const size_t start = begin == std::string::npos ? 0 : begin + 1;
+        name = names.substr(start, at - start);
+      }
+      shader_ms[name] += std::atof(report.c_str() + colon + 1);
+      if (end == std::string::npos) break;
+      pos = end + 1;
+    }
   };
   {
     std::vector<std::thread> th;
@@ -717,28 +737,24 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       }
   }
   S.ms_tiles = now_ms() - t;
-  S.gpu_profile = gpu->profileReport();
-  if (!S.gpu_profile.empty()) {   // pointer -> shader name, sorted by time
-    std::vector<std::pair<double, std::string>> rows;
-    size_t pos = 0;
-    while (pos < S.gpu_profile.size()) {
-      const size_t e = S.gpu_profile.find(' ', pos), c = S.gpu_profile.find(':', pos);
-      const std::string ptr = S.gpu_profile.substr(pos, c - pos);
-      const double ms = std::atof(S.gpu_profile.c_str() + c + 1);
-      const size_t at = prof_names.find("=" + ptr);
-      std::string name = ptr;
-      if (at != std::string::npos) {
-        const size_t b = prof_names.rfind(' ', at);
-        name = prof_names.substr(b == std::string::npos ? 0 : b + 1, at - (b == std::string::npos ? 0 : b + 1));
-      }
-      rows.emplace_back(ms, name);
-      if (e == std::string::npos) break;
-      pos = e + 1;
-    }
-    std::sort(rows.rbegin(), rows.rend());
-    S.gpu_profile.clear();
-    char b[96];
-    for (const auto& r : rows) { std::snprintf(b, sizeof(b), "%s %.0f, ", r.second.c_str(), r.first); S.gpu_profile += b; }
+  std::vector<std::pair<double, std::string>> ranked;
+  for (const auto& e : shader_ms) ranked.emplace_back(e.second, e.first);
+  std::sort(ranked.rbegin(), ranked.rend());
+  for (const auto& e : ranked) {
+    char line[128];
+    std::snprintf(line, sizeof(line), "%s %.1f, ", e.second.c_str(), e.first);
+    S.gpu_profile += line;
+  }
+  for (const Gpu* wg : gpus) {
+    const auto& v = wg->stats();
+    auto& total = S.gpu_stats;
+    total.allocations += v.allocations; total.allocated_bytes += v.allocated_bytes;
+    total.live_bytes += v.live_bytes; total.peak_bytes += v.peak_bytes;
+    total.pipelines += v.pipelines; total.sets += v.sets;
+    total.submissions += v.submissions; total.dispatches += v.dispatches; total.copies += v.copies;
+    total.alloc_ms += v.alloc_ms; total.pipeline_ms += v.pipeline_ms; total.sets_ms += v.sets_ms;
+    total.record_ms += v.record_ms; total.queue_ms += v.queue_ms; total.wait_ms += v.wait_ms;
+    total.coherency_ms += v.coherency_ms; total.query_ms += v.query_ms;
   }
   S.ms_total = now_ms() - t0;
   if (st) *st = S;

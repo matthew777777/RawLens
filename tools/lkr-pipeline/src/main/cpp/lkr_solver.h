@@ -55,7 +55,10 @@ struct SolveParams {
   // the running-HR residual confidence, which rejected aliased static detail the HR
   // estimate had not learned yet; temporal protection and spread remain. 0 = off
   // (residual confidence). Validation: docs/performance/lkr-rejection-validation-2026-11-13.md.
-  float guide_confidence = 2.0f;
+  // Off by default while guide foliage artifacts are investigated. Both app
+  // and desktop use residual confidence; guide is an explicit research opt-in
+  // (--guide 2 / debug.lkr.guide 2).
+  float guide_confidence = 0.0f;
   // Diagnostic only: known-static rectangle in this tile's reference LR coordinates.
   // No inferred/static mask is enabled in the app. Width/height zero disables it.
   std::array<float, 4> trusted_static{0, 0, 0, 0};

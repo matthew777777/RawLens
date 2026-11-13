@@ -105,6 +105,7 @@ struct FullStats {
   float sigma_look = 0;
   float local_lambda = 0;              // noise level the look was chosen from
   std::string gpu_profile;   // per-shader GPU ms (when Gpu::profile is on)
+  GpuStats gpu_stats;        // sums across all tile workers (wall times overlap)
   // FullParams::holdout: 3 planes of holdout_h x holdout_w, on the held-out frame's own RGGB grid
   // (shifted against the output by that frame's motion): squared residual / expected noise
   // variance, usable share of the sample (0..1), signed residual / expected noise sigma.

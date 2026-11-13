@@ -9,6 +9,8 @@
 // device lives only for the merge.
 #include <jni.h>
 #include <chrono>
+#include <cstdarg>
+#include <cstdio>
 
 #include <algorithm>
 #include <array>
@@ -30,13 +32,36 @@
 #ifdef __ANDROID__
 #include <android/log.h>
 #include <sys/system_properties.h>
-#define LKR_LOG(...) __android_log_print(ANDROID_LOG_INFO, "RawLensLkr", __VA_ARGS__)
+#define LKR_PLATFORM_LOG(text) __android_log_write(ANDROID_LOG_INFO, "RawLensLkr", text)
 #else
 #include <cstdio>
-#define LKR_LOG(...) (std::fprintf(stderr, __VA_ARGS__), std::fputc('\n', stderr))
+#define LKR_PLATFORM_LOG(text) std::fprintf(stderr, "%s\n", text)
 #endif
 
 namespace {
+
+// The app reads this on the same thread immediately after Merge. OEM logd may
+// omit native lines, so retain a bounded copy for Kotlin's in-process file tee.
+thread_local std::string g_last_profile;
+void LkrLog(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  va_list count_args;
+  va_copy(count_args, args);
+  const int size = std::vsnprintf(nullptr, 0, format, count_args);
+  va_end(count_args);
+  if (size >= 0) {
+    std::vector<char> line(size_t(size) + 1);
+    std::vsnprintf(line.data(), line.size(), format, args);
+    LKR_PLATFORM_LOG(line.data());
+    if (g_last_profile.size() + size_t(size) + 1 <= 64 * 1024) {
+      g_last_profile.append(line.data(), size_t(size));
+      g_last_profile += '\n';
+    }
+  }
+  va_end(args);
+}
+#define LKR_LOG(...) LkrLog(__VA_ARGS__)
 
 // Learned per-device noise model for the NEXT merge on this thread
 // (nativeSetNoiseModel, consumed by Merge): store path + ISO, empty = none.
@@ -53,6 +78,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
               jfloatArray black_j, jfloat white, jfloatArray wb_j, jint s, jint tile, jint overlap,
               jintArray crop_j, jboolean dct, jfloatArray stats_j, jfloatArray tuning_j, jint out_w_req,
               jint out_h_req, jint packed_bits = 0) {
+  g_last_profile.clear();
   const jsize K = env->GetArrayLength(frames);
   std::vector<lkr::RawFrame> fr;
   for (jsize k = 0; k < K; ++k) {
@@ -202,7 +228,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     env->SetFloatArrayRegion(stats_j, 0, 14, sv);
   }
   if (!st.gpu_profile.empty())
-    LKR_LOG("gpu profile (worker 1 of %d, ms): %s", st.workers, st.gpu_profile.c_str());
+    LKR_LOG("gpu profile (sum of %d workers, ms): %s", st.workers, st.gpu_profile.c_str());
   LKR_LOG("mode: %s", dct ? "DCT x-step" : "no prior");
   LKR_LOG("look: prior %.2f grain %.2f (sigma %.5f)", st.prior_gain, st.grain, st.sigma);
   LKR_LOG("merge %dx%d s=%d K=%d tiles %d: noise %.0f coarse %.0f tiles %.0f (gpu %.0f prior %.0f) total %.0f ms",
@@ -211,12 +237,27 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   LKR_LOG("workers %d, tile sums: solve %.0f (gpu %.0f prior %.0f init %.0f finish %.0f other %.0f) prep %.0f (load %.0f) blend %.0f | setup %.0f wait %.0f ms",
           st.workers, st.ms_solve, st.ms_gpu, st.ms_prior, st.ms_init, st.ms_finish,
           st.ms_solve - st.ms_gpu - st.ms_prior - st.ms_init - st.ms_finish, st.ms_prep, st.ms_load, st.ms_blend, st.ms_setup, st.ms_wait);
+  const auto& gs = st.gpu_stats;
+  LKR_LOG("GPU host totals: alloc %llu (%.1f MiB cumulative, %.1f MiB summed peaks) %.1f ms; pipelines %llu %.1f ms; sets %llu %.1f ms",
+          (unsigned long long)gs.allocations, gs.allocated_bytes / 1048576.0, gs.peak_bytes / 1048576.0, gs.alloc_ms,
+          (unsigned long long)gs.pipelines, gs.pipeline_ms, (unsigned long long)gs.sets, gs.sets_ms);
+  LKR_LOG("GPU work totals: submissions %llu dispatches %llu copies %llu; record %.1f queue %.1f fenceWait %.1f coherency %.1f query %.1f ms",
+          (unsigned long long)gs.submissions, (unsigned long long)gs.dispatches, (unsigned long long)gs.copies,
+          gs.record_ms, gs.queue_ms, gs.wait_ms, gs.coherency_ms, gs.query_ms);
+
   jobject buf = env->NewDirectByteBuffer(out, jlong(bytes));
   if (!buf) std::free(out);
   return buf;
 }
 
 }  // namespace
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_matthew_rawlens_LkrBridge_nativeLastProfile(
+    JNIEnv* env, jclass) {
+  const std::string profile = std::move(g_last_profile);
+  g_last_profile.clear();
+  return env->NewStringUTF(profile.c_str());
+}
 
 extern "C" JNIEXPORT jdouble JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSharpness(
     JNIEnv* env, jclass, jobject src, jint w, jint h, jint stride, jintArray cfa_j, jfloatArray black_j) {
