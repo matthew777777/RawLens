@@ -142,6 +142,9 @@ bool Solver::Optional(const SolveParams& prm, bool dct) {
     return p.pipe != VK_NULL_HANDLE;
   };
   bool ok = true;
+  if (prm.guide_confidence > 0.0f || prm.trusted_static[2] > 0.0f)
+    ok = need(guide_stats_, spv::guide_stats, sizeof(spv::guide_stats), 3, sizeof(Push)) &&
+         need(weight_guide_, spv::weight_guide, sizeof(spv::weight_guide), 6, sizeof(Push));
   if (dct)
     ok = need(dct_y_, spv::dct_x_y, sizeof(spv::dct_x_y), 5, sizeof(DctPush)) &&
          need(dct_u_, spv::dct_x_u, sizeof(spv::dct_x_u), 5, sizeof(DctPush)) &&
@@ -195,7 +198,7 @@ Buffer& Solver::Cached(int slot, size_t bytes, bool host_read) {
 Solver::~Solver() {
   if (gpu_) for (Entry& e : cache_) gpu_->free(e.buf);
   if (!gpu_ || !gpu_->ok()) return;
-  for (Pipeline* p : {&dct_y_, &dct_u_, &dct_v_, &dct_yuv_, &resid_, &zstep_, &jac_, &solve_, &residg_, &zgather_, &weight_, &scatter_, &jacblk_, &solveblk_, &wmin_, &wtemp_, &wdark_, &wdarkv_, &wminh_, &radjw_, &wexp_, &wth_, &wtdet_, &zgw_, &residq_, &radjwq_, &scatq_, &zpack_, &residzq_, &radjwzq_})
+  for (Pipeline* p : {&dct_y_, &dct_u_, &dct_v_, &dct_yuv_, &resid_, &zstep_, &jac_, &solve_, &residg_, &zgather_, &weight_, &scatter_, &jacblk_, &solveblk_, &wmin_, &wtemp_, &wdark_, &wdarkv_, &wminh_, &radjw_, &wexp_, &wth_, &wtdet_, &zgw_, &residq_, &radjwq_, &scatq_, &zpack_, &residzq_, &radjwzq_, &guide_stats_, &weight_guide_})
     gpu_->destroy(*p);
 }
 
@@ -314,6 +317,20 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   auto oset = [&](const Pipeline& pl, std::initializer_list<const Buffer*> bufs) {
     return pl.pipe ? gpu_->set(pl, bufs) : VkDescriptorSet(VK_NULL_HANDLE);
   };
+  VkDescriptorSet sGuideStats = VK_NULL_HANDLE, sGuideWeight = VK_NULL_HANDLE;
+  // Guide confidence needs whole Bayer quads; otherwise (odd size, holdout) the
+  // residual confidence runs instead of failing the merge.
+  const bool guide_on = (prm.guide_confidence > 0.0f || prm.trusted_static[2] > 0.0f) && !(h & 1) && !(w & 1) &&
+                        !prm.holdout;
+  const bool guide_stats_on = guide_on && prm.guide_confidence > 0.0f;
+  if (guide_on) {
+    // vec4 per Bayer quad: means for every frame, variances for the reference frame only.
+    Buffer& gm = cached(guide_stats_on ? nLR * 4 : 16);
+    Buffer& gv = cached(guide_stats_on ? size_t(h) * w * 4 : 16);
+    if (!gm.map || !gv.map) return LKR_FAIL("guide buffers");
+    sGuideStats = gpu_->set(guide_stats_, {&y, &gm, &gv});
+    sGuideWeight = gpu_->set(weight_guide_, {&gm, &gv, &pb, &wrawb, &dloc, &wtr});
+  }
   VkDescriptorSet sDctY = VK_NULL_HANDLE, sDctU = VK_NULL_HANDLE, sDctV = VK_NULL_HANDLE, sDctC = VK_NULL_HANDLE;
   if (dct) {
     sDctY = gpu_->set(dct_y_, {&z, &x, &dct_ns, &dct_iw, &dct_nv});
@@ -394,6 +411,39 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   const uint32_t gxHR = div_up(W, 16), gyHR = div_up(H, 16);
   // One "data step" = residual + adjoint (+ z update): scatter or gather.
   auto data_step = [&](const Push& q, bool on_v, bool first = true) {
+    if (!on_v && q.rob_on > 0.5f && guide_on) {
+      if (!first && !prm.robust_gather) {
+        // Reuse this iteration's confidence, but update the residual at every
+        // z-step. Reusing rwb here would repeat a stale gradient and diverge.
+        if (quad) gpu_->dispatch(radjwq_, sRWq, &q, gxQ, gyQ, K);
+        else if (packz) { d_pack(sZP, q); gpu_->dispatch(radjwzq_, sRWzq, &q, gxLR, gyLR, K); }
+        else kdispatch(radjw_, sRW, &q, K);
+        gpu_->dispatch(zstep_, sZ, &q, gHR1);
+        return;
+      }
+      if (packz) d_pack(sZP, q);
+      d_resid(sR, sRq, q, sRzq);
+      if (first) {
+        Push qg = q; qg.f0 = prm.guide_confidence;
+        if (prm.trusted_static[2] > 0.0f) {
+          gpu_->dispatch(wexp_, sE, &q, gxLR, gyLR, K);
+          Push qw = q; qw.f0 = -1;
+          gpu_->dispatch(weight_, sW0, &qw, gxLR, gyLR, K);
+          qg.f0 = -1; qg.f1 = prm.trusted_static[0]; qg.f2 = prm.trusted_static[1];
+          qg.f3 = prm.trusted_static[2]; qg.rob_k = prm.trusted_static[3];
+        }
+        gpu_->dispatch(weight_guide_, sGuideWeight, &qg, gxQ, gyQ, K);   // one invocation per quad
+        Push qm = q; qm.f3 = float(prm.robust_spread);
+        gpu_->dispatch(wminh_, sWH, &qm, gxLR, gyLR, K);
+        gpu_->dispatch(wmin_, sWM, &qm, gxLR, gyLR, K);
+      }
+      if (prm.robust_gather) gpu_->dispatch(zgw_, sZGW, &q, gxHR, gyHR);
+      else {
+        d_scatter(sS, sSq, q);
+        gpu_->dispatch(zstep_, sZ, &q, gHR1);
+      }
+      return;
+    }
     if (!on_v && q.rob_on > 0.5f && prm.robust_spread > 0 && prm.robust_gather) {
       // gather: residual (first step: + weights), then the fused gather adjoint + z-update
       if (packz) d_pack(sZP, q);
@@ -485,6 +535,13 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     }
   }
   S.L = L;
+  if (guide_stats_on) {
+    gpu_->begin();
+    Push q = pc; q.rob_a = prm.noise_a; q.rob_b = prm.noise_b;
+    gpu_->dispatch(guide_stats_, sGuideStats, &q, div_up(w / 2, 16), div_up(h / 2, 16), K);
+    if (!gpu_->submit()) return LKR_FAIL("guide statistics");
+    ++S.submits;
+  }
   const bool eq = prm.equalize_noise && prm.robust && prm.noise_b > 0;
   if (eq) {   // plain coverage U^T 1 (v after the bound) for the contributing-frame ratio
     if (prm.L != 0.0f) {  // v not computed by the bound: compute U^T 1 now
@@ -895,7 +952,7 @@ static void NotchBayerPeriod(float* P, int H, int W) {
 // structure, plus luminance-only grain = grain * notch(L(z - x)).
 void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, const float* noise_scale,
                 const float* shadow) {
-  if (!prm.notch && prm.grain <= 0.0f && !shadow && !prm.highlight_desat) return;
+  if (!prm.notch && prm.grain <= 0.0f && !shadow && !prm.highlight_desat && prm.fallback_chroma <= 0.0f) return;
   const size_t HW = size_t(H) * W;
   const float q[3] = {0.25f * prm.wb[0], 0.5f * prm.wb[1], 0.25f * prm.wb[2]};
   std::vector<float> L(HW), C(HW);
@@ -952,6 +1009,34 @@ void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, 
       if (t <= 0.0f) continue;
       const float d = t * (Ln[i] - Lx[i]);
       for (int c = 0; c < 3; ++c) x[c * HW + i] += d / prm.wb[c];
+    }
+  }
+  // Fallback false-colour repair: only where frames were lost (noise_scale > 1), chroma toward
+  // its median. The reference frame alone aliases thin lines into colour stripes.
+  if (prm.fallback_chroma > 0.0f && noise_scale) {
+    std::vector<float> Lf(HW), Cc(HW), Cm(HW);
+    for (size_t i = 0; i < HW; ++i) Lf[i] = q[0] * x[i] + q[1] * x[HW + i] + q[2] * x[2 * HW + i];
+    auto med3 = [&](const std::vector<float>& a, std::vector<float>& o) {
+      float v[9];
+      for (int Y = 0; Y < H; ++Y)
+        for (int X = 0; X < W; ++X) {
+          int n = 0;
+          for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx)
+              v[n++] = a[size_t(std::clamp(Y + dy, 0, H - 1)) * W + std::clamp(X + dx, 0, W - 1)];
+          std::nth_element(v, v + 4, v + 9);
+          o[size_t(Y) * W + X] = v[4];
+        }
+    };
+    for (int c = 0; c < 3; ++c) {
+      for (size_t i = 0; i < HW; ++i) Cc[i] = prm.wb[c] * x[c * HW + i] - Lf[i];
+      med3(Cc, Cm);
+      std::vector<float> Cm2(HW);
+      med3(Cm, Cm2);
+      for (size_t i = 0; i < HW; ++i) {
+        const float t = prm.fallback_chroma * std::min(std::max((noise_scale[i] - 1.0f) / 0.4142f, 0.0f), 1.0f);
+        if (t > 0.0f) x[c * HW + i] = (Lf[i] + Cc[i] + t * (Cm2[i] - Cc[i])) / prm.wb[c];
+      }
     }
   }
   if (!halo.empty())

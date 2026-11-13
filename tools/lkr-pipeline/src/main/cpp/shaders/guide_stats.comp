@@ -1,0 +1,32 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Experimental reference-guide confidence; statistics of sqrt RAW RGB quads.
+// Independent of the running HR estimate. Mean.w = noise variance of RGB mean.
+#include "lkr_common.glsl"
+layout(local_size_x=16, local_size_y=16) in;
+layout(std430,binding=0) readonly buffer Y { float y[]; };
+layout(std430,binding=1) writeonly buffer M { vec4 means[]; };
+layout(std430,binding=2) writeonly buffer V { vec4 vars[]; };
+
+void main() {
+  int x=int(gl_GlobalInvocationID.x), yy=int(gl_GlobalInvocationID.y), k=int(gl_GlobalInvocationID.z);
+  int w=pc.w/2, h=pc.h/2;
+  if(x>=w || yy>=h) return;
+  vec3 m=vec3(0), v=vec3(0); float vn=0;
+  for(int dy=-1;dy<=1;++dy) for(int dx=-1;dx<=1;++dx) {
+    int qx=clamp(x+dx,0,w-1), qy=clamp(yy+dy,0,h-1);
+    int t=k*pc.w*pc.h+2*qy*pc.w+2*qx;
+    vec3 raw=vec3(y[t], .5*(y[t+1]+y[t+pc.w]), y[t+pc.w+1]);
+    vec3 a=sqrt(max(raw,vec3(0)));
+    m+=a; v+=a*a;
+    // Delta-method noise propagation (experimental; not IPOL's Monte Carlo LUT).
+    vec3 nv=(pc.rob_a*max(raw,vec3(0))+pc.rob_b)/max(4.0*raw,vec3(4e-5));
+    nv.y*=.5;
+    vn+=nv.x+nv.y+nv.z;
+  }
+  m/=9.0; v=max(v/9.0-m*m,vec3(0));
+  int o=(k*h+yy)*w+x;
+  means[o]=vec4(m,vn/81.0);
+  if(k==0) vars[o]=vec4(v,0);   // only the reference frame's variances are read (weight_guide)
+}

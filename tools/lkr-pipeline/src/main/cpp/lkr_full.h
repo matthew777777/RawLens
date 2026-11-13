@@ -44,6 +44,8 @@ struct FullParams {
   int min_workers = 1;   // the budget never drops below this (x2 keeps 2: 1 worker is ~15-40 % slower)         // concurrent tile solvers: GPU + CPU work of some overlaps the prior of another (3 measured best on MT6878)
   int crop_x = -1, crop_y = -1, crop_w = 0, crop_h = 0;   // optional sub-rectangle (sensor px)
   SolveParams solve;       // T, z_steps, prior_at, step_scale (sigma_* filled here)
+  // Host diagnostic: known-static sensor rectangle x,y,width,height.
+  std::array<float, 4> trusted_static{0, 0, 0, 0};
   float smax_x = 10.0f, end_x = 1.0f;   // schedule in multiples of our noise sigma
   // Noise-aware look controls. The old daylight prior 0.15 plus 0.8 residual
   // reinjection retained substantial shadow noise. Keep the denoised estimate

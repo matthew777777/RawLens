@@ -18,11 +18,12 @@ int main() {
   constexpr int W=128, H=128, K=2, N=W*H;
   auto r=gpu.alloc(K*N*4), y=gpu.alloc(K*N*4), tmp=gpu.alloc(K*N*16);
   auto wt=gpu.alloc(K*N*4), unused=gpu.alloc(K*N*4);
-  auto rows=gpu.pipeline(lkr::spv::weight_th,sizeof(lkr::spv::weight_th),4,sizeof(Push));
+  auto rows=gpu.pipeline(lkr::spv::weight_th,sizeof(lkr::spv::weight_th),5,sizeof(Push));
   auto cols=gpu.pipeline(lkr::spv::weight_t,sizeof(lkr::spv::weight_t),6,sizeof(Push));
-  auto rs=gpu.set(rows,{&r,&y,&tmp,&unused});
+  auto rs=gpu.set(rows,{&r,&y,&tmp,&unused,&unused});
   auto cs=gpu.set(cols,{&r,&y,&tmp,&wt,&unused,&unused});
   Push p{}; p.h=H;p.w=W;p.H=H;p.W=W;p.s=1;p.K=K;p.rob_b=0.00005f;p.rob_k=3;
+  p.f1=-1; // exercise the shader's inline detail reference, not an uninitialized TDET buffer
   std::fill(y.as<float>(),y.as<float>()+K*N,0.05f);
   std::mt19937 rng(42);std::normal_distribution<float> noise(0,0.01f);
   bool ok=true;
@@ -52,6 +53,59 @@ int main() {
   }
   gpu.resetSets();gpu.destroy(rows);gpu.destroy(cols);
   for(auto* b:{&r,&y,&tmp,&wt,&unused})gpu.free(*b);
+  {
+    // Independent guide: exact static RGB agreement, large colour change,
+    // and a spatially bounded oracle override. No evolving HR image is bound.
+    auto raw=gpu.alloc(K*N*4), means=gpu.alloc(K*N*4), vars=gpu.alloc(K*N*4);
+    auto motion=gpu.alloc(K*6*4), local=gpu.alloc(16), weights=gpu.alloc(K*N*4), temporal=gpu.alloc(K*N*4);
+    auto stats=gpu.pipeline(lkr::spv::guide_stats,sizeof(lkr::spv::guide_stats),3,sizeof(Push));
+    auto guide=gpu.pipeline(lkr::spv::weight_guide,sizeof(lkr::spv::weight_guide),6,sizeof(Push));
+    auto ss=gpu.set(stats,{&raw,&means,&vars});
+    auto gs=gpu.set(guide,{&means,&vars,&motion,&weights,&local,&temporal});
+    std::fill(motion.as<float>(),motion.as<float>()+K*6,0);
+    for(int k=0;k<K;++k){motion.as<float>()[k*6]=1;motion.as<float>()[k*6+4]=1;}
+    Push q{};q.h=H;q.w=W;q.K=K;q.rob_a=1e-5f;q.rob_b=1e-6f;q.f0=2;
+    for(int changed=0;changed<2;++changed){
+      std::fill(raw.as<float>(),raw.as<float>()+N,.1f);
+      std::fill(raw.as<float>()+N,raw.as<float>()+K*N,changed?.4f:.1f);
+      std::fill(temporal.as<float>(),temporal.as<float>()+K*N,.2f);
+      gpu.begin();gpu.dispatch(stats,ss,&q,W/32,H/32,K);gpu.dispatch(guide,gs,&q,W/32,H/32,K);
+      if(!gpu.submit())return 2;
+      float w=weights.as<float>()[N+32*W+32];
+      ok &= weights.as<float>()[32*W+32]==1 && (changed?w==0:w==1);
+      ok &= temporal.as<float>()[N+32*W+32]==.2f;
+      std::printf("RGB guide changed=%d weight=%g reference=1\n",changed,w);
+    }
+    q.f0=-1;q.f1=16;q.f2=16;q.f3=32;q.rob_k=32;
+    gpu.begin();gpu.dispatch(guide,gs,&q,W/32,H/32,K);if(!gpu.submit())return 2;
+    ok &= weights.as<float>()[N+32*W+32]==1 && temporal.as<float>()[N+32*W+32]==1;
+    ok &= weights.as<float>()[N+64*W+64]==0 && temporal.as<float>()[N+64*W+64]==.2f;
+    std::puts("known-static override: bounded in reference coordinates");
+    gpu.resetSets();gpu.destroy(stats);gpu.destroy(guide);
+    for(auto* b:{&raw,&means,&vars,&motion,&local,&weights,&temporal})gpu.free(*b);
+  }
+  {
+    // An all-static oracle must agree with rejection disabled over multiple
+    // gradient steps. This catches stale weighted residual reuse in new paths.
+    constexpr int n=64*64;
+    std::vector<float> frames(2*n),plain,trusted;
+    for(int k=0;k<2;++k)for(int y=0;y<64;++y)for(int x=0;x<64;++x)
+      frames[k*n+y*64+x]=.2f+.05f*std::sin(float(x)*.6f)+.03f*std::cos(float(y)*.5f)+(k?-.003f:.003f);
+    lkr::SolveParams s;s.s=2;s.T=6;s.z_steps=3;s.refine_motion=false;s.local_block=0;
+    s.robust=false;s.equalize_noise=false;s.temporal_k=0;s.notch=false;s.grain=0;
+    s.highlight_desat=false;s.shadow_boost=0;s.shadow_chroma=0;s.mean_preserve=0;
+    s.noise_a=1e-5f;s.noise_b=1e-6f;
+    lkr::Solver solver(&gpu);
+    float p0[12]={1,0,0,0,1,0,1,0,0,0,1,0};
+    float p1[12]={1,0,0,0,1,0,1,0,0,0,1,0};
+    if(!solver.solve(frames.data(),2,64,64,p0,s,{},&plain,nullptr))return 2;
+    s.robust=true;s.trusted_static={0,0,64,64};
+    if(!solver.solve(frames.data(),2,64,64,p1,s,{},&trusted,nullptr))return 2;
+    float error=0;
+    for(size_t i=0;i<plain.size();++i)error=std::max(error,std::abs(plain[i]-trusted[i]));
+    std::printf("multi-step all-static oracle vs rejection off: max=%g\n",error);
+    ok &= error<1e-5f;
+  }
   {
     lkr::Solver solver(&gpu);
     std::vector<float> frames(2*32*32,0.01f),out;

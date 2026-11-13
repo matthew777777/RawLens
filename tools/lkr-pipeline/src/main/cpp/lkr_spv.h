@@ -7,6 +7,12 @@
 
 namespace lkr {
 namespace spv {
+static const uint32_t guide_stats[] = {
+#include "guide_stats.inc"
+};
+static const uint32_t weight_guide[] = {
+#include "weight_guide.inc"
+};
 static const uint32_t dct_x_y[] = {
 #include "dct_x_y.inc"
 };

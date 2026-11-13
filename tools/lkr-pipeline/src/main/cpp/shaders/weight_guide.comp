@@ -1,0 +1,51 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Experimental RGB guide alternative to HR-residual confidence. It replaces
+// raw confidence, before the existing temporal gate and spatial spread.
+#define LKR_LOCAL_BINDING 4
+#include "lkr_common.glsl"
+layout(local_size_x=16,local_size_y=16) in;
+layout(std430,binding=0) readonly buffer M { vec4 means[]; };
+layout(std430,binding=1) readonly buffer V { vec4 vars[]; };
+layout(std430,binding=2) readonly buffer P { float p[]; };
+layout(std430,binding=3) writeonly buffer W { float weights[]; };
+layout(std430,binding=5) buffer T { float temporal[]; };
+
+// One invocation per Bayer quad: all four samples share the quad centre u and
+// the frame's quad statistics, so they get the same weight (written 4 times).
+void put(int o,float v){weights[o]=v;weights[o+1]=v;weights[o+pc.w]=v;weights[o+pc.w+1]=v;}
+void main() {
+  int qx=int(gl_GlobalInvocationID.x), qy=int(gl_GlobalInvocationID.y), k=int(gl_GlobalInvocationID.z);
+  int w=pc.w/2,h=pc.h/2;
+  if(qx>=w || qy>=h) return;
+  int j=2*qx, i=2*qy;
+  int o=(k*pc.h+i)*pc.w+j;
+  if(k==0) {put(o,1); return;}
+  vec2 u=vec2(j+1,i+1);
+  int b=k*6;
+  vec2 ref=vec2(p[b]*u.x+p[b+1]*u.y+p[b+2],p[b+3]*u.x+p[b+4]*u.y+p[b+5])+localD(k,u);
+  if(pc.f0 < 0) {
+    // A hand-annotated static region is an oracle diagnostic, never a classifier.
+    if(ref.x>=pc.f1 && ref.y>=pc.f2 && ref.x<pc.f1+pc.f3 && ref.y<pc.f2+pc.rob_k) {
+      put(o,1); temporal[o]=1; temporal[o+1]=1; temporal[o+pc.w]=1; temporal[o+pc.w+1]=1;
+    }
+    return;
+  }
+  vec2 q=(ref-1.0)*.5;
+  ivec2 t=ivec2(floor(q)); vec2 a=fract(q);
+  if(t.x<0 || t.y<0 || t.x+1>=w || t.y+1>=h) {put(o,0);return;}
+  vec4 m=vec4(0),v=vec4(0);
+  for(int dy=0;dy<2;++dy) for(int dx=0;dx<2;++dx) {
+    float tap=(dx==0 ? 1-a.x:a.x)*(dy==0 ? 1-a.y:a.y);
+    m+=tap*means[(t.y+dy)*w+t.x+dx];
+    v+=tap*vars[(t.y+dy)*w+t.x+dx];   // reference frame only (guide_stats)
+  }
+  vec4 c=means[(k*h+qy)*w+qx];
+  vec3 diff=c.xyz-m.xyz;
+  float d=dot(diff,diff), n=max(m.w+c.w,1e-10);
+  float shrink=d/(d+n);
+  d*=shrink*shrink;
+  float variance=max(v.x+v.y+v.z,9.0*m.w);
+  put(o,clamp(pc.f0*exp(-d/max(variance,1e-10))-.12,0,1));
+}

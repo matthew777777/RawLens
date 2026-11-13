@@ -51,6 +51,14 @@ struct SolveParams {
   // Robust data term (moving objects / occlusion): Cauchy IRLS weights against
   // our noise model sigma^2 = noise_a y + noise_b, from iteration robust_start.
   bool robust = true;
+  // Reference-only sqrt RGB guide confidence (shaders/guide_stats, weight_guide) replaces
+  // the running-HR residual confidence, which rejected aliased static detail the HR
+  // estimate had not learned yet; temporal protection and spread remain. 0 = off
+  // (residual confidence). Validation: docs/performance/lkr-rejection-validation-2026-11-13.md.
+  float guide_confidence = 2.0f;
+  // Diagnostic only: known-static rectangle in this tile's reference LR coordinates.
+  // No inferred/static mask is enabled in the app. Width/height zero disables it.
+  std::array<float, 4> trusted_static{0, 0, 0, 0};
   bool equalize_noise = true;
   // How much the denoiser map / grain follow the contributing-frame factor
   // (0..1; the luma Bayer notch always uses the full factor). MergeFull sets it
@@ -106,6 +114,9 @@ struct SolveParams {
   // Neutralise fully clipped highlights only. A clipped single channel
   // does not justify discarding the remaining sunset / coloured-light signal.
   bool highlight_desat = true;
+  // EXPERIMENT (off): where frames were rejected, pull chroma toward its 3x3 median applied twice,
+  // scaled by the lost-frame factor -- removes reference-frame false colour on aliased wires/railings.
+  float fallback_chroma = 0.0f;
   // Held-out validation (diagnostics): the LAST frame is left out of the merge, aligned to the
   // finished image and compared with it; SolveStats::ho_r / ho_valid receive the result.
   bool holdout = false;
@@ -189,7 +200,7 @@ class Solver {
   std::deque<Entry> cache_;   // deque: references stay valid while it grows
   Gpu* gpu_;
   bool ok_ = false;
-  Pipeline dct_y_, dct_u_, dct_v_, dct_yuv_, resid_, zstep_, jac_, solve_, residg_, zgather_, weight_, scatter_, jacblk_, solveblk_, wmin_, wtemp_, wdark_, wdarkv_, wminh_, radjw_, wexp_, wth_, wtdet_, zgw_, residq_, radjwq_, scatq_, zpack_, residzq_, radjwzq_;
+  Pipeline dct_y_, dct_u_, dct_v_, dct_yuv_, resid_, zstep_, jac_, solve_, residg_, zgather_, weight_, scatter_, jacblk_, solveblk_, wmin_, wtemp_, wdark_, wdarkv_, wminh_, radjw_, wexp_, wth_, wtdet_, zgw_, residq_, radjwq_, scatq_, zpack_, residzq_, radjwzq_, guide_stats_, weight_guide_;
 };
 
 // CPU helpers (exact mirrors of the python reference).

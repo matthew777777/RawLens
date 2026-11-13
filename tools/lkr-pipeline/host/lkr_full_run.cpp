@@ -59,6 +59,10 @@ int main(int argc, char** argv) {
     else if (k == "--notch") prm.solve.notch = nx() != 0;
     else if (k == "--workers") prm.workers = nx();
     else if (k == "--robust") prm.solve.robust = nx() != 0;
+    else if (k == "--guide") prm.solve.guide_confidence = float(std::atof(argv[++i]));
+    else if (k == "--trusted-static") {
+      for (float& v : prm.trusted_static) v = float(std::atof(argv[++i]));
+    }
     else if (k == "--rk") prm.solve.robust_k = prm.robust_k_day = prm.robust_k_night = float(std::atof(argv[++i]));
     else if (k == "--rpow") prm.solve.robust_pow = prm.robust_pow_day = prm.robust_pow_night = float(std::atof(argv[++i]));
     else if (k == "--rstart") prm.solve.robust_start = nx();
@@ -81,6 +85,7 @@ int main(int argc, char** argv) {
     else if (k == "--local") prm.solve.local_block = nx();
     else if (k == "--bsearch") prm.block_search = nx() != 0;
     else if (k == "--stage-bits") pack_bits = nx();   // stage the frames packed at this many bits (lkr_pack.h), as the app does
+    else if (k == "--fbc") prm.solve.fallback_chroma = float(std::atof(argv[++i]));
     else if (k == "--fallback") prm.solve.dct_fallback = nx() != 0;
     else if (k == "--paper") prm.paper_parity = nx() != 0;
     else if (k == "--spread") prm.solve.robust_spread = nx();

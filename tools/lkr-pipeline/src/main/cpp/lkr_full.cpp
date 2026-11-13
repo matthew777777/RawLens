@@ -319,6 +319,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     sp.notch = false;
     sp.clip = 1e9f;
     sp.robust = false;
+    sp.guide_confidence = 0.0f;
     sp.equalize_noise = false;
     sp.local_block = 0;
     sp.robust_spread = 0;
@@ -602,6 +603,11 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       }
       SolveStats ss;
       SolveParams spt = sp;
+      if (prm.trusted_static[2] > 0 && prm.trusted_static[3] > 0) {
+        spt.trusted_static = prm.trusted_static;
+        spt.trusted_static[0] -= float(g.x0 + gx);
+        spt.trusted_static[1] -= float(g.y0 + gy);
+      }
       spt.debug_maps = dbg_path != nullptr;
       if (const char* trace = std::getenv("LKR_TRACE_PREFIX"); trace &&
           ji == size_t(std::getenv("LKR_TRACE_TILE") ? std::atoi(std::getenv("LKR_TRACE_TILE")) : 0))
