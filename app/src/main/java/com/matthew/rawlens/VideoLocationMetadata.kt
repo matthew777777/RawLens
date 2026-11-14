@@ -30,6 +30,35 @@ internal object VideoLocationMetadata {
         }
     }
 
+    /** [copyFrom] for a URI source (direct-recording content URIs). */
+    fun copyFrom(context: android.content.Context, source: android.net.Uri, muxer: androidx.media3.muxer.MediaMuxerCompat) {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, source)
+            parse(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION))?.let {
+                muxer.setLocation(it.first, it.second)
+            }
+        } catch (failure: RuntimeException) {
+            Log.w("RawLensVideoGps", "Source video location unavailable", failure)
+        } finally {
+            try { retriever.release() } catch (_: Exception) { }
+        }
+    }
+
+    fun copyFrom(context: android.content.Context, source: android.net.Uri, muxer: MediaMuxer) {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, source)
+            parse(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION))?.let {
+                muxer.setLocation(it.first, it.second)
+            }
+        } catch (failure: RuntimeException) {
+            Log.w("RawLensVideoGps", "Source video location unavailable", failure)
+        } finally {
+            try { retriever.release() } catch (_: Exception) { }
+        }
+    }
+
     /** Preserve the source MP4/MOV position when creating a stabilized MP4. */
     fun copyFrom(source: File, muxer: MediaMuxer) {
         val retriever = MediaMetadataRetriever()

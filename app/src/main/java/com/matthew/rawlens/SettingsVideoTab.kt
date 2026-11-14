@@ -373,7 +373,20 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         })
         content.addView(sectionDesc("Freeze the preview AE/AWB/AF at REC (manual tiles always hold). Off = continuous auto during takes. SS/ISO/WB/focus/EV tiles stay live before and during takes."))
         content.addView(sectionTitle("Stabilization"))
-        content.addView(sectionDesc("Post-record stabilization is unavailable for single-file recording because it creates a second video. Recording keeps the original take."))
+        content.addView(Button(this).apply {
+            fun refresh() {
+                text = "Stabilized output: ${stabOutputMode().label.uppercase(Locale.US)}"
+            }
+            refresh()
+            isEnabled = !videoRecording
+            setOnClickListener {
+                val next = stabOutputMode().next()
+                lensPreferences().edit().putString(KEY_VIDEO_STAB_OUTPUT, next.name).apply()
+                refresh()
+                setStatus("STAB OUTPUT • ${next.label.uppercase(Locale.US)} — NEXT TAKE")
+            }
+        })
+        content.addView(sectionDesc("Post-record gyro stabilization for Encoded Video: keep the original take, the stabilized copy (_STAB.mp4, written next to it), or both. The warp runs on-device right after stop; any failure keeps the original."))
 
         content.addView(sectionTitle("Recording folder"))
         recordingFolderSettingsStatus = sectionDesc(recordingFolderText()).also { it.tag = "settings-status"; content.addView(it) }

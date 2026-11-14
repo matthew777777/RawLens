@@ -176,9 +176,10 @@ struct StabWarpParams {
     int32_t srcStrides[2];  // yStrideW, uvStrideW (u16 units, tight input)
     int32_t outStrides[2];  // yStrideW, uvStrideW (u16 units, staging)
     int32_t uvBase[2];      // srcUvBaseOffB, outUvBaseOffB
-    float mat[9];
+    float mat0[9];          // out->src homography at output row 0
+    float mat1[9];          // ... at the last output row (rolling shutter)
 };
-static_assert(sizeof(StabWarpParams) == 68, "stab warp push layout drift");
+static_assert(sizeof(StabWarpParams) == 104, "stab warp push layout drift");
 
 // Fold WB gains + exposure into CCM rows (record-path order: wb=rgb*gains,
 // ccm=CCM*wb, ex=ccm*exp2(ev)): out[r][i] = ccm[r][i]*gains[i]*evMult.

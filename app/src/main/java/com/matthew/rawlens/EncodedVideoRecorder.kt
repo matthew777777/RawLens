@@ -393,6 +393,16 @@ class EncodedVideoRecorder internal constructor(
     private var stabOrientation = 0
     private var stabFront = false
     private var stabGyroSamples = 0L
+    // Sidecar v2 (StabPlanner): per-frame row timing + lens calibration,
+    // keyed by SENSOR_TIMESTAMP from the capture callback (camera thread),
+    // joined to the queued-frame table at stop. Static calibration below.
+    private class StabFrameMeta(val exposureNs: Long, val skewNs: Long, val intrinsics: FloatArray?)
+    private val stabFrameMeta = HashMap<Long, StabFrameMeta>()
+    private val stabOis = ArrayList<StabSidecar.OisSample>()
+    private var stabLensIntrinsics: FloatArray? = null
+    private var stabLensDistortion: FloatArray? = null
+    private var stabPreCorr: android.graphics.Rect? = null
+    private var stabActive: android.graphics.Rect? = null
 
     private data class Slot(
         var export: HardwareBufferRef? = null,
@@ -748,8 +758,8 @@ class EncodedVideoRecorder internal constructor(
             effRung = decision.rung
             effStep = decision.step
             effPreferMhc = decision.preferMhc
-            heatDegraded = true
-            Log.w(TAG, "heat degrade: thermal=$heatThermalStatus rung=${rung.label}->${effRung.label} " +
+            heatDegraded = effRung != rung || effStep != computeStep || effPreferMhc != preferMhc
+            Log.w(TAG, "thermal policy: thermal=$heatThermalStatus degraded=$heatDegraded rung=${rung.label}->${effRung.label} " +
                 "step=$computeStep->$effStep mhc=$preferMhc->$effPreferMhc")
         }
         // DCG14 exists only at its verified readout; any other RAW size is not that mode.
@@ -1228,6 +1238,7 @@ class EncodedVideoRecorder internal constructor(
                                 "exposureNs=${result.get(CaptureResult.SENSOR_EXPOSURE_TIME)}")
                         diagnosticCaptureTimestamp = ts
                     }
+                    if (stabTableArmed) recordStabFrameMeta(ts, frameResult)
                     captureResults.offer(ts, frameResult)
                     drainPendingResults()
                 }
@@ -1397,6 +1408,7 @@ class EncodedVideoRecorder internal constructor(
         builder: CaptureRequest.Builder,
         c: CameraCharacteristics,
     ) {
+        applyStabMetadataToRequest(builder, c)
         val frameFps = fps.takeIf { it > 0 } ?: 30
         // Fail fast when the sensor offers no AE range covering the take
         // rate (fixed (fps,fps) is illegal there and breaks the session).
@@ -1488,7 +1500,16 @@ class EncodedVideoRecorder internal constructor(
         stabMotion = null
         stabTableArmed = false
         stabFrameTs.clear()
+        synchronized(stabFrameMeta) {
+            stabFrameMeta.clear()
+            stabOis.clear()
+        }
         stabGyroSamples = 0L
+        stabLensIntrinsics = c.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
+            ?.takeIf { it.size == 5 }
+        stabLensDistortion = c.get(CameraCharacteristics.LENS_DISTORTION)?.takeIf { it.size == 5 }
+        stabPreCorr = c.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+        stabActive = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         stabOrientation = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         stabFront =
             c.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
@@ -1514,6 +1535,68 @@ class EncodedVideoRecorder internal constructor(
         }
     }
 
+    /**
+     * Camera thread: stashes this frame's row timing / intrinsics / OIS
+     * shifts for the v2 sidecar. Bounded: a take past ~4 h at 60 fps stops
+     * adding (the planner treats missing rows as "unknown", fail-soft).
+     */
+    private fun recordStabFrameMeta(ts: Long, r: CaptureResult) {
+        try {
+            val exp = r.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: -1L
+            val skew = r.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW) ?: -1L
+            val intr = r.get(CaptureResult.LENS_INTRINSIC_CALIBRATION)?.takeIf { it.size == 5 }
+            synchronized(stabFrameMeta) {
+                if (stabFrameMeta.isEmpty()) {
+                    // Did the HAL honour the OIS request? (DCG14/root may not.)
+                    Log.i(TAG, "stab first frame oisMode=${r.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)} " +
+                        "policy=$stabOisPolicy exposureNs=$exp skewNs=$skew")
+                }
+                if (stabFrameMeta.size < STAB_META_CAP) stabFrameMeta[ts] = StabFrameMeta(exp, skew, intr)
+                if (android.os.Build.VERSION.SDK_INT >= 31 && stabOis.size < STAB_META_CAP * 8) {
+                    r.get(CaptureResult.STATISTICS_OIS_SAMPLES)?.forEach {
+                        stabOis.add(StabSidecar.OisSample(it.timestamp, it.xshift, it.yshift))
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Asks the HAL for OIS lens-shift samples when the take records stab
+     * metadata and the camera advertises them (API 31+, fail-soft).
+     */
+    private fun applyStabMetadataToRequest(builder: CaptureRequest.Builder, c: CameraCharacteristics) {
+        if (!stabEnabled) return
+        try {
+            val dataModes = if (android.os.Build.VERSION.SDK_INT >= 31)
+                c.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_OIS_DATA_MODES) else null
+            if (dataModes?.contains(CameraMetadata.STATISTICS_OIS_DATA_MODE_ON) == true) {
+                // Measured lens shift: the planner can fold it in (S5).
+                builder.set(CaptureRequest.STATISTICS_OIS_DATA_MODE, CameraMetadata.STATISTICS_OIS_DATA_MODE_ON)
+                stabOisPolicy = "data"
+                return
+            }
+            // Hidden OIS (moves the image, never reported) makes the gyro warp
+            // over-correct: it re-adds the shake the lens already removed. With
+            // no OIS data, a take that wants a stabilized copy runs OIS off so
+            // the gyro explains all image motion (Gyroflow does the same).
+            val ois = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+            if (ois?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF) == true &&
+                ois.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON)
+            ) {
+                builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+                stabOisPolicy = "off"
+            } else {
+                stabOisPolicy = "none"
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /** How this take handled OIS for stabilization: data | off | none (logged with the sidecar). */
+    @Volatile private var stabOisPolicy = "?"
+
     /** Idempotent motion stop (stop path + teardown safety net). */
     private fun stopStabMotion() {
         try {
@@ -1531,7 +1614,19 @@ class EncodedVideoRecorder internal constructor(
      * Runs on the stop path AFTER the copy workers joined, so [stabFrameTs]
      * is complete.
      */
+    /**
+     * Sidecar of the last take (null when none was written). Direct takes
+     * have no staged file, so theirs lives in app cache (see [stabStagingFile]).
+     */
+    @Volatile var stabSidecarFile: File? = null
+        private set
+
+    /** Cache stand-in next to which a direct take's sidecar is written. */
+    private fun stabStagingFile(name: String): File =
+        File(File(appContext.cacheDir, "stab").apply { mkdirs() }, name)
+
     private fun writeStabSidecar(output: File): Long {
+        stabSidecarFile = null
         val rec = stabMotion
         val frames = stabFrameTs.toLongArray()
         stopStabMotion()
@@ -1558,6 +1653,19 @@ class EncodedVideoRecorder internal constructor(
             Log.w(TAG, "stab gyro empty; OG-only take")
             return 0L
         }
+        val accel = ArrayList<GyroSample>(2048)
+        try {
+            while (true) {
+                val chunk = rec.drainAccel(2048) ?: break
+                for (i in 0 until chunk.count) {
+                    accel.add(GyroSample(chunk.timestampsNs[i], chunk.axes[i * 3], chunk.axes[i * 3 + 1], chunk.axes[i * 3 + 2]))
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "stab accel drain failed (${e.message}); sidecar without accel")
+            accel.clear()
+        }
+        val extras = buildStabExtras(frames, accel)
         val raw = rawSize
         val crop = cropRect
         if (raw == null || crop == null) return 0L
@@ -1573,7 +1681,8 @@ class EncodedVideoRecorder internal constructor(
                 mapperVersion = GyroCameraFrameMapper.MAPPER_VERSION
             ),
             frameTimestampsNs = frames,
-            gyro = gyro
+            gyro = gyro,
+            extras = extras,
         )
         val sidecar = File(output.parent, output.nameWithoutExtension + StabSidecar.FILE_SUFFIX)
         val tmp = File(output.parent, sidecar.name + ".tmp")
@@ -1590,8 +1699,46 @@ class EncodedVideoRecorder internal constructor(
             return 0L
         }
         stabGyroSamples = gyro.size.toLong()
-        Log.i(TAG, "stab sidecar ${sidecar.name} frames=${frames.size} gyro=${gyro.size}")
+        stabSidecarFile = sidecar
+        Log.i(TAG, "stab sidecar ${sidecar.name} frames=${frames.size} gyro=${gyro.size} " +
+            "accel=${accel.size} ois=${extras.ois.size} oisPolicy=$stabOisPolicy lens=${extras.lensIntrinsics != null}/" +
+            "${extras.lensDistortion != null} skew0=${extras.rollingShutterSkewNs.firstOrNull()}")
         return stabGyroSamples
+    }
+
+    /** Joins the callback-side per-frame metadata onto the queued-frame table. */
+    private fun buildStabExtras(frames: LongArray, accel: List<GyroSample>): StabSidecar.Extras {
+        val exp = LongArray(frames.size) { -1L }
+        val skew = LongArray(frames.size) { -1L }
+        val intr = FloatArray(frames.size * 5) { Float.NaN }
+        var anyIntr = false
+        val ois: List<StabSidecar.OisSample>
+        synchronized(stabFrameMeta) {
+            frames.forEachIndexed { i, ts ->
+                val m = stabFrameMeta[ts] ?: return@forEachIndexed
+                exp[i] = m.exposureNs
+                skew[i] = m.skewNs
+                m.intrinsics?.let { anyIntr = true; it.copyInto(intr, i * 5) }
+            }
+            ois = stabOis.sortedBy { it.timestampNs }.distinctBy { it.timestampNs }
+            stabFrameMeta.clear()
+            stabOis.clear()
+        }
+        val pre = stabPreCorr
+        val act = stabActive
+        return StabSidecar.Extras(
+            lensIntrinsics = stabLensIntrinsics,
+            lensDistortion = stabLensDistortion,
+            preCorrLeft = pre?.left ?: 0, preCorrTop = pre?.top ?: 0,
+            preCorrW = pre?.width() ?: 0, preCorrH = pre?.height() ?: 0,
+            activeLeft = act?.left ?: 0, activeTop = act?.top ?: 0,
+            activeW = act?.width() ?: 0, activeH = act?.height() ?: 0,
+            exposureNs = exp,
+            rollingShutterSkewNs = skew,
+            frameIntrinsics = if (anyIntr) intr else FloatArray(0),
+            ois = ois,
+            accel = accel,
+        )
     }
 
     fun stop(): Stats {
@@ -1655,7 +1802,7 @@ class EncodedVideoRecorder internal constructor(
         // table is complete. Finalize the warp sidecar BEFORE teardown
         // (teardown nulls the motion recorder; 0 samples = OG-only take).
         val stabSamples = try {
-            outputFile?.let { writeStabSidecar(it) } ?: 0L
+            (outputFile ?: directOutput?.let { stabStagingFile(it.name) })?.let { writeStabSidecar(it) } ?: 0L
         } catch (e: Exception) {
             Log.w(TAG, "stab sidecar failed (${e.message})")
             0L
@@ -3441,6 +3588,8 @@ class EncodedVideoRecorder internal constructor(
 
     companion object {
         private const val TAG = "EncodedVideo"
+        /** Per-frame stab metadata rows kept per take (~4.6 h at 60 fps). */
+        private const val STAB_META_CAP = 1_000_000
         private val retainedWriterJobs = mutableListOf<CopyJob>()
 
         /**

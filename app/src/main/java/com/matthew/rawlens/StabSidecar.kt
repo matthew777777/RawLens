@@ -20,7 +20,9 @@ import java.util.Locale
  */
 internal object StabSidecar {
     const val FORMAT = "rawlens-stab-sidecar"
-    const val FORMAT_VERSION = 1
+    /** v2 adds [Extras] (row timing, lens calibration, OIS, accel); v1 still parses. */
+    const val FORMAT_VERSION = 2
+    private val ACCEPTED_VERSIONS = setOf(1, 2)
 
     /** File suffix for the staged sidecar (`<stem>_LOG709.stab.json`). */
     const val FILE_SUFFIX = ".stab.json"
@@ -55,6 +57,50 @@ internal object StabSidecar {
         val frameTimestampsNs: LongArray,
         /** Camera-frame gyro samples, ascending timestamps. */
         val gyro: List<GyroSample>,
+        /** v2 stabilization metadata; null for v1 takes (planner degrades). */
+        val extras: Extras? = null,
+    )
+
+    /** One OIS lens-shift sample (Camera2 OisSample, sensor pixels). */
+    data class OisSample(val timestampNs: Long, val xShift: Float, val yShift: Float)
+
+    /**
+     * v2 metadata the rolling-shutter + lens planner ([StabPlanner]) needs.
+     * Every field is optional: a missing one is null/empty and the planner
+     * falls back (no skew → global shutter, no distortion → pinhole, ...).
+     *
+     * Rect conventions follow Camera2: [lensIntrinsics] / [lensDistortion]
+     * are in the pre-correction active array pixel frame
+     * ([preCorrLeft]..), [activeLeft].. is the active array inside the
+     * pixel array, and the RAW crop in [Header] is relative to RAW buffer
+     * pixels (the active array for RAW_SENSOR outputs).
+     *
+     * Per-frame arrays are aligned to [Take.frameTimestampsNs] (same length)
+     * or empty when not captured; a value of -1 marks one missing frame.
+     */
+    class Extras(
+        /** f_x, f_y, c_x, c_y, s (LENS_INTRINSIC_CALIBRATION), or null. */
+        val lensIntrinsics: FloatArray? = null,
+        /** k1, k2, k3, p1, p2 (LENS_DISTORTION), or null. */
+        val lensDistortion: FloatArray? = null,
+        val preCorrLeft: Int = 0,
+        val preCorrTop: Int = 0,
+        val preCorrW: Int = 0,
+        val preCorrH: Int = 0,
+        val activeLeft: Int = 0,
+        val activeTop: Int = 0,
+        val activeW: Int = 0,
+        val activeH: Int = 0,
+        /** SENSOR_EXPOSURE_TIME per frame. */
+        val exposureNs: LongArray = LongArray(0),
+        /** SENSOR_ROLLING_SHUTTER_SKEW per frame (first to last row). */
+        val rollingShutterSkewNs: LongArray = LongArray(0),
+        /** Per-frame LENS_INTRINSIC_CALIBRATION (`frames * 5`; NaN = missing). */
+        val frameIntrinsics: FloatArray = FloatArray(0),
+        /** STATISTICS_OIS_SAMPLES, ascending timestamps. */
+        val ois: List<OisSample> = emptyList(),
+        /** Accelerometer, RAW DEVICE axes (m/s²), ascending timestamps. */
+        val accel: List<GyroSample> = emptyList(),
     )
 
     /** Renders [take] to canonical sidecar JSON. */
@@ -62,7 +108,7 @@ internal object StabSidecar {
         val h = take.header
         val sb = StringBuilder(512 + take.frameTimestampsNs.size * 20 + take.gyro.size * 40)
         sb.append("{\"format\":\"").append(FORMAT).append("\",")
-        sb.append("\"formatVersion\":").append(FORMAT_VERSION).append(',')
+        sb.append("\"formatVersion\":").append(if (take.extras == null) 1 else FORMAT_VERSION).append(',')
         sb.append("\"fps\":").append(h.fps).append(',')
         sb.append("\"encodeW\":").append(h.encodeW).append(',')
         sb.append("\"encodeH\":").append(h.encodeH).append(',')
@@ -92,8 +138,55 @@ internal object StabSidecar {
                 .append(num(s.yRadiansPerSecond)).append(',')
                 .append(num(s.zRadiansPerSecond)).append(']')
         }
-        sb.append("]}")
+        sb.append(']')
+        take.extras?.let { renderExtras(sb, it) }
+        sb.append('}')
         return sb.toString()
+    }
+
+    private fun renderExtras(sb: StringBuilder, e: Extras) {
+        fun floats(key: String, a: FloatArray?) {
+            if (a == null || a.isEmpty()) return
+            sb.append(",\"").append(key).append("\":[")
+            a.forEachIndexed { i, f ->
+                if (i > 0) sb.append(',')
+                if (f.isFinite()) sb.append(num(f)) else sb.append("null")
+            }
+            sb.append(']')
+        }
+        fun longs(key: String, a: LongArray) {
+            if (a.isEmpty()) return
+            sb.append(",\"").append(key).append("\":[")
+            a.forEachIndexed { i, v -> if (i > 0) sb.append(','); sb.append(v) }
+            sb.append(']')
+        }
+        floats("lensIntrinsics", e.lensIntrinsics)
+        floats("lensDistortion", e.lensDistortion)
+        sb.append(",\"preCorr\":[").append(e.preCorrLeft).append(',').append(e.preCorrTop).append(',')
+            .append(e.preCorrW).append(',').append(e.preCorrH).append(']')
+        sb.append(",\"active\":[").append(e.activeLeft).append(',').append(e.activeTop).append(',')
+            .append(e.activeW).append(',').append(e.activeH).append(']')
+        longs("exposureNs", e.exposureNs)
+        longs("rsSkewNs", e.rollingShutterSkewNs)
+        floats("frameIntrinsics", e.frameIntrinsics)
+        if (e.ois.isNotEmpty()) {
+            sb.append(",\"ois\":[")
+            e.ois.forEachIndexed { i, o ->
+                if (i > 0) sb.append(',')
+                sb.append('[').append(o.timestampNs).append(',').append(num(o.xShift)).append(',')
+                    .append(num(o.yShift)).append(']')
+            }
+            sb.append(']')
+        }
+        if (e.accel.isNotEmpty()) {
+            sb.append(",\"accel\":[")
+            e.accel.forEachIndexed { i, a ->
+                if (i > 0) sb.append(',')
+                sb.append('[').append(a.timestampNanos).append(',').append(num(a.xRadiansPerSecond)).append(',')
+                    .append(num(a.yRadiansPerSecond)).append(',').append(num(a.zRadiansPerSecond)).append(']')
+            }
+            sb.append(']')
+        }
     }
 
     private fun num(f: Float): String = "%.6f".format(Locale.US, f)
@@ -114,7 +207,8 @@ internal object StabSidecar {
         val root = reader.readValue() as? Map<*, *> ?: return null
         reader.expectEnd()
         if (root["format"] as? String != FORMAT) return null
-        if ((root["formatVersion"] as? Number)?.toInt() != FORMAT_VERSION) return null
+        val version = (root["formatVersion"] as? Number)?.toInt() ?: return null
+        if (version !in ACCEPTED_VERSIONS) return null
         fun num(key: String): Double? = (root[key] as? Number)?.toDouble()
         fun lng(key: String): Long? = (root[key] as? Number)?.toLong()
         fun int(key: String): Int? = (root[key] as? Number)?.toInt()
@@ -167,7 +261,67 @@ internal object StabSidecar {
             focal, sensorWMm, sensorHMm, sensorW, sensorH,
             cropLeft, cropTop, cropW, cropH, mapper
         )
-        return Take(header, frameTs, gyro)
+        val extras = if (version >= 2) parseExtras(root, frameTs.size) ?: return null else null
+        return Take(header, frameTs, gyro, extras)
+    }
+
+    /** v2 extras; null only when a present field is malformed (absent = default). */
+    @Suppress("UNCHECKED_CAST")
+    private fun parseExtras(root: Map<*, *>, frames: Int): Extras? {
+        fun floats(key: String, size: Int?): FloatArray? {
+            val raw = root[key] ?: return FloatArray(0)
+            val list = raw as? List<Any?> ?: return null
+            if (size != null && list.size != size) return null
+            return FloatArray(list.size) { (list[it] as? Number)?.toFloat() ?: Float.NaN }
+        }
+        fun longs(key: String): LongArray? {
+            val raw = root[key] ?: return LongArray(0)
+            val list = raw as? List<Any?> ?: return null
+            if (list.size != frames) return null
+            return LongArray(list.size) { (list[it] as? Number)?.toLong() ?: -1L }
+        }
+        fun rect(key: String): IntArray? {
+            val raw = root[key] ?: return IntArray(4)
+            val list = raw as? List<Number> ?: return null
+            if (list.size != 4) return null
+            return IntArray(4) { list[it].toInt() }
+        }
+        val intr = floats("lensIntrinsics", null) ?: return null
+        val dist = floats("lensDistortion", null) ?: return null
+        if (intr.isNotEmpty() && intr.size != 5) return null
+        if (dist.isNotEmpty() && dist.size != 5) return null
+        val pre = rect("preCorr") ?: return null
+        val act = rect("active") ?: return null
+        val exp = longs("exposureNs") ?: return null
+        val skew = longs("rsSkewNs") ?: return null
+        val fi = floats("frameIntrinsics", null) ?: return null
+        if (fi.isNotEmpty() && fi.size != frames * 5) return null
+        fun samples(key: String, width: Int): List<List<Number>>? {
+            val raw = root[key] ?: return emptyList()
+            val list = raw as? List<List<Number>> ?: return null
+            var prev = Long.MIN_VALUE
+            for (row in list) {
+                if (row.size != width) return null
+                val ts = row[0].toLong()
+                if (ts < prev) return null
+                prev = ts
+            }
+            return list
+        }
+        val ois = (samples("ois", 3) ?: return null).map {
+            OisSample(it[0].toLong(), it[1].toFloat(), it[2].toFloat())
+        }
+        val accel = (samples("accel", 4) ?: return null).map {
+            GyroSample(it[0].toLong(), it[1].toFloat(), it[2].toFloat(), it[3].toFloat())
+        }
+        return Extras(
+            lensIntrinsics = intr.takeIf { it.isNotEmpty() },
+            lensDistortion = dist.takeIf { it.isNotEmpty() },
+            preCorrLeft = pre[0], preCorrTop = pre[1], preCorrW = pre[2], preCorrH = pre[3],
+            activeLeft = act[0], activeTop = act[1], activeW = act[2], activeH = act[3],
+            exposureNs = exp, rollingShutterSkewNs = skew, frameIntrinsics = fi,
+            ois = ois, accel = accel,
+        )
     }
 
     /**

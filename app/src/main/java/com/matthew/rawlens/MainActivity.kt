@@ -1225,12 +1225,17 @@ class MainActivity : Activity() {
         return super.onKeyDown(keyCode, event)
     }
 
-    private fun startCameraWhenReady() {
+    internal fun startCameraWhenReady() {
         // The recorder owns the camera while video state exists (rolling or
         // stopping): a stills start here would STEAL the session and kill the
         // take silently (no frames, audio keeps running). Never touch it.
         if (videoRecording || videoRecorder != null || encodedVideoRecorder != null) {
             Log.i(LOG_TAG, "startCameraWhenReady suppressed: video owns camera")
+            return
+        }
+        // Settings is fullscreen: the camera stays closed until it is dismissed.
+        if (settingsDialog != null && pauseCameraInSettings()) {
+            Log.i(LOG_TAG, "startCameraWhenReady suppressed: settings open")
             return
         }
         if (activityResumed && cameraViewportReady &&
@@ -2374,8 +2379,8 @@ class MainActivity : Activity() {
         val recorder = EncodedVideoRecorder(manager, cameraId, applicationContext, lapisRecordingLease).apply {
             captureGps = currentGpsLocation()
             audioEnabled = withAudio
-            // Direct single-file recording never starts a second re-encode/sidecar.
-            stabEnabled = false
+            // Gyro + row-timing sidecar only when a stabilized copy is wanted.
+            stabEnabled = stabOutputMode() != StabOutputMode.OG_ONLY
             exposureEv = encodedVideoGainPref()
             saturation = encodedVideoSaturationPref()
             vibrance = encodedVideoVibrancePref()
@@ -2583,15 +2588,76 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Recording finalization failed at ${destination?.uri}", e)
             }
-            runOnUiThread { finishEncodedVideoStop(stats, saved, rearmPreview, afterStop) }
+            // Post-record stabilization, still on the stop thread (camera
+            // closed, so the warp has the GPU). Any failure keeps the OG.
+            var stabNote: String? = null
+            val sidecar = recorder.stabSidecarFile
+            val origin = saved
+            if (stats != null && origin != null && destination != null && sidecar != null) {
+                val r = stabilizeDirectTake(origin, destination.name, sidecar, stats)
+                stabNote = r.first
+                if (r.second != null) saved = r.second
+            } else if (stats != null && stabOutputMode() != StabOutputMode.OG_ONLY) {
+                stabNote = "NO GYRO • OG KEPT"
+            }
+            val note = stabNote
+            runOnUiThread { finishEncodedVideoStop(stats, saved, rearmPreview, afterStop, note) }
         }, "EncodedVideoStop").start()
+    }
+
+    /**
+     * Warps a finished direct take into `<stem>_STAB.mp4` in the same
+     * recording folder (cache file, then one copy into a new destination).
+     * Returns the status note and, for "Stabilized only" success (original
+     * deleted), the URI to report as saved. Stop thread; never throws.
+     */
+    private fun stabilizeDirectTake(
+        origin: Uri, originName: String, sidecar: File, stats: EncodedVideoRecorder.Stats,
+    ): Pair<String, Uri?> {
+        val mode = stabOutputMode()
+        val work = File(File(cacheDir, "stab").apply { mkdirs() }, originName.substringBeforeLast('.') + "_STAB.mp4")
+        try {
+            if (!stats.hasStabGyro || !sidecar.isFile) return "NO GYRO • OG KEPT" to null
+            runOnUiThread { setStatus("STABILIZING…") }
+            val report = EncodedVideoStabilizer(applicationContext).stabilize(
+                origin, sidecar, work, EncodedVideoProfile.fromName(stats.profile)
+            ) { done, total ->
+                if (done % 30 == 0) runOnUiThread { setStatus("STABILIZING $done/$total") }
+            }
+            Log.i(LOG_TAG, "encoded-video stab ok=${report.ok} warped=${report.framesWarped} " +
+                "degraded=${report.framesDegraded} ms=${report.elapsedMs} err=${report.error}")
+            if (!report.ok || !work.isFile || work.length() <= 0) return "STAB FAILED • OG KEPT" to null
+            val out = DirectRecordingOutput.create(this, work.name, "video/mp4")
+            val copied = try {
+                java.io.FileInputStream(work).use { input ->
+                    java.io.FileOutputStream(out.fileDescriptor).use { input.copyTo(it, 1 shl 20) }
+                }
+                out.finish(true)
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "stabilized copy failed", e)
+                out.close()
+                false
+            }
+            if (!copied) return "STAB SAVE FAILED • OG KEPT" to null
+            if (mode == StabOutputMode.STABILIZED_ONLY && DirectRecordingOutput.delete(this, origin)) {
+                return "STAB ${report.framesWarped}F" to out.uri
+            }
+            return "STAB ${report.framesWarped}F" to null
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "encoded-video stabilization failed", e)
+            return "STAB FAILED • OG KEPT" to null
+        } finally {
+            try { work.delete() } catch (_: Exception) {}
+            try { sidecar.delete() } catch (_: Exception) {}
+        }
     }
 
     private fun finishEncodedVideoStop(
         stats: EncodedVideoRecorder.Stats?,
         saved: Uri?,
         rearmPreview: Boolean,
-        afterStop: (() -> Unit)?
+        afterStop: (() -> Unit)?,
+        stabNote: String? = null,
     ) {
         encodedVideoRecorder = null
         updateQuickControls()
@@ -2614,7 +2680,8 @@ class MainActivity : Activity() {
                     " • ${stats.profile}" +
                     (if (stats.hasAudio) "" else " • SILENT") +
                     (if (stats.framesDropped > 0) " • D${stats.framesDropped}" else "") +
-                    (if (stats.fallbackWaits > 0) " • FB${stats.fallbackWaits}" else "")
+                    (if (stats.fallbackWaits > 0) " • FB${stats.fallbackWaits}" else "") +
+                    (if (stabNote != null) " • $stabNote" else "")
             )
             Log.i(
                 LOG_TAG, "encoded-video saved sensor=${stats?.sensorSize} " +
@@ -2635,7 +2702,7 @@ class MainActivity : Activity() {
                     "fenceAvg=${"%.1f".format(stats?.fenceWaitMsAvg ?: 0f)}ms " +
                     "fenceMax=${"%.1f".format(stats?.fenceWaitMsMax ?: 0f)}ms " +
                     "shaded=${stats?.shadedFrames} " +
-                    "stabGyro=${stats?.stabGyroSamples ?: 0} " +
+                    "stabGyro=${stats?.stabGyroSamples ?: 0} stab=${stabNote ?: "-"} " +
                     "destination=$saved " +
                     "file=${"%.1f".format(mb)}MB"
             )
@@ -3258,14 +3325,14 @@ class MainActivity : Activity() {
         // Controller may be saving (LOCKED): keep the tile honest by
         // only clearing on success.
         if (applyMfsrSettings(mfsrSettings.copy(enabled = false))) {
-            Log.i(LOG_TAG, "MFSR enabled=false")
+            Log.i(LOG_TAG, "KB-SR enabled=false")
             updateQuickControls()
         }
     }
 
     internal fun applyMfsrSettings(settings: MfsrSettings): Boolean {
         if (!controller.setMfsrSettings(settings)) {
-            setStatus("MFSR LOCKED • SAVING")
+            setStatus("KB-SR LOCKED • SAVING")
             return false
         }
         mfsrSettings = settings
@@ -3430,7 +3497,7 @@ class MainActivity : Activity() {
         rawVfDebugOverlay.contentDescription =
             "RAW viewfinder engine ${mode.name}. Tap to switch the GPU / CPU / BGU / BGU-CPU engine."
         vfEngineButton?.apply {
-            text = if (mode == VfEngineMode.BGU_CPU) "BGU\nCPU" else mode.name
+            text = chipCaption(if (mode == VfEngineMode.BGU_CPU) "BGU·CPU" else mode.name, "RAW VF")
             contentDescription = rawVfDebugOverlay.contentDescription
         }
     }
@@ -4176,11 +4243,11 @@ class MainActivity : Activity() {
 
     private fun refreshRawExposureToggle() {
         findViewById<TextView>(R.id.rawExposureToggle).apply {
-            text = when (rawExposureSettings.overlay) {
+            text = chipCaption(when (rawExposureSettings.overlay) {
                 RawExposureOverlayMode.OFF -> "OFF"
                 RawExposureOverlayMode.ZEBRAS -> "ZEBRA"
                 RawExposureOverlayMode.FALSE_COLOR -> "FALSE"
-            }
+            }, "OVERLAY")
             isSelected = rawExposureSettings.overlay != RawExposureOverlayMode.OFF
             contentDescription = "RAW exposure assist: ${rawExposureSettings.overlay.label}. Tap to cycle Off, Zebra, False colour."
         }

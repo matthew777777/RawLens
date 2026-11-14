@@ -861,9 +861,11 @@ Java_com_matthew_rawlens_VfStab_stabSubmitNative(
     if (!dstBuf) return VFVK_BAD_ARGUMENT;
     StabWarpParams params{};
     jint ii[4];
-    jfloat ff[9];
+    // 9 floats = one homography for every row (legacy); 18 = row 0 + last row.
+    const jsize nf = env->GetArrayLength(fparams) >= 18 ? 18 : 9;
+    jfloat ff[18];
     env->GetIntArrayRegion(iparams, 0, 4, ii);
-    env->GetFloatArrayRegion(fparams, 0, 9, ff);
+    env->GetFloatArrayRegion(fparams, 0, nf, ff);
     if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
     const int w = ii[0], h = ii[1];
     const int yStrideB = ii[2], uvStrideB = ii[3];
@@ -885,9 +887,12 @@ Java_com_matthew_rawlens_VfStab_stabSubmitNative(
     params.outStrides[1] = uvStrideB / 2;
     params.uvBase[0] = w * h * 2;
     params.uvBase[1] = yStrideB * fh;
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < nf; ++i) {
         if (!std::isfinite(ff[i])) return VFVK_BAD_ARGUMENT;
-        params.mat[i] = ff[i];
+    }
+    for (int i = 0; i < 9; ++i) {
+        params.mat0[i] = ff[i];
+        params.mat1[i] = ff[nf == 18 ? 9 + i : i];
     }
 
     ImportedBuffer dstImg;

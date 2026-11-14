@@ -49,7 +49,7 @@ class StabSidecarTest {
     @Test fun `parse rejects wrong format and version`() {
         val json = StabSidecar.render(take())
         assertNull(StabSidecar.parse(json.replace("rawlens-stab-sidecar", "other")))
-        assertNull(StabSidecar.parse(json.replace("\"formatVersion\":1", "\"formatVersion\":2")))
+        assertNull(StabSidecar.parse(json.replace("\"formatVersion\":1", "\"formatVersion\":3")))
     }
 
     @Test fun `parse rejects malformed and truncated input without throwing`() {
@@ -97,5 +97,49 @@ class StabSidecarTest {
         assertEquals(StabOutputMode.BOTH, StabOutputMode.fromName("BOTH"))
         assertEquals(StabOutputMode.BOTH, StabOutputMode.STABILIZED_ONLY.next())
         assertEquals(StabOutputMode.OG_ONLY, StabOutputMode.BOTH.next())
+    }
+
+    private fun extras() = StabSidecar.Extras(
+        lensIntrinsics = floatArrayOf(6000f, 6001f, 4000f, 3000f, 0f),
+        lensDistortion = floatArrayOf(0.01f, -0.002f, 0f, 0.0001f, -0.0002f),
+        preCorrLeft = 8, preCorrTop = 8, preCorrW = 8000, preCorrH = 6000,
+        activeLeft = 16, activeTop = 16, activeW = 7984, activeH = 5984,
+        exposureNs = longArrayOf(8_000_000L, 8_000_000L, -1L),
+        rollingShutterSkewNs = longArrayOf(20_000_000L, 20_000_000L, 20_000_000L),
+        frameIntrinsics = FloatArray(15) { if (it == 7) Float.NaN else it.toFloat() },
+        ois = listOf(StabSidecar.OisSample(999_500_000L, 1.5f, -0.25f)),
+        accel = listOf(GyroSample(1_000_000_000L, 0.1f, 9.8f, 0.2f)),
+    )
+
+    @Test fun `v2 extras round-trip`() {
+        val json = StabSidecar.render(take().copy(extras = extras()))
+        assertTrue(json.contains("\"formatVersion\":2"))
+        val e = StabSidecar.parse(json)!!.extras!!
+        val x = extras()
+        assertTrue(x.lensIntrinsics!!.contentEquals(e.lensIntrinsics!!))
+        assertTrue(x.lensDistortion!!.contentEquals(e.lensDistortion!!))
+        assertEquals(8, e.preCorrLeft); assertEquals(6000, e.preCorrH)
+        assertEquals(16, e.activeTop); assertEquals(7984, e.activeW)
+        assertTrue(x.exposureNs.contentEquals(e.exposureNs))
+        assertTrue(x.rollingShutterSkewNs.contentEquals(e.rollingShutterSkewNs))
+        assertEquals(15, e.frameIntrinsics.size)
+        assertTrue(e.frameIntrinsics[7].isNaN())
+        assertEquals(3f, e.frameIntrinsics[3], 1e-6f)
+        assertEquals(x.ois, e.ois)
+        assertEquals(1, e.accel.size)
+        assertEquals(9.8f, e.accel[0].yRadiansPerSecond, 1e-6f)
+    }
+
+    @Test fun `v1 sidecars still parse without extras`() {
+        val json = StabSidecar.render(take())
+        assertTrue(json.contains("\"formatVersion\":1"))
+        assertNull(StabSidecar.parse(json)!!.extras)
+    }
+
+    @Test fun `v2 rejects per-frame arrays of the wrong length`() {
+        val bad = extras().let {
+            StabSidecar.Extras(lensIntrinsics = it.lensIntrinsics, exposureNs = longArrayOf(1L, 2L))
+        }
+        assertNull(StabSidecar.parse(StabSidecar.render(take().copy(extras = bad))))
     }
 }

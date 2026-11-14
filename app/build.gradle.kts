@@ -319,6 +319,10 @@ android {
             if (project.hasProperty("recordingToolsAudit")) applicationIdSuffix = ".recordingcheck"
             if (project.hasProperty("waveletCheck")) applicationIdSuffix = ".waveletcheck"
             if (project.hasProperty("lkrCheck")) applicationIdSuffix = ".lkrcheck"
+            if (project.hasProperty("stabCheck")) {
+                applicationIdSuffix = ".stabcheck"
+                manifestPlaceholders["appLabel"] = "RawLens Stab"
+            }
             isMinifyEnabled = false
             // Resource shrinking requires code shrinking (AGP enforces
             // the pair); tests keep the full resource set instead.

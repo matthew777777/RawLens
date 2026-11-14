@@ -374,3 +374,15 @@ helpers and `shader_common/shaders/cfa_common.glsl` come from the same commit.
 The upstream module notice and RAWR license are retained beside the code.
 A typed null handle in DeviceObjects.h is the sole portability adaptation,
 needed for Android armeabi-v7a; sharpening arithmetic is unchanged.
+
+## VidUltra (stabilization model)
+
+`StabPlanner.kt` follows the gyro stabilization model of Pixelgamer4k/VidUltra
+(`app/src/main/java/dev/vidultra/proto/Stabilizer.java`, GPL-3.0): quaternion
+camera orientation, rolling-shutter row timing evaluated in row bands, the
+virtual-camera projection with Brown lens distortion, and the border-point fit
+test. The implementation is a Kotlin rewrite. RawLens replaces VidUltra's causal
+smoothing and margin easing with a whole-take L1 path optimization
+(`StabPathSolver.kt`, after Grundmann, Kwatra & Essa, CVPR 2011) and adds
+self-calibration (`StabCalib.kt`, after Karpenko et al., 2011). No VidUltra source
+file is copied. Reviewed at commit `25674ef`.

@@ -88,6 +88,12 @@ internal class DirectRecordingOutput private constructor(
             }
         }
 
+        /** Deletes a finished recording (MediaStore or document URI). True when removed. */
+        fun delete(context: Context, uri: Uri): Boolean = try {
+            if (uri.authority == MediaStore.AUTHORITY) context.contentResolver.delete(uri, null, null) > 0
+            else DocumentsContract.deleteDocument(context.contentResolver, uri)
+        } catch (_: Exception) { false }
+
         internal fun requireSeekable(descriptor: ParcelFileDescriptor) {
             try { Os.lseek(descriptor.fileDescriptor, 0, OsConstants.SEEK_SET) }
             catch (e: Exception) { throw IOException("Choose a local or USB folder that supports seeking", e) }

@@ -52,6 +52,20 @@ class EncodedVideoStabilizer(private val appContext: Context) {
         profile: EncodedVideoProfile,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
     ): Report {
+        if (!source.isFile || source.length() <= 0) {
+            return Report(0, 0, 0, 0, 0L, 0L, "missing source MP4")
+        }
+        return stabilize(android.net.Uri.fromFile(source), sidecarFile, output, profile, onProgress)
+    }
+
+    /** [source] is any readable, seekable video URI (direct-recording content URIs included). */
+    fun stabilize(
+        source: android.net.Uri,
+        sidecarFile: File,
+        output: File,
+        profile: EncodedVideoProfile,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): Report {
         val t0 = android.os.SystemClock.elapsedRealtime()
         try {
             return stabilizeOrThrow(source, sidecarFile, output, profile, onProgress, t0)
@@ -66,17 +80,16 @@ class EncodedVideoStabilizer(private val appContext: Context) {
     }
 
     private fun stabilizeOrThrow(
-        source: File,
+        source: android.net.Uri,
         sidecarFile: File,
         output: File,
         profile: EncodedVideoProfile,
         onProgress: (done: Int, total: Int) -> Unit,
         t0: Long,
     ): Report {
-        require(source.isFile && source.length() > 0) { "missing source MP4" }
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
         val take = StabSidecar.parse(sidecarFile.readText()) ?: error("unreadable sidecar")
-        val plan = StabTrajectory.plan(take) ?: error("unplannable trajectory")
+        val plan = planTake(source, take)
         val w = take.header.encodeW
         val h = take.header.encodeH
         val fps = take.header.fps
@@ -106,7 +119,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
         var muxer: MediaMuxer? = null
         try {
             extractor = MediaExtractor()
-            extractor.setDataSource(source.absolutePath)
+            extractor.setDataSource(appContext, source, null)
             val videoTrack = selectTrack(extractor, "video/") ?: error("no video track")
             val videoFormat = extractor.getTrackFormat(videoTrack)
             val srcW = videoFormat.getInteger(MediaFormat.KEY_WIDTH)
@@ -114,7 +127,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
             val mime = videoFormat.getString(MediaFormat.KEY_MIME) ?: error("no video mime")
             check(srcW == w && srcH == h) { "size drift ${srcW}x$srcH vs ${w}x$h" }
             val audioTrack = selectTrack(extractor, "audio/")
-            val audioFormat = audioTrack?.let { extractor.getTrackFormat(it) }
+            val audioFormat = audioTrack?.let { pcmSafe(extractor.getTrackFormat(it)) }
 
             val decoderName = EncodedVideoProbe.preferredHwDecoder(mime, w, h)
             decoder = if (decoderName != null) MediaCodec.createByCodecName(decoderName)
@@ -130,7 +143,12 @@ class EncodedVideoStabilizer(private val appContext: Context) {
             )
             val target = profile.targetColors()
                 .copy(width = w, height = h, fps = fps, bitrate = bitrate)
+            // Same picks as the recorder: advertised Main10 first, then the
+            // force pick (MTK advertises [Main] yet configures Main10, which
+            // is how the take itself was encoded). A force pick must pass a
+            // trial configure, else the warp drops to the 8-bit SDR path.
             val directName = EncodedVideoProbe.preferredP010EncoderAt(w, h, fps)
+                ?: EncodedVideoProbe.preferredForce10EncoderAt(w, h, fps)?.takeIf { canConfigureP010(it, profile, w, h, fps) }
             val surfaceName =
                 if (EncodedVideoProbe.writerPathAvailable()) EncodedVideoProbe.preferredHwEncoderAt(w, h, fps)
                 else null
@@ -238,7 +256,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
 
             if (output.exists()) output.delete()
             muxer = MediaMuxer(output.absolutePath, MediaMuxer.OUTPUT_FORMAT_MP4)
-            VideoLocationMetadata.copyFrom(source, muxer)
+            VideoLocationMetadata.copyFrom(appContext, source, muxer)
 
             val pass = VideoPass(
                 extractor, decoder, encoder, muxer, staging, plan, w, h, fps,
@@ -293,6 +311,97 @@ class EncodedVideoStabilizer(private val appContext: Context) {
         }
     }
 
+    /** Trial configure of [name] for P010 input at the warp target (released at once). */
+    private fun canConfigureP010(name: String, profile: EncodedVideoProfile, w: Int, h: Int, fps: Int): Boolean {
+        var c: MediaCodec? = null
+        return try {
+            c = MediaCodec.createByCodecName(name)
+            val bitrate = EncodedVideoProbe.clampedBitrate(EncodedVideoProbe.BITRATE, EncodedVideoProbe.maxBitrateMbps)
+            c.configure(
+                EncodedVideoProbe.toMediaFormat(
+                    profile.targetColors().copy(width = w, height = h, fps = fps, bitrate = bitrate),
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010
+                ),
+                null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+            )
+            true
+        } catch (e: Exception) {
+            Log.i(TAG, "stab force-10 $name refused: ${e.message}")
+            false
+        } finally {
+            try { c?.release() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * MP4 PCM tracks read back without KEY_PCM_ENCODING, and the muxer
+     * then rejects them ("Unsupported PCM encoding: -1"). Restore it from
+     * bits-per-sample (the recorder writes 16-bit PCM).
+     */
+    private fun pcmSafe(f: MediaFormat): MediaFormat {
+        if (f.getString(MediaFormat.KEY_MIME) != MediaFormat.MIMETYPE_AUDIO_RAW) return f
+        if (f.containsKey(MediaFormat.KEY_PCM_ENCODING) && f.getInteger(MediaFormat.KEY_PCM_ENCODING) > 0) return f
+        val bits = if (f.containsKey("bits-per-sample")) f.getInteger("bits-per-sample") else 16
+        f.setInteger(
+            MediaFormat.KEY_PCM_ENCODING,
+            when (bits) {
+                8 -> android.media.AudioFormat.ENCODING_PCM_8BIT
+                24 -> android.media.AudioFormat.ENCODING_PCM_24BIT_PACKED
+                32 -> android.media.AudioFormat.ENCODING_PCM_FLOAT
+                else -> android.media.AudioFormat.ENCODING_PCM_16BIT
+            }
+        )
+        return f
+    }
+
+    /** Per-frame warp for the two-homography shader (9 floats = same for all rows). */
+    internal class WarpPlan(val frameCount: Int, val engine: String, val matrices: (Int) -> FloatArray)
+
+    /**
+     * Planner v2 (calibrated, rolling-shutter aware; [StabPlanner]) with the
+     * v1 [StabTrajectory] as fallback. `adb shell setprop debug.rawlens.stab_engine
+     * legacy` forces v1 for A/B, and `nocalib` skips the stage-3 pass.
+     */
+    private fun planTake(source: android.net.Uri, take: StabSidecar.Take): WarpPlan {
+        val mode = try {
+            Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+                .invoke(null, "debug.rawlens.stab_engine") as? String
+        } catch (_: Throwable) { null } ?: ""
+        if (mode != "legacy") {
+            var cal = StabPlanner.Calibration()
+            if (mode != "nocalib") {
+                val t = android.os.SystemClock.elapsedRealtime()
+                val shifts = StabCalibPass.measure(appContext, source, take)
+                val r = StabCalib.calibrate(take, shifts)
+                if (r != null) {
+                    cal = StabPlanner.Calibration(
+                        gyroOffsetNs = if (r.offsetAccepted) r.calibration.gyroOffsetNs else 0L,
+                        biasX = r.calibration.biasX, biasY = r.calibration.biasY,
+                    )
+                }
+                Log.i(TAG, "stab calib pairs=${r?.pairsUsed ?: shifts.size} offsetMs=${cal.gyroOffsetNs / 1e6} " +
+                    "accepted=${r?.offsetAccepted} seMs=${r?.offsetStdErrNs?.div(1e6)} bias=${cal.biasX},${cal.biasY} " +
+                    "rmsPx=${r?.rmsBeforePx}->${r?.rmsAfterPx} gain=${r?.gainX},${r?.gainY} ms=${android.os.SystemClock.elapsedRealtime() - t}")
+            }
+            val t = android.os.SystemClock.elapsedRealtime()
+            val horizon = try {
+                Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+                    .invoke(null, "debug.rawlens.stab_horizon") == "1"
+            } catch (_: Throwable) { false }
+            val opts = StabPlanner.Options(cropMargin = StabTrajectory.CROP_MARGIN.toDouble(), horizonLock = horizon)
+            val v2 = StabPlanner.plan(take, opts, cal)
+            if (v2 != null) {
+                Log.i(TAG, "stab plan v2 frames=${v2.frameCount} rs=${v2.usedRollingShutter} lens=${v2.lens.calibrated} " +
+                    "its=${v2.solverIterations} conv=${v2.solverConverged} refined=${v2.refinedFrames} " +
+                    "minAlpha=${v2.alpha.minOrNull()} horizon=${v2.horizon} blurEased=${v2.blurEasedFrames} ms=${android.os.SystemClock.elapsedRealtime() - t}")
+                return WarpPlan(v2.frameCount, "v2") { v2.rowHomographies(it) }
+            }
+            Log.w(TAG, "stab plan v2 refused; falling back to v1")
+        }
+        val v1 = StabTrajectory.plan(take) ?: error("unplannable trajectory")
+        return WarpPlan(v1.frameCount, "v1") { v1.matrixFor(it) }
+    }
+
     private data class Warped(val decoded: Int, val warped: Int, val degraded: Int)
 
     /**
@@ -307,7 +416,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
         val encoder: MediaCodec,
         val muxer: MediaMuxer,
         val staging: android.hardware.HardwareBuffer,
-        val plan: StabTrajectory.Plan,
+        val plan: WarpPlan,
         val w: Int,
         val h: Int,
         val fps: Int,
@@ -477,7 +586,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
             }
             val subRc = VfStab.stabSubmitNative(
                 staging, intArrayOf(w, h, srcYStrideB, srcUvStrideB),
-                plan.matrixFor(idx)
+                plan.matrices(idx)
             )
             if (subRc != VfVulkan.OK) {
                 Log.w(TAG, "stab submit failed (${VfStab.describe(subRc)}); frame degraded")
@@ -726,7 +835,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
      * stays monotonic, so the file is valid.
      */
     private fun copyAudioTrack(
-        source: File,
+        source: android.net.Uri,
         audioTrack: Int?,
         audioFormat: MediaFormat?,
         muxer: MediaMuxer,
@@ -737,7 +846,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
         var copied = 0
         val extractor = MediaExtractor()
         try {
-            extractor.setDataSource(source.absolutePath)
+            extractor.setDataSource(appContext, source, null)
             extractor.selectTrack(audioTrack)
             val buf = ByteBuffer.allocateDirect(256 * 1024)
             val info = MediaCodec.BufferInfo()
