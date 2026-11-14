@@ -22,7 +22,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
     fun settingsCheck(label: String, checked: Boolean): SettingsSwitch = p.kit.settingsCheck(label, checked)
     val mergeTab = p.tabs[5]
         content.removeAllViews()
-        content.addView(sectionTitle("MFSR sharp merge"))
+        content.addView(sectionTitle("KB-SR · Kernel-Based Super-Resolution"))
         content.addView(sectionDesc(
             "Auto, Program and Manual capture a fresh burst; ZSL merges buffered frames. " +
                 "Reconstruction kernel and Wronski supplement S.3 high-frequency " +
@@ -40,7 +40,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 p.kit.chooseEnum("Kernel", mfsrSettings.kernel, { mfsrKernelText(it) }) { next ->
                     if (applyMfsrSettings(mfsrSettings.copy(kernel = next))) {
                         text = mfsrKernelText(next)
-                        setStatus("MFSR ${mfsrKernelText(next).uppercase(Locale.US)}")
+                        setStatus("KB-SR ${mfsrKernelText(next).uppercase(Locale.US)}")
                     }
                 }
             }
@@ -49,7 +49,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.s3) {
                     if (applyMfsrSettings(mfsrSettings.copy(s3 = checked))) {
-                        setStatus(if (checked) "MFSR S.3 • ON" else "MFSR S.3 • OFF")
+                        setStatus(if (checked) "KB-SR S.3 • ON" else "KB-SR S.3 • OFF")
                     } else {
                         isChecked = mfsrSettings.s3
                     }
@@ -60,7 +60,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.zipperFix) {
                     if (applyMfsrSettings(mfsrSettings.copy(zipperFix = checked))) {
-                        setStatus(if (checked) "MFSR ZIPPER FIX • ON" else "MFSR ZIPPER FIX • OFF")
+                        setStatus(if (checked) "KB-SR ZIPPER FIX • ON" else "KB-SR ZIPPER FIX • OFF")
                     } else {
                         isChecked = mfsrSettings.zipperFix
                     }
@@ -71,31 +71,31 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.learnedNoise) {
                     if (applyMfsrSettings(mfsrSettings.copy(learnedNoise = checked))) {
-                        setStatus(if (checked) "MFSR LEARNED NOISE • ON" else "MFSR LEARNED NOISE • OFF")
+                        setStatus(if (checked) "KB-SR LEARNED NOISE • ON" else "KB-SR LEARNED NOISE • OFF")
                     } else {
                         isChecked = mfsrSettings.learnedNoise
                     }
                 }
             }
         })
-        content.addView(sectionTitle("LK-R burst super-resolution"))
+        content.addView(sectionTitle("LK-SR · Lucas–Kanade Super-Resolution"))
         content.addView(sectionDesc(
             "RawLens adaptation of Lucas–Kanade Reloaded (Lecouat et al., 2021). " +
                 "RawLens improvements: DSLR look, motion and water rejection, local motion, " +
-                "shadow cleanup. Own quick tile; same shutter, ZSL and save path as MFSR."
+                "shadow cleanup. Own quick tile; same shutter, ZSL and save path as KB-SR."
         ))
-        content.addView(settingsCheck("ISP preview during LK-R merge", ispPreviewDuringMerge()).apply {
+        content.addView(settingsCheck("ISP preview during LK-SR merge", ispPreviewDuringMerge()).apply {
             setOnCheckedChangeListener { _, checked ->
                 setIspPreviewSettings(ispPreviewAlways(), checked)
                 setStatus(if (checked) "MERGE ISP PREVIEW • ON" else "MERGE ISP PREVIEW • OFF")
             }
         })
         content.addView(sectionDesc(
-            "While LK-R merges, the RAW viewfinder, scopes and peaking pause so the merge gets " +
+            "While LK-SR merges, the RAW viewfinder, scopes and peaking pause so the merge gets " +
                 "the GPU (~5-10 % faster) and the camera's own ISP preview (no noise reduction, " +
                 "no sharpening) is shown instead of a frozen frame."
         ))
-        content.addView(settingsCheck("LK-R denoise: sliding DCT", mfsrSettings.lkrDctPrior).apply {
+        content.addView(settingsCheck("LK-SR denoise: sliding DCT", mfsrSettings.lkrDctPrior).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrDctPrior &&
                     !applyMfsrSettings(mfsrSettings.copy(lkrDctPrior = checked))) {
@@ -107,7 +107,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             "Off (default): no denoiser, the most organic result. On: a fast GPU denoiser " +
                 "removes colour noise and a little luma noise during reconstruction."
         ))
-        content.addView(settingsCheck("LK-R reference: middle of the burst", mfsrSettings.lkrMiddleReference).apply {
+        content.addView(settingsCheck("LK-SR reference: middle of the burst", mfsrSettings.lkrMiddleReference).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrMiddleReference &&
                     !applyMfsrSettings(mfsrSettings.copy(lkrMiddleReference = checked))) {
@@ -123,7 +123,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
         ))
         val labPrefs = LkrTuning.prefs(this)
         val labBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(settingsCheck("Show LK-R Lab (expert tuning)",
+        content.addView(settingsCheck("Show LK-SR Lab (expert tuning)",
             labPrefs.getBoolean(LkrTuning.KEY_SHOW_LAB, false)).apply {
             setOnCheckedChangeListener { _, checked ->
                 labPrefs.edit().putBoolean(LkrTuning.KEY_SHOW_LAB, checked).apply()
@@ -214,12 +214,12 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
 private fun MainActivity.buildLkrLab(p: SettingsPage, box: LinearLayout) {
     val prefs = LkrTuning.prefs(this)
     box.addView(p.kit.sectionDesc(
-        "Defaults are the tuned values in code. Changes apply to the next LK-R merge; " +
+        "Defaults are the tuned values in code. Changes apply to the next LK-SR merge; " +
             "a value set back to its default follows future code updates again."
     ))
     val defaults = LkrTuning.defaults()
     if (defaults == null) {
-        box.addView(p.kit.sectionDesc("LK-R library unavailable on this build."))
+        box.addView(p.kit.sectionDesc("LK-SR library unavailable on this build."))
         return
     }
     val refreshers = ArrayList<() -> Unit>()
@@ -278,11 +278,11 @@ private fun MainActivity.buildLkrLab(p: SettingsPage, box: LinearLayout) {
             setPadding(dp(12), 0, dp(12), dp(6))
         })
     }
-    box.addView(p.kit.settingsButton("Reset LK-R Lab to defaults").apply {
+    box.addView(p.kit.settingsButton("Reset LK-SR Lab to defaults").apply {
         setOnClickListener {
             LkrTuning.resetAll(prefs)
             refreshers.forEach { it() }
-            setStatus("LK-R LAB • DEFAULTS")
+            setStatus("LK-SR LAB • DEFAULTS")
         }
     })
 }

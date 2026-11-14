@@ -390,8 +390,8 @@
         </LinearLayout>
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:baselineAligned="false">
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/hdrPlusQuick" style="@style/QuickControlTile" android:text="HDR+\nOFF" />
-            <com.matthew.rawlens.QuickControlTileView android:id="@+id/mfsrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="MFSR\nOFF" />
-            <com.matthew.rawlens.QuickControlTileView android:id="@+id/lkrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LK-R\nOFF" />
+            <com.matthew.rawlens.QuickControlTileView android:id="@+id/mfsrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="KB-SR\nOFF" />
+            <com.matthew.rawlens.QuickControlTileView android:id="@+id/lkrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LK-SR\nOFF" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/dLightingQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="D-LIGHTING\nOFF" android:visibility="gone" />
         </LinearLayout>
     </LinearLayout>
@@ -632,11 +632,12 @@
                     android:clickable="true"
                     android:focusable="true"
                     android:gravity="center"
-                    android:singleLine="true"
+                    android:maxLines="2"
+                    android:lineSpacingMultiplier="0.9"
                     android:text="OFF"
                     android:includeFontPadding="false"
                     android:textColor="@color/text_secondary"
-                    android:textSize="8sp" />
+                    android:textSize="9sp" />
 
                 <!-- LK-R output resolution: sensor MP <-> x2 super-resolution.
                      Round like its OFF / AUTO neighbours; shown only while

@@ -27,7 +27,7 @@ internal fun MainActivity.wireLkrZoomChip() {
         val next = mfsrSettings.lkrZoom.nextZoom()
         if (applyMfsrSettings(mfsrSettings.copy(lkrZoom = next))) {
             chip.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-            setStatus("LK-R ZOOM ${next.label}")
+            setStatus("LK-SR ZOOM ${next.label}")
             updateLkrZoomChip()
         }
     }
@@ -35,7 +35,7 @@ internal fun MainActivity.wireLkrZoomChip() {
         val next = !mfsrSettings.lkrFullRes
         if (applyMfsrSettings(mfsrSettings.copy(lkrFullRes = next))) {
             button.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-            setStatus("LK-R ${lkrMegapixelLabel(next, mfsrSettings.lkrZoom)}")
+            setStatus("LK-SR ${lkrMegapixelLabel(next, mfsrSettings.lkrZoom)}")
             updateLkrZoomChip()
         }
     }
@@ -64,7 +64,7 @@ internal fun MainActivity.updateLkrZoomChip() {
     (res as? RotatingContent)?.contentRotation = controlRotationDegrees
     val zoom = if (shown) mfsrSettings.lkrZoom else LkrZoom.X1
     chip.text = "SR ${zoom.label}"
-    chip.contentDescription = "LK-R zoom ${zoom.label}. Tap to cycle 1×, 1.5×, 2×."
+    chip.contentDescription = "LK-SR zoom ${zoom.label}. Tap to cycle 1×, 1.5×, 2×."
     val zoomed = zoom != LkrZoom.X1
     chip.setBackgroundResource(if (zoomed) R.drawable.control_chip_active else R.drawable.control_chip)
     chip.setTextColor(getColor(if (zoomed) R.color.accent_dark else R.color.text_primary))
@@ -72,7 +72,7 @@ internal fun MainActivity.updateLkrZoomChip() {
         val fullRes = shown && mfsrSettings.lkrFullRes
         val label = lkrMegapixelLabel(fullRes, zoom)
         res.text = label.replace(" MP", "\nMP")
-        res.contentDescription = "LK-R output resolution $label. Tap to switch sensor / 2× super-resolution."
+        res.contentDescription = "LK-SR output resolution $label. Tap to switch sensor / 2× super-resolution."
         res.setBackgroundResource(if (fullRes) R.drawable.control_chip_round_active else R.drawable.control_chip_round)
         res.setTextColor(getColor(if (fullRes) R.color.accent_dark else R.color.text_primary))
     }

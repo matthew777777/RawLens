@@ -81,7 +81,7 @@ data class MfsrSettings(
     val lkrFullRes: Boolean = false
 ) {
     /** Quick-tile / status label of the active engine. */
-    val label: String get() = if (engine == MfsrEngine.LKR) "LK-R" else "MFSR"
+    val label: String get() = if (engine == MfsrEngine.LKR) "LK-SR" else "KB-SR"
     /** Follow the shared burst / ZSL frame count, up to the active engine's ceiling. */
     fun activeFrameCount(configuredCount: Int): Int =
         configuredCount.coerceIn(MIN_MERGE_FRAMES, maxFrames(engine, if (lkrFullRes && lkrZoom == LkrZoom.X1) LkrZoom.FULL_2X else lkrZoom))
@@ -105,7 +105,7 @@ data class MfsrSettings(
 
     fun quickText(
         which: MfsrEngine, count: Int, buffered: Int, available: Boolean?, busy: Boolean, zsl: Boolean = true
-    ): String = (if (which == MfsrEngine.LKR) "LK-R" else "MFSR") + "\n" + when {
+    ): String = (if (which == MfsrEngine.LKR) "LK-SR" else "KB-SR") + "\n" + when {
         !isOn(which) -> "OFF"
         busy -> "MERGING"
         available == false -> "UNAVAILABLE"

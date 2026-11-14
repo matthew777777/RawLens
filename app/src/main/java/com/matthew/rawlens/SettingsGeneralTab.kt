@@ -134,6 +134,13 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             textSize = 11f
         })
         content.addView(sectionTitle("Viewfinder"))
+        content.addView(p.kit.settingsCheck("Pause camera while in Settings", pauseCameraInSettings()).apply {
+            setOnCheckedChangeListener { _, on ->
+                lensPreferences().edit().putBoolean(KEY_PAUSE_CAMERA_IN_SETTINGS, on).apply()
+                if (on) pauseCameraForSettings() else startCameraWhenReady()
+            }
+        })
+        content.addView(sectionDesc("Saves battery by closing the camera while Settings is open. Active recordings continue."))
         content.addView(p.kit.settingsCheck("ISP preview (instead of RAW viewfinder)", ispPreviewAlways()).apply {
             setOnCheckedChangeListener { _, checked ->
                 setIspPreviewSettings(checked, ispPreviewDuringMerge())

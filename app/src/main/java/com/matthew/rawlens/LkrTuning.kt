@@ -7,7 +7,7 @@ import android.content.Context
 import android.content.SharedPreferences
 
 /**
- * "LK-R Lab": every RawLens LK-R tuning value, exposed in Settings -> Merge
+ * "LK-SR Lab": every RawLens LK-R tuning value, exposed in Settings -> Merge
  * behind a hidden-by-default switch. Indices mirror `lkr_tuning.h`
  * (tools/lkr-pipeline). Defaults are NOT duplicated here: the sliders show
  * [LkrBridge.nativeTuningDefaults], the native code's own values, and only

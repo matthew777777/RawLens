@@ -45,7 +45,7 @@ class SharpMergeProvenanceTest {
                 assertFalse(jpeg.contains("AMaZE"))
                 if (engine == MfsrEngine.LKR) {
                     assertFalse(jpeg.contains("MFSR", ignoreCase = true))
-                    assertEquals("LKR", settings.mergeFileSuffix())
+                    assertEquals("LK-SR", settings.mergeFileSuffix())
                     assertTrue(block.contains("Reconstruction scale: 2x"))
                 }
             }

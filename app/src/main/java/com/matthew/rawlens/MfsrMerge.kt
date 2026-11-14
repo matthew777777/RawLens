@@ -164,7 +164,7 @@ internal object MfsrMerge {
     private fun logPlan(label: String, timestamps: List<Long>, sharpness: List<Double>, plan: BurstSharpness.Plan) {
         val newest = timestamps.maxOrNull() ?: 0L
         val ref = plan.order.first()
-        Log.i(LOG_TAG, "$label MFSR plan: ref=F$ref merge=${plan.order.size}/${sharpness.size} " +
+        Log.i(LOG_TAG, "$label KB-SR plan: ref=F$ref merge=${plan.order.size}/${sharpness.size} " +
             "rejected=${plan.rejected.map { "F$it" }} | " +
             sharpness.indices.joinToString(" ") { i ->
                 "F$i(${(newest - timestamps[i]) / 1_000_000}ms)=${"%.4f".format(sharpness[i])}" +

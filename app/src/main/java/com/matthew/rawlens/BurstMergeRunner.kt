@@ -147,10 +147,10 @@ internal class BurstMergeRunner(private val appContext: Context) {
     ): Completed {
         val captureId = take.lastModified()
         val ordered = MfsrMerge.prepareDecoded(frames)
-            ?: throw IllegalStateException("No usable frames for MFSR")
+            ?: throw IllegalStateException("No usable frames for KB-SR")
         val tMerge = SystemClock.elapsedRealtime()
         val merged = MfsrMerge.mergeDecoded(appContext, ordered, inputs.mfsr)
-            ?: throw IllegalStateException("MFSR merge failed")
+            ?: throw IllegalStateException("KB-SR merge failed")
         try {
             val mergeMs = SystemClock.elapsedRealtime() - tMerge
             reportSaving(listener, t0, take, merged.width, merged.height, format, Method.MFSR)
@@ -214,7 +214,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
         val merged = LkrMerge.mergeDecoded(appContext, frames,
             LkrMerge.Settings(dctPrior = inputs.mfsr.lkrDctPrior, tuning = LkrTuning.overrides(appContext),
                 zoom = inputs.mfsr.lkrZoom, fullRes = inputs.mfsr.lkrFullRes))
-            ?: throw IllegalStateException("LK-Reloaded merge failed")
+            ?: throw IllegalStateException("LK-SR merge failed")
         try {
             reportSaving(listener, t0, take, merged.width, merged.height, format, Method.LKR)
             val provenance = sharpMergeProvenance(merged, inputs.mfsr.copy(engine = MfsrEngine.LKR), frames.size,

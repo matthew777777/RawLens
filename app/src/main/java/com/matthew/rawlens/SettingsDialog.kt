@@ -65,6 +65,18 @@ internal const val SETTINGS_LENSES_TAB = 7
  * [SETTINGS_VIDEO_TAB]); the settings button uses that for Video in video mode and
  * Exposure in PROGRAM. Back from such a page still leads to the category list.
  */
+internal const val KEY_PAUSE_CAMERA_IN_SETTINGS = "settings_pause_camera"
+
+internal fun MainActivity.pauseCameraInSettings(): Boolean =
+    lensPreferences().getBoolean(KEY_PAUSE_CAMERA_IN_SETTINGS, true)
+
+/** Closes the camera behind Settings when the switch is on; a recording keeps it (recorder owns it). */
+internal fun MainActivity.pauseCameraForSettings() {
+    if (pauseCameraInSettings() && !videoRecording && videoRecorder == null && encodedVideoRecorder == null) {
+        controller.stop()
+    }
+}
+
 internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
     settingsDialog?.dismiss()
     fun selectableBackground(borderless: Boolean): Int = android.util.TypedValue().also {
@@ -111,7 +123,7 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
         "Video" to "RAW and encoded video, audio, stabilization, monitoring",
         "Exposure" to "PROGRAM auto exposure, HDR brackets, face priority",
         "Burst" to "Zero shutter lag, gyro sidecars, offline merges",
-        "Merge" to "HDR+, MFSR and LK-R burst merges",
+        "Merge" to "HDR+, KB-SR and LK-SR burst merges",
         "Denoise" to "AI RAW denoise, wavelet denoise, capture sharpening",
         "Lenses" to "",
         "Debug" to "App log, camera diagnostics, debug frames",
@@ -299,10 +311,17 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
     }
     goTab(if (initialTab == SETTINGS_LENSES_TAB) SETTINGS_ROOT else initialTab)
     settingsDialog = dialog
+    // Settings covers the viewfinder, so close the camera while it is open (battery).
+    // A recording keeps the camera: the recorder owns it.
+    pauseCameraForSettings()
     dialog.setOnDismissListener {
         rawZslSettingsStatus = null
         sidecarSettingsStatus = null
-        if (settingsDialog === dialog) settingsDialog = null
+        // A replacement Settings (reopen) keeps the camera closed.
+        if (settingsDialog === dialog) {
+            settingsDialog = null
+            startCameraWhenReady()
+        }
     }
     container.setPadding(dp(12), 0, dp(12), 0)
     RawLensUi.showFullscreen(dialog, container)

@@ -325,7 +325,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
             // Images stay open for the just-in-time decode inside merge.
         }
         if (settings.engine == MfsrEngine.LKR) Log.i(LOG_TAG,
-            "LK-R selection=${android.os.SystemClock.elapsedRealtime() - tMerge0}ms frames=${selected.size}")
+            "LK-SR selection=${android.os.SystemClock.elapsedRealtime() - tMerge0}ms frames=${selected.size}")
         if (ordered.isNullOrEmpty()) {
             Log.e(LOG_TAG, "${settings.label} prepare produced no usable frames")
             host.reportSaveState("${settings.label} ERROR")

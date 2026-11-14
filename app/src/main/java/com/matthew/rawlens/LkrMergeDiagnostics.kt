@@ -40,7 +40,7 @@ internal class LkrMergeDiagnostics(context: Context) : AutoCloseable {
             }.getOrDefault("unavailable")
             val cgroup = runCatching { File("/proc/self/cgroup").readLines().joinToString(";") }
                 .getOrDefault("unavailable")
-            Log.i("RawLensCamera", "LK-R runtime phase=$phase elapsedMs=$elapsed " +
+            Log.i("RawLensCamera", "LK-SR runtime phase=$phase elapsedMs=$elapsed " +
                 "awakeMs=$awake sleepMs=${(elapsed - awake).coerceAtLeast(0)} " +
                 "processCpuMs=${Process.getElapsedCpuTime() - cpu} importance=${info.importance} " +
                 "workerTid=$workerTid priority=${Process.getThreadPriority(workerTid)} " +

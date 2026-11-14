@@ -9,7 +9,7 @@ package com.matthew.rawlens
  */
 internal object MergeGpuQuiet {
     @Volatile var active = false
-    /** Settings toggle "ISP preview during LK-R merge"; the debug prop also forces it. */
+    /** Settings toggle "ISP preview during LK-SR merge"; the debug prop also forces it. */
     @Volatile var duringMergeEnabled = false
 
 

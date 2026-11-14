@@ -37,7 +37,7 @@ class MfsrSettingsTest {
         val settings = MfsrSettings(enabled = true, engine = MfsrEngine.LKR)
         for (count in 2..59) assertEquals(count, settings.activeFrameCount(count))
         assertEquals(59, settings.activeFrameCount(80))
-        assertEquals("LK-R\n×40", settings.quickText(MfsrEngine.LKR, 40, 40, true, false))
+        assertEquals("LK-SR\n×40", settings.quickText(MfsrEngine.LKR, 40, 40, true, false))
         for (z in listOf(LkrZoom.X1_5, LkrZoom.X2, LkrZoom.FULL_2X))
             assertEquals(24, settings.copy(lkrZoom = z).activeFrameCount(40))
     }
@@ -45,13 +45,13 @@ class MfsrSettingsTest {
     @Test fun quickTextUsesConfiguredCountAndWaitsForFullSelection() {
         val on = MfsrSettings(enabled = true)
         val m = MfsrEngine.MFSR
-        assertEquals("MFSR\nOFF", MfsrSettings().quickText(m, 12, 12, true, false))
-        assertEquals("MFSR\nMERGING", on.quickText(m, 12, 12, true, true))
-        assertEquals("MFSR\nUNAVAILABLE", on.quickText(m, 12, 12, false, false))
-        assertEquals("MFSR\nWARMING", on.quickText(m, 12, 8, true, false))
-        assertEquals("MFSR\n×12", on.quickText(m, 12, 12, true, false))
-        assertEquals("MFSR\nWARMING", on.quickText(m, 30, 15, true, false))
-        assertEquals("MFSR\n×16", on.quickText(m, 30, 16, true, false))
+        assertEquals("KB-SR\nOFF", MfsrSettings().quickText(m, 12, 12, true, false))
+        assertEquals("KB-SR\nMERGING", on.quickText(m, 12, 12, true, true))
+        assertEquals("KB-SR\nUNAVAILABLE", on.quickText(m, 12, 12, false, false))
+        assertEquals("KB-SR\nWARMING", on.quickText(m, 12, 8, true, false))
+        assertEquals("KB-SR\n×12", on.quickText(m, 12, 12, true, false))
+        assertEquals("KB-SR\nWARMING", on.quickText(m, 30, 15, true, false))
+        assertEquals("KB-SR\n×16", on.quickText(m, 30, 16, true, false))
     }
 
     @Test fun lkrMiddleReferenceDefaultsOnAndRoundTrips() {
@@ -87,12 +87,12 @@ class MfsrSettingsTest {
 
     @Test fun eachEngineHasItsOwnTile() {
         val lkr = MfsrSettings(enabled = true, engine = MfsrEngine.LKR)
-        assertEquals("LK-R\n×12", lkr.quickText(MfsrEngine.LKR, 12, 12, true, false))
-        assertEquals("MFSR\nOFF", lkr.quickText(MfsrEngine.MFSR, 12, 12, true, false))
+        assertEquals("LK-SR\n×12", lkr.quickText(MfsrEngine.LKR, 12, 12, true, false))
+        assertEquals("KB-SR\nOFF", lkr.quickText(MfsrEngine.MFSR, 12, 12, true, false))
         assertTrue(lkr.isOn(MfsrEngine.LKR))
         assertFalse(lkr.isOn(MfsrEngine.MFSR))
         assertFalse(lkr.copy(enabled = false).isOn(MfsrEngine.LKR))
-        assertEquals("LK-R\nOFF", MfsrSettings().quickText(MfsrEngine.LKR, 12, 12, true, false))
+        assertEquals("LK-SR\nOFF", MfsrSettings().quickText(MfsrEngine.LKR, 12, 12, true, false))
     }
 
     @Test fun kernelAndS3SurviveReload() {
@@ -127,7 +127,7 @@ class MfsrSettingsTest {
     }
     @Test fun freshPhotoBurstDoesNotWaitForZslRing() {
         val on = MfsrSettings(enabled = true)
-        assertEquals("MFSR\n×8", on.quickText(MfsrEngine.MFSR, 8, 0, true, false, zsl = false))
+        assertEquals("KB-SR\n×8", on.quickText(MfsrEngine.MFSR, 8, 0, true, false, zsl = false))
     }
 
 }

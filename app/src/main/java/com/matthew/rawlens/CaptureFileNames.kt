@@ -28,8 +28,8 @@ object CaptureFileNames {
     const val TYPE_LINEAR = "LINEAR"
     const val TYPE_AI = "AI"
     const val TYPE_HDRPLUS = "HDRPLUS"
-    const val TYPE_MFSR = "MFSR"
-    const val TYPE_LKR = "LKR"
+    const val TYPE_MFSR = "KB-SR"
+    const val TYPE_LKR = "LK-SR"
     const val TYPE_BURST = "BURST"
 
     private const val STEM_PATTERN = "yyyyMMdd_HHmmss_SSS"

@@ -2697,7 +2697,7 @@ class RawCameraController(
 
     fun setMfsrSettings(settings: MfsrSettings): Boolean {
         if (captureInProgress.get() || pendingSaveCount.get() > 0) {
-            onState("MFSR LOCKED • SAVING")
+            onState("KB-SR LOCKED • SAVING")
             return false
         }
         mfsrSettings = settings
@@ -2999,7 +2999,7 @@ class RawCameraController(
         // + JPEG out). Mutual exclusivity with HDR+ is enforced at the
         // settings layer; this branch wins when both somehow engage.
         if (activeMfsrSettings.enabled) {
-            return takeFullRingForMerge(cutoff, selectedFrameCount, "MFSR", ::saveMfsrMerge)
+            return takeFullRingForMerge(cutoff, selectedFrameCount, "KB-SR", ::saveMfsrMerge)
         }
         // HDR+ merges to one artifact: same full-ring discipline as SR.
         if (activeHdrPlusSettings.enabled) {
@@ -3248,7 +3248,7 @@ class RawCameraController(
     private fun saveMfsrMerge(selected: List<BufferedRawFrame>) {
         val c = characteristics ?: run {
             selected.forEach { RawImageOwnership.release(it.image) }
-            onState("MFSR ERROR")
+            onState("KB-SR ERROR")
             return
         }
         val orientation = activeOutputOrientation
@@ -3287,11 +3287,11 @@ class RawCameraController(
                     captureTimeMillis, captureGps = captureGps, saveSettings = saveSettings
                 )
             } catch (failure: Exception) {
-                Log.e(LOG_TAG, "MFSR save failed", failure)
-                onState("MFSR ERROR")
+                Log.e(LOG_TAG, "KB-SR save failed", failure)
+                onState("KB-SR ERROR")
             } catch (oom: OutOfMemoryError) {
-                Log.e(LOG_TAG, "MFSR save out of memory", oom)
-                onState("MFSR ERROR")
+                Log.e(LOG_TAG, "KB-SR save out of memory", oom)
+                onState("KB-SR ERROR")
             } finally {
                 if (outputFormat.includesJpeg) endJpegProcessing()
                 endPendingSave()
@@ -4794,7 +4794,7 @@ class RawCameraController(
                 "50mp","Main camera, 50 megapixel RAW"))
             options.add(at+1,LensOption("0","${mainLabel(2f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X,
                 "2x","Main camera, 2× in-sensor crop RAW"))
-            options.add(at+2,LensOption("0","4× · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_4X,
+            options.add(at+2,LensOption("0","${mainLabel(4f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_4X,
                 "4x","Main camera, 4× in-sensor crop RAW"))
         }
         if(extended) options.add(LensOption("0","${mainLabel()} · DCG14",selectedCameraId=="0" && mode==LapisRootProfile.Mode.DCG14,
@@ -6424,7 +6424,7 @@ class RawCameraController(
             "iso=${selected.first().result.get(CaptureResult.SENSOR_SENSITIVITY)} " +
             "exposureNs=${selected.first().exposureNanos} " +
             "pairs=${selected.joinToString { "${it.result.get(CaptureResult.SENSOR_SENSITIVITY)}:${it.exposureNanos}" }}")
-        onState("${if (activeMfsrSettings.enabled) "MFSR" else "HDR+"} ×${selected.size} • PREPARING")
+        onState("${if (activeMfsrSettings.enabled) "KB-SR" else "HDR+"} ×${selected.size} • PREPARING")
         if (activeMfsrSettings.enabled) saveMfsrMerge(selected) else saveHdrPlusMerge(selected)
         finishCapture()
         publishRawZslStatus()

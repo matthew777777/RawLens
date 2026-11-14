@@ -188,7 +188,7 @@ internal object LkrMerge {
         } finally {
             diagnostics.close()
             LkrBridge.nativeLastProfile().lineSequence().filter { it.isNotBlank() }.forEach {
-                Log.i(LOG_TAG, "LK-R native: $it")
+                Log.i(LOG_TAG, "LK-SR native: $it")
             }
         } ?: return null
         val mergeMs = SystemClock.elapsedRealtime() - t0
