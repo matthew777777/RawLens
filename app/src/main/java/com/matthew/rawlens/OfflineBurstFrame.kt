@@ -36,7 +36,7 @@ internal object OfflineBurstMetadata {
         frameJson: String,
         frameIndex: Int,
         cameraId: String = "unknown",
-        exifOrientation: Int = 1
+        exifOrientation: Int? = null
     ): RawFrameMetadata {
         val container = JSONObject(containerJson)
         val frame = JSONObject(frameJson)
@@ -63,7 +63,12 @@ internal object OfflineBurstMetadata {
             rawPlaneCount = 1,
             rawPlaneRowStride = width * 2,
             rawPlanePixelStride = 2,
-            exifOrientation = exifOrientation,
+            exifOrientation = exifOrientation ?: resolveOrientation(
+                frame.optInt("exifOrientation", 0), container.optInt("exifOrientation", 0),
+                container.optInt("sensorOrientation", 0),
+                container.optInt("deviceOrientationDegrees", 0),
+                container.optString("lensFacing", "back") == "front"
+            ),
             sensorOrientationDegrees = container.optInt("sensorOrientation", 0),
             sensitivityIso = frame.optInt("iso", 0).takeIf { it > 0 },
             exposureTimeNanos = frame.optLong("exposureTime", 0L).takeIf { it > 0 },
@@ -177,6 +182,14 @@ internal object OfflineBurstMetadata {
         }
         return LensShadingSnapshot(rows, columns, ImmutableFloatValues(gains))
     }
+
+    /** Old bursts stored only the sensor mount; assume an upright phone for those. */
+    internal fun resolveOrientation(
+        frameExif: Int, containerExif: Int, sensorDegrees: Int,
+        deviceDegrees: Int = 0, frontFacing: Boolean = false
+    ): Int = frameExif.takeIf { it in 1..8 }
+        ?: containerExif.takeIf { it in 1..8 }
+        ?: CaptureOrientation.exif(sensorDegrees, deviceDegrees, frontFacing)
 
     fun cfaFrom(sensorArrangement: String): BayerPattern = when (sensorArrangement.lowercase()) {
         "rggb" -> BayerPattern.RGGB

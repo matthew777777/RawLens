@@ -99,7 +99,8 @@ internal object BurstCrawStore {
         frames: List<BufferedRawFrame>,
         characteristics: CameraCharacteristics,
         realtimeTimestamps: Boolean,
-        output: File
+        output: File,
+        deviceOrientationDegrees: Int = 0
     ): BurstDumpStats {
         require(frames.isNotEmpty()) { "Empty ZSL ring" }
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
@@ -115,9 +116,11 @@ internal object BurstCrawStore {
         }
         val orientation =
             characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val exifOrientation = CaptureOrientation.exif(orientation, deviceOrientationDegrees,
+            characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT)
         val baseJson = "{\"UniqueCameraModel\":\"${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\"," +
             "\"width\":$width,\"height\":$height," +
-            "\"crop\":\"FULL\",\"sensorOrientation\":$orientation,\"encoder\":\"RawLens-Burst\"}"
+            "\"crop\":\"FULL\",\"sensorOrientation\":$orientation,\"exifOrientation\":$exifOrientation,\"deviceOrientationDegrees\":$deviceOrientationDegrees,\"encoder\":\"RawLens-Burst\"}"
         val containerJson = CrawMetadata.container(
             baseJson, characteristics, realtimeTimestamps,
             audioRate = 0, audioChannels = 0, motion = false,

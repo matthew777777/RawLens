@@ -2377,6 +2377,7 @@ class RawCameraController(
     internal fun dumpZslRingToBurstCraw(
         output: java.io.File
     ): BurstCrawStore.BurstDumpStats? {
+        val orientationSnapshot = deviceOrientationDegrees
         val frames = rawZslBuffer?.takeAll().orEmpty()
         if (frames.isEmpty()) {
             lastZslTakeSize = 0
@@ -2393,7 +2394,7 @@ class RawCameraController(
         onState("BURST ×${frames.size} • SAVING")
         return try {
             BurstCrawStore.writeZslRingToCraw(
-                frames, chars, rawZslRealtimeTimestamps, output
+                frames, chars, rawZslRealtimeTimestamps, output, orientationSnapshot
             ).also {
                 onState("BURST ×${it.framesWritten} • SAVED")
                 publishRawZslStatus()
