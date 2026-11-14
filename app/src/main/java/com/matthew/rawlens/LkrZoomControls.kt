@@ -32,6 +32,17 @@ internal fun MainActivity.wireLkrZoomChip() {
         }
     }
     findViewById<TextView>(R.id.lkrResChip).setOnClickListener { button ->
+        // Same round button for both sharp-merge engines: LK-SR keeps its x2
+        // solve, KB-SR merges at 2x (Wronski super-resolution).
+        if (mfsrSettings.isOn(MfsrEngine.MFSR)) {
+            val next = !mfsrSettings.mfsrFullRes
+            if (applyMfsrSettings(mfsrSettings.copy(mfsrFullRes = next))) {
+                button.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                setStatus("KB-SR ${lkrMegapixelLabel(next, LkrZoom.X1)}")
+                updateLkrZoomChip()
+            }
+            return@setOnClickListener
+        }
         val next = !mfsrSettings.lkrFullRes
         if (applyMfsrSettings(mfsrSettings.copy(lkrFullRes = next))) {
             button.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
@@ -58,8 +69,9 @@ internal fun MainActivity.updateLkrZoomChip() {
     val chip = findViewById<TextView>(R.id.lkrZoomChip) ?: return
     val res = findViewById<TextView>(R.id.lkrResChip)
     val shown = !isVideoMode && mfsrSettings.isOn(MfsrEngine.LKR)
+    val kbShown = !isVideoMode && mfsrSettings.isOn(MfsrEngine.MFSR)
     chip.visibility = if (shown) View.VISIBLE else View.GONE
-    res?.visibility = chip.visibility
+    res?.visibility = if (shown || kbShown) View.VISIBLE else View.GONE
     (chip as? RotatingContent)?.contentRotation = controlRotationDegrees
     (res as? RotatingContent)?.contentRotation = controlRotationDegrees
     val zoom = if (shown) mfsrSettings.lkrZoom else LkrZoom.X1
@@ -69,14 +81,14 @@ internal fun MainActivity.updateLkrZoomChip() {
     chip.setBackgroundResource(if (zoomed) R.drawable.control_chip_active else R.drawable.control_chip)
     chip.setTextColor(getColor(if (zoomed) R.color.accent_dark else R.color.text_primary))
     if (res != null) {
-        val fullRes = shown && mfsrSettings.lkrFullRes
-        val label = lkrMegapixelLabel(fullRes, zoom)
+        val fullRes = if (kbShown) mfsrSettings.mfsrFullRes else shown && mfsrSettings.lkrFullRes
+        val label = lkrMegapixelLabel(fullRes, if (kbShown) LkrZoom.X1 else zoom)
         res.text = label.replace(" MP", "\nMP")
-        res.contentDescription = "LK-SR output resolution $label. Tap to switch sensor / 2× super-resolution."
+        res.contentDescription = "${if (kbShown) "KB-SR" else "LK-SR"} output resolution $label. Tap to switch sensor / 2× super-resolution."
         res.setBackgroundResource(if (fullRes) R.drawable.control_chip_round_active else R.drawable.control_chip_round)
         res.setTextColor(getColor(if (fullRes) R.color.accent_dark else R.color.text_primary))
     }
-    if (shown) seatScopeSlot()
+    if (shown || kbShown) seatScopeSlot()
     applyLkrPreviewZoom(zoom.factor)
 }
 

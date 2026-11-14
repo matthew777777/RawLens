@@ -187,6 +187,19 @@ class MfsrMergeTest {
         assertEquals(0.1f, done.get(0), 0f)
     }
 
+    @Test fun shadingAfterMergeAt2xUsesTheSourceSensorPixel() {
+        // 2x1 grid with different gains per cell: a 2x merge (8x4 output of a
+        // 4x2 sensor) must match the 1x result replicated per 2x2 block.
+        val model = LensShadingModel(2, 1, floatArrayOf(2f, 3f, 5f, 4f, 6f, 7f, 9f, 8f), IntRectSnapshot(0, 0, 4, 2))
+        val one = java.nio.FloatBuffer.wrap(FloatArray(4 * 2 * 3) { 0.1f })
+        MfsrMerge.applyShadingAfterMerge(one, 4, 2, model)
+        val two = java.nio.FloatBuffer.wrap(FloatArray(8 * 4 * 3) { 0.1f })
+        MfsrMerge.applyShadingAfterMerge(two, 8, 4, model, scale = 2)
+        for (y in 0 until 4) for (x in 0 until 8) for (c in 0..2) {
+            assertEquals("($x,$y,$c)", one.get(3 * ((y / 2) * 4 + x / 2) + c), two.get(3 * (y * 8 + x) + c), 0f)
+        }
+    }
+
     @Test fun offlineSnapshotBuildInterleavesAndValidates() {
         // Four nested R/G-even/G-odd/B planes interleave into Camera2
         // map order; shape/value defects throw (the JSON shell nulls).

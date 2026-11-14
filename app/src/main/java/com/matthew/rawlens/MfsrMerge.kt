@@ -330,15 +330,20 @@ internal object MfsrMerge {
      * gain(B), same LensShadingModel.gainAt the still path uses. Identity
      * when the map is already applied.
      */
-    internal fun applyShadingAfterMerge(rgb: java.nio.FloatBuffer, w: Int, h: Int, model: LensShadingModel) {
+    internal fun applyShadingAfterMerge(
+        rgb: java.nio.FloatBuffer, w: Int, h: Int, model: LensShadingModel, scale: Int = 1
+    ) {
         if (model.alreadyApplied) return
         ShardWorkers.forEachShard(h) { y0, y1 ->
             for (y in y0 until y1) for (x in 0 until w) {
                 val i = 3 * (y * w + x)
-                val gG = 0.5f * (model.gainAt(x, y, CfaColor.GREEN, 0) + model.gainAt(x, y, CfaColor.GREEN, 1))
-                rgb.put(i, rgb.get(i) * model.gainAt(x, y, CfaColor.RED))
+                // 2x output: the map is in sensor pixels, sample it at the source position.
+                val sx = x / scale
+                val sy = y / scale
+                val gG = 0.5f * (model.gainAt(sx, sy, CfaColor.GREEN, 0) + model.gainAt(sx, sy, CfaColor.GREEN, 1))
+                rgb.put(i, rgb.get(i) * model.gainAt(sx, sy, CfaColor.RED))
                 rgb.put(i + 1, rgb.get(i + 1) * gG)
-                rgb.put(i + 2, rgb.get(i + 2) * model.gainAt(x, y, CfaColor.BLUE))
+                rgb.put(i + 2, rgb.get(i + 2) * model.gainAt(sx, sy, CfaColor.BLUE))
             }
         }
     }
@@ -575,7 +580,14 @@ internal object MfsrMerge {
         verifiers: List<(Int, Int) -> Float> = emptyList()
     ): EngineOut? {
         val count = decoders.size
-        if (!fitsMemory(context, w, h)) return null
+        // KB-SR resolution (viewfinder round button, like LK-SR): 2x super-resolution
+        // (12.5 -> 50 MP) instead of the sensor grid.
+        val scale = if (settings.mfsrFullRes) 2 else 1
+        val outW = w * scale
+        val outH = h * scale
+        // KB-SR Lab (Settings -> Merge): code defaults + the user's overrides.
+        val tuning = MfsrTuning.resolve(context)
+        if (!fitsMemory(context, w, h, scale)) return null
         try {
             SrpBridge.loadLibrary()
         } catch (e: UnsatisfiedLinkError) {
@@ -623,7 +635,7 @@ internal object MfsrMerge {
             val snr = BurstConfig.estimateSnr(first, alpha, beta)
             val fin = BurstConfig.finalize(snr)
             val factors = listOf(1, 2, 4, 4)
-            BurstConfig.sanitize(1f, fin.tileSize, factors, fin.tileSizes, h, w)
+            BurstConfig.sanitize(scale.toFloat(), fin.tileSize, factors, fin.tileSizes, h, w)
             // Robustness noise correction (Wronski 2019 Sec. 5.2.1): the
             // Monte Carlo noise LUT for this profile, simulated once per
             // sensor/ISO and cached (NoiseLutGen). Only with a real tag
@@ -638,25 +650,23 @@ internal object MfsrMerge {
                 null
             }
             val config = PipelineConfig(
-                scale = 1f, bayer = true, factors = factors, tileSizes = fin.tileSizes,
+                scale = scale.toFloat(), bayer = true, factors = factors, tileSizes = fin.tileSizes,
                 // Mobile grey for alignment (perf 2026-11-14): half-band FIR,
                 // known-truth flow error <= the IPOL FFT grey, ~8x cheaper on Mali.
                 greyMethod = "FIR7",
-                // C26: the SNR-tuned Wronski kernel params (update_snr_config) were
-                // computed above but never passed, so the app ran KernelParams()
-                // defaults (kDetail 1.0 vs 0.25-0.33); kMin 0.64 = the checker fix.
-                kernelParams = KernelParams(fin.kDetail.toFloat(), fin.kDenoise.toFloat(),
-                    fin.dTh.toFloat(), fin.dTr.toFloat(), kMin = 0.64f),
+                // SNR-tuned Wronski kernel params (update_snr_config) times the
+                // KB-SR Lab multipliers; kMin 0.64 default = the C26 checker fix.
+                kernelParams = tuning.kernelParams(fin),
                 kernelPreprocessing = "gat",
                 kernelAlpha = FloatArray(4) { alpha[it].toFloat() },
                 kernelBeta = FloatArray(4) { beta[it].toFloat() },
-                robustnessParams = RobustnessParams(noiseCorrection = curves != null, s3 = settings.s3),
+                robustnessParams = tuning.robustnessParams(haveNoiseLut = curves != null, s3 = settings.s3),
                 robustnessEnabled = true,
                 sigmaSqCurve = curves?.sigmaSq ?: floatArrayOf(0f, 0f),
                 dSqCurve = curves?.dSq ?: floatArrayOf(0f, 0f),
                 memoryTight = true,
                 colourDiff = if (!settings.zipperFix) null else zipperWb(neutral),
-                icaIterations = 3,
+                icaIterations = tuning.icaIterations,
                 // KernelNet (when selected): one kernel map from the reference
                 // frame, which on the device IS the full frame, so no
                 // separate full-frame copy; the net runs in sensor
@@ -667,6 +677,8 @@ internal object MfsrMerge {
                         weights = KernelNet.bundledWeights(),
                         sigma = KernelNet.sigma(
                             FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
+                        sigmaScale = tuning.knSigmaScale,
+                        sigmaCap = tuning.knSigmaCap,
                         flipX = fx,
                         flipY = fy
                     )
@@ -679,7 +691,7 @@ internal object MfsrMerge {
             val t0 = System.nanoTime()
             // Output in native memory (see VulkanPipeline.run): released by
             // MfsrResult.release(), or below if the engine fails.
-            nativeOut = SrpBridge.nativeFloats(w * h * 3)
+            nativeOut = SrpBridge.nativeFloats(outW * outH * 3)
             val rgb = VulkanPipeline.run(
                 { first },
                 decoders.drop(1).map { decode ->
@@ -707,21 +719,21 @@ internal object MfsrMerge {
                 output = nativeOut
             )
             val mergeMs = (System.nanoTime() - t0) / 1_000_000
-            VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), w * h * 3)
+            VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), outW * outH * 3)
             rgb.rewind()
             // Compute preserves the RGGB-normalized input coordinates.
             // Undo the Bayer normalization before applying the original
             // sensor metadata / EXIF orientation in either output tail.
-            restoreSensorCoordinates(rgb.asFloatBuffer(), w, h, pattern)
+            restoreSensorCoordinates(rgb.asFloatBuffer(), outW, outH, pattern)
             rgb.rewind()
             shading?.let { model ->
                 val t0 = SystemClock.elapsedRealtime()
-                applyShadingAfterMerge(rgb.asFloatBuffer(), w, h, model)
+                applyShadingAfterMerge(rgb.asFloatBuffer(), outW, outH, model, scale)
                 rgb.rewind()
                 Log.i(LOG_TAG, "sharp merge lens shading after merge in ${SystemClock.elapsedRealtime() - t0} ms")
             }
-            Log.i(LOG_TAG, "sharp merge done ${w}x$h N=$count in ${mergeMs}ms")
-            return EngineOut(rgb, w, h, mergeMs)
+            Log.i(LOG_TAG, "sharp merge done ${outW}x$outH (x$scale) N=$count in ${mergeMs}ms tuning=$tuning")
+            return EngineOut(rgb, outW, outH, mergeMs)
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "sharp merge failed", failure)
             nativeOut?.let(SrpBridge::nativeFreeDirect)
@@ -743,9 +755,11 @@ internal object MfsrMerge {
      * Checked against measured headroom before any work, so an oversized
      * merge fails cleanly (caller's MFSR ERROR path) instead.
      */
-    private fun fitsMemory(context: Context, w: Int, h: Int): Boolean {
+    private fun fitsMemory(context: Context, w: Int, h: Int, scale: Int = 1): Boolean {
         val px = w.toDouble() * h
-        val native = px * NATIVE_BYTES_PER_PX * MergeMemoryBudget.ESTIMATE_MARGIN
+        // Output-sized buffers (num 12 + den 12 + RGB out 12 B/px) grow with scale^2.
+        val native = px * (NATIVE_BYTES_PER_PX + OUTPUT_BYTES_PER_PX * (scale * scale - 1)) *
+            MergeMemoryBudget.ESTIMATE_MARGIN
         val java = px * JAVA_BYTES_PER_PX * MergeMemoryBudget.ESTIMATE_MARGIN
         val systemBudget = MergeMemoryBudget.systemHeadroomBytes(context)
         val javaBudget = MergeMemoryBudget.javaHeapHeadroomBytes()
@@ -771,6 +785,8 @@ internal object MfsrMerge {
     //   + grads 2 + cov 4 + S.3 map 1 = 46; pinned align spectra/statics ~4;
     // native scratch frameBuf 4 + kernPre 4 + RGB output 12 = 20; init transients ~10.
     private const val NATIVE_BYTES_PER_PX = 80.0
+    // Per OUTPUT pixel: GPU num 12 + den 12 + native RGB output 12.
+    private const val OUTPUT_BYTES_PER_PX = 36.0
     // Java heap rows: the decoded frame (4) + loop/grey rows (4) live together.
     private const val JAVA_BYTES_PER_PX = 8.0
 

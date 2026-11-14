@@ -54,7 +54,7 @@ data class MfsrSettings(
     val zipperFix: Boolean = true,
     /**
      * Merge engine behind the same shutter / ZSL / save path: Wronski MFSR
-     * (sr-pipeline) or LK-Reloaded (tools/lkr-pipeline, Lecouat et al. 2021).
+     * (sr-pipeline) or LK-Reloaded (tools/lkr-lite = LK-R Lite, after Lecouat et al. 2021).
      * Each engine has its own quick tile (MFSR, LK-R); turning one on
      * switches the shared sharp-merge path to that engine.
      */
@@ -78,7 +78,13 @@ data class MfsrSettings(
      * keep the x2 solve instead of returning to sensor size. 1x -> 4x the
      * sensor pixels; 1.5x -> crop x2 (~2.25x pixels); 2x -> sensor size.
      */
-    val lkrFullRes: Boolean = false
+    val lkrFullRes: Boolean = false,
+    /**
+     * KB-SR resolution (same viewfinder round button as LK-SR when KB-SR is the
+     * active engine): merge at 2x (Wronski super-resolution, 12.5 -> 50 MP)
+     * instead of the sensor grid.
+     */
+    val mfsrFullRes: Boolean = false
 ) {
     /** Quick-tile / status label of the active engine. */
     val label: String get() = if (engine == MfsrEngine.LKR) "LK-SR" else "KB-SR"
@@ -97,7 +103,8 @@ data class MfsrSettings(
         "lkr_dct_prior" to lkrDctPrior,
         "lkr_middle_reference" to lkrMiddleReference,
         "lkr_zoom" to lkrZoom.name,
-        "lkr_full_res" to lkrFullRes
+        "lkr_full_res" to lkrFullRes,
+        "mfsr_full_res" to mfsrFullRes
     )
 
     /** True when the sharp merge is on with [which] as its engine (that engine's tile is active). */
@@ -128,7 +135,8 @@ data class MfsrSettings(
             // Legacy FULL_2X (zoom and resolution in one value) splits into 1x + full res.
             lkrZoom = (LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1)
                 .let { if (it == LkrZoom.FULL_2X) LkrZoom.X1 else it },
-            lkrFullRes = values["lkr_full_res"] as? Boolean ?: (values["lkr_zoom"] == LkrZoom.FULL_2X.name)
+            lkrFullRes = values["lkr_full_res"] as? Boolean ?: (values["lkr_zoom"] == LkrZoom.FULL_2X.name),
+            mfsrFullRes = values["mfsr_full_res"] as? Boolean ?: false
         )
 
         const val MIN_MERGE_FRAMES = 2

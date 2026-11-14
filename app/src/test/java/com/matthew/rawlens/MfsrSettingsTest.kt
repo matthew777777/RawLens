@@ -61,6 +61,13 @@ class MfsrSettingsTest {
         assertFalse(MfsrSettings.fromPreferences(off.toPreferences()).lkrMiddleReference)
     }
 
+    @Test fun kbSr2xDefaultsOffAndRoundTrips() {
+        assertFalse(MfsrSettings().mfsrFullRes)
+        assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).mfsrFullRes)
+        val on = MfsrSettings(mfsrFullRes = true)
+        assertTrue(MfsrSettings.fromPreferences(on.toPreferences()).mfsrFullRes)
+    }
+
     @Test fun lkrDefaultsToNoPrior() {
         assertFalse(MfsrSettings().lkrDctPrior)
         assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).lkrDctPrior)

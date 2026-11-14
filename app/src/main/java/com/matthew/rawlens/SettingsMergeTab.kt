@@ -78,6 +78,34 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 }
             }
         })
+        content.addView(settingsCheck("2× super-resolution (KB-SR)", mfsrSettings.mfsrFullRes).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.mfsrFullRes) {
+                    if (applyMfsrSettings(mfsrSettings.copy(mfsrFullRes = checked))) {
+                        setStatus(if (checked) "KB-SR 2× • ON" else "KB-SR 2× • OFF")
+                        updateLkrZoomChip()
+                    } else {
+                        isChecked = mfsrSettings.mfsrFullRes
+                    }
+                }
+            }
+        })
+        content.addView(sectionDesc(
+            "Off (default): output at the sensor size. On: Wronski super-resolution at 2× " +
+                "(a 12.5 MP sensor gives 50 MP). Same as the round MP button in the viewfinder."
+        ))
+        val mfsrLabPrefs = MfsrTuning.prefs(this)
+        val mfsrLabBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(settingsCheck("Show KB-SR Lab (expert tuning)",
+            mfsrLabPrefs.getBoolean(MfsrTuning.KEY_SHOW_LAB, false)).apply {
+            setOnCheckedChangeListener { _, checked ->
+                mfsrLabPrefs.edit().putBoolean(MfsrTuning.KEY_SHOW_LAB, checked).apply()
+                mfsrLabBox.visibility = if (checked) View.VISIBLE else View.GONE
+            }
+        })
+        mfsrLabBox.visibility = if (mfsrLabPrefs.getBoolean(MfsrTuning.KEY_SHOW_LAB, false)) View.VISIBLE else View.GONE
+        content.addView(mfsrLabBox)
+        buildMfsrLab(p, mfsrLabBox)
         content.addView(sectionTitle("LK-SR · Lucas–Kanade Super-Resolution"))
         content.addView(sectionDesc(
             "RawLens adaptation of Lucas–Kanade Reloaded (Lecouat et al., 2021). " +
@@ -211,6 +239,78 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
  * the native code defaults; a changed value is stored and applies to the next
  * LK-R merge (live and offline). "Reset" forgets every override.
  */
+/** KB-SR Lab: Wronski 2019 / IPOL tuning values ([MfsrTuning]); same layout as the LK-SR Lab. */
+private fun MainActivity.buildMfsrLab(p: SettingsPage, box: LinearLayout) {
+    val prefs = MfsrTuning.prefs(this)
+    box.addView(p.kit.sectionDesc(
+        "Paper / reference tuning of KB-SR. Defaults are the tuned values in code; values marked × " +
+            "multiply the automatic per-burst (light level) value. Changes apply to the next KB-SR merge."
+    ))
+    val refreshers = ArrayList<() -> Unit>()
+    for (e in MfsrTuning.Entry.entries) {
+        fun labelText(v: Float): String {
+            val mark = if (MfsrTuning.isOverridden(prefs, e))
+                " • changed (default ${MfsrTuning.format(e, e.defaultValue())})" else ""
+            return "${e.label}: ${MfsrTuning.format(e, v)}$mark"
+        }
+        when (e.kind) {
+            MfsrTuning.Kind.SWITCH -> {
+                val sw = p.kit.settingsCheck(e.label, MfsrTuning.value(prefs, e) >= .5f)
+                sw.setOnCheckedChangeListener { _, checked -> MfsrTuning.set(prefs, e, if (checked) 1f else 0f) }
+                box.addView(sw)
+                refreshers += { sw.isChecked = MfsrTuning.value(prefs, e) >= .5f }
+            }
+            else -> {
+                val steps = Math.round((e.max - e.min) / e.step)
+                fun toProgress(v: Float) = Math.round((v.coerceIn(e.min, e.max) - e.min) / e.step)
+                fun fromProgress(pr: Int) = e.min + pr * e.step
+                var current = MfsrTuning.value(prefs, e)
+                val label = TextView(this).apply {
+                    text = labelText(current)
+                    setTextColor(getColor(R.color.text_primary))
+                    textSize = 14f
+                    setPadding(dp(12), dp(8), dp(12), 0)
+                }
+                box.addView(label)
+                val slider = SettingsSlider(this).apply {
+                    max = steps
+                    progress = toProgress(current)
+                    setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                        override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
+                            current = fromProgress(progress)
+                            label.text = labelText(current)
+                        }
+                        override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                        override fun onStopTrackingTouch(seekBar: SettingsSlider) {
+                            MfsrTuning.set(prefs, e, current)
+                            label.text = labelText(current)
+                        }
+                    })
+                }
+                box.addView(slider)
+                refreshers += {
+                    current = MfsrTuning.value(prefs, e)
+                    slider.progress = toProgress(current)
+                    label.text = labelText(current)
+                }
+            }
+        }
+        box.addView(TextView(this).apply {
+            text = e.help
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+            setPadding(dp(12), 0, dp(12), dp(6))
+        })
+    }
+    box.addView(p.kit.settingsButton("Reset KB-SR Lab to defaults").apply {
+        setOnClickListener {
+            MfsrTuning.resetAll(prefs)
+            refreshers.forEach { it() }
+            setStatus("KB-SR LAB • DEFAULTS")
+        }
+    })
+}
+
 private fun MainActivity.buildLkrLab(p: SettingsPage, box: LinearLayout) {
     val prefs = LkrTuning.prefs(this)
     box.addView(p.kit.sectionDesc(

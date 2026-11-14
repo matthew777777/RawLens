@@ -123,12 +123,14 @@ class SrpPipelineFullresDeviceTest {
                     Log.i("SrpFullresDevice", "noise LUT gen ${android.os.SystemClock.elapsedRealtime() - t0} ms")
                 }
             } else NoiseLut.load(lutFile.absolutePath, alpha, beta)
+            val srpScale = args.getString("rawlensSrpScale")?.toFloatOrNull() ?: 1f
             val snr = BurstConfig.estimateSnr(refBox!!, alpha, beta)
             val fin = BurstConfig.finalize(snr)
             val factors = listOf(1, 2, 4, 4)
             BurstConfig.sanitize(1f, fin.tileSize, factors, fin.tileSizes, h, w)
             val config = PipelineConfig(
-                scale = 1f, bayer = true, factors = factors, tileSizes = fin.tileSizes,
+                // -e rawlensSrpScale 2: 2x super-resolution output (default 1).
+                scale = srpScale, bayer = true, factors = factors, tileSizes = fin.tileSizes,
                 // -e rawlensSrpGrey FIR7|FIR11|FIR15 (mobile FIR grey) or FFT (default).
                 greyMethod = args.getString("rawlensSrpGrey") ?: "FFT",
                 kernelParams = KernelParams(
@@ -182,9 +184,11 @@ class SrpPipelineFullresDeviceTest {
                     // -e rawlensSrpResident true: resident grey + GPU moving pyramid.
                     pyrDown = if (args.getString("rawlensSrpResident") == "true") assetBytes("pyr_down") else null,
                     kernelNet = if (args.getString("rawlensSrpKernel") == "kernelnet") assetBytes("kernelnet") else null),
+                // Native output like MfsrMerge: a 2x frame (600 MB) cannot be a heap direct buffer.
+                output = SrpBridge.nativeFloats((w * srpScale).toInt() * (h * srpScale).toInt() * 3),
             )
-            val outH = h
-            val outW = w
+            val outH = (h * srpScale).toInt()
+            val outW = (w * srpScale).toInt()
             VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), outH * outW * 3)
             rgb.rewind()
             VulkanPipeline.flipRowsInPlace(rgb.asFloatBuffer(), outW, outH)
