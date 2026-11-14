@@ -53,7 +53,7 @@ The pinned Gradle daemon uses JDK 27 (`gradle/gradle-daemon-jvm.properties`);
 compilation targets Java 21. The repository pins Gradle 9.8.2, AGP 9.4.1,
 Kotlin 2.4.21, compile SDK 37, target SDK 35, NDK 27.0.12077973 and CMake 3.22.1.
 Initialize submodules before building. GitHub and F-Droid are separate distribution
-flavors; the latter disables the updater. See [build instructions](../README.md#build-from-source)
+flavors; the latter disables the updater. See [build instructions](DEVELOPMENT.md#build-from-source)
 and [F-Droid documentation](fdroid.md).
 
 Use `-PfreezeVersion` when a verification build must not advance the generated
