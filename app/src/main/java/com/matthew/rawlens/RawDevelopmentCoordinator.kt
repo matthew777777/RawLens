@@ -1000,7 +1000,8 @@ class RawDevelopmentCoordinator(context: Context) {
         amaze.chromaCleanup = outputSettings.chromaCleanup
         // Covers developMergedImagesJpeg too (it delegates here).
         MemoryLeakDiagnostics.stillCapture()
-        return mergedDevelop.develop(input, settings, cameraLinear = settings.denoise.captureSharpening.enabled) { scene ->
+        return mergedDevelop.develop(input, settings, cameraLinear = settings.denoise.captureSharpening.enabled,
+            chromaCleanup = outputSettings.chromaCleanup) { scene ->
             require(scene.internalFormat == AmazeTextureFormat.RGBA16F) {
                 "Merged develop must emit scene-linear RGBA16F"
             }
@@ -1155,6 +1156,7 @@ class RawDevelopmentCoordinator(context: Context) {
         look: JpegOutputSettings = JpegOutputSettings(),
         jxl: JxlOutputSettings = JxlOutputSettings()
     ): DevelopedJxl {
+        amaze.chromaCleanup = look.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         cfa.requireAmazeCompatible()
@@ -1229,6 +1231,7 @@ class RawDevelopmentCoordinator(context: Context) {
         look: JpegOutputSettings = JpegOutputSettings(),
         jxl: JxlOutputSettings = JxlOutputSettings()
     ): DevelopedJxl {
+        amaze.chromaCleanup = look.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         cfa.requireAmazeCompatible()
@@ -1302,6 +1305,7 @@ class RawDevelopmentCoordinator(context: Context) {
         look: JpegOutputSettings = JpegOutputSettings(),
         jxl: JxlOutputSettings = JxlOutputSettings()
     ): DevelopedJxl {
+        amaze.chromaCleanup = look.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         val transform = SceneLinearColorProcessor.resolve(

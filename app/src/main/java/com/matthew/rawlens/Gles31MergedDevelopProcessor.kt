@@ -139,7 +139,7 @@ object MergedDevelopWeights {
 class Gles31MergedDevelopProcessor(context: Context) {
     private val shaderSource = context.applicationContext.assets.open(SHADER).bufferedReader().use {
         it.readText()
-    }
+    }.replace("#import cleanup", context.applicationContext.assets.open("shaders/amaze/cleanup.glsl").bufferedReader().use { it.readText() })
     private var program = 0
     private var programThread: Thread? = null
 
@@ -148,6 +148,7 @@ class Gles31MergedDevelopProcessor(context: Context) {
         input: MergedTextureJpegInput,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         cameraLinear: Boolean = false,
+        chromaCleanup: ChromaCleanup = ChromaCleanup(falseColorSuppression = false, defringeStrength = 0f),
         consume: (AmazeGpuOutput) -> T
     ): T {
         val startedAt = SystemClock.elapsedRealtime()
@@ -196,6 +197,8 @@ class Gles31MergedDevelopProcessor(context: Context) {
             GLES31.glUniform3fv(
                 location(prog, "u_camera_white_normalized"), 1, transform.glslCameraWhiteNormalized(), 0
             )
+            GLES31.glUniform1i(location(prog, "u_fc_median"), if (chromaCleanup.falseColorSuppression) 1 else 0)
+            GLES31.glUniform1f(location(prog, "u_defringe"), chromaCleanup.defringeStrength)
             GLES31.glUniform1f(location(prog, "u_denoise_blend_max"), blendMax)
             GLES31.glUniform1f(location(prog, "u_rc_normalizer"), input.acceptedFrames.toFloat())
             GLES31.glUniform1i(location(prog, "u_denoise_enabled"), if (denoiseOn) 1 else 0)

@@ -40,6 +40,12 @@ vec3 loadMerged(ivec2 q) {
     return imageLoad(u_merged, clamp(q, ivec2(0), u_merged_size - 1)).rgb;
 }
 
+vec3 cc_white() { return max(u_camera_white_normalized, vec3(1e-4)); }
+vec3 fetch_bal(ivec2 off) {
+    return max(loadMerged(ivec2(gl_GlobalInvocationID.xy) + u_crop_offset + off), vec3(0.0)) / cc_white();
+}
+#import cleanup
+
 float confidence(ivec2 q) {
     ivec2 quad = clamp(q / 2, ivec2(0), u_merged_size / 2 - 1);
     float rc = imageLoad(u_rc, quad).r;
@@ -65,6 +71,7 @@ void main() {
         float blend = clamp(u_denoise_blend_max * (1.0 - confidence(q)), 0.0, 1.0);
         base = mix(center, avg, blend);
     }
+    base = chroma_cleanup(base / cc_white()) * cc_white();
     if (u_camera_linear != 0) {
         imageStore(u_out, p, vec4(base, 1.0));
         return;

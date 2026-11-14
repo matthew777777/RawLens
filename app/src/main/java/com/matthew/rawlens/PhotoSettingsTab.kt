@@ -407,7 +407,7 @@ internal class PhotoSettingsTab(
             }
         }
         kit.content.addView(defringeButton)
-        kit.content.addView(kit.sectionDesc("Fused into the demosaic's final pass (no extra memory). False-color suppression: 3x3 color-difference median against moire on fine detail. Defringe: removes purple/magenta edges only at high-contrast edges."))
+        kit.content.addView(kit.sectionDesc("Fused into the demosaic's final pass (no extra memory). False-color suppression: two-radius color-difference median against moire and color speckles on fine detail. Defringe: removes purple/magenta edges only at high-contrast edges."))
         if (host.developedFormat == DevelopedFormat.JPEG) {
         var jpegQuality = currentJpegSettings.jpegQuality.coerceIn(1, 100)
         val jpegQualityLabel = TextView(activity).apply {
