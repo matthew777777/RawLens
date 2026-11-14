@@ -68,10 +68,11 @@ object EncodedVideoLadder {
 
     /**
      * Single degrade step for a hot device: drop one rung when that
-     * yields strictly fewer pixels, else fall to the cheap superpixel
-     * path (computeStep only affects that path, so fused + a
-     * single-size sensor degrades by switching path, not rung). Pure
-     * and unit-tested; the caller decides the thermal trigger.
+     * yields strictly fewer pixels. Preserve the requested demosaic:
+     * silently replacing MHC with superpixel loses detail even though
+     * settings still show MHC. If no smaller RAW size exists, only the
+     * already-selected superpixel path may increase its compute step.
+     * The caller decides the thermal trigger.
      */
     fun heatDegrade(sizes: List<RawSize>, rung: Rung, step: Int, preferMhc: Boolean): HeatDecision {
         val order = Rung.entries
@@ -82,7 +83,7 @@ object EncodedVideoLadder {
                 return HeatDecision(down, step, preferMhc)
             }
         }
-        return HeatDecision(rung, maxOf(step, 4), false)
+        return HeatDecision(rung, if (preferMhc) step else maxOf(step, 4), preferMhc)
     }
 
     /** Megapixels for logs and file naming. */

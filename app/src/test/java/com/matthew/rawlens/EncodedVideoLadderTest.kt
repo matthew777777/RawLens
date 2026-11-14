@@ -102,9 +102,26 @@ class EncodedVideoLadderTest {
     }
 
     @Test
-    fun heatDegradeSingleSizeSensorFallsToCheapSuperpixel() {
+    fun heatDegradeSingleSizeSensorPreservesMhcAndStep() {
         val single = listOf(EncodedVideoLadder.RawSize(4080, 3060))
         val d = EncodedVideoLadder.heatDegrade(single, EncodedVideoLadder.Rung.FULL, 2, true)
+        assertEquals(EncodedVideoLadder.Rung.FULL, d.rung)
+        assertEquals(2, d.step)
+        assertEquals(true, d.preferMhc)
+    }
+
+    @Test
+    fun heatDegradeAtBottomPreservesMhc() {
+        val d = EncodedVideoLadder.heatDegrade(sensor, EncodedVideoLadder.Rung.EFFICIENT, 2, true)
+        assertEquals(EncodedVideoLadder.Rung.EFFICIENT, d.rung)
+        assertEquals(2, d.step)
+        assertEquals(true, d.preferMhc)
+    }
+
+    @Test
+    fun heatDegradeSingleSizeSuperpixelStillReducesCompute() {
+        val single = listOf(EncodedVideoLadder.RawSize(4080, 3060))
+        val d = EncodedVideoLadder.heatDegrade(single, EncodedVideoLadder.Rung.FULL, 2, false)
         assertEquals(EncodedVideoLadder.Rung.FULL, d.rung)
         assertEquals(4, d.step)
         assertEquals(false, d.preferMhc)

@@ -6,6 +6,7 @@ import org.junit.Test
 
 class VfPresentSizeTest {
     @Test fun nativePreviewBoundsReplaceFullScreenShading() {
+        assertEquals(VfPresentSize.Size(810, 1080), VfPresentSize.forLayout(1264, 1686, 1080))
         assertEquals(VfPresentSize.Size(723, 1080), VfPresentSize.forLayout(1080, 1613, 1080))
         assertEquals(VfPresentSize.Size(643, 960), VfPresentSize.forLayout(1080, 1613, 960))
         assertEquals(VfPresentSize.Size(1080, 723), VfPresentSize.forLayout(1613, 1080, 1080))

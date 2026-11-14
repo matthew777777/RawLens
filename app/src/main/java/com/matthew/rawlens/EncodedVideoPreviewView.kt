@@ -57,11 +57,30 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
 
     /** True while a draw is queued or running (recorder skips offers then). Any thread. */
     @Volatile private var workOutstanding = false
+    // Protected by lock; flushing a queued frame must not clear the gate
+    // for a different frame that is already being sampled by GL.
+    private var drawing = false
 
     @Volatile private var hasSurface = false
     private var window: Surface? = null
     private var viewportWidth = 1
     private var viewportHeight = 1
+    private var presentBufferWidth = 0
+    private var presentBufferHeight = 0
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w <= 0 || h <= 0) return
+        // Match the RAW viewfinder's presentation budget. Shading a 540p
+        // monitor into a physical-resolution window wastes bandwidth (the
+        // reported device used 1264x1686). Let the compositor scale instead.
+        val size = VfPresentSize.forLayout(w, h, 1080)
+        if (size.width != presentBufferWidth || size.height != presentBufferHeight) {
+            presentBufferWidth = size.width
+            presentBufferHeight = size.height
+            holder.setFixedSize(size.width, size.height)
+        }
+    }
 
     private var display = EGL14.EGL_NO_DISPLAY
     private var eglContext = EGL14.EGL_NO_CONTEXT
@@ -102,6 +121,12 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
     private val presentFailed = AtomicInteger(0)
 
     init {
+        // Above the ISP preview SurfaceView (1d1495c0), like RawViewfinder /
+        // BguViewfinder: both are default-layer SurfaceViews otherwise, and
+        // the idle ISP surface (no ISP stream during the take) painted black
+        // over the monitor. Media overlay stays below the window, so the
+        // record controls drawn in the window remain on top.
+        setZOrderMediaOverlay(true)
         holder.addCallback(this)
     }
 
@@ -160,15 +185,25 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
             return
         }
         synchronized(lock) {
+            if (!isPreviewActive) {
+                consumeNow(fd, release)
+                return
+            }
             pending?.let {
                 consumeNow(it.fd, it.release)
                 pending = null
             }
             pending = Pending(buffer, fd, rotation, mirrored, release)
+            worker.removeCallbacks(draw)
+            // Publish before enqueue: the worker may finish before post returns.
+            // Setting this afterwards can leave the offer gate stuck forever.
+            workOutstanding = true
+            if (!worker.post(draw)) {
+                pending = null
+                workOutstanding = drawing
+                consumeNow(fd, release)
+            }
         }
-        worker.removeCallbacks(draw)
-        worker.post(draw)
-        workOutstanding = true
     }
 
     /** Immediate consume for offers that will never draw. Any thread. */
@@ -185,16 +220,18 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
 
     /** Drop any queued preview (detach / surface loss / dispose). Any thread. */
     private fun flushPending() {
-        val dropped = synchronized(lock) { pending.also { pending = null } }
+        val dropped = synchronized(lock) {
+            // Serialize removal with offer's enqueue; otherwise a detach can
+            // remove a new draw while leaving its pending frame and gate set.
+            worker.removeCallbacks(draw)
+            pending.also {
+                pending = null
+                workOutstanding = drawing
+            }
+        }
         if (dropped != null) {
             consumeNow(dropped.fd, dropped.release)
-            // The removed draw will never run its finally: release the
-            // idle gate here, or offers wedge until the next attach. (A
-            // concurrently running draw resets the same flag idempotently;
-            // a transient early idle just supersede-queues, harmless.)
-            workOutstanding = false
         }
-        worker.removeCallbacks(draw)
     }
 
     fun dispose() {
@@ -207,7 +244,13 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
     }
 
     private val draw = Runnable {
-        val pv = synchronized(lock) { pending.also { pending = null } } ?: return@Runnable
+        val pv = synchronized(lock) {
+            pending.also {
+                pending = null
+                drawing = it != null
+                workOutstanding = drawing
+            }
+        } ?: return@Runnable
         // Set the moment the fd is adopted-or-closed by native (or was
         // already invalid): the finally below must then NOT close it.
         var fdConsumed = false
@@ -254,7 +297,6 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
             Log.w(TAG, "preview present failed", failure)
             releaseGl()
         } finally {
-            workOutstanding = false
             if (!fdConsumed) {
                 try {
                     VfEglImport.closeSyncFd(pv.fd)
@@ -264,6 +306,10 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
             try {
                 pv.release()
             } catch (_: Exception) {
+            }
+            synchronized(lock) {
+                drawing = false
+                workOutstanding = pending != null
             }
         }
     }
@@ -421,6 +467,7 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
     override fun surfaceCreated(holder: SurfaceHolder) {
         worker.post {
             releaseGl()
+            nextInitAttemptMs = 0L
             window = holder.surface
             val frame = holder.surfaceFrame
             viewportWidth = frame.width().coerceAtLeast(1)
@@ -431,8 +478,16 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         worker.post {
-            viewportWidth = width.coerceAtLeast(1)
-            viewportHeight = height.coerceAtLeast(1)
+            val newWidth = width.coerceAtLeast(1)
+            val newHeight = height.coerceAtLeast(1)
+            if (newWidth != viewportWidth || newHeight != viewportHeight) {
+                viewportWidth = newWidth
+                viewportHeight = newHeight
+                // Some drivers keep the old EGL window dimensions after a
+                // SurfaceView resize. Rebind before the next presentation.
+                releaseGl()
+                nextInitAttemptMs = 0L
+            }
             window = holder.surface
             hasSurface = holder.surface.isValid
         }
@@ -442,6 +497,7 @@ class EncodedVideoPreviewView @JvmOverloads constructor(context: Context, attrs:
         // The framework owns the Surface: just drop GL state + any queued
         // preview (its fd closes, its slot latch releases). The recorder
         // keeps encoding; presents resume if the surface returns.
+        hasSurface = false
         flushPending()
         worker.post { hasSurface = false; window = null; releaseGl() }
     }
