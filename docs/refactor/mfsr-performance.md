@@ -71,3 +71,20 @@ quality gate) to go faster. Adreno: not measured (no device, no offline
 compiler here); shaders use only core Vulkan 1.0 / GLSL 450.
 App (MfsrMerge): FIR7 grey, align_wg, corr_argmin_wg enabled; KernelNet
 speedup is automatic. App path itself not yet run on the phone.
+
+## Residency + fused L2, 2026-11-14 (same burst, phone idle-checked)
+| step | total | stage | output |
+|---|---|---|---|
+| previous | 10.3-10.7 s | L2 1.79 s | |
+| fused L2, reordered sums (corr_l2_fused.comp) | ~9.4-10.3 s | L2 1.79 -> 0.77-0.98 s | gated: known truth identical to 0.01 dB at 3 noise levels (VulkanMobileGateTest, MoltenVK), real crop 73.9 dB vs unfused, phone full frame 67.3 dB |
+| resident grey + GPU pyramid (pyr_down.comp) | **8.6-9.5 s** | alignLoop 2.9 -> 2.0 s; pyramid 70 -> 40 ms/frame on GPU | gated: identical to fused on clean/ISO100/real crop, dim 76.7 dB; phone full frame 83.4 dB vs host pyramid |
+
+Lessons (measured): the first fused L2 kept the reference order and ran
+2.2 s; reordering alone did not help; the win came from two fixes found by
+native timing, reference tile in shared memory and SHIFT-major thread
+layout (row-block-major put neighbours 64 floats apart: one shared bank,
+dispatch 260-350 -> 88 ms). A persistent FIR scratch changed nothing.
+The phone was shared with an LK-R Lite job during part of this session:
+runs taken while it ran are discarded.
+Extra GPU memory for residency: grey + scratch + levels + band, ~140 MB at
+12.5 MP. 64-px tiles (SNR <= 14 dB) keep the split L2 path (shared memory).

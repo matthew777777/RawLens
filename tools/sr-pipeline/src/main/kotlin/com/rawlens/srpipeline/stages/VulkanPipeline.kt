@@ -68,6 +68,12 @@ object VulkanPipeline {
         val greyFft: ByteArray? = null,
         /** grey_fir.comp: required when [PipelineConfig.greyMethod] is FIR7/FIR11/FIR15. */
         val greyFir: ByteArray? = null,
+        /**
+         * pyr_down.comp: with a FIR grey, keep the grey and the moving pyramid
+         * GPU-resident (no 50 MB download, CPU pyramid or per-call re-upload).
+         * Null keeps the host pyramid.
+         */
+        val pyrDown: ByteArray? = null,
     )
 
     /** Last KernelNet (s1, s2, rho) map of this process, for parity dumps: 3 x mapH x mapW. */
@@ -653,6 +659,15 @@ object VulkanPipeline {
         // streams row by row and the pad is fused into the reads, so
         // only the ~37 MB levels are retained).
         val pyramidReuse = AlignGpu.PyramidReuse()
+        // Mobile path: resident grey + GPU moving pyramid (same pad contract
+        // as AlignGpu.alignLevelsGpu). Freed after the comparison loop.
+        val resPyr: AlignGpu.ResidentPyramid? =
+            if (config.bayer && firRadius != 0 && spirvs.pyrDown != null) {
+                val ts = loop.tileSize
+                AlignGpu.ResidentPyramid(handle, h, w,
+                    if (h % ts == 0) 0 else ts - h % ts, if (w % ts == 0) 0 else ts - w % ts,
+                    loop.factors, spirvs.pyrDown)
+            } else null
         var frameNo = 0
         // One frame end to end (own scope): the decoded frame, pyramid,
         // per-call transients and flow all die here, so a memory-tight
@@ -667,9 +682,18 @@ object VulkanPipeline {
             // Resident grey leg on bayer (uploads frameRes as a side
             // effect); the staged greyOfInto serves the ref phase and
             // the non-bayer configuration.
-            val frameGrey = if (config.bayer) greyOfIntoRes(frame, loopRows)
-                else greyOfInto(frame, frameBuf, kernPre, loopRows)
-            val flow = timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs, pyramidReuse) }
+            val flow = if (resPyr != null) {
+                timed("frameUpload") { checkRc("frameUpload", SrpBridge.uploadResident(handle, frameRes,
+                    packImageInto(frame, frameBuf), (w * h).toLong())) }
+                timed("greyFir") { checkRc("greyFir", SrpBridge.nativeGreyFirToRes(handle, frameRes, resPyr.grey,
+                    spirvs.greyFir!!, w, h, firTaps, firRadius, resPyr.greyTmp)) }
+                timed("pyrGpu") { resPyr.build() }
+                timed("alignLoop") { AlignGpu.alignLevelsGpuResident(pinnedInit, resPyr, loop, handle, alignSpirvs) }
+            } else {
+                val frameGrey = if (config.bayer) greyOfIntoRes(frame, loopRows)
+                    else greyOfInto(frame, frameBuf, kernPre, loopRows)
+                timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs, pyramidReuse) }
+            }
             val ftx = flow[0].size
             val fty = flow.size
             require(ftx == ftx0 && fty == fty0) { "flow grid changed mid-run" }
@@ -723,12 +747,16 @@ object VulkanPipeline {
             }
             mergeFrame(frame, flow, rBuf)
         }
-        for (frameThunk in comparisons) {
-            frameStep(frameThunk)
-            // Memory-tight discipline (cf. `memoryTight`): everything
-            // above is dead here; collect before the next frame so GC
-            // timing cannot decide survival at the 512 MB ceiling.
-            if (config.memoryTight) System.gc()
+        try {
+            for (frameThunk in comparisons) {
+                frameStep(frameThunk)
+                // Memory-tight discipline (cf. `memoryTight`): everything
+                // above is dead here; collect before the next frame so GC
+                // timing cannot decide survival at the 512 MB ceiling.
+                if (config.memoryTight) System.gc()
+            }
+        } finally {
+            resPyr?.free()
         }
         } // 3. work block ends: kernel scratch, loop rows and merge
           // vectors die here, before the 150 MB download below.

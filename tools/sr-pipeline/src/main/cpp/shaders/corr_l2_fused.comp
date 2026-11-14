@@ -1,0 +1,119 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Fused L2 block matching (align_lvl_block_matching_L2) for one pyramid level,
+// one 256-thread workgroup per tile, no host round trips. Replaces corr.comp
+// op 0 (extract) -> corr_direct.comp -> corr.comp op 1 (argmin).
+//
+// Same quantities, REORDERED sums (not bit-identical; gated on known truth,
+// see docs/refactor/mfsr-performance.md):
+//   patch  = moving[clamp(tile*T + round_even(flow) + (py, px) - r)]
+//   corr   = sum_u sum_v ref[(oy+u)*W + ox+v] * patch[(u+yy)*S + v+xx]
+//            (yy, xx) = (y, x), or (2r-y, 2r-x) when pad[5] == 1;
+//            split into NB row blocks (one thread per shift x block), the
+//            block partials summed in block order
+//   box    = sum_iy rowsq[y+iy][x], rowsq[y][x] = sum_jx patch[y][x+jx]^2
+//            (separable: (S*C + C*C)*T instead of C*C*T*T multiply-adds)
+//   energy = box - 2*corr; delta = first strict-< minimum in (y, x) order - C/2
+//
+// Bindings: 0 = reference level (W x H), 1 = moving level (W x H),
+// 2 = flow (nTiles*2, read), 3 = delta out (nTiles*2).
+// pad: [0]=W [1]=T (8..32) [2]=r (<= 4) [3]=nTx [5]=flip [6]=H.
+// tileCount = nTiles. Workgroups stride over tiles (host caps at 65535).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer Ref { float ref_[]; };
+layout(set = 0, binding = 1) readonly buffer Mov { float mov_[]; };
+layout(set = 0, binding = 2) readonly buffer Flow { float flow_[]; };
+layout(set = 0, binding = 3) writeonly buffer Delta { float delta_[]; };
+
+shared float patch_[40 * 40];   // S <= 32 + 2*4 (T <= 32; 64-px tiles use the split path)
+shared float reft[32 * 32];     // reference tile, T x T
+shared float rowsq[40 * 9];     // [S][C]
+shared float cpart[81 * 16];    // [C*C][NB]
+shared float energy[81];
+
+// Same tie rule as corr.comp's round_half_even (torch .round()).
+int round_half_even(float x) {
+  float k = floor(x);
+  float f = x - k;
+  if (f < 0.5) return int(k);
+  if (f > 0.5) return int(k) + 1;
+  return (mod(k, 2.0) == 0.0) ? int(k) : int(k) + 1;
+}
+
+void main() {
+  const uint lid = gl_LocalInvocationID.x;
+  const uint W = p.pad[0], T = p.pad[1], r = p.pad[2], nTx = p.pad[3], H = p.pad[6];
+  const bool flip = p.pad[5] == 1u;
+  const uint S = T + 2u * r, C = 2u * r + 1u, CC = C * C;
+  const uint NB = min(T, 16u), RB = T / NB;   // row blocks, rows per block
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    const uint ty = t / nTx, tx = t % nTx;
+    const int dx = round_half_even(flow_[t * 2u]);
+    const int dy = round_half_even(flow_[t * 2u + 1u]);
+    const int top = int(ty * T) + dy, left = int(tx * T) + dx;
+    for (uint k = lid; k < S * S; k += 256u) {
+      const int y = clamp(top + int(k / S) - int(r), 0, int(H) - 1);
+      const int x = clamp(left + int(k % S) - int(r), 0, int(W) - 1);
+      patch_[k] = mov_[uint(y) * W + uint(x)];
+    }
+    const uint ox = tx * T, oy = ty * T;
+    for (uint k = lid; k < T * T; k += 256u) reft[k] = ref_[(oy + k / T) * W + ox + k % T];
+    barrier();
+    // Phase 1: row sums of squares (S*C items) and correlation row-block
+    // partials (CC*NB items), one item per thread at a time.
+    for (uint k = lid; k < S * C + CC * NB; k += 256u) {
+      if (k < S * C) {
+        const uint y = k / C, x = k % C;
+        float s = 0.0;
+        for (uint jx = 0u; jx < T; jx++) { const float q = patch_[y * S + x + jx]; s += q * q; }
+        rowsq[k] = s;
+      } else {
+        // Consecutive threads take consecutive SHIFTS of one row block: patch
+        // reads are adjacent and reft reads broadcast (shift-major would put
+        // neighbours RB*T floats apart: one shared bank, serialised on Mali).
+        const uint i = k - S * C;
+        const uint b = i / CC, c = i % CC;
+        const uint y = c / C, x = c % C;
+        const uint yy = flip ? 2u * r - y : y;
+        const uint xx = flip ? 2u * r - x : x;
+        float s = 0.0;
+        for (uint u = b * RB; u < (b + 1u) * RB; u++) {
+          const uint rr = u * T;
+          const uint pr = (u + yy) * S + xx;
+          for (uint v = 0u; v < T; v++) s += reft[rr + v] * patch_[pr + v];
+        }
+        cpart[c * NB + b] = s;
+      }
+    }
+    barrier();
+    // Phase 2: energies.
+    if (lid < CC) {
+      const uint y = lid / C, x = lid % C;
+      float box = 0.0;
+      for (uint iy = 0u; iy < T; iy++) box += rowsq[(y + iy) * C + x];
+      float corr = 0.0;
+      for (uint b = 0u; b < NB; b++) corr += cpart[lid * NB + b];
+      energy[lid] = box - 2.0 * corr;
+    }
+    barrier();
+    if (lid == 0u) {
+      float best = 3.402823466e+38;
+      uint bs = 0u;
+      for (uint c = 0u; c < CC; c++) {
+        if (energy[c] < best) { best = energy[c]; bs = c; }
+      }
+      delta_[t * 2u] = float(int(bs % C) - int(C / 2u));
+      delta_[t * 2u + 1u] = float(int(bs / C) - int(C / 2u));
+    }
+    barrier();
+  }
+}

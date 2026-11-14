@@ -1405,7 +1405,7 @@ object SrpBridge {
     external fun nativeAlignL1Res(
         handle: Long,
         refRes: Long,
-        movBuffer: ByteBuffer,
+        movBuffer: ByteBuffer?,
         flowBuffer: ByteBuffer,
         spirv: ByteArray,
         width: Int,
@@ -1415,6 +1415,8 @@ object SrpBridge {
         searchRadius: Int,
         ntx: Int,
         workgroupPerTile: Int,
+        /** Resident moving level (width*height); non-zero skips [movBuffer]. */
+        movRes: Long,
     ): Int
 
     /**
@@ -1425,7 +1427,7 @@ object SrpBridge {
     fun alignL1Res(
         handle: Long,
         refRes: Long,
-        movBuffer: ByteBuffer,
+        movBuffer: ByteBuffer?,
         flowBuffer: ByteBuffer,
         spirv: ByteArray,
         width: Int,
@@ -1436,6 +1438,8 @@ object SrpBridge {
         ntx: Int,
         /** true: [spirv] is align_wg.comp (one workgroup per tile, radius <= 4). */
         workgroupPerTile: Boolean = false,
+        /** Resident moving level; non-zero replaces [movBuffer] (mobile path). */
+        movRes: Long = 0L,
     ): Int {
         require(handle != 0L) { "SrpBridge: null context handle" }
         require(refRes != 0L) { "SrpBridge: null resident handle" }
@@ -1443,13 +1447,13 @@ object SrpBridge {
             "SrpBridge: bad dimensions"
         }
         require(tileCount % ntx == 0) { "SrpBridge: tileCount must be a multiple of ntx" }
-        checkDirect(movBuffer, width * height, "movBuffer")
+        if (movRes == 0L) checkDirect(requireNotNull(movBuffer) { "SrpBridge: movBuffer or movRes" }, width * height, "movBuffer")
         checkDirect(flowBuffer, tileCount * 2, "flowBuffer")
         require(spirv.isNotEmpty() && spirv.size % 4 == 0) {
             "SrpBridge: spirv must be a non-empty multiple of 4 bytes"
         }
-        return nativeAlignL1Res(handle, refRes, movBuffer, flowBuffer, spirv,
-            width, height, tileCount, tileSize, searchRadius, ntx, if (workgroupPerTile) 1 else 0)
+        return nativeAlignL1Res(handle, refRes, if (movRes != 0L) null else movBuffer, flowBuffer, spirv,
+            width, height, tileCount, tileSize, searchRadius, ntx, if (workgroupPerTile) 1 else 0, movRes)
     }
 
     /**
@@ -1485,6 +1489,44 @@ object SrpBridge {
      * `dflowBuffer` receives `chunkTiles*2` winning integer shifts, same
      * window as [nativeCorrExtract] (`tileCount` stays the full grid).
      */
+    /**
+     * Fused L2 block matching for one level (corr_l2_fused.comp) against the
+     * pinned reference level `refRes`: `deltaBuffer` receives the integer
+     * shift per tile. Reordered parallel sums (not bit-identical to the
+     * corrExtract -> nativeCorrDirect -> corrArgmin chain); radius <= 4,
+     * 8 <= tileSize, tileSize + 2*radius <= 72.
+     */
+    @JvmStatic
+    external fun nativeCorrL2FusedRes(
+        handle: Long, refRes: Long, movBuffer: ByteBuffer?, flowBuffer: ByteBuffer,
+        deltaBuffer: ByteBuffer, spirv: ByteArray, width: Int, height: Int,
+        tileCount: Int, tileSize: Int, radius: Int, ntx: Int, flip: Int,
+        /** Resident moving level; non-zero skips [movBuffer]. */
+        movRes: Long = 0L,
+    ): Int
+
+    /** FIR grey (grey_fir.comp) from resident `inRes` into resident `outRes`, no download. */
+    @JvmStatic
+    external fun nativeGreyFirToRes(
+        handle: Long, inRes: Long, outRes: Long, spirv: ByteArray,
+        width: Int, height: Int, taps: FloatArray, radius: Int,
+        /** Persistent w*h scratch resident (0 = allocate per call). */
+        tmpRes: Long = 0L,
+    ): Int
+
+    /**
+     * One GPU moving-pyramid level (pyr_down.comp): resident `srcRes`
+     * (srcW x srcH, read through a virtual circular pad) into `dstRes`
+     * (outW x outH). factor 1 = padded copy; otherwise `halfTaps` = the
+     * symmetric gaussian's k[R..K-1] and `tmpRes` >= outH*(srcW+padW).
+     */
+    @JvmStatic
+    external fun nativePyrLevelRes(
+        handle: Long, srcRes: Long, srcW: Int, srcH: Int, padW: Int, padH: Int,
+        dstRes: Long, outW: Int, outH: Int, factor: Int, halfTaps: FloatArray?,
+        tmpRes: Long, spirv: ByteArray,
+    ): Int
+
     @JvmStatic
     external fun nativeCorrArgmin(
         handle: Long,
@@ -1987,7 +2029,7 @@ object SrpBridge {
     external fun nativeIcaRefineWgRes(
         handle: Long,
         refRes: Long,
-        movBuffer: ByteBuffer,
+        movBuffer: ByteBuffer?,
         gradxRes: Long,
         gradyRes: Long,
         hessRes: Long,
@@ -2000,6 +2042,8 @@ object SrpBridge {
         niter: Int,
         clipRadius: Float,
         ntx: Int,
+        /** Resident moving level; non-zero skips [movBuffer]. */
+        movRes: Long = 0L,
     ): Int
 
     /**

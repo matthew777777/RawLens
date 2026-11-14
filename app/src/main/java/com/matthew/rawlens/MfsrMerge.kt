@@ -690,7 +690,9 @@ internal object MfsrMerge {
                     align = asset("align"), corr = asset("corr"),
                     fft = fft, ica = asset("ica"), corrDirect = asset("corr_direct"), icaWg = asset("ica_wg"),
                     // Workgroup-per-tile L1 search and L2 argmin (perf 2026-11-14).
-                    alignWg = asset("align_wg"), argminWg = asset("corr_argmin_wg")
+                    alignWg = asset("align_wg"), argminWg = asset("corr_argmin_wg"),
+                    // Fused L2 per level (reordered sums, known-truth gated) (perf 2026-11-14).
+                    l2Fused = asset("corr_l2_fused")
                 ),
                 VulkanPipeline.Spirvs(
                     gat = asset("gat"), grad = asset("grad"),
@@ -698,6 +700,8 @@ internal object MfsrMerge {
                     robust = asset("robustness"),
                     mergeSplat = asset("merge_splat"),
                     fft = fft, corr = asset("corr"), greyFft = asset("grey_fft"), greyFir = asset("grey_fir"),
+                    // Resident grey + GPU moving pyramid (perf 2026-11-14).
+                    pyrDown = asset("pyr_down"),
                     kernelNet = if (settings.kernel == MfsrKernel.KERNELNET) asset("kernelnet") else null
                 ),
                 output = nativeOut

@@ -86,6 +86,8 @@ srp_spv(grey_fft)
 srp_spv(grey_fir)
 srp_spv(align_wg)
 srp_spv(corr_argmin_wg)
+srp_spv(corr_l2_fused)
+srp_spv(pyr_down)
 srp_spv(corr_direct)
 srp_spv(ica_wg)
 

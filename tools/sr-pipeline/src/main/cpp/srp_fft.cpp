@@ -1204,6 +1204,74 @@ Status SrpGreyFirGpu(Context* ctx, uint32_t w, uint32_t h, VkBuffer real_buffer,
   return st;
 }
 
+// FIR grey straight into a caller-owned resident `out_buffer` (w*h): the
+// mobile alignment path keeps the grey on the GPU (no 50 MB download).
+Status SrpGreyFirToResGpu(Context* ctx, uint32_t w, uint32_t h, VkBuffer real_buffer,
+                          VkBuffer out_buffer, VkShaderModule fir_module,
+                          const float* taps, uint32_t radius, VkBuffer tmp_buffer) {
+  if (ctx == nullptr || w < 4 || h < 4 || real_buffer == VK_NULL_HANDLE ||
+      out_buffer == VK_NULL_HANDLE || fir_module == VK_NULL_HANDLE || taps == nullptr ||
+      radius == 0 || (radius & 1u) == 0 || radius > 15 || radius >= w || radius >= h) {
+    return Status::kInitFailed;
+  }
+  const size_t n = static_cast<size_t>(w) * h;
+  if (n > 0x0FFFFFFFu) return Status::kInitFailed;
+  // Caller-owned scratch when given (persistent across frames: a 50 MB
+  // allocation per call cost ~40 ms on Mali), else a temporary.
+  const int64_t tr = tmp_buffer == VK_NULL_HANDLE ? SrpCreateResident(ctx, n) : 0;
+  Status st = Status::kInitFailed;
+  VkBuffer T = tmp_buffer;
+  if (T != VK_NULL_HANDLE || (tr != 0 && SrpResidentBuffer(ctx, tr, n, &T) == Status::kOk)) {
+    SrpHmsrPush p{};
+    p.width = w; p.height = h; p.pixel_count = static_cast<uint32_t>(n); p.scale = 1.0f;
+    p.pad[0] = radius;
+    std::memcpy(&p.pad[1], &taps[0], 4);
+    for (uint32_t j = 0; 2 * j + 1 <= radius; ++j) std::memcpy(&p.pad[2 + j], &taps[1 + j], 4);
+    p.mode = 0;
+    st = GreyDispatch(ctx, real_buffer, T, &p, fir_module);
+    if (st == Status::kOk) {
+      p.mode = 1;
+      st = GreyDispatch(ctx, T, out_buffer, &p, fir_module);
+    }
+  }
+  if (tr != 0) SrpFreeResident(ctx, tr);
+  return st;
+}
+
+// One moving-pyramid level on the GPU (pyr_down.comp). factor 1: padded copy
+// src -> dst ((src_h+pad_h) x (src_w+pad_w)); otherwise vertical pass into
+// `tmp_buffer` (out_h x (src_w+pad_w)) then horizontal pass into dst
+// (out_h x out_w). `half_taps` = k[R..K-1] of the symmetric gaussian.
+Status SrpPyrLevelGpu(Context* ctx, VkBuffer src, uint32_t src_w, uint32_t src_h,
+                      uint32_t pad_w, uint32_t pad_h, VkBuffer dst, uint32_t out_w,
+                      uint32_t out_h, uint32_t factor, uint32_t k_taps,
+                      const float* half_taps, VkBuffer tmp_buffer, VkShaderModule module) {
+  if (ctx == nullptr || src == VK_NULL_HANDLE || dst == VK_NULL_HANDLE ||
+      module == VK_NULL_HANDLE || src_w == 0 || src_h == 0 || pad_w >= src_w ||
+      pad_h >= src_h || factor == 0 || (factor > 1 && (tmp_buffer == VK_NULL_HANDLE ||
+      half_taps == nullptr || (k_taps & 1u) == 0 || k_taps / 2 + 1 > 13))) {
+    return Status::kInitFailed;
+  }
+  const uint32_t vw = src_w + pad_w;
+  SrpHmsrPush p{};
+  p.scale = 1.0f;
+  p.pad[0] = src_w; p.pad[1] = src_h; p.pad[2] = pad_w; p.pad[3] = pad_h;
+  p.pad[4] = out_w; p.pad[5] = out_h; p.pad[6] = factor; p.pad[7] = k_taps;
+  if (factor == 1) {
+    p.mode = 0;
+    p.pixel_count = (src_h + pad_h) * vw;
+    return GreyDispatch(ctx, src, dst, &p, module);
+  }
+  for (uint32_t m = 0; m <= k_taps / 2; ++m) std::memcpy(&p.pad[8 + m], &half_taps[m], 4);
+  p.mode = 1;
+  p.pixel_count = out_h * vw;
+  Status st = GreyDispatch(ctx, src, tmp_buffer, &p, module);
+  if (st != Status::kOk) return st;
+  p.mode = 2;
+  p.pixel_count = out_h * out_w;
+  return GreyDispatch(ctx, tmp_buffer, dst, &p, module);
+}
+
 Status SrpGreyFftHaveGpu(Context* ctx, uint32_t w, uint32_t h,
                          VkBuffer real_buffer, float* out,
                          VkShaderModule fft_module,

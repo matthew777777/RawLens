@@ -171,13 +171,16 @@ class SrpPipelineFullresDeviceTest {
                     fft = fft, ica = assetBytes("ica"), corrDirect = assetBytes("corr_direct"), icaWg = assetBytes("ica_wg"),
                     // -e rawlensSrpAlignWg true: workgroup-per-tile L1 search.
                     alignWg = if (args.getString("rawlensSrpAlignWg") == "true") assetBytes("align_wg") else null,
-                    argminWg = if (args.getString("rawlensSrpArgminWg") == "true") assetBytes("corr_argmin_wg") else null),
+                    argminWg = if (args.getString("rawlensSrpArgminWg") == "true") assetBytes("corr_argmin_wg") else null,
+                    l2Fused = if (args.getString("rawlensSrpL2Fused") == "true") assetBytes("corr_l2_fused") else null),
                 VulkanPipeline.Spirvs(
                     gat = assetBytes("gat"), grad = assetBytes("grad"),
                     kernels = assetBytes("kernels"), divide = assetBytes("divide"),
                     robust = assetBytes("robustness"),
                     mergeSplat = assetBytes("merge_splat"),
                     fft = fft, corr = assetBytes("corr"), greyFft = assetBytes("grey_fft"), greyFir = assetBytes("grey_fir"),
+                    // -e rawlensSrpResident true: resident grey + GPU moving pyramid.
+                    pyrDown = if (args.getString("rawlensSrpResident") == "true") assetBytes("pyr_down") else null,
                     kernelNet = if (args.getString("rawlensSrpKernel") == "kernelnet") assetBytes("kernelnet") else null),
             )
             val outH = h

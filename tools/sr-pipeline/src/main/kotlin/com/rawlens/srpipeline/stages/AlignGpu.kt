@@ -61,6 +61,8 @@ object AlignGpu {
         val alignWg: ByteArray? = null,
         /** corr_argmin_wg.comp: L2 argmin with a workgroup per tile (bit-identical energies). */
         val argminWg: ByteArray? = null,
+        /** corr_l2_fused.comp: whole-level fused L2, reordered parallel sums (mobile path). */
+        val l2Fused: ByteArray? = null,
     )
 
     /** One coarse-to-fine row, cf. `AlignmentInit` (spectra replaced). */
@@ -560,11 +562,140 @@ object AlignGpu {
                 ptime("upscaleFlow") { upscaleLvl(flow, intArrayOf(lvl.nTy, lvl.nTx), c, config) }
             }
             val current = flow
+            val mov = MovLevel(moving[0].size, moving.size, 0L) { moving }
             when (config.metrics[c]) {
-                BlockMetric.L1 -> gpuL1(lvl, moving, current, handle, spirvs.align, spirvs.alignWg)
-                BlockMetric.L2 -> gpuL2(lvl, moving, current, handle, spirvs)
+                BlockMetric.L1 -> gpuL1(lvl, mov, current, handle, spirvs.align, spirvs.alignWg)
+                BlockMetric.L2 -> gpuL2(lvl, mov, current, handle, spirvs)
             }
-            ptime("ica") { gpuIca(lvl, moving, current, config, c, handle, spirvs.ica, spirvs.icaWg) }
+            ptime("ica") { gpuIca(lvl, mov, current, config, c, handle, spirvs.ica, spirvs.icaWg) }
+            flow = current
+        }
+        return flow ?: error("empty loop")
+    }
+
+    /**
+     * One moving pyramid level for the align helpers: its shape, an optional
+     * GPU-resident copy ([res], 0 = none) and host rows fetched only when a
+     * path still needs them (8 px ICA, non-fused L2, unpinned levels).
+     */
+    class MovLevel(val w: Int, val h: Int, val res: Long, private val fetch: () -> Array<FloatArray>) {
+        val rows: Array<FloatArray> by lazy(LazyThreadSafetyMode.NONE) { fetch() }
+    }
+
+    /**
+     * GPU-resident moving pyramid (mobile path): the FIR grey of each frame
+     * is written into [grey] and the levels are built on the GPU with
+     * pyr_down.comp (same per-term order as [Resample.downsampleInto]), so
+     * alignment reads them without the 50 MB download, CPU pyramid and
+     * per-call re-upload. Residents are allocated once per run.
+     */
+    class ResidentPyramid(
+        private val handle: Long,
+        val h: Int,
+        val w: Int,
+        private val padH: Int,
+        private val padW: Int,
+        private val factors: List<Int>,
+        private val spirv: ByteArray,
+    ) {
+        /** Coarse-first level shapes (rows, cols), as [Resample.pyramidShapes]. */
+        val shapes: List<Pair<Int, Int>> = Resample.pyramidShapes(h + padH, w + padW, factors)
+        /** Resident grey (h x w) the caller fills each frame. */
+        val grey: Long = alloc(h.toLong() * w)
+        /** Persistent scratch for the two-pass FIR grey (h x w). */
+        val greyTmp: Long = alloc(h.toLong() * w)
+        val levels: List<Long> = shapes.map { (lh, lw) -> alloc(lh.toLong() * lw) }
+        private val tmp: Long
+        private val halfTaps: List<FloatArray?>
+
+        init {
+            // Fine-to-coarse source widths decide the vertical-pass band size.
+            var srcW = w + padW
+            var maxTmp = 1L
+            val taps = ArrayList<FloatArray?>()
+            for ((i, f) in factors.withIndex()) {
+                val (oh, _) = shapes[shapes.size - 1 - i]
+                if (f == 1) { taps.add(null) } else {
+                    val radius = (4 * f * 0.5 + 0.5).toInt()
+                    val k = Resample.gaussianKernel1d(f * 0.5, radius)
+                    val r = k.size / 2
+                    require(k.size % 2 == 1 && (0 until k.size).all { k[it] == k[k.size - 1 - it] }) {
+                        "pyramid kernel for factor $f is not exactly symmetric"
+                    }
+                    taps.add(FloatArray(r + 1) { k[r + it] })
+                    maxTmp = maxOf(maxTmp, oh.toLong() * srcW)
+                }
+                srcW = shapes[shapes.size - 1 - i].second
+            }
+            halfTaps = taps
+            tmp = alloc(maxTmp)
+        }
+
+        private fun alloc(n: Long): Long = SrpBridge.createResident(handle, n).also {
+            require(it != 0L) { "ResidentPyramid: resident alloc of $n floats failed" }
+        }
+
+        /** Builds every level from [grey] (padded virtually for the first factor). */
+        fun build() {
+            var src = grey; var sw = w; var sh = h; var pw = padW; var ph = padH
+            for ((i, f) in factors.withIndex()) {
+                val slot = shapes.size - 1 - i
+                val (oh, ow) = shapes[slot]
+                val rc = SrpBridge.nativePyrLevelRes(handle, src, sw, sh, pw, ph, levels[slot], ow, oh, f,
+                    halfTaps[i], if (f == 1) 0L else tmp, spirv)
+                require(rc == 0) { "pyr level $i (factor $f) failed with status $rc" }
+                src = levels[slot]; sw = ow; sh = oh; pw = 0; ph = 0
+            }
+        }
+
+        /** Host rows of coarse-first level [p] (fallback paths only). */
+        fun download(p: Int): Array<FloatArray> {
+            val (lh, lw) = shapes[p]
+            val buf = SrpBridge.directFloats(lh * lw)
+            require(SrpBridge.downloadResident(handle, levels[p], buf, (lh * lw).toLong()) == 0) { "pyr download failed" }
+            buf.rewind()
+            val fb = buf.asFloatBuffer()
+            return Array(lh) { FloatArray(lw).also { r -> fb.get(r) } }
+        }
+
+        fun free() {
+            SrpBridge.freeResident(handle, grey)
+            SrpBridge.freeResident(handle, greyTmp)
+            for (l in levels) SrpBridge.freeResident(handle, l)
+            SrpBridge.freeResident(handle, tmp)
+        }
+    }
+
+    /**
+     * [alignLevelsGpu] over a [ResidentPyramid] already built for this frame
+     * (same loop, same per-level calls; levels read from the GPU).
+     */
+    fun alignLevelsGpuResident(
+        init: GpuInit,
+        pyr: ResidentPyramid,
+        config: AlignLoopConfig,
+        handle: Long,
+        spirvs: Spirvs,
+    ): Array<Array<FloatArray>> {
+        val n = config.factors.size
+        require(init.levels.size == n && pyr.shapes.size == n) { "init/pyramid must hold $n levels" }
+        var flow: Array<Array<FloatArray>>? = null
+        for (p in 0 until n) {
+            val c = n - p - 1
+            val lvl = init.levels[p]
+            val (lh, lw) = pyr.shapes[p]
+            val mov = MovLevel(lw, lh, pyr.levels[p]) { ptime("pyrDownload") { pyr.download(p) } }
+            flow = if (flow == null) {
+                Array(lvl.nTy) { Array(lvl.nTx) { floatArrayOf(0f, 0f) } }
+            } else {
+                ptime("upscaleFlow") { upscaleLvl(flow, intArrayOf(lvl.nTy, lvl.nTx), c, config) }
+            }
+            val current = flow
+            when (config.metrics[c]) {
+                BlockMetric.L1 -> gpuL1(lvl, mov, current, handle, spirvs.align, spirvs.alignWg)
+                BlockMetric.L2 -> gpuL2(lvl, mov, current, handle, spirvs)
+            }
+            ptime("ica") { gpuIca(lvl, mov, current, config, c, handle, spirvs.ica, spirvs.icaWg) }
             flow = current
         }
         return flow ?: error("empty loop")
@@ -572,7 +703,7 @@ object AlignGpu {
 
     internal fun gpuL1(
         lvl: GpuLevelInit,
-        moving: Array<FloatArray>,
+        mov: MovLevel,
         flow: Array<Array<FloatArray>>,
         handle: Long,
         spirv: ByteArray,
@@ -580,27 +711,28 @@ object AlignGpu {
     ) {
         // Sized from `moving` (same shape as the ref level by the
         // circular-pad contract): `lvl.ref` is stripped post-pin.
-        val w = moving[0].size
-        val h = moving.size
+        val w = mov.w
+        val h = mov.h
         val sc = lvl.scratch
         val tc = lvl.nTy * lvl.nTx
         val flowBuf = packInto(flowToFlatInto(flow, sc.floats("flowFlat", tc * 2)),
             sc.direct("flow", tc * 2))
+        val resident = mov.res != 0L && lvl.refRes != 0L
         // Moving upload packs into the level scratch (one retained 50 MB
         // direct per level): the old per-call direct churned 96×50 MB of
         // native allocations per full-res run, freed only by GC phantom
         // processing that cannot keep up (observed nativeAlloc 424→982 MB
         // with 83 thrashing GCs and the ART OOM that follows). Same bytes.
-        val movBuf = packImgInto(moving, sc.direct("mov", w * h))
+        val movBuf = if (resident) null else packImgInto(mov.rows, sc.direct("mov", w * h))
         // Pinned levels skip the ref upload; unpinned levels stage both.
         val rc = if (lvl.refRes != 0L) {
             val wg = alignWg != null && lvl.radius <= 4
             ptime("alignL1Res") { SrpBridge.alignL1Res(handle, lvl.refRes, movBuf,
                 flowBuf, if (wg) alignWg!! else spirv, w, h, tc, lvl.tileSize, lvl.radius,
-                lvl.nTx, wg) }
+                lvl.nTx, wg, if (resident) mov.res else 0L) }
         } else {
             ptime("alignL1") { SrpBridge.alignL1(handle,
-                packImgInto(lvl.ref, sc.direct("ref", w * h)), movBuf,
+                packImgInto(lvl.ref, sc.direct("ref", w * h)), movBuf!!,
                 flowBuf, spirv, w, h, tc, lvl.tileSize, lvl.radius,
                 lvl.nTx) }
         }
@@ -613,7 +745,7 @@ object AlignGpu {
 
     internal fun gpuL2(
         lvl: GpuLevelInit,
-        moving: Array<FloatArray>,
+        mov: MovLevel,
         flow: Array<Array<FloatArray>>,
         handle: Long,
         spirvs: Spirvs,
@@ -624,7 +756,7 @@ object AlignGpu {
         val sc = lvl.scratch
         // Same level-scratch moving buffer as gpuL1 (one retained direct
         // per level, not per-call churn): see the note above.
-        val movBuf = packImgInto(moving, sc.direct("mov", moving.size * moving[0].size))
+        val movBuf by lazy(LazyThreadSafetyMode.NONE) { packImgInto(mov.rows, sc.direct("mov", mov.w * mov.h)) }
         val flowBuf = packInto(flowToFlatInto(flow, sc.floats("flowFlat", tc * 2)),
             sc.direct("flow", tc * 2))
         // Extract moving patches around the current flow, correlate
@@ -640,6 +772,24 @@ object AlignGpu {
         // dispatches throughout: same bytes, no download or re-pack
         // between stages.
         val delta = sc.floats("delta", tc * 2)
+        val fused = spirvs.l2Fused
+        if (fused != null && lvl.refRes != 0L && lvl.radius <= 4 && lvl.tileSize in 8..32 && !corrCompare) {
+            val dBuf = sc.direct("deltaFused", tc * 2)
+            val rc = ptime("l2Fused") { SrpBridge.nativeCorrL2FusedRes(handle, lvl.refRes,
+                if (mov.res != 0L) null else movBuf, flowBuf, dBuf.apply { rewind() }, fused, mov.w, mov.h, tc,
+                lvl.tileSize, lvl.radius, lvl.nTx, CORR_DIRECT_FLIP, mov.res) }
+            require(rc == 0) { "l2Fused failed with status $rc" }
+            dBuf.rewind()
+            dBuf.asFloatBuffer().get(delta)
+            for (ty in 0 until lvl.nTy) {
+                for (tx in 0 until lvl.nTx) {
+                    val t = (ty * lvl.nTx + tx) * 2
+                    flow[ty][tx][0] = flow[ty][tx][0] + delta[t]
+                    flow[ty][tx][1] = flow[ty][tx][1] + delta[t + 1]
+                }
+            }
+            return
+        }
         val directCorr = spirvs.corrDirect != null && lvl.refRes != 0L
         if (lvl.refSpecChunks.isNotEmpty() || directCorr) {
             val maxChunk = minOf(CorrelateChunkTiles, tc)
@@ -652,7 +802,7 @@ object AlignGpu {
                 val ct = minOf(CorrelateChunkTiles, tc - t0)
                 var rc = ptime("corrExtract") { SrpBridge.corrExtract(handle, movBuf,
                     flowBuf, patchChunk, spirvs.corr,
-                    moving.size, moving[0].size, tc, lvl.tileSize, lvl.radius, lvl.nTx,
+                    mov.h, mov.w, tc, lvl.tileSize, lvl.radius, lvl.nTx,
                     t0, ct) }
                 require(rc == 0) { "corrExtract failed with status $rc" }
                 patchChunk.rewind()
@@ -663,7 +813,7 @@ object AlignGpu {
                     // Direct tile sums straight into the argmin's crop input.
                     rc = ptime("corrDirect") { SrpBridge.nativeCorrDirect(handle, lvl.refRes,
                         patchChunk, cropChunk.apply { rewind() }, dflowChunk, direct,
-                        moving[0].size, moving.size, lvl.tileSize, lvl.radius, lvl.nTx,
+                        mov.w, mov.h, lvl.tileSize, lvl.radius, lvl.nTx,
                         t0, ct, CORR_DIRECT_FLIP) }
                     require(rc == 0) { "corrDirect failed with status $rc" }
                     patchChunk.rewind()
@@ -675,7 +825,7 @@ object AlignGpu {
                         val fftCrop = cropCorrs(corrChunk.asFloatBuffer(), ct, s, c, FloatArray(ct * c * c))
                         val other = sc.direct("corrOther$ct", ct * c * c)
                         require(SrpBridge.nativeCorrDirect(handle, lvl.refRes, patchChunk, other.apply { rewind() },
-                            dflowChunk, direct, moving[0].size, moving.size, lvl.tileSize, lvl.radius,
+                            dflowChunk, direct, mov.w, mov.h, lvl.tileSize, lvl.radius,
                             lvl.nTx, t0, ct, 1 - CORR_DIRECT_FLIP) == 0)
                         patchChunk.rewind()
                         val mine = FloatArray(ct * c * c).also { cropChunk.rewind(); cropChunk.asFloatBuffer().get(it) }
@@ -728,7 +878,7 @@ object AlignGpu {
             val patchBuf = sc.direct("patches", tc * s * s)
             var rc = ptime("corrExtract") { SrpBridge.corrExtract(handle, movBuf,
                 flowBuf, patchBuf, spirvs.corr,
-                moving.size, moving[0].size, tc, lvl.tileSize, lvl.radius, lvl.nTx,
+                mov.h, mov.w, tc, lvl.tileSize, lvl.radius, lvl.nTx,
                 0, tc) }
             require(rc == 0) { "corrExtract failed with status $rc" }
             patchBuf.rewind()
@@ -764,7 +914,7 @@ object AlignGpu {
 
     internal fun gpuIca(
         lvl: GpuLevelInit,
-        moving: Array<FloatArray>,
+        mov: MovLevel,
         flow: Array<Array<FloatArray>>,
         config: AlignLoopConfig,
         c: Int,
@@ -781,24 +931,25 @@ object AlignGpu {
         val tc = lvl.nTy * lvl.nTx
         // Sized from `moving` (same shape as the ref level by the
         // circular-pad contract): `lvl.ref` is stripped post-pin.
-        val w = moving[0].size
-        val h = moving.size
+        val w = mov.w
+        val h = mov.h
         val flowBuf = packInto(flowToFlatInto(flow, sc.floats("flowFlat", tc * 2)),
             sc.direct("flow", tc * 2))
         // Same level-scratch moving buffer as gpuL1 (one retained direct
         // per level, not per-call churn): see the note above.
         // (Shares nothing with gpuL1's: sequential fence-waited calls.)
-        val movBuf = packImgInto(moving, sc.direct("mov", w * h))
+        val movBuf by lazy(LazyThreadSafetyMode.NONE) { packImgInto(mov.rows, sc.direct("mov", w * h)) }
         // Pinned levels skip the four static uploads; unpinned stage all.
         val statics = lvl.refRes != 0L && lvl.gradXRes != 0L &&
             lvl.gradYRes != 0L && lvl.hessRes != 0L
         val rc = if (statics) {
             if (icaWg != null && lvl.tileSize != 8) {
-                ptime("icaRefineWg") { SrpBridge.nativeIcaRefineWgRes(handle, lvl.refRes, movBuf,
+                ptime("icaRefineWg") { SrpBridge.nativeIcaRefineWgRes(handle, lvl.refRes,
+                    if (mov.res != 0L) null else movBuf,
                     lvl.gradXRes, lvl.gradYRes, lvl.hessRes,
                     flowBuf, icaWg, w, h,
                     tc, lvl.tileSize, config.nIter, radius.toFloat(),
-                    lvl.nTx) }
+                    lvl.nTx, mov.res) }
             } else {
                 ptime("icaRefineRes") { SrpBridge.icaRefineRes(handle, lvl.refRes, movBuf,
                     lvl.gradXRes, lvl.gradYRes, lvl.hessRes,

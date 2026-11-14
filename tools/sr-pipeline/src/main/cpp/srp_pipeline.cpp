@@ -341,6 +341,32 @@ Status SrpCorrArgminGpu(Context* ctx, uint32_t tile_count, uint32_t tile_size,
                                 kCorrLocalSize, chunk_tiles, shader_module);
 }
 
+// Fused L2 block matching for a whole level (corr_l2_fused.comp): extract +
+// direct correlation + energy + argmin per tile in one dispatch, no host
+// round trips; reordered (parallel) sums, see the shader header.
+Status SrpCorrL2FusedGpu(Context* ctx, uint32_t width, uint32_t height,
+                         uint32_t tile_count, uint32_t tile_size, uint32_t radius,
+                         uint32_t ntx, uint32_t flip, VkBuffer ref_buffer,
+                         VkBuffer mov_buffer, VkBuffer flow_buffer,
+                         VkBuffer delta_buffer, VkShaderModule shader_module) {
+  if (width == 0 || height == 0 || tile_count == 0 || tile_size < 8 || ntx == 0 ||
+      tile_count % ntx != 0 || radius > 4 || tile_size > 32 ||
+      tile_size % (tile_size < 16 ? tile_size : 16) != 0) {
+    return Status::kInitFailed;
+  }
+  SrpHmsrPush push{};
+  push.pixel_count = tile_count * 2;
+  push.tile_count = tile_count;
+  push.tile_size = tile_size;
+  push.scale = 1.0f;
+  push.pad[0] = width; push.pad[1] = tile_size; push.pad[2] = radius;
+  push.pad[3] = ntx; push.pad[5] = flip; push.pad[6] = height;
+  VkBuffer buffers[4] = {ref_buffer, mov_buffer, flow_buffer, delta_buffer};
+  const uint32_t g = tile_count < 65535u ? tile_count : 65535u;
+  return DispatchStorageCompute(ctx, buffers, 4, &push, sizeof(push), 256u,
+                                g * 256u, shader_module);
+}
+
 Status SrpCorrCropGpu(Context* ctx, uint32_t tile_count, uint32_t tile_size,
                       uint32_t radius, uint32_t ntx, VkBuffer full_buffer,
                       VkBuffer crop_buffer, VkShaderModule shader_module) {

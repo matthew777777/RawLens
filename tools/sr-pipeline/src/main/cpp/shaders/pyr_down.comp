@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// GPU moving pyramid (Resample.downsampleInto / build_gaussian_pyramid) so the
+// moving levels stay resident for alignment. Same per-term order as the CPU
+// code: a vertical gaussian pass into a tmp row band, then a horizontal pass
+// at the decimated positions ("valid" convolution, stride = factor). The
+// source may be read through a virtual circular pad (level 0 only):
+// element (y, x) of the padded image is src[y < srcH ? y : y - srcH][x < srcW ? x : x - srcW].
+//
+// p.mode: 0 COPY  out[y][x] = padded src (factor 1), out = (srcH+padH) x (srcW+padW)
+//         1 VERT  tmp[y2][x] = sum_i k[i] * src[y2*f + i][x],  x < srcW + padW
+//         2 HORZ  out[y2][x2] = sum_j k[j] * tmp[y2][x2*f + j]
+// pad: [0]=srcW [1]=srcH [2]=padW [3]=padH [4]=outW [5]=outH [6]=f [7]=K (taps, odd)
+//      [8 + m] = bits of k[R + m], m = 0..R (symmetric kernel, R = K/2)
+// Buffers: 0 = A (in), 1 = B (out). Grid-stride over p.pixelCount.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float a_[]; };
+layout(set = 0, binding = 1) writeonly buffer B { float b_[]; };
+
+float tap(uint i, uint R) {
+  const uint m = i >= R ? i - R : R - i;
+  return uintBitsToFloat(p.pad[8u + m]);
+}
+
+void main() {
+  const uint srcW = p.pad[0], srcH = p.pad[1], padW = p.pad[2], padH = p.pad[3];
+  const uint outW = p.pad[4], f = p.pad[6], K = p.pad[7], R = K / 2u;
+  const uint VW = srcW + padW;
+  const uint stride = gl_NumWorkGroups.x * 256u;
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount; id += stride) {
+    if (p.mode == 0u) {
+      const uint y = id / VW, x = id % VW;
+      const uint sy = y < srcH ? y : y - srcH, sx = x < srcW ? x : x - srcW;
+      b_[id] = a_[sy * srcW + sx];
+    } else if (p.mode == 1u) {
+      const uint y2 = id / VW, x = id % VW;
+      const uint sx = x < srcW ? x : x - srcW;
+      const uint r = y2 * f;
+      float acc = 0.0;
+      for (uint i = 0u; i < K; i++) {
+        const uint yy = r + i;
+        acc += tap(i, R) * a_[(yy < srcH ? yy : yy - srcH) * srcW + sx];
+      }
+      b_[id] = acc;
+    } else {
+      const uint y2 = id / outW, x2 = id % outW;
+      const uint base = y2 * VW + x2 * f;
+      float acc = 0.0;
+      for (uint j = 0u; j < K; j++) acc += tap(j, R) * a_[base + j];
+      b_[id] = acc;
+    }
+  }
+}

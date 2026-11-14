@@ -224,6 +224,16 @@ Status SrpGreyFftMixedGpu(Context* ctx, uint32_t w, uint32_t h,
                           VkShaderModule grey_module);
 // SrpGreyFirGpu: separable half-band FIR grey (grey_fir.comp), mobile
 // replacement for the FFT grey; taps from Grey.halfBandTaps.
+// SrpGreyFirToResGpu: FIR grey into a resident buffer (no download).
+Status SrpGreyFirToResGpu(Context* ctx, uint32_t w, uint32_t h, VkBuffer real_buffer,
+                          VkBuffer out_buffer, VkShaderModule fir_module,
+                          const float* taps, uint32_t radius,
+                          VkBuffer tmp_buffer = VK_NULL_HANDLE);
+// SrpPyrLevelGpu: one GPU moving-pyramid level (pyr_down.comp).
+Status SrpPyrLevelGpu(Context* ctx, VkBuffer src, uint32_t src_w, uint32_t src_h,
+                      uint32_t pad_w, uint32_t pad_h, VkBuffer dst, uint32_t out_w,
+                      uint32_t out_h, uint32_t factor, uint32_t k_taps,
+                      const float* half_taps, VkBuffer tmp_buffer, VkShaderModule module);
 Status SrpGreyFirGpu(Context* ctx, uint32_t w, uint32_t h, VkBuffer real_buffer,
                      float* out, VkShaderModule fir_module, const float* taps,
                      uint32_t radius);
@@ -262,6 +272,12 @@ Status SrpCorrExtractGpu(Context* ctx, uint32_t height, uint32_t width,
                          uint32_t chunk_tiles, VkBuffer mov_buffer,
                          VkBuffer flow_buffer, VkBuffer patch_buffer,
                          VkShaderModule shader_module);
+// Fused L2 block matching for one level (corr_l2_fused.comp), see .cpp.
+Status SrpCorrL2FusedGpu(Context* ctx, uint32_t width, uint32_t height,
+                         uint32_t tile_count, uint32_t tile_size, uint32_t radius,
+                         uint32_t ntx, uint32_t flip, VkBuffer ref_buffer,
+                         VkBuffer mov_buffer, VkBuffer flow_buffer,
+                         VkBuffer delta_buffer, VkShaderModule shader_module);
 Status SrpCorrArgminGpu(Context* ctx, uint32_t tile_count, uint32_t tile_size,
                         uint32_t radius, uint32_t ntx, uint32_t tile_offset,
                         uint32_t chunk_tiles, uint32_t patch_count,
