@@ -88,6 +88,48 @@ class LapisNativeSessionInstrumentedTest {
         LapisRootSessionControl.release(normalKey)
     }
 
+    /** Read only the TIFF IFD and opcode bytes; never allocate a 100 MB RAW payload. */
+    private fun verifySavedGainMap(context:android.content.Context,name:String,metadata:RawFrameMetadata) {
+        val collection=android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val id=context.contentResolver.query(collection,arrayOf(android.provider.MediaStore.Images.Media._ID),
+            "${android.provider.MediaStore.Images.Media.DISPLAY_NAME} = ?",arrayOf(name),null)!!.use {
+            assertTrue("Saved DNG not found: $name",it.moveToFirst());it.getLong(0)
+        }
+        val uri=android.content.ContentUris.withAppendedId(collection,id)
+        context.contentResolver.openFileDescriptor(uri,"r")!!.use { descriptor ->
+            java.io.FileInputStream(descriptor.fileDescriptor).channel.use { channel ->
+                fun read(at:Long,size:Int):java.nio.ByteBuffer {
+                    val b=java.nio.ByteBuffer.allocate(size);channel.position(at)
+                    while(b.hasRemaining())check(channel.read(b)>0) { "Truncated DNG" }
+                    b.flip();return b
+                }
+                val header=read(0,8)
+                val order=if(header.get(0).toInt()==73)java.nio.ByteOrder.LITTLE_ENDIAN else java.nio.ByteOrder.BIG_ENDIAN
+                header.order(order);assertEquals(42,header.getShort(2).toInt())
+                val offset=header.getInt(4).toLong() and 0xffffffffL
+                val count=read(offset,2).order(order).short.toInt() and 65535
+                val entries=read(offset+2,count*12).order(order)
+                var payload:java.nio.ByteBuffer?=null
+                repeat(count) {
+                    val tag=entries.short.toInt() and 65535;val type=entries.short.toInt() and 65535
+                    val n=entries.int;val at=entries.int.toLong() and 0xffffffffL
+                    if(tag==51009) { assertEquals(7,type);assertTrue(n in 100..131072);payload=read(at,n).order(java.nio.ByteOrder.BIG_ENDIAN) }
+                }
+                val opcode=requireNotNull(payload) { "Saved DNG has no OpcodeList2: $name" }
+                assertEquals(4,opcode.int)
+                val map=requireNotNull(metadata.lensShadingMap)
+                repeat(4) {
+                    assertEquals(9,opcode.int);opcode.int;opcode.int
+                    val size=opcode.int;val start=opcode.position()
+                    opcode.position(start+32)
+                    assertEquals(map.rows,opcode.int);assertEquals(map.columns,opcode.int)
+                    opcode.position(start+size)
+                }
+                assertFalse(opcode.hasRemaining())
+            }
+        }
+    }
+
     private fun run(mode: LapisRootProfile.Mode) {
         val args=InstrumentationRegistry.getArguments()
         assumeTrue(args.getString("lapisNativeSession")=="true")
@@ -150,6 +192,7 @@ class LapisNativeSessionInstrumentedTest {
                 set(CaptureRequest.SENSOR_FRAME_DURATION,100_000_000L)
                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,Range(10,10))
                 lease.spec.applyRequest(this)
+                set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
             }.build()
             val callback=object:CameraCaptureSession.CaptureCallback(){
                 override fun onCaptureCompleted(s:CameraCaptureSession,q:CaptureRequest,r:TotalCaptureResult){
@@ -169,14 +212,24 @@ class LapisNativeSessionInstrumentedTest {
             val metadata=RawFrameMetadataFactory.capture("0",reference.image,c,reference.result,1)
             assertNull(metadata.rawDevelopmentUnsupportedReason)
             assertEquals(mode.argument,metadata.sensorReadoutProfile)
+            if(args.getString("lapisShading")=="true") {
+                val map=requireNotNull(metadata.lensShadingMap) { "Root readout discarded its lens-shading map" }
+                assertFalse("Remaining map must be exported",metadata.lensShadingAlreadyApplied)
+                assertTrue("Expected measured nonidentity map",map.gains.toList().max()>1.01f)
+                val tags=TinyDngMetadata.create(metadata,DngMetadataOverrides(),BayerPattern.GBRG,
+                    metadata.blackLevels!!.toList().map(Float::toDouble).toDoubleArray(),metadata.whiteLevel!!.toInt(),RawCrop(0,0,width,height))
+                assertTrue("DNG GainMap opcode missing",tags.descriptors.chunked(3).any { it[0]==51009 })
+            }
             if(lease.spec.dcg) {
                 assertTrue("DCG14 white level lost",(metadata.whiteLevel?:0f)>1023f)
                 assertTrue("DCG14 black level lost",metadata.blackLevels!!.toList().all { it>256f })
             }
             val saved=DngSaver(context).save(reference.image,c,reference.result,1,DngMetadataOverrides(),metadata,DngWriterBackend.AUTO)
+            if(args.getString("lapisShading")=="true") verifySavedGainMap(context,saved,metadata)
             val report=JSONObject().put("mode",mode.argument).put("width",width).put("height",height)
                 .put("zslFrames",selected.size).put("sourceDng",saved).put("hardwareVerified",lease.spec.hardwareVerified)
-                .put("whiteLevel",metadata.whiteLevel).put("blackLevels",metadata.blackLevels?.toList())
+                .put("shadingRows",metadata.lensShadingMap?.rows).put("shadingColumns",metadata.lensShadingMap?.columns)
+                .put("shadingMaximum",metadata.lensShadingMap?.gains?.toList()?.maxOrNull()).put("whiteLevel",metadata.whiteLevel).put("blackLevels",metadata.blackLevels?.toList())
             if(lease.spec.dcg) {
                 val fps=(timestamps.size-1)*1e9/(timestamps.last()-timestamps.first())
                 report.put("verifiedFrames",timestamps.size).put("measuredFps",fps)
@@ -194,6 +247,7 @@ class LapisNativeSessionInstrumentedTest {
                 assertEquals(width,merged!!.width);assertEquals(height,merged.height)
                 val mergeName=DngSaver(context).saveMerged(merged,metadata.copy(compositeSourceCount=3,compositeUsedCount=3),sixteenBit=true)
                 report.put("mergedFrames",3).put("mergedDng",mergeName)
+                if(args.getString("lapisShading")=="true") verifySavedGainMap(context,mergeName,metadata)
             }
             selected.forEach { it.image.close() };selected=emptyList()
             synchronized(lock){collectingBurst=true;accepting=true}

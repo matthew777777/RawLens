@@ -30,6 +30,7 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
         val dcg: Boolean get() = mode == LapisRootProfile.Mode.DCG14
         val fps: Int get() = if(dcg) 30 else 10
         fun applyRequest(builder: CaptureRequest.Builder) {
+            builder.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
             builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,Range(fps,fps))
             if(mode==LapisRootProfile.Mode.CROP_4X) {
                 builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.configSensorScenarios",IntArray::class.java),intArrayOf(0,1,4))
@@ -178,10 +179,14 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
                 (metadata.rawPlaneRowStride?:0)<spec.width*2 || metadata.cfaPattern!=BayerPattern.GBRG) return metadata
             if(spec.dcg && ((metadata.whiteLevel?:0f)<=1023f || metadata.blackLevels?.toList()?.all { it>256f }!=true))
                 return metadata.copy(rawDevelopmentUnsupportedReason="DCG14 sensor levels are not available yet")
+            // MT6878 returns a readout-specific remaining map: crop modes already
+            // have their own smaller field, so cropping the map again is incorrect.
+            val shading=RawShadingCalibration.readoutMap(metadata.lensShadingMap)
             val full=IntRectSnapshot(0,0,spec.width,spec.height)
             return metadata.copy(imageCrop=full,pixelArraySize=spec.width to spec.height,activeArray=full,preCorrectionActiveArray=full,
                 rawCropRegion=full,bufferGeometry=RawBufferGeometry.Supported(0,0,RawCrop(0,0,spec.width,spec.height),"Verified Lapis ${spec.mode.argument}"),
-                rawDevelopmentUnsupportedReason=null,quadBayer=false,lensShadingMap=null,hotPixels=emptyList(),noiseProfile=null,
+                rawDevelopmentUnsupportedReason=null,quadBayer=false,lensShadingMap=shading,
+                lensShadingAlreadyApplied=RawShadingCalibration.alreadyApplied(shading,metadata.lensShadingAlreadyApplied),hotPixels=emptyList(),noiseProfile=null,
                 sensorReadoutProfile=spec.mode.argument)
         }
         fun open(context: Context,mode: LapisRootProfile.Mode): LapisRootSession {
