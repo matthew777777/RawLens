@@ -1015,8 +1015,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 halGains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
             )) {
                 runCatching {
-                    RawWhiteBalanceFallback.estimate(plane.buffer, plane.rowStride, plane.pixelStride,
-                        image.width, image.height, cfaInt, levels, white, RawWhiteBalanceFallback.locusFor(c))
+                    RawWhiteBalanceFallback.estimateDetailed(plane.buffer, plane.rowStride, plane.pixelStride,
+                        image.width, image.height, cfaInt, levels, white, RawWhiteBalanceFallback.locusFor(c),
+                        RawWhiteBalanceFallback.exposureEv100(result?.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+                            result?.get(CaptureResult.SENSOR_SENSITIVITY), result?.get(CaptureResult.LENS_APERTURE)))
                 }.getOrNull()
             }
             if (wbFallbackNeutral != null && !wbFallbackLogged) {

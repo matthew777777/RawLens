@@ -275,7 +275,9 @@ object RawFrameMetadataFactory {
             runCatching {
                 RawWhiteBalanceFallback.estimate(plane.buffer, plane.rowStride, plane.pixelStride,
                     image.width, image.height, cfaValue, black, white,
-                    RawWhiteBalanceFallback.locusFor(characteristics))
+                    RawWhiteBalanceFallback.locusFor(characteristics),
+                    RawWhiteBalanceFallback.exposureEv100(sensorKey(CaptureResult.SENSOR_EXPOSURE_TIME),
+                        sensorKey(CaptureResult.SENSOR_SENSITIVITY), sensorKey(CaptureResult.LENS_APERTURE)))
             }.getOrNull()
         } else null
         val gains = fallbackNeutral?.let { ImmutableFloatValues(RawWhiteBalanceFallback.gainsFor(it)) } ?: halGains
@@ -352,8 +354,10 @@ object RawFrameMetadataFactory {
             preCorrectionActiveArray = preCorrection,
             rawCropRegion = rawCrop,
             bufferGeometry = geometry,
-            lensShadingAlreadyApplied = characteristics
-                .get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) == true,
+            // Camera2's returned map is the REMAINING correction even when the
+            // sensor applies some shading correction. Do not discard that map.
+            lensShadingAlreadyApplied = RawShadingCalibration.alreadyApplied(lensMap, characteristics
+                .get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) == true),
             lensShadingMap = lensMap,
             hotPixels = hotPixels,
             wbGains = gains,

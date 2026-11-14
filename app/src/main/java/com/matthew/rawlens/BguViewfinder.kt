@@ -1059,13 +1059,16 @@ class BguViewfinder @JvmOverloads constructor(
                 halGains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) })
         ) {
             runCatching {
-                RawWhiteBalanceFallback.estimate(buf, rowStride, pixelStride, imgW, imgH, cfa, levels, white,
-                    RawWhiteBalanceFallback.locusFor(c))
+                RawWhiteBalanceFallback.estimateDetailed(buf, rowStride, pixelStride, imgW, imgH, cfa, levels, white,
+                    RawWhiteBalanceFallback.locusFor(c), RawWhiteBalanceFallback.exposureEv100(
+                        result?.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+                        result?.get(CaptureResult.SENSOR_SENSITIVITY),
+                        result?.get(CaptureResult.LENS_APERTURE)))
             }.getOrNull()
         }
         if (fallbackNeutral != null && !wbFallbackLogged) {
             wbFallbackLogged = true
-            Log.w(TAG, "HAL reported no white balance; gray-world neutral=" +
+            Log.w(TAG, "HAL reported no white balance; estimated neutral=" +
                 ColorDiagnostics.values(fallbackNeutral))
         }
         val fallbackGains = fallbackNeutral?.let(RawWhiteBalanceFallback::gainsFor)

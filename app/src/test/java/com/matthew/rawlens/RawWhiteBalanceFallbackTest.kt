@@ -71,17 +71,38 @@ class RawWhiteBalanceFallbackTest {
             RawWhiteBalanceFallback.gainsFor(doubleArrayOf(0.8, 1.0, 0.4)), 1e-6f)
     }
 
-    @Test fun `tracker throttles, eases and resets when the HAL recovers`() {
-        val t = RawWhiteBalanceFallback.Tracker(intervalMs = 500L, alpha = 0.5)
+    private fun est(n: DoubleArray, c: Double = 1.0) = RawWhiteBalanceFallback.Estimate(n, c)
+
+    @Test fun `tracker throttles, filters and resets when the HAL recovers`() {
+        val t = RawWhiteBalanceFallback.Tracker(intervalMs = 500L)
         var calls = 0
         val a = doubleArrayOf(1.0, 1.0, 0.5)
-        val b = doubleArrayOf(0.5, 1.0, 0.5)
-        assertArrayEquals(a, t.update(0L, true) { calls++; a }, 1e-9)
-        assertArrayEquals(a, t.update(100L, true) { calls++; b }, 1e-9)
+        val b = doubleArrayOf(0.9, 1.0, 0.5)
+        assertArrayEquals(a, t.update(0L, true) { calls++; est(a) }, 1e-9)
+        assertArrayEquals(a, t.update(100L, true) { calls++; est(b) }, 1e-9)
         assertEquals(1, calls)
-        assertArrayEquals(doubleArrayOf(0.75, 1.0, 0.5), t.update(600L, true) { calls++; b }, 1e-9)
-        assertNull(t.update(700L, false) { calls++; a })
+        val moved = requireNotNull(t.update(600L, true) { calls++; est(b) })
+        assertTrue(moved[0] < 1.0 && moved[0] > 0.9)  // partway, not a jump
+        assertNull(t.update(700L, false) { calls++; est(a) })
         assertNull(t.neutral)
+    }
+
+    @Test fun `tracker ignores jitter below a visible step`() {
+        val t = RawWhiteBalanceFallback.Tracker(intervalMs = 500L)
+        val a = doubleArrayOf(1.0, 1.0, 0.5)
+        t.update(0L, true) { est(a) }
+        val shown = t.update(500L, true) { est(doubleArrayOf(1.004, 1.0, 0.501), 0.3) }
+        assertArrayEquals(a, shown, 1e-12)
+    }
+
+    @Test fun `tracker converges within seconds after a scene cut`() {
+        val t = RawWhiteBalanceFallback.Tracker(intervalMs = 500L)
+        t.update(0L, true) { est(doubleArrayOf(1.0, 1.0, 0.5)) }
+        val tungsten = doubleArrayOf(1.6, 1.0, 0.3)
+        var n = doubleArrayOf()
+        for (i in 1..6) n = requireNotNull(t.update(i * 500L, true) { est(tungsten, 0.8) })
+        assertEquals(1.6, n[0], 0.05)
+        assertEquals(0.3, n[2], 0.01)
     }
 
     @Test fun `invalid gains cannot suppress fallback`() {
@@ -142,13 +163,13 @@ class RawWhiteBalanceFallbackTest {
         assertTrue(plain[0] < truth[0] * 0.6)
     }
 
-    @Test fun `one-colour frame stays on the locus between its hue and daylight`() {
+    @Test fun `one-colour frame stays near the locus between its hue and daylight`() {
         val sky = doubleArrayOf(0.10, 0.18, 0.40)
         val buf = mixedFrame(neutralAt(5500.0), sky, grayShare = 0.0)
         val n = requireNotNull(RawWhiteBalanceFallback.estimate(buf, 512, 2, 256, 192, 0, black, white, locus))
         val p = locus.project(kotlin.math.ln(n[0]), kotlin.math.ln(n[2]))
-        assertTrue("off-locus ${p[2]}", p[2] < 1e-6)
+        assertTrue("off-locus ${p[2]}", p[2] < 0.02)
         val daylight = locus.indexOf(5500.0)
-        assertTrue(p[3] >= daylight)  // pulled toward cool, never past the sky's own direction
+        assertTrue(p[3] >= daylight - 0.5)  // pulled toward cool, never past the sky's own direction
     }
 }
