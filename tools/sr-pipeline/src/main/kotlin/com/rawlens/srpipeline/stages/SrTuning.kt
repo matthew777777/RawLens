@@ -46,7 +46,19 @@ data class SrTuning(
     val knSigmaScale: Float = KernelNet.DEFAULT_SIGMA_SCALE,
     /** KernelNet width cap, px. */
     val knSigmaCap: Float = KernelNet.DEFAULT_SIGMA_CAP,
+    /** KernelNet minimum width at 1x, px (C24 checker floor). */
+    val knSigmaFloor: Float = KernelNet.DEFAULT_SIGMA_FLOOR,
+    /**
+     * KernelNet minimum width at 2x, px. The 1x floor is a fixed blur of
+     * ~1.8 output px at 2x ("looks out of focus", owner 2026-11-14). 0.70 on
+     * 12 bursts at 2x (MfsrTuneSweepTest): detail x1.40, false colour x1.05,
+     * zipper x1.03, checker x1.00, speckles x0.89 vs 0.90.
+     */
+    val knSigmaFloor2x: Float = 0.70f,
 ) {
+    /** KernelNet floor for an output [scale]. */
+    fun knFloor(scale: Float): Float = if (scale > 1f) knSigmaFloor2x else knSigmaFloor
+
     fun kernelParams(fin: BurstConfig.Final): KernelParams = KernelParams(
         kDetail = (fin.kDetail * kDetailScale).toFloat(),
         kDenoise = (fin.kDenoise * kDenoiseScale).toFloat(),

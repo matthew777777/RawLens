@@ -919,7 +919,7 @@ Status SrpKernelNetCovGpu(Context* ctx, uint32_t raw_w, uint32_t raw_h,
                           VkBuffer act0_buffer, VkBuffer act1_buffer,
                           VkBuffer map_buffer, VkBuffer cov_buffer,
                           VkShaderModule shader_module, uint32_t flip_x,
-                          uint32_t flip_y) {
+                          uint32_t flip_y, float sigma_floor) {
   if (ctx == nullptr || raw_w < 4 || raw_h < 4 || cov_w == 0 || cov_h == 0 ||
       raw_buffer == VK_NULL_HANDLE || weights_buffer == VK_NULL_HANDLE ||
       luma_buffer == VK_NULL_HANDLE || act0_buffer == VK_NULL_HANDLE ||
@@ -976,6 +976,7 @@ Status SrpKernelNetCovGpu(Context* ctx, uint32_t raw_w, uint32_t raw_h,
   cp.mode = 3;
   cp.alpha = sigma_scale;
   cp.beta = sigma_cap;
+  cp.robustness = sigma_floor;
   cp.pixel_count = cov_w * cov_h;
   cp.pad[0] = mw; cp.pad[1] = mh; cp.pad[2] = raw_w; cp.pad[3] = raw_h;
   cp.pad[4] = crop_x; cp.pad[5] = crop_y; cp.pad[6] = cov_w; cp.pad[7] = cov_h;

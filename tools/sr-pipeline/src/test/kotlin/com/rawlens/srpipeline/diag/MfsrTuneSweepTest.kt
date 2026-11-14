@@ -71,7 +71,9 @@ class MfsrTuneSweepTest {
             listOf(.5f, 1.2f).map { "Mt $it" to d.copy(mt = it) }
         val kn = listOf("default" to d) +
             listOf(.2f, .3f, .35f).map { "knScale $it" to d.copy(knSigmaScale = it) } +
-            listOf(1.0f, 1.4f, 1.6f).map { "knCap $it" to d.copy(knSigmaCap = it) } + robust
+            listOf(1.0f, 1.4f, 1.6f).map { "knCap $it" to d.copy(knSigmaCap = it) } +
+            listOf(.9f, .7f, .55f, .4f).map { "knFloor $it" to d.copy(knSigmaFloor = it, knSigmaFloor2x = it) } +
+            listOf(.7f, .55f, .4f).map { "knFloorCap $it" to d.copy(knSigmaFloor = it, knSigmaFloor2x = it, knSigmaCap = 1.0f) } + robust
         val wr = listOf("default" to d) +
             listOf(.8f, .9f, 1.15f, 1.3f).map { "kDetail x$it" to d.copy(kDetailScale = it) } +
             listOf(.8f, 1.25f, 1.5f).map { "kDenoise x$it" to d.copy(kDenoiseScale = it) } +
@@ -130,7 +132,7 @@ class MfsrTuneSweepTest {
             icaIterations = tune.icaIterations, colourDiff = floatArrayOf(b.wbR, b.wbB),
             kernelNet = if (!kernelNet) null else KernelNetConfig(weights = KernelNet.bundledWeights(),
                 sigma = KernelNet.sigma(FloatArray(4) { b.alpha[it].toFloat() }, FloatArray(4) { b.beta[it].toFloat() }),
-                sigmaScale = tune.knSigmaScale, sigmaCap = tune.knSigmaCap,
+                sigmaScale = tune.knSigmaScale, sigmaCap = tune.knSigmaCap, sigmaFloor = tune.knFloor(scale),
                 fullReference = b.fullRef, cropX = b.ox, cropY = b.oy, flipX = b.flipX, flipY = b.flipY),
         )
         val buf = VulkanPipeline.run({ b.frames[0].map { it.copyOf() }.toTypedArray() },
@@ -230,7 +232,8 @@ class MfsrTuneSweepTest {
         log.println("burst\tscale\tvariant\tfc\tzip\tchk\tspk\tdet\tnoise")
         val ratios = HashMap<Pair<String, Float>, MutableList<DoubleArray>>()
         try {
-            for (dir in root.listFiles { f -> f.isDirectory }!!.sortedBy { it.name }) {
+            val onlyBursts = System.getenv("SRP_ONLY")?.split(',')?.filter { it.isNotBlank() }
+            for (dir in root.listFiles { f -> f.isDirectory }!!.sortedBy { it.name }.filter { d -> onlyBursts == null || d.name in onlyBursts }) {
                 val b = loadBurst(dir) ?: continue
                 println("TUNE burst ${b.name} snr %.1f tile ${b.fin.tileSize} crop (${b.ox},${b.oy})".format(b.fin.snr))
                 for (scale in scales) {

@@ -44,7 +44,8 @@ layout(set = 0, binding = 2) readonly buffer W { float w_[]; };
 //            [7]=ksize [8]=relu [9]=wOff [10]=bOff [11]=layer0 (sigma plane)
 //            sigma rides p.alpha
 // COV: [0]=mapW [1]=mapH [2]=rawW [3]=rawH [4]=cropX [5]=cropY [6]=covW
-//      [7]=covH [8]=flipX [9]=flipY ; p.alpha = sigmaScale, p.beta = sigmaCap
+//      [7]=covH [8]=flipX [9]=flipY ; p.alpha = sigmaScale, p.beta = sigmaCap,
+//      p.robustness = sigmaFloor (minimum width, px)
 
 float inputAt(uint c, int x, int y, uint inW, uint inH, bool layer0, float sigma) {
   if (x < 0 || y < 0 || x >= int(inW) || y >= int(inH)) return 0.0;  // zero pad
@@ -178,8 +179,9 @@ void main() {
       // (checker in flats); narrower than 0.90 px made texture a per-lattice
       // pick (checker in texture). PhotonCamera's own 0.25 floor is kept for
       // its upscaler, not for this merge. Cost: ~5 % edge sharpness vs Wronski.
-      s1 = clamp(s1 * (rawW / float(mapW)) * p.alpha, 0.90, p.beta);
-      s2 = clamp(s2 * (rawH / float(mapH)) * p.alpha, 0.90, p.beta);
+      // Floor rides p.robustness (KernelNetConfig.sigmaFloor, default 0.90).
+      s1 = clamp(s1 * (rawW / float(mapW)) * p.alpha, p.robustness, p.beta);
+      s2 = clamp(s2 * (rawH / float(mapH)) * p.alpha, p.robustness, p.beta);
       if (s1 > s2 * 7.0) s1 = s2 * 7.0; else if (s2 > s1 * 7.0) s2 = s1 * 7.0;
       float det = max(1.0 - rho * rho, 1e-2);
       float rhoEff = sign(rho) * sqrt(max(1.0 - det, 0.0));

@@ -3058,7 +3058,7 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKe
     JNIEnv* env, jclass /*cls*/, jlong handle, jlong raw_res, jlong weights_res,
     jint weight_count, jbyteArray spirv, jint raw_w, jint raw_h, jfloat sigma,
     jfloat sigma_scale, jfloat sigma_cap, jint crop_x, jint crop_y, jint cov_w,
-    jint cov_h, jlong cov_res, jlong map_res, jint flip_x, jint flip_y) {
+    jint cov_h, jlong cov_res, jlong map_res, jint flip_x, jint flip_y, jfloat sigma_floor) {
   VkDevice device = VK_NULL_HANDLE;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   srp::Context* ctx = CorrContext(handle, &device, &physical);
@@ -3097,7 +3097,7 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKe
         sigma_scale, sigma_cap, static_cast<uint32_t>(crop_x),
         static_cast<uint32_t>(crop_y), static_cast<uint32_t>(cov_w),
         static_cast<uint32_t>(cov_h), raw_vk, w_vk, luma_vk, a0_vk, a1_vk,
-        map_vk, cov_vk, module, flip_x != 0 ? 1u : 0u, flip_y != 0 ? 1u : 0u);
+        map_vk, cov_vk, module, flip_x != 0 ? 1u : 0u, flip_y != 0 ? 1u : 0u, sigma_floor);
   }
   if (luma != 0) srp::SrpFreeResident(ctx, luma);
   if (act0 != 0) srp::SrpFreeResident(ctx, act0);

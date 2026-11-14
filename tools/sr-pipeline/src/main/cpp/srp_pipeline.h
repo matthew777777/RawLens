@@ -494,7 +494,7 @@ Status SrpKernelNetCovGpu(Context* ctx, uint32_t raw_w, uint32_t raw_h,
                           VkBuffer act0_buffer, VkBuffer act1_buffer,
                           VkBuffer map_buffer, VkBuffer cov_buffer,
                           VkShaderModule shader_module, uint32_t flip_x,
-                          uint32_t flip_y);
+                          uint32_t flip_y, float sigma_floor = 0.90f);
 
 
 // Real GPU paths for robustness estimation (shaders/robustness.comp,

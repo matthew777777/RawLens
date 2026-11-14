@@ -630,7 +630,7 @@ object VulkanPipeline {
                 timed("kernelNet") { checkRc("kernelNet", SrpBridge.nativeKernelNetCovRes(handle, rawRes, wRes,
                     kn.weights.size, knSpirv, rawW, rawH, kn.sigma, kn.sigmaScale, kn.sigmaCap,
                     kn.cropX, kn.cropY, gw, gh, knCovRes, mapRes,
-                    if (kn.flipX) 1 else 0, if (kn.flipY) 1 else 0)) }
+                    if (kn.flipX) 1 else 0, if (kn.flipY) 1 else 0, kn.sigmaFloor)) }
                 val mapOut = SrpBridge.directFloats(3 * mw * mh)
                 checkRc("kernelNet map", SrpBridge.downloadResident(handle, mapRes, mapOut, (3 * mw * mh).toLong()))
                 lastKernelNetMap = FloatArray(3 * mw * mh).also { mapOut.asFloatBuffer().get(it) }

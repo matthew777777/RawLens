@@ -39,9 +39,17 @@ data class KernelNetConfig(
      */
     val flipX: Boolean = false,
     val flipY: Boolean = false,
+    /** Minimum kernel width, px (kernelnet.comp clamp floor). */
+    val sigmaFloor: Float = KernelNet.DEFAULT_SIGMA_FLOOR,
 )
 
 object KernelNet {
+    /**
+     * 0.90 px (C24): below it the 1x merge's 3x3 gather picked one Bayer
+     * lattice in texture (checker). At 2x the same floor is a fixed blur of
+     * ~1.8 output px, so it is tunable ([SrTuning.knSigmaFloor]).
+     */
+    const val DEFAULT_SIGMA_FLOOR = 0.90f
     const val DEFAULT_SIGMA_SCALE = 0.25f
     /**
      * 1.2 px (was 2.0, C24): with the 0.90 px floor in kernelnet.comp this

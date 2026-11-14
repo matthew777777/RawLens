@@ -679,6 +679,7 @@ internal object MfsrMerge {
                             FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
                         sigmaScale = tuning.knSigmaScale,
                         sigmaCap = tuning.knSigmaCap,
+                        sigmaFloor = tuning.knFloor(scale.toFloat()),
                         flipX = fx,
                         flipY = fy
                     )

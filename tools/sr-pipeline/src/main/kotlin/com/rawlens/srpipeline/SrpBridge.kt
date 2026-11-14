@@ -501,6 +501,8 @@ object SrpBridge {
         mapRes: Long,
         flipX: Int,
         flipY: Int,
+        /** Minimum kernel width (px), [KernelNetConfig.sigmaFloor]. */
+        sigmaFloor: Float = com.rawlens.srpipeline.stages.KernelNet.DEFAULT_SIGMA_FLOOR,
     ): Int
 
     /**

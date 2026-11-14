@@ -378,6 +378,8 @@ private fun merge(plan: Plan) {
                     FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
                 sigmaScale = plan.knScale,
                 sigmaCap = plan.knCap,
+                // Same floor as the app: 0.90 at 1x, 0.70 at 2x (SrTuning).
+                sigmaFloor = com.rawlens.srpipeline.stages.SrTuning().knFloor(plan.scale),
                 fullReference = if (plan.crop == null) null else fullRef,
                 cropX = plan.crop?.x ?: 0,
                 cropY = plan.crop?.y ?: 0,
@@ -457,10 +459,21 @@ private fun merge(plan: Plan) {
     }
     VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), outH * outW * 3)
     rgb.rewind()
-    // Pipeline rows run sensor-bottom-up (the GRBG->RGGB input flip is
-    // only undone inside the finished PNG path); the DNG stores true
-    // native top-down, so emit rows flipped, in place.
-    VulkanPipeline.flipRowsInPlace(rgb.asFloatBuffer(), outW, outH)
+    // Undo exactly the input RGGB normalisation (DngRead.flipToRggb): RGGB
+    // none, GRBG rows, GBRG columns, BGGR both. Flipping rows unconditionally
+    // wrote RGGB bursts upside down and GBRG/BGGR mirrored.
+    val (undoX, undoY) = KernelNet.rggbFlips(refMeta.cfa)
+    if (undoY) VulkanPipeline.flipRowsInPlace(rgb.asFloatBuffer(), outW, outH)
+    if (undoX) {
+        val fb = rgb.asFloatBuffer()
+        for (y in 0 until outH) {
+            var a = y * outW * 3; var b = a + (outW - 1) * 3
+            while (a < b) {
+                for (c in 0..2) { val t = fb.get(a + c); fb.put(a + c, fb.get(b + c)); fb.put(b + c, t) }
+                a += 3; b -= 3
+            }
+        }
+    }
     Files.createDirectories(plan.outputDir)
     val out = plan.outputDir.resolve("merged.dng").toString()
     // Camera color passthrough from the reference frame (rendering), cf.
