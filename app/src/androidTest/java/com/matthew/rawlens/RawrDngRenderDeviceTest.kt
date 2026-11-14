@@ -64,6 +64,14 @@ class RawrDngRenderDeviceTest {
 
     private fun d(vararg v: Double) = ImmutableDoubleValues(v)
 
+    /** DNG tags are row-major; RawFrameMetadata uses Camera2's column-major ordering. */
+    private fun dngMatrix(vararg rowMajor: Double): ImmutableDoubleValues {
+        require(rowMajor.size == 9)
+        return ImmutableDoubleValues(DoubleArray(9) { index ->
+            rowMajor[(index % 3) * 3 + index / 3]
+        })
+    }
+
     private fun metadata(): RawFrameMetadata {
         val full = IntRectSnapshot(0, 0, W, H)
         return RawFrameMetadata(
@@ -84,12 +92,12 @@ class RawrDngRenderDeviceTest {
             wbGains = null,
             neutralColorPoint = d(0.4443359375, 1.0, 0.578125),
             colorCorrectionTransform = null,
-            colorMatrix1 = d(0.921875, -0.34375, -0.109375, -0.421875, 1.2578125, 0.1328125, -0.1328125, 0.28125, 0.3984375),
-            colorMatrix2 = d(1.3515625, -0.703125, -0.2421875, -0.6640625, 1.7578125, -0.0703125, -0.1171875, 0.2421875, 0.578125),
-            cameraCalibration1 = d(1.0390625, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9765625),
-            cameraCalibration2 = d(1.0234375, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9921875),
-            forwardMatrix1 = d(0.5390625, 0.3515625, 0.078125, 0.1796875, 0.9609375, -0.140625, 0.0390625, -0.421875, 1.2109375),
-            forwardMatrix2 = d(0.5546875, 0.15625, 0.2578125, 0.203125, 0.6875, 0.1171875, 0.078125, -0.578125, 1.3203125),
+            colorMatrix1 = dngMatrix(0.921875, -0.34375, -0.109375, -0.421875, 1.2578125, 0.1328125, -0.1328125, 0.28125, 0.3984375),
+            colorMatrix2 = dngMatrix(1.3515625, -0.703125, -0.2421875, -0.6640625, 1.7578125, -0.0703125, -0.1171875, 0.2421875, 0.578125),
+            cameraCalibration1 = dngMatrix(1.0390625, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9765625),
+            cameraCalibration2 = dngMatrix(1.0234375, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9921875),
+            forwardMatrix1 = dngMatrix(0.5390625, 0.3515625, 0.078125, 0.1796875, 0.9609375, -0.140625, 0.0390625, -0.421875, 1.2109375),
+            forwardMatrix2 = dngMatrix(0.5546875, 0.15625, 0.2578125, 0.203125, 0.6875, 0.1171875, 0.078125, -0.578125, 1.3203125),
             referenceIlluminant1 = 21, // D65
             referenceIlluminant2 = 17, // Standard light A
             noiseProfile = null, sensorPixelMode = null, rawBinningFactorUsed = false,

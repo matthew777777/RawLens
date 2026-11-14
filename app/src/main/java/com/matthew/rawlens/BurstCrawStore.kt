@@ -9,7 +9,6 @@ import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.net.Uri
-import android.os.FileUtils
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.MediaStore
@@ -198,13 +197,17 @@ internal object BurstCrawStore {
                 ?: throw IOException("Could not open burst destination")
             ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
                 FileInputStream(source).use { input ->
-                    val copied = FileUtils.copy(input.fd, output.fd)
+                    val copied = input.copyTo(output)
                     if (copied != expected || source.length() != expected) {
                         throw IOException("Incomplete burst copy ($copied/$expected)")
                     }
                 }
                 output.fd.sync()
-                if (descriptor.statSize != expected) throw IOException("Burst size mismatch")
+                // Some document providers cannot report a size (statSize == -1).
+                val destinationSize = descriptor.statSize
+                if (destinationSize >= 0 && destinationSize != expected) {
+                    throw IOException("Burst size mismatch")
+                }
             }
             values.clear()
             values.put(MediaStore.Video.Media.IS_PENDING, 0)
@@ -263,13 +266,17 @@ internal object BurstCrawStore {
                 ?: throw IOException("Could not open granted-folder destination")
             ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
                 FileInputStream(source).use { input ->
-                    val copied = FileUtils.copy(input.fd, output.fd)
+                    val copied = input.copyTo(output)
                     if (copied != expected || source.length() != expected) {
                         throw IOException("Incomplete burst copy ($copied/$expected)")
                     }
                 }
                 output.fd.sync()
-                if (descriptor.statSize != expected) throw IOException("Burst size mismatch")
+                // Some document providers cannot report a size (statSize == -1).
+                val destinationSize = descriptor.statSize
+                if (destinationSize >= 0 && destinationSize != expected) {
+                    throw IOException("Burst size mismatch")
+                }
             }
         } catch (failure: Exception) {
             try { DocumentsContract.deleteDocument(resolver, fileUri) } catch (_: Exception) {

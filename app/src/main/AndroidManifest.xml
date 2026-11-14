@@ -54,6 +54,14 @@
         android:label="${appLabel}"
         android:supportsRtl="true"
         android:theme="@style/Theme.RawLens">
+        <provider
+            android:name=".BurstFileProvider"
+            android:authorities="${applicationId}.bursts"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/burst_paths" />
+        </provider>
         <service
             android:name=".JpegProcessingService"
             android:exported="false"

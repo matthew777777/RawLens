@@ -91,12 +91,12 @@ internal object OfflineBurstMetadata {
             wbGains = null,
             neutralColorPoint = neutral?.let(::ImmutableDoubleValues),
             colorCorrectionTransform = null,
-            colorMatrix1 = doubleArray("colorMatrix1", container),
-            colorMatrix2 = doubleArray("colorMatrix2", container),
-            cameraCalibration1 = doubleArray("calibrationMatrix1", container),
-            cameraCalibration2 = doubleArray("calibrationMatrix2", container),
-            forwardMatrix1 = doubleArray("forwardMatrix1", container),
-            forwardMatrix2 = doubleArray("forwardMatrix2", container),
+            colorMatrix1 = matrix("colorMatrix1", container),
+            colorMatrix2 = matrix("colorMatrix2", container),
+            cameraCalibration1 = matrix("calibrationMatrix1", container),
+            cameraCalibration2 = matrix("calibrationMatrix2", container),
+            forwardMatrix1 = matrix("forwardMatrix1", container),
+            forwardMatrix2 = matrix("forwardMatrix2", container),
             referenceIlluminant1 = container.optInt("referenceIlluminant1", 0).takeIf { it > 0 },
             referenceIlluminant2 = container.optInt("referenceIlluminant2", 0).takeIf { it > 0 },
             // Per-frame Camera2 profile when the take recorded it (CrawMetadata.frame);
@@ -190,8 +190,14 @@ internal object OfflineBurstMetadata {
         metadata.normalizationOrNull()
             ?: throw IllegalStateException("Offline frame has no black/white levels")
 
-    private fun doubleArray(name: String, container: JSONObject): ImmutableDoubleValues? =
+    private fun matrix(name: String, container: JSONObject): ImmutableDoubleValues? =
         if (!container.has(name)) null else container.getJSONArray(name).let { array ->
-            ImmutableDoubleValues(DoubleArray(array.length()) { array.getDouble(it) })
+            require(array.length() == 9) { "Container $name needs 9 entries" }
+            // CRAW stores getElement(column, row) in row-major order. Live Camera2
+            // snapshots use column-major order; match that boundary so development
+            // and DNG writers each perform their existing single conversion.
+            ImmutableDoubleValues(DoubleArray(9) { index ->
+                array.getDouble((index % 3) * 3 + index / 3)
+            })
         }
 }

@@ -80,6 +80,7 @@ class MergesActivity : Activity() {
     private lateinit var progressBar: ProgressBar
     private lateinit var controls: LinearLayout
     private var loadingGeneration = 0
+    private var pendingExport: Pair<File?, PublishedTake?>? = null
     private var pendingDeleteUri: android.net.Uri? = null
     private var tuningMfsr = MfsrSettings()
     private var tuningHdr = HdrPlusSettings()
@@ -88,7 +89,9 @@ class MergesActivity : Activity() {
     private var selected: File? = null
     private var selectedPublished: PublishedTake? = null
     private var method = BurstMergeRunner.Method.MFSR
-    private var format = CaptureFormat.DNG_ONLY
+    private lateinit var jpegQualityControls: LinearLayout
+    private lateinit var jxlQualityControls: LinearLayout
+    private var format = CaptureFormat.JPEG
     private var developedFormat = DevelopedFormat.JPEG
     /** LK-R zoom for staged takes (own choice, not the live chip's). */
     private var lkrZoom = LkrZoom.X1
@@ -104,7 +107,7 @@ class MergesActivity : Activity() {
                     ?: BurstMergeRunner.Method.MFSR.name
             )
         }.getOrDefault(BurstMergeRunner.Method.MFSR)
-        format = CaptureFormat.fromPreference(prefs.getString(KEY_MERGE_OUTPUT_FORMAT, null))
+        format = MergeScreenSettings.outputFormat(prefs.getString(KEY_MERGE_OUTPUT_FORMAT, null))
         developedFormat =
             DevelopedFormat.fromPreference(prefs.getString(MainActivity.KEY_DEVELOPED_FORMAT, null))
 
@@ -157,7 +160,7 @@ class MergesActivity : Activity() {
         controls.addView(selectionLine)
         controls.addView(title("Method"))
         val methodRow = LinearLayout(this)
-        methodMfsr = optionButton("MFSR").also { button ->
+        methodMfsr = optionButton("KB-SR").also { button ->
             button.setOnClickListener { setMethod(BurstMergeRunner.Method.MFSR) }
             methodRow.addView(button, rowParams())
         }
@@ -165,7 +168,7 @@ class MergesActivity : Activity() {
             button.setOnClickListener { setMethod(BurstMergeRunner.Method.HDRPLUS) }
             methodRow.addView(button, rowParams())
         }
-        methodLkr = optionButton("LK-R").also { button ->
+        methodLkr = optionButton("LK-SR").also { button ->
             button.setOnClickListener { setMethod(BurstMergeRunner.Method.LKR) }
             methodRow.addView(button, rowParams())
         }
@@ -211,6 +214,11 @@ class MergesActivity : Activity() {
         }
         controls.addView(desc("Developed format").apply { setPadding(0, dp(12), 0, dp(4)) })
         controls.addView(developedRow)
+        jpegQualityControls = outputQualityControl(DevelopedFormat.JPEG)
+        jxlQualityControls = outputQualityControl(DevelopedFormat.JXL)
+        controls.addView(jpegQualityControls)
+        controls.addView(jxlQualityControls)
+        controls.addView(desc("JPEG and JPEG XL save developed photos. DNG saves larger RAW files."))
         tuningButton = optionButton("Fine-tune method  ›").apply {
             setOnClickListener { showTuning() }
         }
@@ -268,7 +276,9 @@ class MergesActivity : Activity() {
                 .sortedBy { it.lastModified }
             runOnUiThread {
                 if (isFinishing || isDestroyed || generation != loadingGeneration) return@runOnUiThread
-                rows = staged
+                rows = staged.filter { local ->
+                    published.none { it.displayName == local.file.name && it.sizeBytes == local.file.length() }
+                }
                 publishedRows = published
                 if (selected?.let { file -> rows.none { it.file.absolutePath == file.absolutePath } } == true) {
                     selected = null
@@ -349,7 +359,7 @@ class MergesActivity : Activity() {
         selectedPublished = published
         val values = takePrefs(requireNotNull(file?.name ?: published?.displayName)).all
         method = runCatching { BurstMergeRunner.Method.valueOf(values[KEY_MERGE_METHOD] as String) }.getOrDefault(runCatching { BurstMergeRunner.Method.valueOf(prefs().getString(KEY_MERGE_METHOD, null) ?: "MFSR") }.getOrDefault(BurstMergeRunner.Method.MFSR))
-        format = CaptureFormat.fromPreference(values[KEY_MERGE_OUTPUT_FORMAT] as? String ?: prefs().getString(KEY_MERGE_OUTPUT_FORMAT, null))
+        format = MergeScreenSettings.outputFormat(values[KEY_MERGE_OUTPUT_FORMAT] as? String ?: prefs().getString(KEY_MERGE_OUTPUT_FORMAT, null))
         developedFormat = DevelopedFormat.fromPreference(values[MainActivity.KEY_DEVELOPED_FORMAT] as? String ?: prefs().getString(MainActivity.KEY_DEVELOPED_FORMAT, null))
         lkrZoom = LkrZoom.entries.firstOrNull { it.name == values[KEY_MERGE_LKR_ZOOM] } ?: LkrZoom.X1
         tuningMfsr = MfsrSettings.fromPreferences(prefs().all + values)
@@ -414,6 +424,35 @@ class MergesActivity : Activity() {
             choose(row?.file, pub)
             statusLine.text = "Merge options reset for this take"
         }
+        action("Share burst file") {
+            try {
+                val uri = row?.file?.let {
+                    androidx.core.content.FileProvider.getUriForFile(this, "$packageName.bursts", it)
+                } ?: requireNotNull(pub).uri
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "application/octet-stream"
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    clipData = android.content.ClipData.newRawUri(name, uri)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(android.content.Intent.createChooser(send, "Share burst file"))
+            } catch (failure: Exception) {
+                statusLine.text = failure.message ?: "Could not share burst"
+            }
+        }
+        action("Save burst file as…") {
+            try {
+                pendingExport = row?.file to pub
+                startActivityForResult(android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                    type = "application/octet-stream"
+                    putExtra(android.content.Intent.EXTRA_TITLE, name)
+                }, 43)
+            } catch (failure: Exception) {
+                pendingExport = null
+                statusLine.text = failure.message ?: "Could not open file picker"
+            }
+        }
         action("Info") {
             RawLensDialogBuilder(this).setTitle("Burst info")
                 .setMessage("$name\n\n" + (row?.let { rowText(it).substringAfter('\n') } ?: publishedText(requireNotNull(pub)).substringAfter('\n')) +
@@ -463,6 +502,30 @@ class MergesActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 43) {
+            val source = pendingExport
+            pendingExport = null
+            val destination = data?.data
+            if (resultCode == RESULT_OK && source != null && destination != null) {
+                statusLine.text = "Saving burst file…"
+                Thread({
+                    try {
+                        val expected = source.first?.length() ?: requireNotNull(source.second).sizeBytes
+                        val copied = (source.first?.inputStream()
+                            ?: contentResolver.openInputStream(requireNotNull(source.second).uri)
+                            ?: error("Could not open burst")).use { input ->
+                            (contentResolver.openOutputStream(destination, "wt")
+                                ?: error("Could not open destination")).use { output -> input.copyTo(output) }
+                        }
+                        check(copied > 0 && (expected <= 0 || copied == expected)) { "Incomplete burst copy" }
+                        runOnUiThread { statusLine.text = "Burst file saved"; reloadTakes() }
+                    } catch (failure: Exception) {
+                        runCatching { android.provider.DocumentsContract.deleteDocument(contentResolver, destination) }
+                        runOnUiThread { statusLine.text = failure.message ?: "Could not save burst" }
+                    }
+                }, "ExportBurst").start()
+            }
+        }
         if (requestCode == 41) {
             val uri = pendingDeleteUri
             pendingDeleteUri = null
@@ -666,9 +729,9 @@ class MergesActivity : Activity() {
     }
 
     private fun methodLabel() = when (method) {
-        BurstMergeRunner.Method.MFSR -> "MFSR"
+        BurstMergeRunner.Method.MFSR -> "KB-SR"
         BurstMergeRunner.Method.HDRPLUS -> "HDR+"
-        BurstMergeRunner.Method.LKR -> "LK-R"
+        BurstMergeRunner.Method.LKR -> "LK-SR"
     }
 
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -703,6 +766,35 @@ class MergesActivity : Activity() {
         lkrZoom = next
         saveTakeOptions()
         refreshOptions()
+    }
+
+    /** Uses the Photo tab's quality keys, slider and encoder ranges. */
+    private fun outputQualityControl(container: DevelopedFormat): LinearLayout {
+        val isJxl = container == DevelopedFormat.JXL
+        val key = if (isJxl) MainActivity.KEY_JXL_QUALITY else MainActivity.KEY_JPEG_QUALITY
+        val minimum = if (isJxl) JxlOutputSettings.MIN_QUALITY else 1
+        val maximum = if (isJxl) JxlOutputSettings.MAX_QUALITY else 100
+        var quality = prefs().getInt(key, 100).coerceIn(minimum, maximum)
+        fun text() = if (isJxl && quality == 100) "JXL quality: lossless" else "${container.label} quality: $quality%"
+        val content = column()
+        val label = desc(text()).apply { setPadding(0, dp(12), 0, 0) }
+        content.addView(label)
+        content.addView(SettingsSlider(this).apply {
+            max = maximum - minimum
+            progress = quality - minimum
+            contentDescription = "${container.label} quality"
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
+                    quality = progress + minimum
+                    label.text = text()
+                }
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
+                    prefs().edit().putInt(key, quality).apply()
+                }
+            })
+        })
+        return content
     }
 
     private fun setFormat(next: CaptureFormat) {
@@ -767,6 +859,8 @@ class MergesActivity : Activity() {
         stylePick(outBoth, format == CaptureFormat.JPEG_DNG)
         stylePick(developedJpeg, developedFormat == DevelopedFormat.JPEG)
         stylePick(developedJxl, developedFormat == DevelopedFormat.JXL)
+        jpegQualityControls.visibility = if (format.includesJpeg && developedFormat == DevelopedFormat.JPEG) View.VISIBLE else View.GONE
+        jxlQualityControls.visibility = if (format.includesJpeg && developedFormat == DevelopedFormat.JXL) View.VISIBLE else View.GONE
     }
 
     /**
@@ -868,9 +962,9 @@ class MergesActivity : Activity() {
                     progressLine.text = "Done • ${result.outputs.size} output${if (result.outputs.size == 1) "" else "s"}"
                     statusLine.text =
                         "${when (method) {
-                            BurstMergeRunner.Method.MFSR -> "MFSR"
+                            BurstMergeRunner.Method.MFSR -> "KB-SR"
                             BurstMergeRunner.Method.HDRPLUS -> "HDR+"
-                            BurstMergeRunner.Method.LKR -> "LK-R"
+                            BurstMergeRunner.Method.LKR -> "LK-SR"
                         }} " +
                             "×${result.keptFrames}/${result.pooledFrames} • " +
                             "${result.width}×${result.height} • " +
