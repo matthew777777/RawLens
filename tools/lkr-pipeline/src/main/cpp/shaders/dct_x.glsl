@@ -16,13 +16,23 @@ layout(std430, binding = 2) readonly buffer N { vec4 ns[]; };
 // 1 / (sum of window over overlapping blocks): rows, then columns at ixo.
 layout(std430, binding = 3) readonly buffer W { vec4 iw[]; };
 // Mean noise level per block: written by the luma pass, read by the two others.
+#ifdef LKR_APERTURE
+layout(std430, binding = 4) buffer B { vec4 nv[]; };
+#else
 layout(std430, binding = 4) buffer B { float nv[]; };
+#endif
 layout(push_constant) uniform P {
   int H, W, ny, nx, py, px, ixo, has_ns;
   float sigma2, lv_a, lv_b, k_y2, k_c2, wb_r, wb_g, wb_b;
   // Deep shadow: the noise model under-predicts merged shadow noise, so dark blocks may raise
   // their noise level to the block's measured AC energy, up to dark_cap x the model.
   float dark_level, dark_cap, dark_luma;   // dark_luma: share of the boost the luma pass uses (0..1)
+
+#ifdef LKR_APERTURE
+  float aperture_scale, aperture_strength;
+  float coherence_sigma2;
+  float correlated_error;
+#endif
 } pc;
 
 const float C4 = 0.35355339, C1 = 0.98078528, C2 = 0.92387953, C3 = 0.83146961,
@@ -65,6 +75,57 @@ vec4 shrink(vec4 c, float t) {
   return c * c2 / max(c2 + vec4(t), vec4(1e-20));
 }
 
+#ifdef LKR_APERTURE
+float tileValue(mat4 a0, mat4 a1, mat4 b0, mat4 b1, int y, int x) {
+  y = clamp(y, 0, 7); x = clamp(x, 0, 7);
+  if (x < 4) return y < 4 ? a0[y][x] : a1[y - 4][x];
+  return y < 4 ? b0[y][x - 4] : b1[y - 4][x - 4];
+}
+// Two-pixel differences do not mistake period-two dots for edge structure.
+float incoherence(mat4 a0, mat4 a1, mat4 b0, mat4 b1, float noise) {
+  float xx = 0, yy = 0, xy = 0;
+  for (int y = 2; y < 6; ++y) for (int x = 2; x < 6; ++x) {
+    float gx = tileValue(a0,a1,b0,b1,y,x+2)-tileValue(a0,a1,b0,b1,y,x-2);
+    float gy = tileValue(a0,a1,b0,b1,y+2,x)-tileValue(a0,a1,b0,b1,y-2,x);
+    xx += gx*gx; yy += gy*gy; xy += gx*gy;
+  }
+  float floor = 32.0 * noise; // sixteen differences, variance 2*noise each
+  xx = max(xx-floor, 0.0); yy = max(yy-floor, 0.0);
+  float coherence = sqrt((xx-yy)*(xx-yy)+4.0*xy*xy) / max(xx+yy+2.0*floor, 1e-20);
+  return 1.0-clamp(coherence, 0.0, 1.0);
+}
+// Camera noise propagated through white balance and the Y / R-G / B-G basis.
+vec3 colorNoise(int o, int plane) {
+  vec4 r = max(pc.lv_a * max(z[o], vec4(0)) + vec4(pc.lv_b), vec4(0)) * (pc.wb_r*pc.wb_r);
+  vec4 g = max(pc.lv_a * max(z[o+plane], vec4(0)) + vec4(pc.lv_b), vec4(0)) * (pc.wb_g*pc.wb_g);
+  vec4 b = max(pc.lv_a * max(z[o+2*plane], vec4(0)) + vec4(pc.lv_b), vec4(0)) * (pc.wb_b*pc.wb_b);
+  // Sampling-density approximation: R/B occupy 1/4 of the sensor sites,
+  // green 1/2; there are s*s output sites per sensor site. The local Gram
+  // diagnostic remains necessary to measure correlations/phase conditioning.
+  float area = pc.aperture_scale * pc.aperture_scale;
+  r *= 4.0*area; g *= 2.0*area; b *= 4.0*area;
+  if (pc.has_ns != 0) { vec4 n=ns[o]; r*=n*n;g*=n*n;b*=n*n; }
+  return vec3(dot(.0625*r+.25*g+.0625*b,vec4(1)),dot(r+g,vec4(1)),dot(b+g,vec4(1)));
+}
+// Experimental aperture approximation, not the complete local CFA/warp Gram.
+float aperture(float frequency) {
+  float x = 3.141592653589793 * frequency;
+  return x == 0.0 ? 1.0 : sin(x) / x;
+}
+vec4 shrinkFrequency(vec4 c, float t, int fx, int fy0) {
+  float hx = aperture(pc.aperture_scale * float(fx) / 16.0);
+  vec4 threshold;
+  for (int i = 0; i < 4; ++i) {
+    float hy = aperture(pc.aperture_scale * float(fy0 + i) / 16.0);
+    float power = hx * hx * hy * hy;
+    threshold[i] = t * pc.aperture_strength * max(1.0 / max(power, 1e-20) - 1.0 + pc.correlated_error, 0.0);
+  }
+  vec4 c2 = c * c;
+  return c * c2 / max(c2 + threshold, vec4(1e-20));
+}
+
+#endif
+
 // a[r] = rows 0..7 of columns 0..3, b[r] = columns 4..7. Filtered in place.
 // gate > 0 (luma only): raise t towards the block's measured AC energy (see pc.dark_cap);
 // returns the factor applied, which the colour passes reuse through nv.
@@ -85,10 +146,21 @@ float filt(inout mat4 a0, inout mat4 a1, inout mat4 b0, inout mat4 b1, float t, 
     boost = mix(1.0, clamp(ac / sm2, 1.0, pc.dark_cap), gate);
     t *= mix(1.0, boost, pc.dark_luma);   // colour passes always get the full boost (through nv)
   }
+#ifdef LKR_APERTURE
+  p0[0] = shrinkFrequency(p0[0], t, 0, 0); p0[1] = shrinkFrequency(p0[1], t, 1, 0);
+  p0[2] = shrinkFrequency(p0[2], t, 2, 0); p0[3] = shrinkFrequency(p0[3], t, 3, 0);
+  p1[0] = shrinkFrequency(p1[0], t, 4, 0); p1[1] = shrinkFrequency(p1[1], t, 5, 0);
+  p1[2] = shrinkFrequency(p1[2], t, 6, 0); p1[3] = shrinkFrequency(p1[3], t, 7, 0);
+  q0[0] = shrinkFrequency(q0[0], t, 0, 4); q0[1] = shrinkFrequency(q0[1], t, 1, 4);
+  q0[2] = shrinkFrequency(q0[2], t, 2, 4); q0[3] = shrinkFrequency(q0[3], t, 3, 4);
+  q1[0] = shrinkFrequency(q1[0], t, 4, 4); q1[1] = shrinkFrequency(q1[1], t, 5, 4);
+  q1[2] = shrinkFrequency(q1[2], t, 6, 4); q1[3] = shrinkFrequency(q1[3], t, 7, 4);
+#else
   p0[0] = shrink(p0[0], t); p0[1] = shrink(p0[1], t); p0[2] = shrink(p0[2], t); p0[3] = shrink(p0[3], t);
   p1[0] = shrink(p1[0], t); p1[1] = shrink(p1[1], t); p1[2] = shrink(p1[2], t); p1[3] = shrink(p1[3], t);
   q0[0] = shrink(q0[0], t); q0[1] = shrink(q0[1], t); q0[2] = shrink(q0[2], t); q0[3] = shrink(q0[3], t);
   q1[0] = shrink(q1[0], t); q1[1] = shrink(q1[1], t); q1[2] = shrink(q1[2], t); q1[3] = shrink(q1[3], t);
+#endif
   p0[0].x = dc;
   idct(p0[0], p0[1], p0[2], p0[3], p1[0], p1[1], p1[2], p1[3]);
   idct(q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3]);
@@ -106,9 +178,16 @@ void main() {
   mat4 a0, a1, b0, b1;
 #if CH == 0
   float acc = 0.0;
+#ifdef LKR_APERTURE
+  vec3 noise_acc = vec3(0);
+#define AP_NOISE(O) noise_acc += colorNoise(O, plane) + colorNoise((O)+1, plane);
+#else
+#define AP_NOISE(O)
+#endif
 #define LOAD(M, C, I)                                                                   \
   {                                                                                     \
     int o = o0 + (I) * row;                                                             \
+    AP_NOISE(o)                                                                        \
     vec4 ya = 0.25 * (z[o] * pc.wb_r + z[o + 2 * plane] * pc.wb_b) + 0.5 * z[o + plane] * pc.wb_g;           \
     vec4 yb = 0.25 * (z[o + 1] * pc.wb_r + z[o + 2 * plane + 1] * pc.wb_b) + 0.5 * z[o + plane + 1] * pc.wb_g; \
     a##M[C] = ya; b##M[C] = yb;                                                         \
@@ -131,15 +210,32 @@ void main() {
   LOAD(0, 0, 0) LOAD(0, 1, 1) LOAD(0, 2, 2) LOAD(0, 3, 3)
   LOAD(1, 0, 4) LOAD(1, 1, 5) LOAD(1, 2, 6) LOAD(1, 3, 7)
 #if CH == 0
+#ifdef LKR_APERTURE
+  float level = noise_acc.x / 64.0;
+#else
   float level = acc / 64.0;
+#endif
   float ymean = (dot(a0[0] + a0[1] + a0[2] + a0[3] + a1[0] + a1[1] + a1[2] + a1[3], vec4(1.0)) +
                  dot(b0[0] + b0[1] + b0[2] + b0[3] + b1[0] + b1[1] + b1[2] + b1[3], vec4(1.0))) / 64.0;
   float gate = pc.dark_cap > 1.0 ? 1.0 - smoothstep(0.25 * pc.dark_level, pc.dark_level, ymean) : 0.0;
+#ifdef LKR_APERTURE
+  float sm2 = pc.coherence_sigma2 * level;
+  float isotropic = incoherence(a0, a1, b0, b1, pc.coherence_sigma2 * level);
+  float boost = filt(a0, a1, b0, b1, pc.k_y2 * sm2 * isotropic, sm2, gate);
+  nv[iy * pc.nx + ix] = vec4(noise_acc / 64.0 * boost, isotropic);
+#else
   float sm2 = pc.sigma2 * level;
   float boost = filt(a0, a1, b0, b1, pc.k_y2 * sm2, sm2, gate);
   nv[iy * pc.nx + ix] = level * boost;
+#endif
+#else
+#ifdef LKR_APERTURE
+  vec4 info = nv[iy * pc.nx + ix];
+  float level = CH == 1 ? info.y : info.z;
+  filt(a0, a1, b0, b1, pc.k_c2 * pc.coherence_sigma2 * level * info.w, 0.0, 0.0);
 #else
   filt(a0, a1, b0, b1, pc.k_c2 * pc.sigma2 * nv[iy * pc.nx + ix], 0.0, 0.0);
+#endif
 #endif
   vec4 wxa = iw[pc.ixo + ix] * WIN_A, wxb = iw[pc.ixo + ix + 1] * WIN_B;
   vec4 wya = iw[iy] * WIN_A, wyb = iw[iy + 1] * WIN_B;

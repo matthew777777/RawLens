@@ -85,6 +85,9 @@ struct DctPush {
   int32_t H, W, ny, nx, py, px, ixo, has_ns;
   float sigma2, lv_a, lv_b, k_y2, k_c2, wb_r, wb_g, wb_b;
   float dark_level, dark_cap, dark_luma;
+  float aperture_scale, aperture_strength;
+  float coherence_sigma2;
+  float correlated_error;
 };
 
 struct Push {
@@ -142,14 +145,26 @@ bool Solver::Optional(const SolveParams& prm, bool dct) {
     return p.pipe != VK_NULL_HANDLE;
   };
   bool ok = true;
+  if (prm.band_rejection &&
+      !need(weight_band_, spv::weight_band, sizeof(spv::weight_band), 7, sizeof(Push))) return false;
   if (prm.guide_confidence > 0.0f || prm.trusted_static[2] > 0.0f)
     ok = need(guide_stats_, spv::guide_stats, sizeof(spv::guide_stats), 3, sizeof(Push)) &&
          need(weight_guide_, spv::weight_guide, sizeof(spv::weight_guide), 6, sizeof(Push));
-  if (dct)
-    ok = need(dct_y_, spv::dct_x_y, sizeof(spv::dct_x_y), 5, sizeof(DctPush)) &&
+  if (dct) {
+    const bool aperture = prm.dct_aperture > 0.0f;
+    if (aperture != dct_aperture_mode_) {
+      for (Pipeline* p : {&dct_y_, &dct_u_, &dct_v_}) gpu_->destroy(*p);
+      dct_aperture_mode_ = aperture;
+    }
+    ok = (aperture ?
+         need(dct_y_, spv::dct_aperture_y, sizeof(spv::dct_aperture_y), 5, sizeof(DctPush)) &&
+         need(dct_u_, spv::dct_aperture_u, sizeof(spv::dct_aperture_u), 5, sizeof(DctPush)) &&
+         need(dct_v_, spv::dct_aperture_v, sizeof(spv::dct_aperture_v), 5, sizeof(DctPush)) :
+         need(dct_y_, spv::dct_x_y, sizeof(spv::dct_x_y), 5, sizeof(DctPush)) &&
          need(dct_u_, spv::dct_x_u, sizeof(spv::dct_x_u), 5, sizeof(DctPush)) &&
-         need(dct_v_, spv::dct_x_v, sizeof(spv::dct_x_v), 5, sizeof(DctPush)) &&
+         need(dct_v_, spv::dct_x_v, sizeof(spv::dct_x_v), 5, sizeof(DctPush))) &&
          need(dct_yuv_, spv::dct_yuv, sizeof(spv::dct_yuv), 1, sizeof(DctPush));
+  }
   if (prm.gather) ok = ok && need(zgather_, spv::zstep_gather, sizeof(spv::zstep_gather), 4, sizeof(Push));
   if (prm.robust_gather) ok = ok && need(zgw_, spv::zstep_gw, sizeof(spv::zstep_gw), 6, sizeof(Push));
   if (prm.quad)
@@ -196,6 +211,7 @@ Buffer& Solver::Cached(int slot, size_t bytes, bool host_read) {
 }
 
 Solver::~Solver() {
+  gpu_->destroy(weight_band_);
   if (gpu_) for (Entry& e : cache_) gpu_->free(e.buf);
   if (!gpu_ || !gpu_->ok()) return;
   for (Pipeline* p : {&dct_y_, &dct_u_, &dct_v_, &dct_yuv_, &resid_, &zstep_, &jac_, &solve_, &residg_, &zgather_, &weight_, &scatter_, &jacblk_, &solveblk_, &wmin_, &wtemp_, &wdark_, &wdarkv_, &wminh_, &radjw_, &wexp_, &wth_, &wtdet_, &zgw_, &residq_, &radjwq_, &scatq_, &zpack_, &residzq_, &radjwzq_, &guide_stats_, &weight_guide_})
@@ -286,16 +302,43 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     else DemosaicBilinear(frames, h, w, rgb.data());
     std::vector<float> up(nHR);   // CPU-side copy: never read back from mapped GPU memory
     UpsampleBilinear(rgb.data(), 3, h, w, s, up.data());
+    // The bilinear upsample is blurrier than the demosaiced reference: its s x s block means do
+    // not give the reference back. The data term then finds that difference at the sites the
+    // reference actually sampled and corrects only those (one colour per LR pixel), which leaves
+    // 2 x 2 bumps at the Bayer period wherever few frames contribute: chessboard in green,
+    // coloured dots in red / blue (zipper). A few back-projection steps make the start image
+    // reproduce the demosaiced reference in all three colours, so nothing site-specific is left.
+    for (int it = 0; it < prm.init_backproject && s > 1; ++it) {
+      std::vector<float> d(size_t(3) * h * w), du(nHR);
+      const float inv = 1.0f / float(s * s);
+      for (int c = 0; c < 3; ++c)
+        for (int i = 0; i < h; ++i)
+          for (int j = 0; j < w; ++j) {
+            float m = 0.0f;
+            for (int oy = 0; oy < s; ++oy)
+              for (int ox = 0; ox < s; ++ox) m += up[(size_t(c) * H + size_t(i) * s + oy) * W + size_t(j) * s + ox];
+            d[(size_t(c) * h + i) * w + j] = rgb[(size_t(c) * h + i) * w + j] - m * inv;
+          }
+      UpsampleBilinear(d.data(), 3, h, w, s, du.data());
+      for (size_t i = 0; i < nHR; ++i) up[i] += du[i];
+    }
     std::memcpy(z.map, up.data(), nHR * 4);
     std::memcpy(x.map, up.data(), nHR * 4);
     std::memcpy(z0.map, up.data(), nHR * 4);
   }
 
-  const bool dct = (prm.dct_prior || prm.dct_fallback) && !prior;   // pipelines and buffers
+  const bool zero_model_error = prm.model_error &&
+      std::all_of(prm.model_error,prm.model_error+size_t(H)*W,[](float v){return v==0;});
+  const bool bands = prm.band_rejection && prm.model_error && !zero_model_error && !prm.holdout && !(h&1) && !(w&1);
+  if (prm.band_rejection && (prm.guide_confidence <= 0 || !prm.model_error || prm.band_k <= 0))
+    return LKR_FAIL("band rejection requires guide, model-error map and positive band_k");
+  Buffer& model_band = cached(bands ? size_t(H)*W*4 : 16);
+  if(bands)std::memcpy(model_band.map,prm.model_error,size_t(H)*W*4);
+  const bool dct = (prm.dct_prior || prm.dct_fallback) && !prior && !zero_model_error;   // pipelines and buffers
   if (dct && ((H & 3) || (W & 3))) return LKR_FAIL("dct x-step needs H, W % 4 == 0");
   const int dct_ny = dct ? (H - 8) / 4 + 1 : 0, dct_nx = dct ? (W - 8) / 4 + 1 : 0;
   Buffer& dct_ns = cached(dct ? size_t(H) * W * 4 : 16), &dct_iw = cached(dct ? size_t(H + W + 8) * 4 : 16),
-         &dct_nv = cached(dct ? size_t(dct_ny) * dct_nx * 4 : 16);
+         &dct_nv = cached(dct ? size_t(dct_ny) * dct_nx * (prm.dct_aperture > 0 ? 16 : 4) : 16);
   if (dct) {   // inverse Hann overlap sum, per row then per column (vec4 slots)
     static const float win[8] = {0.03806023f, 0.30865828f, 0.69134172f, 0.96193977f,
                                  0.96193977f, 0.69134172f, 0.30865828f, 0.03806023f};
@@ -365,6 +408,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   VkDescriptorSet sVR = gpu_->set(residg_, {&v, &y, &pb, &rr, &dloc});
   VkDescriptorSet sVZG = oset(zgather_, {&v, &x, &rr, &pb});
   VkDescriptorSet sE = gpu_->set(wexp_, {&rr, &y, &ebuf});
+  VkDescriptorSet sBand = bands ? gpu_->set(weight_band_, {&rr,&ebuf,&wtb,&rwb,&pb,&model_band,&dloc}) : VkDescriptorSet(VK_NULL_HANDLE);
   VkDescriptorSet sW = gpu_->set(weight_, {&rr, &ebuf, &rwb, &wtb, &wvb});
   VkDescriptorSet sW0 = gpu_->set(weight_, {&rr, &ebuf, &rwb, &wrawb, &wvb});      // raw weights for the spread (rwb, wvb: rewritten by weight_min)
   VkDescriptorSet sWH = gpu_->set(wminh_, {&wrawb, &wtr, &wmtmp});
@@ -412,7 +456,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   // One "data step" = residual + adjoint (+ z update): scatter or gather.
   auto data_step = [&](const Push& q, bool on_v, bool first = true) {
     if (!on_v && q.rob_on > 0.5f && guide_on) {
-      if (!first && !prm.robust_gather) {
+      if (!first && !prm.robust_gather && !bands) {
         // Reuse this iteration's confidence, but update the residual at every
         // z-step. Reusing rwb here would repeat a stale gradient and diverge.
         if (quad) gpu_->dispatch(radjwq_, sRWq, &q, gxQ, gyQ, K);
@@ -424,7 +468,13 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       if (packz) d_pack(sZP, q);
       d_resid(sR, sRq, q, sRzq);
       if (first) {
-        Push qg = q; qg.f0 = prm.guide_confidence;
+        Push qg = q; qg.f0 = prm.guide_confidence; qg.f1 = 0.0f;
+        if (prm.guide_residual > 0.0f && prm.trusted_static[2] <= 0.0f) {   // residual weights -> wrawb, combined below
+          gpu_->dispatch(wexp_, sE, &q, gxLR, gyLR, K);
+          Push qw = q; qw.f0 = -1;
+          gpu_->dispatch(weight_, sW0, &qw, gxLR, gyLR, K);
+          qg.f1 = prm.guide_residual;
+        }
         if (prm.trusted_static[2] > 0.0f) {
           gpu_->dispatch(wexp_, sE, &q, gxLR, gyLR, K);
           Push qw = q; qw.f0 = -1;
@@ -437,7 +487,13 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
         gpu_->dispatch(wminh_, sWH, &qm, gxLR, gyLR, K);
         gpu_->dispatch(wmin_, sWM, &qm, gxLR, gyLR, K);
       }
-      if (prm.robust_gather) gpu_->dispatch(zgw_, sZGW, &q, gxHR, gyHR);
+      if (bands) {
+        gpu_->dispatch(wexp_,sE,&q,gxLR,gyLR,K);
+        Push qb=q;qb.rob_k=prm.band_k;
+        gpu_->dispatch(weight_band_,sBand,&qb,gxLR,gyLR,K);
+        d_scatter(sS,sSq,q);
+        gpu_->dispatch(zstep_,sZ,&q,gHR1);
+      } else if (prm.robust_gather) gpu_->dispatch(zgw_, sZGW, &q, gxHR, gyHR);
       else {
         d_scatter(sS, sSq, q);
         gpu_->dispatch(zstep_, sZ, &q, gHR1);
@@ -576,9 +632,9 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     trace("motion_initial", p, size_t(K) * 6);
     FILE* f = std::fopen((prm.debug_prefix + "_meta.txt").c_str(), "w");
     if (f) {
-      std::fprintf(f, "H=%d W=%d h=%d w=%d K=%d a=%.9g b=%.9g sigma=%.9g gain=%.9g grain=%.9g wb=%.9g,%.9g,%.9g\n",
+      std::fprintf(f, "H=%d W=%d h=%d w=%d K=%d a=%.9g b=%.9g sigma=%.9g gain=%.9g grain=%.9g wb=%.9g,%.9g,%.9g local_block=%d clip=%.9g robust_k=%.9g robust_tau=%.9g\n",
           H, W, h, w, K, prm.noise_a, prm.noise_b, prm.sigma_noise, prm.prior_gain, prm.grain,
-          prm.wb[0], prm.wb[1], prm.wb[2]);
+          prm.wb[0], prm.wb[1], prm.wb[2], prm.local_block, prm.clip, prm.robust_k, prm.robust_tau);
       std::fclose(f);
     }
   }
@@ -733,6 +789,9 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       if ((prm.shadow_boost > 0.0f || prm.shadow_chroma > 0.0f) &&
           (prm.noise_a > 0.0f || prm.noise_b > 0.0f)) {
         ShadowWeight(zc.as<float>(), H, W, prm, &shadow);
+        if (prm.model_error) for (size_t i=0;i<shadow.size();++i) {
+          const float e=float(K)*prm.model_error[i];shadow[i]*=e/(1.f+e);
+        }
         if (prm.shadow_boost > 0.0f) {
           nsh.resize(shadow.size());
           for (size_t i = 0; i < nsh.size(); ++i) nsh[i] = (ns ? ns[i] : 1.0f) * (1.0f + prm.shadow_boost * shadow[i]);
@@ -743,6 +802,12 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       // Fallback cleanup: remove only the noise a pixel has in excess of fully merged ones
       // (variance factor ns^2 - 1); tiles where every frame was used skip the pass.
       std::vector<float> nfb;
+      std::vector<float> model_ns;
+      if (prm.model_error) {
+        model_ns.resize(size_t(H)*W);
+        for(size_t i=0;i<model_ns.size();++i)model_ns[i]=std::sqrt(float(K)*prm.model_error[i]);
+        ns=model_ns.data();
+      }
       bool fb_skip = false;
       if (dct && !prm.dct_prior) {
         float mx = 0.0f;
@@ -767,7 +832,8 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
                   denom > 0 ? prm.noise_a / denom : 0.0f, denom > 0 ? prm.noise_b / denom : 1.0f,
                   prm.dct_prior ? prm.dct_luma * prm.dct_luma : 0.0f,   // fallback: colour only, luma grain untouched
                   prm.dct_chroma * prm.dct_chroma,
-                  prm.wb[0], prm.wb[1], prm.wb[2], prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma};
+                  prm.wb[0], prm.wb[1], prm.wb[2], prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma,
+                  float(s), prm.dct_aperture, denom / float(K), prm.model_error ? 1.f : 0.f};
         gpu_->begin();
         gpu_->fill(x, 0);
         const std::pair<const Pipeline*, VkDescriptorSet> chans[3] = {{&dct_y_, sDctY}, {&dct_u_, sDctU}, {&dct_v_, sDctV}};
@@ -798,10 +864,182 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
 
   // Final z, x to the CPU (x is already in xc when the last step was a prior).
   gpu_->begin();
+  const bool msmooth = prm.motion_smooth > 0.0f && prm.robust && prm.noise_b > 0 && K > 1 && !prm.holdout;
+  if (!prm.debug_prefix.empty() || msmooth) {
+    // Diagnostic residual at exactly the saved final image and geometry.
+    // The last data-step residual otherwise predates the last z/motion update.
+    Push q = pc; q.f2 = prm.clip;
+    if (packz) d_pack(sZP, q);
+    d_resid(sR, sRq, q, sRzq);
+  }
   gpu_->copy(z, zc, nHR * 4);
   if (!x_from_staging) gpu_->copy(x, xc, nHR * 4);
   if (!gpu_->submit()) return LKR_FAIL("final submit");
   x_out->assign(xc.as<float>(), xc.as<float>() + nHR);
+  if (msmooth) {
+    // Motion look. Where the accepted frames disagree with the merged image by more than their
+    // noise (wind-moved foliage, anything the confidence let through), every HR site holds a
+    // different frame's version of the scene: 2 x 2 blocks at the Bayer period. There the image
+    // is replaced by the time average of the frames (below) in proportion to the excess, g = 1 - 1/E with
+    // E = weighted mean of r^2 / sigma^2 over the frames (the weight_e variance, registration
+    // tolerance included; 5 x 5 LR mean). Consistent areas have E <= 1 and are not touched.
+    gpu_->begin(); gpu_->submit();   // rr, wtb readable
+    const float* rv = rr.as<float>();
+    const float* wv = wtb.as<float>();
+    const float* pm = pb.as<float>();
+    const size_t n = size_t(h) * w;
+    std::vector<float> num(n, 0.0f), den(n, 0.0f), tmp(n);
+    const float tau2 = prm.robust_tau * prm.robust_tau;
+    for (int k = 1; k < K; ++k) {
+      const float* yk = frames + size_t(k) * n;
+      const float* rk = rv + size_t(k) * n;
+      const float* wk = wv + size_t(k) * n;
+      const float* pk = pm + size_t(k) * 6;
+      for (int i = 0; i < h; ++i)
+        for (int j = 0; j < w; ++j) {
+          const float wt = wk[size_t(i) * w + j], r = rk[size_t(i) * w + j];
+          if (wt <= 0.0f || r == 0.0f) continue;
+          auto Y = [&](int ii, int jj) { return yk[size_t(std::min(std::max(ii, 0), h - 1)) * w + std::min(std::max(jj, 0), w - 1)]; };
+          const float c = Y(i, j);
+          const float gx = (Y(i, j + 2) - Y(i, j - 2)) * 0.25f, gy = (Y(i + 2, j) - Y(i - 2, j)) * 0.25f;
+          float lo = c, hi = c;
+          for (int di = -2; di <= 2; di += 2)
+            for (int dj = -2; dj <= 2; dj += 2) { const float v = Y(i + di, j + dj); lo = std::min(lo, v); hi = std::max(hi, v); }
+          const float rg = (hi - lo) * 0.25f;
+          const float var = std::max(prm.noise_a * std::max(c, 0.0f) + prm.noise_b + tau2 * std::max(gx * gx + gy * gy, rg * rg), 1e-12f);
+          const float ux = j + 0.5f, uy = i + 0.5f;   // to the reference frame (tile affine)
+          const int rj = int(std::floor(pk[0] * ux + pk[1] * uy + pk[2])), ri = int(std::floor(pk[3] * ux + pk[4] * uy + pk[5]));
+          if (rj < 0 || ri < 0 || rj >= w || ri >= h) continue;
+          num[size_t(ri) * w + rj] += wt * r * r / var;
+          den[size_t(ri) * w + rj] += wt;
+        }
+    }
+    auto box = [&](std::vector<float>& a) {   // 5 x 5 sum, clamped
+      for (int i = 0; i < h; ++i)
+        for (int j = 0; j < w; ++j) {
+          float sum = 0.0f;
+          for (int d = -2; d <= 2; ++d) sum += a[size_t(i) * w + std::min(std::max(j + d, 0), w - 1)];
+          tmp[size_t(i) * w + j] = sum;
+        }
+      for (int i = 0; i < h; ++i)
+        for (int j = 0; j < w; ++j) {
+          float sum = 0.0f;
+          for (int d = -2; d <= 2; ++d) sum += tmp[size_t(std::min(std::max(i + d, 0), h - 1)) * w + j];
+          a[size_t(i) * w + j] = sum;
+        }
+    };
+    box(num);
+    box(den);
+    std::vector<float> glr(n), g(size_t(H) * W);
+    bool any = false;
+    for (size_t i = 0; i < n; ++i) {
+      const float E = den[i] > 0.0f ? num[i] / den[i] : 0.0f;
+      glr[i] = E > 1.0f ? std::min(prm.motion_smooth * (1.0f - 1.0f / E), 1.0f) : 0.0f;
+      any = any || glr[i] > 0.0f;
+    }
+    if (any) {
+      UpsampleBilinear(glr.data(), 1, h, w, s, g.data());
+      // What a long exposure records is the time average of the scene: each frame demosaiced on
+      // its own, aligned like the merge aligns it (tile affine + local block), and averaged with
+      // the merge's own weights (the reference counts 1, frames the confidence rejected stay
+      // out, so a passing car leaves no trail). The blur then follows the real motion instead of
+      // being a spatial filter. Only the flagged pixels are computed.
+      const size_t HW = size_t(H) * W;
+      std::vector<uint32_t> idx;
+      for (size_t i = 0; i < HW; ++i) if (g[i] > 0.0f) idx.push_back(uint32_t(i));
+      std::vector<float> acc3(idx.size() * 3, 0.0f), accw(idx.size(), 0.0f), dem(size_t(3) * n);
+      const float* dl = dloc.as<float>();
+      const int B = prm.local_block;
+      const int lnbx = B > 0 ? (w + B - 1) / B : 0, lnby = B > 0 ? (h + B - 1) / B : 0;
+      for (int k = 0; k < K; ++k) {
+        const float* yk = frames + size_t(k) * n;
+        if (prm.mhc_init) MhcCoherentRggb(yk, h, w, dem.data()); else DemosaicBilinear(yk, h, w, dem.data());
+        const float* pk = pm + size_t(k) * 6;
+        const float det = pk[0] * pk[4] - pk[1] * pk[3];
+        if (std::fabs(det) < 1e-6f) continue;
+        const float i00 = pk[4] / det, i01 = -pk[1] / det, i10 = -pk[3] / det, i11 = pk[0] / det;
+        const float* wk = wv + size_t(k) * n;
+        for (size_t q = 0; q < idx.size(); ++q) {
+          const int Y = int(idx[q] / uint32_t(W)), X = int(idx[q] % uint32_t(W));
+          const float rx = (X + 0.5f) / s, ry = (Y + 0.5f) / s;   // reference LR coordinates
+          float ux = i00 * (rx - pk[2]) + i01 * (ry - pk[5]), uy = i10 * (rx - pk[2]) + i11 * (ry - pk[5]);
+          if (B > 0)
+            for (int it = 0; it < 2; ++it) {   // the block is addressed in frame coordinates
+              const int bx = std::min(std::max(int(ux) / B, 0), lnbx - 1), by = std::min(std::max(int(uy) / B, 0), lnby - 1);
+              const float* d = dl + (size_t(k) * lnby + by) * lnbx * 2 + size_t(bx) * 2;
+              ux = i00 * (rx - pk[2] - d[0]) + i01 * (ry - pk[5] - d[1]);
+              uy = i10 * (rx - pk[2] - d[0]) + i11 * (ry - pk[5] - d[1]);
+            }
+          const float fx = ux - 0.5f, fy = uy - 0.5f;
+          const int x0 = int(std::floor(fx)), y0 = int(std::floor(fy));
+          if (x0 < 0 || y0 < 0 || x0 + 1 >= w || y0 + 1 >= h) continue;
+          const float wt = k == 0 ? 1.0f : wk[size_t(std::min(std::max(int(uy), 0), h - 1)) * w + std::min(std::max(int(ux), 0), w - 1)];
+          if (wt <= 0.0f) continue;
+          const float ax = fx - x0, ay = fy - y0;
+          const size_t o = size_t(y0) * w + x0;
+          for (int c = 0; c < 3; ++c) {
+            const float* D = dem.data() + size_t(c) * n + o;
+            acc3[q * 3 + c] += wt * ((D[0] * (1 - ax) + D[1] * ax) * (1 - ay) + (D[w] * (1 - ax) + D[w + 1] * ax) * ay);
+          }
+          accw[q] += wt;
+        }
+      }
+      const bool keep_sr = prm.motion_smooth_sr;
+      std::vector<float> D, Bm, mask, Bw;
+      if (keep_sr) { D.assign(HW, 0.0f); Bm.assign(HW, 0.0f); mask.assign(HW, 0.0f); Bw.assign(HW, 0.0f); }
+      const int P = 2 * s;   // Bayer period in HR pixels
+      for (float* img : {zc.as<float>(), x_out->data()})
+        for (int c = 0; c < 3; ++c) {
+          float* V = img + size_t(c) * HW;
+          if (!keep_sr) {
+            for (size_t q = 0; q < idx.size(); ++q)
+              if (accw[q] > 0.0f) V[idx[q]] += g[idx[q]] * (acc3[q * 3 + c] / accw[q] - V[idx[q]]);
+            continue;
+          }
+          // Super-resolved variant: the merge minus the time average is the resolved detail plus
+          // the per-site blocks. The blocks repeat with the Bayer period; the detail does not.
+          // Remove from that difference its local same-site mean (3 x 3 sites one period apart)
+          // less the local mean over all sites, i.e. only what is locked to the Bayer grid.
+          std::fill(D.begin(), D.end(), 0.0f);
+          std::fill(mask.begin(), mask.end(), 0.0f);
+          for (size_t q = 0; q < idx.size(); ++q)
+            if (accw[q] > 0.0f) { D[idx[q]] = V[idx[q]] - acc3[q * 3 + c] / accw[q]; mask[idx[q]] = 1.0f; }
+          for (size_t q = 0; q < idx.size(); ++q) {   // P x P box sums around each flagged pixel
+            const int Y = int(idx[q] / uint32_t(W)), X = int(idx[q] % uint32_t(W));
+            float sd = 0.0f, sm = 0.0f;
+            for (int dy = -P / 2; dy < P - P / 2; ++dy) {
+              const int yy = Y + dy; if (yy < 0 || yy >= H) continue;
+              for (int dx = -P / 2; dx < P - P / 2; ++dx) {
+                const int xx = X + dx; if (xx < 0 || xx >= W) continue;
+                sd += D[size_t(yy) * W + xx]; sm += mask[size_t(yy) * W + xx];
+              }
+            }
+            Bm[idx[q]] = sd; Bw[idx[q]] = sm;
+          }
+          for (size_t q = 0; q < idx.size(); ++q) {
+            if (accw[q] <= 0.0f) continue;
+            const int Y = int(idx[q] / uint32_t(W)), X = int(idx[q] % uint32_t(W));
+            float cs = 0.0f, cw = 0.0f, ms = 0.0f, mw = 0.0f;
+            for (int dy = -1; dy <= 1; ++dy) {
+              const int yy = Y + dy * P; if (yy < 0 || yy >= H) continue;
+              for (int dx = -1; dx <= 1; ++dx) {
+                const int xx = X + dx * P; if (xx < 0 || xx >= W) continue;
+                const float t = (dy == 0 ? 2.0f : 1.0f) * (dx == 0 ? 2.0f : 1.0f);
+                const size_t o = size_t(yy) * W + xx;
+                cs += t * D[o] * mask[o]; cw += t * mask[o];
+                ms += t * Bm[o]; mw += t * Bw[o];
+              }
+            }
+            if (cw <= 0.0f || mw <= 0.0f) continue;
+            V[idx[q]] -= g[idx[q]] * (cs / cw - ms / mw);
+          }
+        }
+    }
+    if (const char* dump = std::getenv("LKR_DUMP_MS")) {
+      FILE* f = std::fopen(dump, "wb");
+      if (f) { std::fwrite(glr.data(), 4, glr.size(), f); std::fclose(f); }
+    }
+  }
   if (const char* dd = std::getenv("LKR_DUMP_WT")) {   // diagnostics: temporal + final robust weights
     gpu_->begin(); gpu_->submit();
     FILE* f = std::fopen((std::string(dd) + "_wtr.f32").c_str(), "wb");
@@ -846,6 +1084,8 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
       }
   }
   trace("local_final", dloc.as<float>(), size_t(K) * nb * 2);
+  trace("motion_final", pb.as<float>(), size_t(K) * 6);
+  trace("weights_final", wtb.as<float>(), nLR);
   trace("final_z", zc.as<float>(), nHR);
   // Each frame minus the model's prediction of it (K x h x w, invalid = 0): host/lkr_align_overlay.py.
   trace("final_resid", rr.as<float>(), nLR);

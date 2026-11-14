@@ -9,12 +9,20 @@ layout(local_size_x=16,local_size_y=16) in;
 layout(std430,binding=0) readonly buffer M { vec4 means[]; };
 layout(std430,binding=1) readonly buffer V { vec4 vars[]; };
 layout(std430,binding=2) readonly buffer P { float p[]; };
-layout(std430,binding=3) writeonly buffer W { float weights[]; };
+layout(std430,binding=3) buffer W { float weights[]; };   // in: residual weights when pc.f1 > 0
 layout(std430,binding=5) buffer T { float temporal[]; };
 
 // One invocation per Bayer quad: all four samples share the quad centre u and
 // the frame's quad statistics, so they get the same weight (written 4 times).
 void put(int o,float v){weights[o]=v;weights[o+1]=v;weights[o+pc.w]=v;weights[o+pc.w+1]=v;}
+// Guide AND residual test (pc.f1 = exponent a > 0): the guide's local means miss
+// wind-moved fine detail; the residual weight (weight.comp, already in weights)
+// sees it. w = min(guide, residual^a); a < 1 softens the residual's over-rejection.
+float both(int o,float v){return pc.f1>0.0 ? min(v,pow(weights[o],pc.f1)) : v;}
+void put2(int o,float v){
+  float a=both(o,v), b=both(o+1,v), c=both(o+pc.w,v), d=both(o+pc.w+1,v);
+  weights[o]=a; weights[o+1]=b; weights[o+pc.w]=c; weights[o+pc.w+1]=d;
+}
 void main() {
   int qx=int(gl_GlobalInvocationID.x), qy=int(gl_GlobalInvocationID.y), k=int(gl_GlobalInvocationID.z);
   int w=pc.w/2,h=pc.h/2;
@@ -47,5 +55,5 @@ void main() {
   float shrink=d/(d+n);
   d*=shrink*shrink;
   float variance=max(v.x+v.y+v.z,9.0*m.w);
-  put(o,clamp(pc.f0*exp(-d/max(variance,1e-10))-.12,0,1));
+  put2(o,clamp(pc.f0*exp(-d/max(variance,1e-10))-.12,0,1));
 }

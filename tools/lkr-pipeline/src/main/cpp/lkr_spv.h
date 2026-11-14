@@ -7,6 +7,18 @@
 
 namespace lkr {
 namespace spv {
+static const uint32_t weight_band[] = {
+#include "weight_band.inc"
+};
+static const uint32_t dct_aperture_y[] = {
+#include "dct_aperture_y.inc"
+};
+static const uint32_t dct_aperture_u[] = {
+#include "dct_aperture_u.inc"
+};
+static const uint32_t dct_aperture_v[] = {
+#include "dct_aperture_v.inc"
+};
 static const uint32_t guide_stats[] = {
 #include "guide_stats.inc"
 };

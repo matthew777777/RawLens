@@ -46,6 +46,9 @@ struct FullParams {
   SolveParams solve;       // T, z_steps, prior_at, step_scale (sigma_* filled here)
   // Host diagnostic: known-static sensor rectangle x,y,width,height.
   std::array<float, 4> trusted_static{0, 0, 0, 0};
+  // Research-only: reference-region LR excess-variance map from a frozen 2x
+  // detector. Empty disables it. Values are in units of sensor noise variance.
+  std::vector<float> model_error;
   float smax_x = 10.0f, end_x = 1.0f;   // schedule in multiples of our noise sigma
   // Noise-aware look controls. The old daylight prior 0.15 plus 0.8 residual
   // reinjection retained substantial shadow noise. Keep the denoised estimate

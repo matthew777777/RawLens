@@ -72,6 +72,7 @@ def main():
     ap.add_argument('--person-wobble', type=float, default=0.0, help='non-rigid motion amount (0 = rigid)')
     ap.add_argument('--person-blur', type=int, default=1, help='motion-blur sub-positions per exposure (1 = sharp)')
     ap.add_argument('--person-chroma', action='store_true', help='person at the background brightness, colour only')
+    ap.add_argument('--no-rail', action='store_true', help='no railing (noise / SNR scenes)')
     ap.add_argument('--rail-level', type=float, default=0.08, help='bar brightness (background median 0.35)')
     ap.add_argument('--noise-a', type=float, default=2.05e-5)
     ap.add_argument('--noise-b', type=float, default=1.4e-6)
@@ -105,6 +106,7 @@ def main():
     band = (xx > 0.15 * HR) & (xx < 0.75 * HR) & (yy > 0.25 * HR) & (yy < 0.85 * HR)
     rail[band & ((xx.astype(int) % 9) < 2)] = 1.0
     rail[(np.abs(yy - 0.25 * HR) < 2) & (xx > 0.15 * HR) & (xx < 0.75 * HR)] = 1.0
+    if a.no_rail: rail[:] = 0.0
     rail_col = np.array([a.rail_level] * 3, 'f4')
     tint = np.array([0.6, 0.9, 1.6], 'f4'); tint /= tint.mean()
     bg_lum = gaussian_filter(bg.mean(-1), 6)   # local background brightness (--person-chroma)

@@ -1,0 +1,55 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Experimental frequency confidence in sensor space. Four cycle-spun 2x2
+// Haar blocks on each CFA phase avoid locking to one block grid. Subtract
+// only a bounded high-band term from the existing guide-weighted residual;
+// LL contributions and the reference frame retain their original weights.
+#define LKR_LOCAL_BINDING 6
+#include "lkr_common.glsl"
+layout(local_size_x=16,local_size_y=16) in;
+layout(std430,binding=0) readonly buffer R { float r[]; };
+layout(std430,binding=1) readonly buffer E { float energy[]; };
+layout(std430,binding=2) readonly buffer W { float weight[]; };
+layout(std430,binding=3) writeonly buffer RW { float rw[]; };
+layout(std430,binding=4) readonly buffer P { float p[]; };
+layout(std430,binding=5) readonly buffer M { float model[]; };
+
+float uncertainty(int k,vec2 u) {
+  int b=k*6;
+  vec2 ref=vec2(p[b]*u.x+p[b+1]*u.y+p[b+2],p[b+3]*u.x+p[b+4]*u.y+p[b+5])+localD(k,u);
+  vec2 q=float(pc.s)*ref-.5;
+  ivec2 t=ivec2(floor(q));vec2 a=fract(q);
+  if(t.x<0 || t.y<0 || t.x+1>=pc.W || t.y+1>=pc.H)return 0;
+  int o=t.y*pc.W+t.x;
+  float e=mix(mix(model[o],model[o+1],a.x),mix(model[o+pc.W],model[o+pc.W+1],a.x),a.y);
+  return 1.0-exp(-float(pc.K)*max(e,0.0));
+}
+void main() {
+  int j=int(gl_GlobalInvocationID.x),i=int(gl_GlobalInvocationID.y),k=int(gl_GlobalInvocationID.z);
+  if(j>=pc.w || i>=pc.h)return;
+  int frame=k*pc.h*pc.w,o=frame+i*pc.w+j;
+  float value=r[o]*weight[o];
+  if(k==0 || r[o]==0){rw[o]=value;return;}
+  for(int sy=0;sy<2;++sy)for(int sx=0;sx<2;++sx) {
+    int y=i-2*sy,x=j-2*sx;
+    if(x<0 || y<0 || x+2>=pc.w || y+2>=pc.h)continue;
+    int b=frame+y*pc.w+x;
+    ivec4 idx=ivec4(b,b+2,b+2*pc.w,b+2*pc.w+2);
+    vec4 v=vec4(r[idx.x],r[idx.y],r[idx.z],r[idx.w]);
+    vec4 e=vec4(energy[idx.x],energy[idx.y],energy[idx.z],energy[idx.w]);
+    if(any(equal(v,vec4(0))) || any(lessThanEqual(e,vec4(0))))continue;
+    float w=min(min(weight[idx.x],weight[idx.y]),min(weight[idx.z],weight[idx.w]));
+    if(w<=0)continue;
+    float gate=uncertainty(k,vec2(x+1.5,y+1.5));if(gate<=0)continue;
+    // Reconstruct the exact variance used by weight_e, including its edge tolerance.
+    float variance=.25*dot(v*v/e,vec4(1));
+    vec3 c=vec3(v.x-v.y+v.z-v.w,v.x+v.y-v.z-v.w,v.x-v.y-v.z+v.w)*.5;
+    vec3 excess=max(c*c/max(variance*pc.rob_k*pc.rob_k,1e-20)-1.0,vec3(0));
+    vec3 confidence=1.0/(1.0+excess);
+    vec3 removed=w*gate*(1.0-confidence)*c;
+    vec3 sign=vec3(sx==0?1:-1,sy==0?1:-1,(sx==sy)?1:-1);
+    value-=.125*dot(sign,removed); // inverse Haar .5, average over four phases .25
+  }
+  rw[o]=value;
+}

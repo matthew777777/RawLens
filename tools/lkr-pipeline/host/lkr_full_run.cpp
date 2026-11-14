@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,6 +27,7 @@ int main(int argc, char** argv) {
   int reference = 0;
   int pack_bits = 0;
   bool profile = false;
+  std::string model_error_path;
   for (int i = 3; i < argc; ++i) {
     std::string k = argv[i];
     auto nx = [&] { return std::atoi(argv[++i]); };
@@ -39,6 +41,10 @@ int main(int argc, char** argv) {
     else if (k == "--repeat-reference") repeat_reference = nx() != 0;
     else if (k == "--prior") dct_prior = nx() != 0;   // 0 none (default), 1 DCT x-step
     else if (k == "--dluma") prm.solve.dct_luma = float(std::atof(argv[++i]));
+    else if (k == "--aperture") prm.solve.dct_aperture = float(std::atof(argv[++i]));
+    else if (k == "--model-error") model_error_path = argv[++i];
+    else if (k == "--bands") prm.solve.band_rejection = nx() != 0;
+    else if (k == "--bk") prm.solve.band_k = float(std::atof(argv[++i]));
     else if (k == "--dchroma") prm.solve.dct_chroma = float(std::atof(argv[++i]));
     else if (k == "--ddark") prm.solve.dct_dark_cap = float(std::atof(argv[++i]));
     else if (k == "--ddl") prm.solve.dct_dark_level = float(std::atof(argv[++i]));
@@ -59,6 +65,14 @@ int main(int argc, char** argv) {
     else if (k == "--notch") prm.solve.notch = nx() != 0;
     else if (k == "--workers") prm.workers = nx();
     else if (k == "--robust") prm.solve.robust = nx() != 0;
+    else if (k == "--ibp") prm.solve.init_backproject = nx();
+    else if (k == "--noise") {   // fixed noise model a, b (normalised units): what the app's learned model supplies on the phone
+      const float na = float(std::atof(argv[++i])), nb = float(std::atof(argv[++i]));
+      prm.noise_refine = [na, nb](float* pa, float* pb, int) { *pa = na; *pb = nb; return true; };
+    }
+    else if (k == "--msr") prm.solve.motion_smooth_sr = nx() != 0;
+    else if (k == "--msmooth") prm.solve.motion_smooth = float(std::atof(argv[++i]));
+    else if (k == "--gres") prm.solve.guide_residual = float(std::atof(argv[++i]));
     else if (k == "--guide") prm.solve.guide_confidence = float(std::atof(argv[++i]));
     else if (k == "--trusted-static") {
       for (float& v : prm.trusted_static) v = float(std::atof(argv[++i]));
@@ -143,6 +157,22 @@ int main(int argc, char** argv) {
   std::printf("device: %s\n", gpu.info().c_str());
   gpu.profile(profile);
   prm.solve.dct_prior = dct_prior;
+  if (!model_error_path.empty()) {
+    const size_t rw = prm.crop_w > 0 ? std::min(int(m.width), prm.crop_w) : int(m.width);
+    const size_t rh = prm.crop_h > 0 ? std::min(int(m.height), prm.crop_h) : int(m.height);
+    FILE* f = std::fopen(model_error_path.c_str(), "rb");
+    if (!f || (!(dct_prior && prm.solve.dct_aperture > 0) && !prm.solve.band_rejection)) {
+      if (f) std::fclose(f);
+      std::fprintf(stderr, "model-error requires a readable map and either aperture prior or --bands 1\n");return 2;
+    }
+    prm.model_error.resize(rw*rh);
+    const size_t got = std::fread(prm.model_error.data(), sizeof(float), rw*rh, f);
+    const bool extra = std::fgetc(f) != EOF; std::fclose(f);
+    if (got != rw*rh || extra || std::any_of(prm.model_error.begin(), prm.model_error.end(),
+        [](float v){return !std::isfinite(v) || v < 0;})) {
+      std::fprintf(stderr, "model-error dimensions/values do not match requested reference region\n");return 2;
+    }
+  }
   const lkr::PriorFactory make;
   std::vector<float> rgb;
   int ow = 0, oh = 0;

@@ -105,6 +105,69 @@ int main() {
     for(size_t i=0;i<plain.size();++i)error=std::max(error,std::abs(plain[i]-trusted[i]));
     std::printf("multi-step all-static oracle vs rejection off: max=%g\n",error);
     ok &= error<1e-5f;
+    std::vector<float> zero_error(128*128,0),zero_out;
+    s.robust=false;s.trusted_static={0,0,0,0};s.dct_prior=true;s.dct_aperture=1;
+    s.model_error=zero_error.data();
+    float p2[12]={1,0,0,0,1,0,1,0,0,0,1,0};
+    if(!solver.solve(frames.data(),2,64,64,p2,s,{},&zero_out,nullptr))return 2;
+    std::printf("zero model-error prior: byte-identical=%d\n",plain==zero_out);
+    ok &= plain==zero_out;
+    // Band rejection is a guide-only research mode; production now defaults off.
+    s.dct_prior=false;s.dct_aperture=0;s.band_rejection=true;s.guide_confidence=2;
+    float p3[12]={1,0,0,0,1,0,1,0,0,0,1,0};
+    if(!solver.solve(frames.data(),2,64,64,p3,s,{},&zero_out,nullptr))return 2;
+    std::printf("zero band-error map: byte-identical=%d\n",plain==zero_out);ok &= plain==zero_out;
+  }
+  {
+    // Frequency confidence must retain LL and the reference while rejecting
+    // inconsistent same-CFA high bands. Exercise all four block phases.
+    auto rr=gpu.alloc(K*N*4),ee=gpu.alloc(K*N*4),ww=gpu.alloc(K*N*4),out=gpu.alloc(K*N*4);
+    auto motion=gpu.alloc(K*6*4),model=gpu.alloc(N*4),local=gpu.alloc(16);
+    std::fill(ww.as<float>(),ww.as<float>()+K*N,1.f);
+    std::fill(model.as<float>(),model.as<float>()+N,10.f);
+    std::fill(motion.as<float>(),motion.as<float>()+K*6,0.f);
+    for(int k=0;k<K;++k){motion.as<float>()[k*6]=1;motion.as<float>()[k*6+4]=1;}
+    auto band=gpu.pipeline(lkr::spv::weight_band,sizeof(lkr::spv::weight_band),7,sizeof(Push));
+    auto set=gpu.set(band,{&rr,&ee,&ww,&out,&motion,&model,&local});
+    Push q{};q.h=H;q.w=W;q.H=H;q.W=W;q.s=1;q.K=K;q.rob_k=1;
+    for(int test=0;test<2;++test){
+      for(int k=0;k<K;++k)for(int y=0;y<H;++y)for(int x=0;x<W;++x){
+        int o=k*N+y*W+x;float v=test?(((x/2+y/2)&1)?-.04f:.04f):.02f;
+        rr.as<float>()[o]=v;ee.as<float>()[o]=v*v/1e-6f;
+      }
+      gpu.begin();gpu.dispatch(band,set,&q,W/16,H/16,K);if(!gpu.submit())return 2;
+      float reference=0;double ratio=0;int count=0;
+      for(int y=8;y<H-8;++y)for(int x=8;x<W-8;++x){
+        int o=y*W+x;reference=std::max(reference,std::abs(out.as<float>()[o]-rr.as<float>()[o]));
+        ratio+=std::abs(out.as<float>()[N+o]/rr.as<float>()[N+o]);++count;
+      }
+      ratio/=count;std::printf("band confidence high=%d residual ratio=%g reference_error=%g\n",test,ratio,reference);
+      ok &= reference==0 && (test?ratio<.01:std::abs(ratio-1)<1e-6);
+    }
+    gpu.resetSets();gpu.destroy(band);
+    for(auto* b:{&rr,&ee,&ww,&out,&motion,&model,&local})gpu.free(*b);
+  }
+  {
+    // Both DCT kernels must preserve a constant color, including when the
+    // same solver switches back from the experimental aperture pipeline.
+    lkr::Solver solver(&gpu);std::vector<float> frames(2*32*32),out;
+    for(int k=0;k<2;++k)for(int y=0;y<32;++y)for(int x=0;x<32;++x)
+      frames[k*32*32+y*32+x]=(y%2==0&&x%2==0)?.12f:((y%2&&x%2)?.08f:.1f);
+    lkr::SolveParams s;s.s=2;s.T=4;s.z_steps=2;s.refine_motion=false;s.local_block=0;
+    s.robust=false;s.equalize_noise=false;s.notch=false;s.grain=0;s.highlight_desat=false;
+    s.shadow_boost=0;s.shadow_chroma=0;s.mean_preserve=0;s.dct_prior=true;
+    s.noise_a=1e-5f;s.noise_b=1e-6f;s.wb={1.7f,1.f,1.3f};
+    std::vector<float> first;
+    for(float aperture:{0.f,1.f,0.f}){
+      s.dct_aperture=aperture;float motion[12]={1,0,0,0,1,0,1,0,0,0,1,0};
+      if(!solver.solve(frames.data(),2,32,32,motion,s,{},&out,nullptr))return 2;
+      float error=0;const float expected[3]={.12f,.1f,.08f};
+      for(int c=0;c<3;++c)for(int y=8;y<56;++y)for(int x=8;x<56;++x)
+        error=std::max(error,std::abs(out[c*64*64+y*64+x]-expected[c]));
+      if(first.empty())first=out;
+      else if(aperture==0)ok &= first==out;
+      std::printf("DCT constant color aperture=%g max=%g\n",aperture,error);ok &= error<2e-5f;
+    }
   }
   {
     lkr::Solver solver(&gpu);

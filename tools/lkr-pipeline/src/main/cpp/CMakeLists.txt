@@ -24,7 +24,7 @@ endif()
 set(LKR_GEN "${CMAKE_CURRENT_BINARY_DIR}/lkr_gen")
 file(MAKE_DIRECTORY "${LKR_GEN}")
 set(LKR_SHADERS dct_x_y dct_x_u dct_x_v dct_yuv resid_adj zstep resid zstep_gather weight weight_e weight_th weight_tdet weight_min weight_minh resid_adj_w zstep_gw resid_q resid_adj_w_q scatter_q zpack resid_zq resid_adj_w_zq zhalf resid_zh resid_adj_w_zh weight_t weight_tv weight_td scatter grad jac solve jacblk solveblk)
-list(APPEND LKR_SHADERS guide_stats weight_guide)
+list(APPEND LKR_SHADERS guide_stats weight_guide weight_band dct_aperture_y dct_aperture_u dct_aperture_v)
 set(LKR_INCS "")
 foreach(sh ${LKR_SHADERS})
   add_custom_command(

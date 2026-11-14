@@ -40,6 +40,11 @@ struct SolveParams {
   // Without dct_prior: one DCT pass at the end, only on tiles that lost frames and only for the
   // noise those pixels have in excess of fully merged ones (EXPERIMENT).
   bool dct_fallback = false;
+  // Opt-in pixel-aperture frequency shaping; zero preserves existing DCT thresholds.
+  float dct_aperture = 0.0f;
+  const float* model_error = nullptr;  // optional H*W nonnegative variance map, tile HR coordinates
+  bool band_rejection = false;  // experimental same-CFA, cycle-spun Haar confidence; requires model_error
+  float band_k = 1.0f;          // high-band noise standard deviations (1 = noise-calibrated)
   float dct_luma = 1.0f, dct_chroma = 16.0f;   // luma 1.5-2 flattened asphalt and foliage at 2x; colour carries the cleaning   // shrinkage thresholds, multiples of the noise level
   // Dark blocks (mean luma below dct_dark_level, full effect below a quarter) use their measured
   // AC energy as the noise level when it exceeds the model, up to dct_dark_cap x (1 = off).
@@ -59,6 +64,8 @@ struct SolveParams {
   // and desktop use residual confidence; guide is an explicit research opt-in
   // (--guide 2 / debug.lkr.guide 2).
   float guide_confidence = 0.0f;
+  // > 0: a frame must also pass the residual test: w = min(guide, residual^guide_residual).
+  float guide_residual = 0.0f;
   // Diagnostic only: known-static rectangle in this tile's reference LR coordinates.
   // No inferred/static mask is enabled in the app. Width/height zero disables it.
   std::array<float, 4> trusted_static{0, 0, 0, 0};
@@ -83,6 +90,15 @@ struct SolveParams {
   // local detail energy common to the frame and its prediction. 0 = off.
   float temporal_detail = 4.0f;
   int robust_spread = 3;        // min-filter radius (LR px) on the robust weights (Wronski robustness); 0 = off
+  // EXPERIMENT (0 = off): where accepted frames disagree beyond their noise, show the average over one
+  // Bayer period (smooth motion blur) instead of per-site blocks; see the motion-look comment in solve().
+  float motion_smooth = 0.0f;
+  // false: flagged pixels become the time average of the frames (single-frame resolution).
+  // true: they keep the merge and lose only the part of (merge - time average) locked to the Bayer grid.
+  bool motion_smooth_sr = false;
+  // Back-projection steps on the upsampled start image so its s x s block means reproduce the
+  // demosaiced reference (see the start-image comment in lkr_solver.cpp). 0 = plain bilinear (A/B).
+  int init_backproject = 0;   // off until validated; 3 removes the reference-only zipper on the car burst
   bool mhc_init = true;         // start from the encoded-video coherent MHC (lkr_mhc, = MhcReference); false = bilinear (paper)   // prior noise map / grain follow the contributing-frame count
   float robust_k = 3.0f;
   float robust_pow = 1.0f;     // rejection curve steepness (1 = Cauchy, 2 = steep: no half-weight blending of moving foliage)
@@ -203,6 +219,8 @@ class Solver {
   std::deque<Entry> cache_;   // deque: references stay valid while it grows
   Gpu* gpu_;
   bool ok_ = false;
+  bool dct_aperture_mode_ = false;
+  Pipeline weight_band_;
   Pipeline dct_y_, dct_u_, dct_v_, dct_yuv_, resid_, zstep_, jac_, solve_, residg_, zgather_, weight_, scatter_, jacblk_, solveblk_, wmin_, wtemp_, wdark_, wdarkv_, wminh_, radjw_, wexp_, wth_, wtdet_, zgw_, residq_, radjwq_, scatq_, zpack_, residzq_, radjwzq_, guide_stats_, weight_guide_;
 };
 

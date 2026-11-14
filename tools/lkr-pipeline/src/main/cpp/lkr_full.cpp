@@ -155,6 +155,11 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     ry = std::clamp(prm.crop_y < 0 ? (H - rh) / 2 : prm.crop_y, 0, H - rh);
   }
   Grid g;
+  if (!prm.model_error.empty() && (prm.model_error.size() != size_t(rw)*rh ||
+      (!(prm.solve.dct_prior && prm.solve.dct_aperture > 0) && !prm.solve.band_rejection))) {
+    if (err) *err = "model-error map requires region dimensions and a compatible experiment";
+    return false;
+  }
   // Phase-align by stepping LEFT/UP one sample when needed, so the grid keeps
   // the full even size of the region (fixed tile shapes,
   // stay exact); step right only at the sensor edge.
@@ -477,7 +482,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       return;
     }
     wg->profile(gpu->profiling());
-    std::vector<float> tf(size_t(K) * n * n), x, field;
+    std::vector<float> tf(size_t(K) * n * n), x, field, model_tile;
     BlockSearch bsearch(wg);
     for (;;) {
       const size_t ji = next.fetch_add(1);
@@ -604,6 +609,19 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       }
       SolveStats ss;
       SolveParams spt = sp;
+      if (!prm.model_error.empty()) {
+        model_tile.resize(size_t(s*n)*(s*n));
+        for (int y=0;y<s*n;++y) for (int x=0;x<s*n;++x) {
+          const float fx=std::clamp((x+.5f)/s-.5f+g.x0+gx-rx,0.f,float(rw-1));
+          const float fy=std::clamp((y+.5f)/s-.5f+g.y0+gy-ry,0.f,float(rh-1));
+          const int ix=int(fx),iy=int(fy),jx=std::min(ix+1,rw-1),jy=std::min(iy+1,rh-1);
+          const float ax=fx-ix,ay=fy-iy;
+          auto at=[&](int yy,int xx){return prm.model_error[size_t(yy)*rw+xx];};
+          model_tile[size_t(y)*(s*n)+x]=(1-ay)*((1-ax)*at(iy,ix)+ax*at(iy,jx))+
+                                        ay*((1-ax)*at(jy,ix)+ax*at(jy,jx));
+        }
+        spt.model_error=model_tile.data();
+      }
       if (prm.trusted_static[2] > 0 && prm.trusted_static[3] > 0) {
         spt.trusted_static = prm.trusted_static;
         spt.trusted_static[0] -= float(g.x0 + gx);
