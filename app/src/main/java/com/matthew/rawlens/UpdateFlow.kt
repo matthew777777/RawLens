@@ -3,8 +3,12 @@
 
 package com.matthew.rawlens
 
+import android.app.Dialog
+import android.view.ViewGroup
+import android.view.Window
+import android.widget.Button
+import android.widget.ScrollView
 import android.app.Activity
-import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.Intent
 import android.net.Uri
@@ -100,7 +104,6 @@ class UpdateFlow(
             "%.0f MB".format(Locale.US, info.apkSizeBytes / 1048576.0)
         } else null
         val notes = info.body.ifEmpty { "See the release page for details." }
-            .take(1200)
         val message = StringBuilder("RawLens ${info.tag} is available " +
             "(installed: $current)")
         if (size != null) message.append(" • APK $size")
@@ -108,17 +111,59 @@ class UpdateFlow(
         // A download that finished before e.g. an app restart installs
         // directly instead of downloading again.
         val staged = UpdateInstaller.stagedApk(activity, info.tag)
-        RawLensDialogBuilder(activity)
-            .setTitle("Update available")
-            .setMessage(message.toString())
-            .setPositiveButton(if (staged != null) "Install" else "Download") { _, _ ->
-                if (staged != null) attemptInstall(staged) else downloadAndInstallUpdate(info)
-            }
-            .setNeutralButton("Skip this version") { _, _ ->
-                UpdateChecker.skipTag(activity, info.tag)
-            }
-            .setNegativeButton("Later", null)
-            .show()
+        // Reserve space for every action; only the release notes consume the
+        // remaining height and scroll. Platform alert button panels can overflow
+        // when three wide labels stack on narrow screens or with larger fonts.
+        val dialog = Dialog(activity, R.style.ThemeOverlay_RawLens_Dialog)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val column = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(16))
+        }
+        column.addView(TextView(activity).apply {
+            text = "Update available"
+            textSize = 22f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(activity.getColor(R.color.text_primary))
+            isAccessibilityHeading = true
+            setPadding(0, 0, 0, dp(12))
+        })
+        val body = TextView(activity).apply {
+            text = message.toString()
+            textSize = 13f
+            setTextColor(activity.getColor(R.color.text_secondary))
+            setLineSpacing(dp(2).toFloat(), 1f)
+            setPadding(0, 0, dp(8), dp(12))
+        }
+        column.addView(ScrollView(activity).apply {
+            isFillViewport = false
+            addView(body)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        fun action(label: String, primary: Boolean = false, run: () -> Unit) {
+            column.addView(Button(activity).apply {
+                text = label
+                RawLensUi.styleButton(this, primary)
+                setOnClickListener {
+                    dialog.dismiss()
+                    run()
+                }
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) })
+        }
+        action(if (staged != null) "Install" else "Download", primary = true) {
+            if (staged != null) attemptInstall(staged) else downloadAndInstallUpdate(info)
+        }
+        action("Later") {}
+        action("Skip this version") { UpdateChecker.skipTag(activity, info.tag) }
+        dialog.setContentView(column)
+        dialog.window?.apply {
+            setBackgroundDrawableResource(R.drawable.quick_panel)
+            val metrics = activity.resources.displayMetrics
+            setLayout(minOf(metrics.widthPixels - dp(24), dp(560)), (metrics.heightPixels * .85f).toInt())
+        }
+        dialog.show()
+        dialog.window?.decorView?.let { StableUiScale.followSystemText(it) }
     }
 
     /**
