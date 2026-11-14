@@ -1,5 +1,7 @@
 # MFSR (Wronski / IPOL engine) speed and memory
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Burst IMG_20260927_134544_522, 8 frames, full 4080x3060, KernelNet kernels.
 Phone: Mali-G615 MC2 (SrpPipelineFullresDeviceTest, `dumpsys meminfo`).
 Desktop: Apple M1 via MoltenVK (sr-pipeline CLI).

@@ -1,5 +1,7 @@
 # Mosaic target figure (T3 reference — do not implement yet)
 
+> See [current repository state](../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 User-supplied concept figure for the mosaic SR path (2026-09-23). Filed here
 so the T3 audit can check our reconstruction against it pixel-path by pixel-path.
 

@@ -1,5 +1,7 @@
 # HDR+ merge SPIR-V (vendored from RAWR)
 
+> See [current repository state](../../../../../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Upstream: https://github.com/adityawarmanfw/rawr (GPL-3.0-only, see NOTICE.md),
 `native/multiframe/merge_hdrplus/shaders/` at commit
 `f41e6c2c493cb2ebfe37ca7dcb98a6e38a5d40a5` (2026-10-06).

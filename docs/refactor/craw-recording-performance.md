@@ -1,5 +1,7 @@
 # CRAW recording work — 2026-10-27
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## Evidence update — 2026-10-30
 
 The synthetic host table below used **Live v1 (codec 2)** and Fast (codec 1).

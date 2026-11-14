@@ -1,5 +1,7 @@
 # Video format controls audit
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The stale format badge came from `refreshCaptureFormatControl`: every stills
 refresh in video mode wrote CRS/REC without checking Encoded Video. The settings
 checkbox separately updated only part of the video UI. The crop/profile tile

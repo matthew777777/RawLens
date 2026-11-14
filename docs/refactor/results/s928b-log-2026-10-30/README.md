@@ -1,5 +1,7 @@
 # Samsung SM-S928B log review
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Source: `logcat-20261030_011334_545.txt`, 13,108 lines, Android 17 / SDK 37.
 SHA-256: `cd9c9b9842d17d6b55c2bf6cc8dd006b73e73b5318c44747cdf61d8121fa3dc2`.
 `line-coverage.txt` assigns every source line to one category, including repeated

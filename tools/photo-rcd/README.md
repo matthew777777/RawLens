@@ -1,5 +1,7 @@
 # Public-source photo RCD baseline tools
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Host-only GPL-3.0-or-later tooling. No production integration or Android device
 tests. Mathematical source: pinned RawTherapee RCD; original LuisSR files are
 provenance evidence only. See upstream/manifest.json and the accompanying license

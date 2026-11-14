@@ -1,5 +1,7 @@
 # Frame-global recording RCD — 2026-11-03 session
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Status: diagnostic kernels only. **Not integrated into the app; no recording,
 encoder or delivered-FPS result.** Workload uncontrolled (camera HAL ~61% CPU,
 GPU 61.7 °C at measurement). Phone: Xiaomi 25080RABDG, Mali-G615 MC2.

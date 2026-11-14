@@ -1,5 +1,7 @@
 # FFDNet denoiser review — 2026-11-05
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Reviewed the standalone path end to end, including the shared LK-SR FFDNet prior. The implementation is usable as an opt-in experimental denoiser, but its noise and colour assumptions do not justify calling it a calibrated RAW denoiser.
 
 ## Corrections made

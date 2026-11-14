@@ -1,3 +1,5 @@
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 | Case | Mean absolute RGB error | Maximum RGB error | PSNR (white = 1) | Sharpening-delta correlation |
 |---|---:|---:|---:|---:|
 | preset-2-cfa-0 | 0.0001219 | 0.0009761 | 75.02 dB | 0.99996923 |

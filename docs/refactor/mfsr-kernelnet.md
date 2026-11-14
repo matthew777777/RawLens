@@ -1,3 +1,5 @@
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
  # MFSR: PhotonCamera KernelNet as the Wronski reconstruction kernel
 
 Wronski et al. 2019 reconstruct each output pixel as a kernel-weighted sum

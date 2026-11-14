@@ -1,5 +1,7 @@
 # Photo profiled wavelet: RAWR parity audit (2026-11-01)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## Follow-up: exact RAWR integration requested (2026-11-02)
 
 The Camera2 adapter correction described below is now superseded by an explicit

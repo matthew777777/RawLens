@@ -1,5 +1,7 @@
 # MFSR vs Wronski et al. 2019: remaining gaps (audit 2026-10-22)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Done and matching the paper: HDR+ style coarse-to-fine alignment + 3 ICA
 iterations, gradient-structure kernels with S.1 heuristics (KernelNet as
 our chosen replacement, Wronski kernel selectable), Eq. 1-2 accumulation,

@@ -1,5 +1,7 @@
 # Remove unused HDR+ RGBA output
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The app consumes `hdrp_cfa` only. `hdrp_output` was an RGBA16F twin
 written by finalize and never read. Remove its Fast/HQ scratch allocations,
 finalize descriptor binding 1, and GLSL image store. Preserve binding 2,

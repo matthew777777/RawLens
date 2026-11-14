@@ -1,8 +1,32 @@
 # Changelog
 
+> See [current repository state](docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
-## [2.2.46] - Unreleased
+## Unreleased
+
+Repository changes since the 2.2.46 snapshot; generated build numbers live in
+`app/version.properties`.
+
+- Rename user-facing merge engines to KB-SR and LK-SR and add a Merge settings tab.
+- Add independent LK-SR zoom/output-resolution controls and reference-guide rejection.
+- Add optional ISP SurfaceView preview, including during LK-SR merges; pause the camera behind Settings.
+- Default offline merges to JPEG, expose output quality controls, support burst sharing,
+  and retain device orientation when loading staged takes.
+- Add two-radius chroma cleanup to ordinary and merged development, revised RAW
+  white-balance fallback, and lens-shading transport for root RAW / merged DNGs.
+- Add gyro stabilization v2 with L1 path smoothing and self-calibration, Encoded
+  Video saturation/vibrance and orientation fixes, and optional RAW Video DCT denoise.
+- Reduce Encoded Video preview work to the viewfinder budget while retaining the selected demosaic.
+- Optimize mobile MFSR; estimate scene noise when a DNG lacks NoiseProfile in the desktop CLI.
+- Add the `tools/sr-pipeline/run.sh` launcher and standalone LK-SR Lite host/mobile CLI.
+- Keep foliage/rejection experiments and optional Lite denoise controls distinct from shipped defaults.
+- Fix update-dialog actions on narrow displays.
+
+See [current repository state](docs/CURRENT_STATE.md) for source pointers and validation limits.
+
+## [2.2.46] - Historical development snapshot
 
 - Increase the shared default ZSL buffer and burst / merge frame selection from
   8 to 16, respecting saved choices and mode-specific limits.

@@ -1,5 +1,7 @@
 # MFSR "Wronski 2.0" (owner goal, 2026-10-22)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Owner: dig deep and improve MFSR beyond the paper ("fix Wronski itself"),
 not only match it. Starting point: the softness investigation below.
 

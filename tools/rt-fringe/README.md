@@ -1,5 +1,7 @@
 # RawTherapee CA and purple-fringe experiments
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Standalone, reproducible prototypes; **not connected to an app setting or enabled in
 production**. User request: test an inexpensive way to reduce purple highlight halos.
 

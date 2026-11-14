@@ -1,5 +1,7 @@
 # RCD recording performance follow-up
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 > Historical report: the video RCD implementation described here was removed on 2026-11-01. These measurements do not describe the current MHC/Super pixel video path.
 
 

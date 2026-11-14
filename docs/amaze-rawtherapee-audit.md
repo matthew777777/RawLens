@@ -1,5 +1,7 @@
 # AMaZE comparison — 2026-09-08
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Status: confirmed port defects corrected; **RawTherapee-identical output is not established**.
 This is a source audit with targeted executable and device GPU checks, not a pixelwise comparison
 against a running RawTherapee demosaicer.

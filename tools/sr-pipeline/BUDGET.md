@@ -1,5 +1,7 @@
 # sr-pipeline memory budget sheet
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Targets: **JVM heap ≤ 450 MB** (phone, 512 MB `largeHeap` cap with headroom)
 and **device native ≤ 1.5 GB** (quiet-phone fit; `MemAvailable` 2.55 GB lab,
 ~330 MB free loaded). Referee: `--heap-budget-mb` (peak heap-pool usage)

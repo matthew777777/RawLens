@@ -1,5 +1,7 @@
 # Halide AOT filters for the BGU viewfinder rewrite
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Generators live in `generators/`; `build_aot.sh` compiles the host generator
 binary, smoke-checks it, and emits one static archive per Android ABI into
 `app/src/main/cpp/halide/filters/<abi>/` plus a shared header. The `.a` files

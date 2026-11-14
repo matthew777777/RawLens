@@ -1,5 +1,7 @@
 # PROGRAM AE and ETTR: reference audit (2026-10-22)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Historical A1/A2 baseline. For the 2026-10-25 F15 source recheck, current
 working-tree default, explicit approximations and minimum-channel extension,
 see [the F14/F15 audit](ml-focus-ettr-audit.md). Its findings supersede the

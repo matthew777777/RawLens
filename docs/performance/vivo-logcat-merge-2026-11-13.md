@@ -1,5 +1,7 @@
 # vivo V2562 log review, 2026-11-13
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Reviewed all four supplied files (340, 1,925, 1,519 and 5,752 lines). The
 07:03:12 `(1)` export is a shorter snapshot of the same process/session as the
 1,925-line export; its merges must not be counted twice. No fatal exception or

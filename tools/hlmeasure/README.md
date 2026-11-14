@@ -1,5 +1,7 @@
 # hlmeasure: on-device measurement for the hlrecon plan
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Executes the exact `HlVulkanRecon` dispatch plan through the shipped
 `spirv/hlrecon.spv` on a local Vulkan compute device and diffs the outputs
 against the JVM twin within a ULP envelope.

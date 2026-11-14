@@ -1,5 +1,7 @@
 # Forward still chain — study before refactor (2026-10-20)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Scope: `RawCameraController.captureFrames` (request building, timeout
 budget), `submitNextStill`, `pendingStillRequests` / `activeStillCallback`,
 `noteChainDeadAndMaybeRecover`, and how pair completion advances the chain.

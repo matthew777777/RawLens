@@ -1,5 +1,7 @@
 # Encoded Video internal namespace
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The application and tooling use Encoded Video in class/file names, APIs,
 fields, preference keys, JNI symbols, native log tags, diagnostics, shader
 asset names, tests, and tool names. The former mode-specific probe/ladder

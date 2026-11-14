@@ -1,5 +1,7 @@
 # Camera-maker harvest — everything we can take
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 > Status 2026-10-23: survey only, nothing implemented from this doc yet.
 > Adopted into `docs/refactor/release-2.0-checklist.md` on 2026-10-23:
 > ML rechecks as F14/F15, Nikon as section H, Sony EncodedVideo as

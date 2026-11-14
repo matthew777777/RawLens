@@ -1,5 +1,7 @@
 # Bounded Encoded Video buffer diagnostics
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Each take samples the first two submitted output frames. RAW sampling is
 also capped at two attempts so failed initial GPU submissions cannot
 produce repeated pixel dumps. Remaining frames do not perform diagnostic

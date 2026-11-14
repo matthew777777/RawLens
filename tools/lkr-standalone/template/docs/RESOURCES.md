@@ -1,5 +1,7 @@
 # Papers, code, data and visual results
 
+> Scope: this document describes the generated standalone package. Android app behavior and integration are documented in the source repository’s `docs/CURRENT_STATE.md`.
+
 Links were reviewed on 2026-11-11. External assets remain under their owners'
 terms. The Apache license for this code does not relicense papers, photographs,
 trained weights or datasets. This is a curated index of the directly relevant

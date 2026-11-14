@@ -1,5 +1,7 @@
 # Bayer inpaint opposed Vulkan port
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Reference: darktable `891e46cd57b64d67dbde183d5d3c0e430edd11d6`.
 Pinned files: `upstream/darktable-opposed.c` and `upstream/darktable-opposed.cl`.
 The OpenCL implementation is the reduction-order reference. CPU OpenMP reductions

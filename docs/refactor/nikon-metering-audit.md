@@ -1,5 +1,7 @@
 # H1 / H2: highlight metering and Active D-Lighting
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 **H1 and H2 closed 2026-10-26.** Source/host checks, ADB GPU/RAW/JPEG tests
 and the final stationary bright-window comparison pass on Xiaomi 25080RABDG,
 Android 16, camera 0, RAW 4080x3060, deviceTest build 1.0.424 (versionCode 511).

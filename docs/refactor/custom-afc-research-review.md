@@ -1,5 +1,7 @@
 # Broader autofocus review and RawLens design decision
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Reviewed 2026-11-02. Research/design only. This is a targeted public-source review,
 not a claim to cover every paper or proprietary implementation. No device speed,
 accuracy or model-transfer claim has been established. Search included 2025/2026

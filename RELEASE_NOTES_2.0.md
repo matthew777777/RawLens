@@ -1,5 +1,7 @@
 # RawLens 2.0
 
+> Repository context: [current source state](docs/CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 RawLens 2.0 refreshes the app based on published camera software, adds handheld
 multi-frame super-resolution, and RAW Video in a new container Cinematic RAW Studio; RAW and Direct Log video records faster. The full list is in [CHANGELOG.md](CHANGELOG.md).
 

@@ -1,5 +1,7 @@
 # RawLens LK-SR handoff to Claude — 2026-11-10
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## Immediate objective and current truth
 
 User wants robust 1x/1.5x/2x (eventually4x) reconstruction that preserves static super-resolution detail like the research baseline while rejecting genuinely moving subjects. Main issue: RawLens improvements falsely reject static detailed structures, creating spatially inconsistent sharpness and sometimes yellow/cyan rails, Bayer zipper/checkerboard/dots. Moving people/car also need protection. Do not solve this by indiscriminately disabling rejection, raising thresholds, smoothing everything, or changing learned model.

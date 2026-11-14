@@ -1,5 +1,7 @@
 # RawLens 2.0 refactor — audit trail
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Branch `refactor/2.0`. One logical change per commit; each row lists its
 evidence. "Device-unverified" means no on-device run yet.
 

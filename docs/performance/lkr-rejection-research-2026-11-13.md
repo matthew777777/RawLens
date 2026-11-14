@@ -1,5 +1,7 @@
 # LK-R static-detail rejection: research and experiment plan
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Research date: 2026-11-13. Local HEAD: `99ce5172ec06f3dd26a7487c59b59fed7ebc4965`.
 
 **Correction from direct frame inspection during implementation:** the handoff's

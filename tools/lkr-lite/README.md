@@ -1,5 +1,7 @@
 # lkr-lite
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 A cheaper LK-Reloaded for mobile GPUs (Mali, Adreno; Vulkan compute). Same
 forward model as `tools/lkr-pipeline` (affine + 16-px local motion, box blur
 over the LR pixel, Bayer decimation), far fewer passes over the frames.
@@ -13,7 +15,9 @@ is shared, as LK-R and MFSR do.
 
 ## Algorithm
 
-Per tile, schedule `GGGJGGJ` (G = motion step, J = merge step):
+Per tile, current default schedules are `GGJJGJ` at 1× and `GGJJJJGJJJJ` at 2×
+(G = motion step, J = merge step). The following describes the original solver;
+the hybrid/SNR changes recorded below supersede its original defaults:
 
 1. **Start image** z0: reference frame demosaic upsampled to the output grid.
    1x: 50/50 coherent MHC + bilinear (MHC alone leaves a Bayer maze on fine
@@ -92,13 +96,19 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib tools/lkr-lite/build/host/lkrl_run 
 experiments, GPU scoring (`score_gpu.py`), checker metric (`checker.py`),
 side-by-side renders (`render_ab.py`). Paths point at the session scratchpad.
 
-## Next
+## Current integration
 
-1. Own front end: DNG burst -> tiles, noise fit, coarse + tile + sub-tile LK
-   (copies exist in `lkrl_host`), blend, DNG out; then a matched full-frame
-   comparison with LK-R through the same finish.
-2. Prior / finish (step 5) and the look.
-3. Phone: JNI, Mali + Adreno timings, PSS, OOB check (Mali DEVICE_LOST).
+The standalone front end now exists: `lkrl_full_run BURST_DIR OUT.dng --s 1`
+(or `--s 2`) loads DNG bursts, estimates noise, aligns tiles and writes a full-frame
+result. Build it with the CMake commands above. `lkrl_run` remains the trace tool.
+Vulkan headers/loader and `glslc` are required; KernelNet weights are read from
+`tools/sr-pipeline/src/main/resources/kernelnet/`.
+
+This tool is separate from the app's `LkrMerge` / `lkr-pipeline` integration.
+Hybrid chroma averaging, noise-gated luma refinement, lost-frame cleanup and fp16
+frame storage are implemented. KernelNet post-denoise (`LKRL_KNDN`), GPU LK
+(`LKRL_GPU_LK`), and motion look (`LKRL_MLOOK`) remain opt-in experiments.
+The measured results below describe their named datasets and configurations.
 
 ## Phone performance (2026-11-13, Mali-G615 MC2, car burst 8 frames, full frame, `--guide 2 --msmooth 1 --msr 1`)
 

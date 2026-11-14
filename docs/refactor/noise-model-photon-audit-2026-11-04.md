@@ -1,5 +1,7 @@
 # Learned noise model versus PhotonCamera (2026-11-04)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The persistent green-plane model now matches PhotonCamera's lower-half-window
 averaging at calibrated ISOs in controlled tests and improves prediction between
 calibrated ISOs. This is a model-level result, not a claim of better final photos

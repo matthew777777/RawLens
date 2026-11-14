@@ -1,5 +1,7 @@
 # RAW exposure assists — F1/F2
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Closed 2026-10-26 after host, real-RAW, rendering, recording and live-monitor
 checks. CRS recording is an explicit existing unavailable-backend exclusion;
 its rejection and cleanup were tested, not its unimplemented encoder.

@@ -1,5 +1,7 @@
 # RAW viewfinder color rings: precision audit (2026-11-02)
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The live viewfinder reduced black-subtracted RAW to an 8-bit **linear** R/Gr/Gb/B quad before applying the four-channel HAL lens-shading map. In a smooth flat field, shading compensation then multiplies different rounded steps in each channel. White balance and the color matrix amplify their disagreement. This can create colored contours even when the brightness falloff is corrected. The previous green-row precision fix addressed channel selection, but left this earlier quantization in place.
 
 ## Paths checked and changed

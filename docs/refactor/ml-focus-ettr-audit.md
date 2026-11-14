@@ -1,5 +1,7 @@
 # F14 / F15: Magic Lantern source audit (2026-10-25)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The peaking section below is historical. The live/RAW-recording detector was replaced on 2026-10-31; see [current rework and headless evidence](focus-peaking-rework.md). ETTR findings remain separate.
 
 Source review began on 2026-10-25; connected-device acceptance was performed

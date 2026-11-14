@@ -1,5 +1,7 @@
 # lkr-pipeline
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 This module is licensed under [Apache 2.0](LICENSE); see [NOTICE](NOTICE).
 The separately packaged desktop repository is generated with
 `tools/lkr-standalone` in the RawLens checkout, preserving shared source

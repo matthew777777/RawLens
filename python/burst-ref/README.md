@@ -1,4 +1,6 @@
 # burst-ref: PyTorch-portable numpy reference for RawLens burst reconstruction.
+
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 #

@@ -1,5 +1,7 @@
 # JPEG XL stills and DNG JXL compression — study (2026-10-20)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Original 2026-10-20 scope: `native_jxl_encoder.cpp` (developed stills), `tinydng_jni.cpp`
 `encodeCfaJxl` (DNG 1.7 JXL tiles), the Kotlin wrappers (`NativeJxlEncoder`,
 `JxlOutputSettings`, `JxlPixelPack`, `JxlMetadataBoxes`, `JxlSaver`,

@@ -1,5 +1,7 @@
 # Public-reference RCD replacement plan
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Status: proposed implementation plan, 2026-10-30. No replacement or repository-history cleanup has been performed by this document.
 
 Context: https://github.com/matthew777777/RawLens/issues/1 disputes the provenance of the packed-ratio shader family introduced in a4f58a717c92b1049feaf3e8bf8c5fb3c1034411. This plan does not determine authorship or validate the archive's licensing claim.

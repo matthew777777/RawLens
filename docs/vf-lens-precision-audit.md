@@ -1,5 +1,7 @@
 # RAW viewfinder lens-shading precision fix
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The CPU sampler and Vulkan sampler both present through `VfGpuImport.cpuFragmentShader()`.
 Their ESSL 1.00 lens function formerly computed sensor geometry and green-row parity
 with the shader's default mediump precision. On FP16 implementations, odd sensor rows

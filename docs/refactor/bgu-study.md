@@ -1,5 +1,7 @@
 # A5: BGU viewfinder source study (2026-10-26)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Status: **CLOSED 2026-10-26** after source/refactor checks, the encoded-guide
 haze regression, 17 device tests, 78 host tests and a guarded smoke run of the
 R8-minified 1.0.468 release. The owner requested closure after finishing these

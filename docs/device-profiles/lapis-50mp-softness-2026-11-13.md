@@ -1,5 +1,7 @@
 # Rooted 50 MP DNG softness investigation — 2026-11-13
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Input: `/Users/monikamalinowska/Downloads/IMG_20261112_153300_134_F00.dng`.
 
 ## Verified observations

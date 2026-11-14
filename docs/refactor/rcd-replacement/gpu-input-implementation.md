@@ -1,5 +1,7 @@
 # Requirements-derived GPU input and compact reconstruction prototype
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 2026-11-01. Status: correctness-validated standalone prototype. It is not wired
 into camera/recording and does not replace the application's current route.
 The mandatory 1080p30, 1440p30 and 4K24 recording targets remain unmet.

@@ -1,5 +1,7 @@
 # Photo autofocus device acceptance — 2026-10-31
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Tested current workspace build 2.0.40, githubDeviceTest, on Redmi 25080RABDG (`lapis`), MediaTek MT6878, Android 16 / OS3.0.303.0.WPPEUXM. Main Camera2 route `0`; RAW 4080×3060. This is evidence for this device/route/build, not Qualcomm or all MediaTek firmware.
 
 ## Results

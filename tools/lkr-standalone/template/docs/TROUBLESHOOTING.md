@@ -1,5 +1,7 @@
 # Troubleshooting
 
+> Scope: this document describes the generated standalone package. Android app behavior and integration are documented in the source repository’s `docs/CURRENT_STATE.md`.
+
 | Symptom | What to check |
 | --- | --- |
 | CMake cannot find `glslc` | Install shaderc, or add the Vulkan SDK `bin` to PATH; the original CMake also searches macOS Android NDK shader tools |

@@ -1,5 +1,7 @@
 # MFSR C9: reference parity chain (CUDA -> CPU port -> RawLens), 2026-11-14
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Checklist §M C9 ("dim-burst divergence vs the Python reference, 70.5 dB").
 Question asked by the owner: is the CPU port of the reference
 (matthew777777/Handheld-Multi-Frame-Super-Resolution, commit 0b4371c, Numba

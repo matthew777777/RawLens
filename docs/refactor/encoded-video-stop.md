@@ -1,5 +1,7 @@
 # Encoded Video naming and EOS stop fix
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## Vivo confirmation
 
 The user confirmed clean RCD and MHC output after the Qualcomm compatibility

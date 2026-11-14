@@ -1,5 +1,7 @@
 # Motorola Signature DCG: RAW frame-rate selection
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The reported working MotionCam configuration uses main camera ID 2, standard operating mode 0,
 `org.codeaurora.qcamera3.sensor_meta_data.current_mode` as Int32 value 8, RAW_SENSOR output,
 and 48/50/60 FPS. The reporter sets the key at session scope, raises FPS, then switches the

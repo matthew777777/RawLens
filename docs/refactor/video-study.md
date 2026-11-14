@@ -1,5 +1,7 @@
 # Video study (EncodedVideoRecorder, RawVideoRecorder)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 References: Android MediaCodec / MediaMuxer API docs (lifecycle: a configured
 or started codec must be release()d; MediaMuxer must be release()d), and
 open-source RAW video recorders (below).

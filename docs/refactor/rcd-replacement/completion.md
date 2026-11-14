@@ -42,6 +42,8 @@ remain open. No FP16 arithmetic or fused P010 workaround was introduced.
 
 # Milestone status — replacement not complete
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 2026-11-01. Starting HEAD/branch and preserved unrelated changes are in
 execution-log.md. This work implements the recommended M1 starting milestone
 and advances M2–M4 through host optimization experiments and internal recording integration. It does not complete the

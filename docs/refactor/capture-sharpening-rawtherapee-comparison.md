@@ -1,5 +1,7 @@
 # Direct RawTherapee comparison (2026-11-01)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 **Result: the RawLens/RAWR GPU implementation closely matches RawTherapee's
 Bayer deconvolution stage at matched settings, but is not a bit-exact or
 feature-complete port of RawTherapee Capture Sharpening.** Earlier exact-parity

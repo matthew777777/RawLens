@@ -1,21 +1,23 @@
 # Contributing to RawLens
 
+> See [current repository state](docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Thank you for helping improve RawLens. By submitting a contribution, you agree that it may be distributed under the project's GPL-3.0-or-later license.
 
 ## Development setup
 
-Use JDK 21 or newer and install Android SDK 37, NDK 27.0.12077973 and CMake 3.22.1. Check out the libjxl submodule, then build from the repository root:
+Use JDK 27 for the pinned Gradle daemon (Java 21 compilation target) and install Android SDK 37, NDK 27.0.12077973 and CMake 3.22.1. Check out the libjxl submodule, then build from the repository root:
 
 ```bash
 git submodule update --init --recursive
-./gradlew assembleDebug
+./gradlew assembleGithubDebug -PfreezeVersion
 ```
 
 Camera behavior varies significantly across Android devices, so camera-pipeline changes should also be tested on physical RAW-capable hardware.
 
 The current activity is portrait-locked in the source manifest. Preview and control positioning still account for sensor/display rotation, but contributions should not assume that the activity can rotate into a separate landscape layout.
 
-The app currently supports AUTO, PROGRAM (libcamera AGC port), ZSL, and MANUAL exposure modes with ETTR and Active D-Lighting; single-frame and six-frame forward capture; optional 1–59-frame ZSL output targeting up to 30 FPS; MFSR, HDR+, HDR bracket and offline burst merges; JPEG, JPEG XL, Ultra HDR and (optionally JXL-compressed) DNG output; `.craw` RAW video and Direct Log video with user LUTs; wavelet and AI denoise; per-lens PROGRAM AE profiles and vendor keys; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior.
+The app currently supports AUTO, PROGRAM (libcamera AGC port), ZSL, and MANUAL exposure modes with ETTR and Active D-Lighting; single-frame and six-frame forward capture; optional 1–59-frame ZSL output targeting up to 30 FPS; KB-SR (MFSR), LK-SR, HDR+, HDR bracket and offline burst merges; JPEG, JPEG XL, Ultra HDR and (optionally JXL-compressed) DNG output; `.craw` RAW video and Encoded Video with user LUTs; wavelet and AI denoise; per-lens PROGRAM AE profiles and vendor keys; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior.
 
 ## Pull requests
 
@@ -29,3 +31,5 @@ The app currently supports AUTO, PROGRAM (libcamera AGC port), ZSL, and MANUAL e
 ## Commit and release hygiene
 
 A released APK must correspond to a reproducible source tag. Build scripts and other material required to produce the application are part of the GPL Corresponding Source and should remain in the repository.
+
+Keep current behavior in [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) and the user-facing guides. Preserve dated research and release evidence as history. Do not put the current generated app version in the README; use `app/version.properties` and release metadata. Documentation-only changes do not require an APK build.

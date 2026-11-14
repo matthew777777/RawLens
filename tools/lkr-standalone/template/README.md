@@ -1,5 +1,7 @@
 # LK-Reloaded Super-Resolution
 
+> Scope: this document describes the generated standalone package. Android app behavior and integration are documented in the source repository’s `docs/CURRENT_STATE.md`.
+
 [Paper](https://arxiv.org/abs/2104.06191) ·
 [Authors' project and results](https://bruno-31.github.io/lkburst2/index.html) ·
 [Method explained](docs/METHOD.md) · [All CLI options](docs/CLI.md) ·

@@ -1,5 +1,7 @@
 # Coherent-green video demosaic investigation (2026-11-01)
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## Final candidate
 
 The strong white-glint smoothing experiment was rejected. The recording shaders now reconstruct a coherent green plane, then interpolate red-minus-green and blue-minus-green differences using green at the actual chroma sample positions. They do not force specular reflections to neutral or replace their luminance with a blurred estimate. Existing highlight protection in the grade is unchanged.

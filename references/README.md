@@ -1,5 +1,7 @@
 # Algorithm reference checkouts
 
+> See [current repository state](../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 This directory is for isolated upstream source checkouts used to study camera algorithms and implementation patterns. They are not RawLens build dependencies and are excluded from RawLens release artifacts.
 
 ## PhotonCamera

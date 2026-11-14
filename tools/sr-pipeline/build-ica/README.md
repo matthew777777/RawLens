@@ -1,5 +1,7 @@
 # Pinned-ICA build (FINAL-14)
 
+> See [current repository state](../../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Reproducible SPIR-V-level pinning of the ICA refine shader for
 desktop/Mali eval convergence. Shader math is untouched: the recipe only
 serializes *how* fused multiply-adds evaluate (explicit `FMA`

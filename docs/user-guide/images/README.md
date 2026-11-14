@@ -1,5 +1,7 @@
 # images/ — drop your 15 screenshots here
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 This folder is referenced by `../user-guide.html` and `../user-guide.md`.
 Save the images from chat with **exactly** these filenames:
 

@@ -1,5 +1,7 @@
 # Program exposure cadence
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Compared with Raspberry Pi libcamera `src/ipa/rpi/controller/rpi/agc_channel.cpp`:
 https://github.com/raspberrypi/libcamera/blob/main/src/ipa/rpi/controller/rpi/agc_channel.cpp
 

@@ -1,5 +1,7 @@
 # RAW focus peaking rework — 2026-10-31
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The photo and RAW-recording overlays now use the same RAW detail detector. This is a sharp-detail assist, independent of the HAL's autofocus success flag. A featureless surface cannot establish optical focus from image gradients; its visible sharp boundaries can be marked, while its flat interior remains unmarked.
 
 ## Primary-source review

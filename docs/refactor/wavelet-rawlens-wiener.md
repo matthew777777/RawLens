@@ -1,5 +1,7 @@
 # Profiled wavelet denoise: optimization + RawLens Wiener (2026-11-03)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Update 2026-11-04: both algorithms now use the revised learned noise model.
 The parity and original step-4 behavior below are historical. See the
 [PhotonCamera model audit](noise-model-photon-audit-2026-11-04.md) for the current

@@ -1,5 +1,7 @@
 # Method and implementation
 
+> Scope: this document describes the generated standalone package. Android app behavior and integration are documented in the source repository’s `docs/CURRENT_STATE.md`.
+
 ## Reading the paper
 
 The underlying publication is **Lucas-Kanade Reloaded: End-to-End

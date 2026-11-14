@@ -1,5 +1,7 @@
 # C14: adaptive exposure for MFSR development
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Implemented 2026-10-26; acceptance remains open for same-scene MFSR / HDR+ /
 single-frame saved-image and VF comparisons, plus device performance measurements.
 

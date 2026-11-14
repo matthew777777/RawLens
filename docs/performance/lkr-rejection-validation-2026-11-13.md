@@ -1,5 +1,7 @@
 # LK-R rejection validation — 2026-11-13
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The reference-guide confidence experiment provides partial detail recovery, not a complete solution.
 
 **Update (same day):** the guide is now the default (`SolveParams::guide_confidence = 2`; `--guide 0` restores residual confidence, paper mode disables it). `weight_guide` runs per Bayer quad and variances are stored for the reference frame only; outputs are byte-identical to `--guide 2` on 8 cases (074919/080720/184641/33TJ at 1x and 2x, oracle, odd crop), and 074919 1x matches this report's `after` f32 SHA-256 `a56b2485…`. See [research and implementation rationale](lkr-rejection-research-2026-11-13.md).

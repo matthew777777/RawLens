@@ -2,7 +2,7 @@
 
 RawLens is a photography-first, open-source Android camera built around a scene-referred RAW pipeline. It captures full-resolution Camera2 sensor data as DNG files, develops calibrated RAW JPEG / JPEG XL / Ultra HDR output, and records lossless RAW Video and real-time Encoded Video, with direct exposure controls and a minimal portrait-oriented viewfinder. The app has no cloud sync or account system; its only network use is the optional in-app update check (disabled in F-Droid builds).
 
-Current release: **2.0.0** (versionCode 2000). See [CHANGELOG.md](CHANGELOG.md) and [RELEASE_NOTES_2.0.md](RELEASE_NOTES_2.0.md).
+See [current repository state](docs/CURRENT_STATE.md), [CHANGELOG.md](CHANGELOG.md), and [GitHub releases](https://github.com/matthew777777/RawLens/releases). Build versions are generated from `app/version.properties`; the README does not pin a current version.
 
 > [!IMPORTANT]
 > Hardware support is device-dependent. RawLens requires a rear camera that advertises the Camera2 `RAW` capability. Some manufacturers expose RAW only on selected lenses or restrict simultaneous stream configurations.
@@ -14,9 +14,11 @@ Current release: **2.0.0** (versionCode 2000). See [CHANGELOG.md](CHANGELOG.md) 
 - Full-resolution `RAW_SENSOR` capture saved as DNG, JPEG, JPEG+DNG, or JPEG XL
 - AUTO, PROGRAM, ZSL, and MANUAL exposure modes; single-frame and six-frame (pipelined) burst release
 - Optional RAW zero-shutter-lag capture from a bounded pre-shutter frame buffer
-- **MFSR** handheld multi-frame super-resolution (Wronski et al. 2019 / IPOL reference) as a ZSL shutter merge or an offline merge, with Wronski or KernelNet reconstruction kernels
+- **KB-SR** (the MFSR engine) handheld multi-frame super-resolution (Wronski et al. 2019 / IPOL reference) as a ZSL shutter merge or an offline merge, with Wronski or KernelNet reconstruction kernels
 - **HDR+** burst merge, HDR brackets (±2 / ±4 EV, merged or separate DNGs), sequential-DCG trio merge (0 / −2 / 0 EV), and experimental two-exposure RAW HDR
-- Offline merges of staged `IMG_<ts>_BURST.craw` takes from the Merges screen (MFSR or HDR+)
+- Offline merges of staged `IMG_<ts>_BURST.craw` takes from the Merges screen (KB-SR, LK-SR or HDR+)
+- **LK-SR** Lucas–Kanade burst reconstruction, with independent zoom and sensor / 2× output-resolution controls
+- Offline merges default to JPEG, expose JPEG / JPEG XL quality controls, support burst sharing, and retain the staged take’s device orientation
 - darktable **inpaint-opposed** highlight reconstruction on normalized Bayer data before demosaic
 - RAW development with AMaZE (or RCD) demosaic and AgX Base, Golden, and Punchy looks; contrast, saturation, purity, hue preservation, highlight/shadow range, and gamut-compression controls
 - **Ultra HDR** JPEG (SDR base + fitted gain map, ISO 21496-1) and Display P3 output
@@ -43,7 +45,7 @@ Current release: **2.0.0** (versionCode 2000). See [CHANGELOG.md](CHANGELOG.md) 
 - Optional half-resolution binning recorded as demosaiced RGB (best) or CFA (cheap)
 - **Encoded Video** with Rec.709, Sony-exact **S-Gamut3.Cine / S-Log3**, HLG and ACES (BakingLab fit) profiles; MHC (default) or super-pixel demosaic; the former video RCD backend has been removed
 - User `.cube` LUT library (up to 16 imports, `LUT_3D_SIZE` 16–65) for S-Log3 monitoring during a take, optionally baked into the recording as SDR Rec.709 (`_LUT709`)
-- Locks on record (AE / AF / AWB), stabilization output, stereo dBFS meters
+- Locks on record (AE / AF / AWB), gyro stabilization v2 with L1 camera-path smoothing and self-calibration, stereo dBFS meters
 - Recording health HUD with recent-drop, pressure, thermal, stalled-output and low-space warnings
 - Optional preview sleep during recording (tap to wake; manual or 5/10/30/60-second idle timer)
 - A/B rack-focus marks with 0.5/1.2/2.5/5-second pulls on manual-focus lenses
@@ -55,10 +57,11 @@ Current release: **2.0.0** (versionCode 2000). See [CHANGELOG.md](CHANGELOG.md) 
 - Feature tags (gold = active/manual), lens discs in a recessed track, video quick panel with torch, gallery seat with the last capture's thumbnail
 - RAW-capable lens discovery with verdicts from real use, and per-lens RAW size / packed RAW format selection
 - Portrait viewfinder layout with rotation-aware controls
+- Optional ISP SurfaceView preview, including during LK-SR merges; the camera pauses behind Settings
 
 ## RAW ZSL
 
-RAW ZSL is opt-in under **Settings → Burst → Zero shutter lag**, or by selecting the `ZSL` capture mode. The ZSL buffer can be set from 1 to 59 saved frames (8 by default), targeting a 30 FPS stream where the device advertises a compatible Camera2 range. At 30 FPS, 30 frames represent approximately one second of pre-shutter history. The effective ring is clamped to what the HAL buffer queue fits (pairing plus transition headroom is reserved first), so deep requests degrade gracefully instead of failing. JPEG/JPEG+DNG selections are bounded to six frames for development memory; DNG-only can save the whole effective ring. Optionally the shutter dumps the whole ring to one `IMG_<ts>_BURST.craw` for a later offline merge. The RAW badge changes to `RAW • ZSL` after the first paired frame is buffered. `ZSL …` means the buffer is warming, `ZSL OFF` means the setting is disabled, and `ZSL N/A` means RawLens has automatically fallen back to ordinary RAW capture.
+RAW ZSL is opt-in under **Settings → Burst → Zero shutter lag**, or by selecting the `ZSL` capture mode. The ZSL buffer can be set from 1 to 59 saved frames (16 by default), targeting a 30 FPS stream where the device advertises a compatible Camera2 range. At 30 FPS, 30 frames represent approximately one second of pre-shutter history. The effective ring is clamped to what the HAL buffer queue fits (pairing plus transition headroom is reserved first), so deep requests degrade gracefully instead of failing. JPEG/JPEG+DNG selections are bounded to six frames for development memory; DNG-only can save the whole effective ring. Optionally the shutter dumps the whole ring to one `IMG_<ts>_BURST.craw` for a later offline merge. The RAW badge changes to `RAW • ZSL` after the first paired frame is buffered. `ZSL …` means the buffer is warming, `ZSL OFF` means the setting is disabled, and `ZSL N/A` means RawLens has automatically fallen back to ordinary RAW capture.
 
 The ZSL implementation continuously pairs full-resolution RAW images with Camera2 metadata by sensor timestamp. It requests the fastest advertised compatible AE range up to 30 FPS and retains only the configured number of recent frames, bounded by the configured ring and `ImageReader` capacity. On shutter press, it considers only fresh frames whose exposure and rolling-shutter readout completed by that instant, then scores them using recency, autofocus state, auto-exposure state, lens movement, ISO, exposure duration, and gyroscope motion. Request epochs prevent frames from an earlier control state entering a new buffer.
 
@@ -70,7 +73,7 @@ ZSL and PROGRAM custom AE are mutually exclusive (enabling HDR+ pulls the mode i
 
 The viewfinder includes the mode switcher, RAW status, lens switcher, manual control chips, focus/exposure metering targets, scopes, guide overlays, quick controls, and shutter. In PROGRAM, tap an ISO/S chip for that axis's slider (Auto releases both locks); hold a chip to lock that axis and let the other adjust; hold the second locked axis to enter MANUAL.
 
-Settings has General, Photo, Video, Exposure, Burst, Denoise, Lenses, Debug, and About tabs; swiping left or right on empty space flips between them.
+Settings has General, Photo, Video, Exposure, Burst, Merge, Denoise, Lenses, Debug, and About tabs; swiping left or right on empty space flips between them.
 
 | Tab | Contents |
 |---|---|
@@ -78,7 +81,8 @@ Settings has General, Photo, Video, Exposure, Burst, Denoise, Lenses, Debug, and
 | Photo | Photo format, JPEG / JPEG XL quality, Ultra HDR, AgX look, Active D-Lighting, adaptive exposure, highlight handling, demosaic (AMaZE / RCD) |
 | Video | Encoded Video (profile, resolution, frame rate, demosaic, crop, gain, LUT library), RAW Video (codec, crop, binning, sound), locks on record, stabilization |
 | Exposure | PROGRAM custom AE per lens, ETTR, HDR brackets, two-exposure RAW HDR, face priority |
-| Burst | Offline burst merges, zero shutter lag, MFSR, HDR+, burst gyro sidecars |
+| Burst | Offline burst staging, zero shutter lag, burst gyro sidecars |
+| Merge | HDR+, KB-SR and LK-SR burst merge controls |
 | Denoise | Profiled wavelet (Vulkan), AI RAW denoise (RawNIND Bayer) |
 | Lenses | Lens discovery and per-lens selection |
 | Debug | HDR debug frames, camera diagnostics, app log |
@@ -92,7 +96,7 @@ A user guide lives in [docs/user-guide/user-guide.md](docs/user-guide/user-guide
 
 - Android 11 or newer (API 30+; GPU video record needs Android 13+ for half-float buffers)
 - A Camera2 camera advertising `REQUEST_AVAILABLE_CAPABILITIES_RAW`
-- JDK 21 or newer for Gradle (the project compiles to Java 21), Android SDK 37 (compileSdk 37, targetSdk 35), NDK 27.0.12077973, CMake 3.22.1
+- JDK 27 for the pinned Gradle daemon (the project compiles to Java 21), Android SDK 37 (compileSdk 37, targetSdk 35), NDK 27.0.12077973, CMake 3.22.1
 - Gradle 9.8.2 (wrapper), AGP 9.4.1, Kotlin 2.4.21
 
 The application requests camera permission, microphone permission on the first video record (mic-less devices record silent video), location only when geotagging is enabled, and one photo-folder grant (asked on first install, re-grantable from Burst settings). Stills and bursts are written through `MediaStore` to `DCIM/RawLens/<stem>`, and gyro sidecars (`burst.json` + `gyro/` CSVs) land next to the DNGs — falling back to `Download/RawLens/<stem>` only until the folder is granted. Copy any split sidecars next to the DNGs before desktop `import`.
@@ -156,7 +160,7 @@ Other host tools (shader builders, parity oracles, DNG and LUT checks) are liste
 
 `MainActivity` owns the viewfinder UI and persisted preferences; the settings pages (`Settings*Tab`, `PhotoSettingsTab`), quick/manual controls, overlays and lens discovery are split into separate files. `RawCameraController` owns Camera2 capture and delegates to focused units: `SessionLadder` (session/stream fallback), `FramePairing`, `ZslStreamHealth` / `RawZslBuffer`, `StillChain`, save jobs (`RawFrameSaveJob`, `HdrBracketSaveJob`, `ZslMergeSaveJobs`), `TouchFocus`, and the `ProgramAeLoop` / `EttrLoop` exposure loops.
 
-`RawDevelopmentCoordinator` performs normalized RAW validation, highlight reconstruction, corrected pre-demosaic processing, adaptive exposure analysis, demosaicing, and development; `Gles31JpegOutputProcessor` / `Gles31JxlOutputProcessor` apply AgX and optional Ultra HDR gain maps. Merges live in `HdrPlusMerge`, `MfsrMerge`, `HdrSeqMerge` and `BurstMergeRunner`. `DngSaver` combines each selected `RAW_SENSOR` image with its frozen capture metadata and streams to Android DngCreator or TinyDNG; `TinyDngImageWriter` also serializes merged, linear RGB and float-CFA output. Video is recorded by `RawVideoRecorder` (`.craw` via `CrawWriter`) and `EncodedVideoRecorder` (Vulkan record shaders, optional 3D LUT). All sources are under `app/src/main/java/com/matthew/rawlens`; native code is under `app/src/main/cpp`.
+`RawDevelopmentCoordinator` performs normalized RAW validation, highlight reconstruction, corrected pre-demosaic processing, adaptive exposure analysis, demosaicing, and development; `Gles31JpegOutputProcessor` / `Gles31JxlOutputProcessor` apply AgX and optional Ultra HDR gain maps. Merges live in `HdrPlusMerge`, `MfsrMerge`, `LkrMerge`, `HdrSeqMerge` and `BurstMergeRunner`. `DngSaver` combines each selected `RAW_SENSOR` image with its frozen capture metadata and streams to Android DngCreator or TinyDNG; `TinyDngImageWriter` also serializes merged, linear RGB and float-CFA output. Video is recorded by `RawVideoRecorder` (`.craw` via `CrawWriter`) and `EncodedVideoRecorder` (Vulkan record shaders, optional 3D LUT). All sources are under `app/src/main/java/com/matthew/rawlens`; native code is under `app/src/main/cpp`.
 
 ## Contributing
 
@@ -166,7 +170,7 @@ Bug reports and focused pull requests are welcome. See [CONTRIBUTING.md](CONTRIB
 
 RawLens is licensed under the GNU General Public License, version 3 or later. See [LICENSE](LICENSE).
 
-2.0 ports or follows published work from libcamera (PROGRAM AGC), Magic Lantern (ETTR, RAW zebras), Open Camera (flash precapture), darktable (inpaint-opposed highlights, JPEG XL export options), RawTherapee (AMaZE), the Wronski et al. / IPOL MFSR reference, Stephen Hill's BakingLab ACES fit, Sony's S-Log3 / S-Gamut3.Cine specification, and Cinematic RAW Studio (`.craw`).
+RawLens ports or follows published work from libcamera (PROGRAM AGC), Magic Lantern (ETTR, RAW zebras), Open Camera (flash precapture), darktable (inpaint-opposed highlights, JPEG XL export options), RawTherapee (AMaZE), the Wronski et al. / IPOL MFSR reference, Stephen Hill's BakingLab ACES fit, Sony's S-Log3 / S-Gamut3.Cine specification, and Cinematic RAW Studio (`.craw`).
 
 RAW ZSL lifecycle research also used PhotonCamera's pinned `dev` source as a reference, especially its continuous RAW ownership and request-transition draining patterns. RawLens's PROGRAM shutter-first exposure policy acknowledges the related work in commit [`5bb9cf4`](https://github.com/eszdman/PhotonCamera/commit/5bb9cf47fa9313abb00f1eb594b647e0553fd866), authored by `matthew777777`. PhotonCamera is distributed under the GNU GPL. See [NOTICE.md](NOTICE.md) and [references/README.md](references/README.md) for attribution and the exact reference revisions.
 

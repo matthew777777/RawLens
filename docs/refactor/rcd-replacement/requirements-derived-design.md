@@ -1,5 +1,7 @@
 # Requirements-derived packed Bayer recording RCD
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Date: 2026-11-01. This is the next design contract, not a claim that this path
 is implemented, faster, legally cleared or accepted on a phone. The current
 candidate remains a validated comparison and fallback experiment. Its measured

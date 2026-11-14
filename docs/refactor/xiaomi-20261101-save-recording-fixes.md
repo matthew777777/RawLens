@@ -1,5 +1,7 @@
 # Xiaomi save and recording failures — 2026-11-01
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Evidence: the six supplied logcat exports (Xiaomi 24030PN60G, SDK 34).
 
 - 10:40:01 and 10:41:41: RAW acquisition/pairing succeeds at 4096x2304, then

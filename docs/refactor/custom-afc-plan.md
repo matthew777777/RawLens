@@ -1,5 +1,7 @@
 # Custom RawLens continuous autofocus: research and staged plan
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Date: 2026-11-02. Status: design only; no AF behavior changes in this task.
 
 ## Broader review update

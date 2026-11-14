@@ -1,5 +1,7 @@
 # Vendor keys: source audit and gap fixes (2026-10-27)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The initial audit identified V1–V12. The owner subsequently authorized filling
 those gaps. This document describes the resulting implementation. Source
 agreement is distinct from evidence of sensor effects on a particular device.

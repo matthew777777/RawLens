@@ -1,5 +1,7 @@
 # Current dependency inventory and replacement boundary
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 2026-11-01. Completed removal is recorded in ../issue1-removal.md and its package
 and history reports. Do not repeat it or consult removed artifacts. No current
 runtime replacement is integrated by M1.

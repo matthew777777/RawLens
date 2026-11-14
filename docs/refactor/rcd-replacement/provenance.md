@@ -1,5 +1,7 @@
 # Source provenance gate
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Date: 2026-11-01. Technical evidence, not legal clearance. The exact source hashes
 are in [the machine-readable manifest](../../../tools/photo-rcd/upstream/manifest.json).
 Original notices and full GPL texts accompany the host tools, outside app assets.

@@ -1,5 +1,7 @@
 # C9 reference-parity harness (checklist §M C9, docs/refactor/mfsr-c9-reference-parity.md)
 
+> See [current repository state](../../../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Python side, run with the CPU reference's venv (matthew777777/Handheld-Multi-Frame-Super-Resolution):
 
     python c9_export.py <reference repo> <burst dir> <out dir> <x> <y> <size>   # burst.f32, cfg.json, out_ref.f32, flows/rob/cov

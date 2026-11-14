@@ -1,5 +1,7 @@
 # Recording tools validation
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Implemented recording health HUD, optional preview sleep and timed A/B manual-focus pulls for RAW and Encoded Video.
 
 ## Checks

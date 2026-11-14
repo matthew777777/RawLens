@@ -1,5 +1,7 @@
 # Quick Mac guide on/off comparison, 2026-11-13
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Shared SolveParams.guide_confidence now defaults to 0, covering Android JNI,
 AppDefaults and desktop. Explicit research overrides remain available. This
 restores residual confidence; it does not disable robust rejection.

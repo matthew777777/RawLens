@@ -1,5 +1,7 @@
 # External actions — review draft only
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 No remote actions authorized or executed by this replacement implementation.
 The completed history/removal work in ../issue1-removal.md is not repeated.
 

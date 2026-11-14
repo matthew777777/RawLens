@@ -1,5 +1,7 @@
 # Handoff: LK-R guide confidence makes checkerboard in wind-moved foliage (2026-11-13)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## State
 
 - `982c6cc9` made the reference-guide confidence the default (`SolveParams::guide_confidence = 2`,

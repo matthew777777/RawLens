@@ -2,6 +2,8 @@
 
 # Standalone FFDNet photo denoising
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Date: 2026-11-04
 
 ## Current revision: constrained colour transfer

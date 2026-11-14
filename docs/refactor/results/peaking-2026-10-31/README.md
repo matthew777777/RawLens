@@ -1,5 +1,7 @@
 # Headless RAW peaking acceptance — 2026-10-31
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Device: Redmi `25080RABDG`, MediaTek MT6878, Android 16 / SDK 36. Build: 2.0.45 githubDeviceTest, main route `0`, RAW 4080×3060. No test Activity, TextureView, screenshots, or injected gestures were used after the headless-only instruction. Camera2 configured the RAW ImageReader alone (`PREVIEW=none`).
 
 ## Passed checks

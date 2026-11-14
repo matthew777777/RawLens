@@ -1,5 +1,7 @@
 # RCD and saved-photo trace — 2026-10-26
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 RCD recorder submits modes 0–2 immediately with one slot index. Native code previously owned only one descriptor set per slot and returned BUSY if that set was still referenced by a GPU submission. Mode 1 could therefore fail after mode 0; the recorder dropped the frame. Allocate four sets per slot, select by mode, and retain the existing in-flight fence check for reuse across frames. Pool capacity and teardown follow the twelve-set allocation.
 
 Device validation: rapid sequence (three rounds, four stages, no intermediate waits) and fused-finalize versus split output both passed on Xiaomi 25080RABDG. The rapid test now asserts submission/completion instead of skipping on failures. RCD reference (4) and adaptive exposure (34) JVM tests passed.

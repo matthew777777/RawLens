@@ -1,5 +1,7 @@
 # Save writers — study before refactor (2026-10-20)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Scope: `RawCameraController` `writer` (serial) and `dngWriter` (parallel)
 executors, `saveRawFrame` (280 lines, one inline job lambda) and its routing.
 Algorithm stages it calls (Galosh, AI denoise, development, HDR+/MFSR merges)

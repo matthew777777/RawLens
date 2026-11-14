@@ -1,5 +1,7 @@
 # Local HDR+ automatic-selector validation
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 The opt-in JUnit test executes production Kotlin code on decoded RAW frames.
 The desktop runner executes the app's C++/Vulkan merge through MoltenVK.
 Source DNGs remain untouched. Outputs need several GB for six full-size bursts.

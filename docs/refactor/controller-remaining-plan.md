@@ -1,5 +1,7 @@
 # RawCameraController: remaining areas (2026-10-22)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Controller: 8,354 lines after R2/S9 (`30345d1`). Done so far: TouchFocus,
 ZslStreamHealth, SessionLadder, FramePairing, ProgramAeSolver, RawStreamPlan,
 RawFrameSaveJob, StillChain, plus C/S/R/F/W study fixes.

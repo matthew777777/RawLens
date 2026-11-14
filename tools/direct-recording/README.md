@@ -1,5 +1,7 @@
 # Direct recording checks
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 RAW video and Encoded Video create their final file before camera start. The
 recorders receive an open descriptor; stopping only closes/finalizes/publishes
 that file. `MainActivity.videoStageDir` is retained solely to rescue recordings

@@ -1,5 +1,7 @@
 # RAWR Capture Sharpening port
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Pinned reference: https://github.com/adityawarmanfw/rawr at
 `537852ec0e109f78fb4ed54bc6a692d9c7cfca92`.
 

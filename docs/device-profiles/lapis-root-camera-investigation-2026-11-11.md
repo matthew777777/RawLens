@@ -1,5 +1,7 @@
 # Lapis root camera investigation — paused 2026-11-11
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## Latest stop — 2026-11-11 around 12:38 device time
 
 User explicitly said **"okay stop for now"**. Stop all further feature experiments until requested again.

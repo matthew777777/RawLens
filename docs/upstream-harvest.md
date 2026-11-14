@@ -4,6 +4,8 @@
 
 # Upstream harvest — P0.1 exposure/focus monitoring (IN PROGRESS, paused)
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Source: https://github.com/adityawarmanfw/rawr @ f41e6c2 (cloned to /tmp/rawr).
 Both repos GPL-3.0 — ports keep upstream notices. HDR+/Wroński/multiframe excluded per user.
 

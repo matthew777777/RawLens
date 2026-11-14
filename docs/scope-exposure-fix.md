@@ -1,5 +1,7 @@
 # Live scope exposure correction
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 References:
 
 - Android Camera2 CaptureResult documentation: https://developer.android.com/reference/android/hardware/camera2/CaptureResult#SENSOR_DYNAMIC_WHITE_LEVEL

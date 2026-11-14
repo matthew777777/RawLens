@@ -1,5 +1,7 @@
 # Capture sharpening
 
+> See [current repository state](../../../../../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 GPU port of RawTherapee's Capture Sharpening (`rtengine/capturesharpening.cc`,
 `rt_algo.cc`, `boxblur.cc`, `gauss.cc` at RT `b2ee504`): Richardson-Lucy
 deconvolution of luminance with a Gaussian PSF, gated by a contrast/clip blend

@@ -1,5 +1,7 @@
 # Default preview efficiency audit — 2026-10-30
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The initial changes remove repeated work without changing capture cadence,
 preview resolution, color math, or image ownership and GPU fence rules. The
 later rendering change below intentionally reduces preview presentation

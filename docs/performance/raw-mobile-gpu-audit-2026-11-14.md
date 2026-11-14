@@ -1,5 +1,7 @@
 # RAW viewfinder and ISP mobile GPU audit
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Research of the current working tree, 2026-11-14. No runtime code changed.
 Existing uncommitted changes were included in the inspection and left intact.
 The connected lapis phone was detected; the selected existing logcat tags had

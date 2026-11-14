@@ -1,5 +1,7 @@
 # Encoded Video Cross-Device Test Plan (build 1.0.284)
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Build: `app/build/outputs/apk/debug/RawLens-1.0.284-debug.apk` (debug-signed,
 install with `adb install -r`). Needs Android 11+; 10-bit LOG realistically
 needs Android 13+ with a HW HEVC encoder; the 8-bit SDR fallback needs any

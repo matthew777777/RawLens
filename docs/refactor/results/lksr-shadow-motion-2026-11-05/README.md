@@ -1,5 +1,7 @@
 # Final shadow, noise and sunset fixes
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The follow-up investigation fixed three additional implementation defects and
 validated a cleaner, shorter default reconstruction. The earlier report below
 records the initial motion/chroma pass, not the final settings.

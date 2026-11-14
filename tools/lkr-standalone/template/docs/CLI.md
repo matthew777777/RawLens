@@ -1,5 +1,7 @@
 # Command-line reference
 
+> Scope: this document describes the generated standalone package. Android app behavior and integration are documented in the source repository’s `docs/CURRENT_STATE.md`.
+
 ```sh
 ./run.sh BURST_DIR OUT.dng [OPTIONS]
 ```

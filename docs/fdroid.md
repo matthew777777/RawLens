@@ -1,5 +1,7 @@
 # F-Droid submission guide
 
+> See [current repository state](CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 RawLens is prepared for inclusion in the official F-Droid catalog
 (`f-droid.org`). This file is the checklist, the build recipe, and the
 step-by-step submission process.

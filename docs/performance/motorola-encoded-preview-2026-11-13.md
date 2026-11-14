@@ -1,5 +1,7 @@
 # Motorola encoded-video monitor investigation — 2026-11-13
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Inputs: `logcat-20261113_142857_870 (1).txt` (1,062 lines) and
 `logcat-20261113_142857_870 (2).txt` (6,275 lines), Motorola signature,
 Android 17, Adreno 829, app 2.2.86. The second export extends the same session.

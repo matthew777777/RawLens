@@ -1,5 +1,7 @@
 # LK-R fixed-quality Mac performance, 2026-11-13
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Full-frame baselines and two implementation optimizations were tested on Apple
 M1 through MoltenVK. The two workloads produce 12.48 MP from 16 frames and
 49.94 MP from 24 frames. No vivo performance measurement is implied.

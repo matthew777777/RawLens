@@ -1,5 +1,7 @@
 # Autofocus redesign: research, audit, and implementation plan
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Date: 2026-10-29. Branch: `fix/mtk-continuous-picture-tap-focus`.
 Status: research and proposed implementation; this document does not implement the redesign.
 

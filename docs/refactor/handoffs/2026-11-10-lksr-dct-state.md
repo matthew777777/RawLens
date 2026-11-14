@@ -1,5 +1,7 @@
 # LK-SR state, 2026-11-10 (stopped by the owner)
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Last commit: `93a5fc3` (temporal tolerance 1.0, noise-fit fix, clip-halo fix).
 Everything below is uncommitted in the working tree.
 

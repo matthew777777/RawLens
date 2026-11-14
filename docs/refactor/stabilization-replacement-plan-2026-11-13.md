@@ -1,5 +1,7 @@
 # Stabilization replacement plan (2026-11-13)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Scope: replace `StabTrajectory.kt` and the post-record warp with a stronger engine.
 This plan starts from VidUltra (`Stabilizer.java`, `Gyro.java`, `VisionOis.java`, GPL-3.0)
 and adds methods from the literature and Gyroflow where they beat it.

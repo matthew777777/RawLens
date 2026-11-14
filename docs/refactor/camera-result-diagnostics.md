@@ -1,5 +1,7 @@
 # Camera result diagnostics
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Photo preview and RAW-video callbacks emit separate route/pipeline-labelled diagnostics:
 
 - `SENSOR_MODE`: values read from the actual request and advertised result keys for

@@ -42,6 +42,8 @@ remain open. No FP16 arithmetic or fused P010 workaround was introduced.
 
 # Performance acceptance — not measured
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Earlier phases performed no Android tests. Subsequently authorized headless
 Vulkan correctness tests passed on the connected Xiaomi; no recording runs
 were performed. Host Apple M1/MoltenVK numerical checks are not mobile performance

@@ -1,5 +1,7 @@
 # sr-pipeline
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Desktop JVM CLI for the MFSR engine (multi-frame super-resolution after
 Wronski et al. 2019 / the IPOL reference) that the app runs for ZSL and
 offline merges: DNG burst directory in, one `merged.dng` out.

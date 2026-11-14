@@ -1,5 +1,7 @@
 # sr-pipeline parity bar
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Reference: the Python CPU source for the SR pipeline. Everything below is
 measured against that source, not against other backends or earlier dumps.
 

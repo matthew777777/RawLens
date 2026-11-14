@@ -1,5 +1,7 @@
 # RawRec and VidUltra source study
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Reviewed 2026-10-31 against the current, modified RawLens working tree. This is a source inspection, not a build, device benchmark, or proof of image quality. No application code was changed.
 
 ## Reproducible sources

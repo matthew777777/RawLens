@@ -1,5 +1,7 @@
 # Issue 1: removal and distribution cleanup
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Date: 2026-11-01. Issue: https://github.com/matthew777777/RawLens/issues/1.
 This records technical actions, not a finding about ownership or legal clearance.
 

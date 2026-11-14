@@ -1,5 +1,7 @@
 # LK baseline rename and NPU test
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Renamed the user-facing mode to **LK baseline with FFDNet** and corrected its
 explanation. Existing preference keys remain compatible. The new label was
 verified in the APK. Installed package: `com.matthew.rawlens.lkrcheck`, version

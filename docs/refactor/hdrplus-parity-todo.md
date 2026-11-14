@@ -1,5 +1,7 @@
 # HDR+ vs Burst Photo: parity findings (2026-10-22, parked)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Oracle: headless runner built from Burst Photo's own Swift + Metal sources
 (hdr-plus-swift @ 69cb057, Metal compiled at runtime, only DNG I/O replaced),
 compared with tools/hdrplus-burst on the same 1024^2 crops.

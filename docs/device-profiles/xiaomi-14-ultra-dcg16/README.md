@@ -1,5 +1,7 @@
 # Xiaomi 14 Ultra DCG16 comparison
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Source: user-provided `Xiaomi 14 Ultra Full Settings (1).zip`, MCPro lens profile exports. These are test configurations, not hardware-verified RawLens fixes.
 
 Both f/1.6 profiles select route `0/2`, RAW16, 4096×2304, operating mode 0, and vendor priority mode in MCPro. RawLens has no corresponding vendor-priority switch; copying tags does not establish equivalent backend behavior.

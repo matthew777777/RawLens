@@ -1,3 +1,5 @@
+> See [current repository state](../../../../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 These RGBA16F inputs and expected outputs come from independently compiled
 RAWR commit 537852ec0e109f78fb4ed54bc6a692d9c7cfca92, not from the Android JNI
 implementation under test. Dimensions: 193 × 187; WB: [1.9, 1, 1.45].

@@ -1,4 +1,6 @@
 # SPDX-FileCopyrightText: 2026 RawLens contributors
+
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # rawnind-train: Mac training scaffold for RawNIND-tiny Bayer denoising

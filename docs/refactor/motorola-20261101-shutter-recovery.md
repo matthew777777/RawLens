@@ -1,5 +1,7 @@
 # Motorola Signature shutter/recovery report
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Read all 3,134 lines of `logcat-20261101_170058_392 (1).txt`.
 Device motorola signature, SDK 37. This export predates the new SENSOR_MODE /
 SENSOR_FPS / AF_TRIGGER diagnostics. Capture format in this export is JPEG,

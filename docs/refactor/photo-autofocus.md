@@ -1,5 +1,7 @@
 # Photo autofocus replacement
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 2026-10-31. Implementation, host verification and device acceptance on the connected MediaTek main-camera route. See [device results](results/photo-af-2026-10-31/README.md).
 This supersedes the previous autofocus policy and its proposed recovery heuristics.
 Historical reports remain evidence of those runs, not acceptance of this implementation.

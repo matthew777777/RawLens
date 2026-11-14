@@ -1,12 +1,14 @@
 # RawLens privacy statement
 
+> See [current repository state](docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Effective date: 2026-10-29
 
 RawLens processes camera preview frames, RAW images, camera metadata, microphone audio while a video is recording, and—when RAW ZSL, video, or the level guide is in use—sensor motion samples locally on the user's device. Optional adaptive RAW development analyzes luminance locally before JPEG output; these statistics are not transmitted or stored as a separate database. It does not include analytics, advertising, or user accounts, and it does not collect or transmit personal information. Camera and lens preferences, including JPEG/AgX, adaptive-exposure, denoise, video, and per-camera DNG calibration settings, and any `.cube` LUTs the user imports, are stored locally in Android app preferences. The only network communication is the optional in-app update check described below.
 
 ## Permissions and files
 
-RawLens requests camera permission so it can display the viewfinder and capture photographs and video. Photos, `.craw` RAW video, Encoded Video video, and burst sidecars are saved at the user's request through Android `MediaStore`, normally under `DCIM/RawLens`, and remain under the user's control. Media read permission is used only to show the user's earlier RawLens captures in the in-app gallery seat.
+RawLens requests camera permission so it can display the viewfinder and capture photographs and video. Photos, `.craw` RAW video, Encoded Video, and burst sidecars are saved at the user's request through Android `MediaStore`, normally under `DCIM/RawLens`, and remain under the user's control. Media read permission is used only to show the user's earlier RawLens captures in the in-app gallery seat.
 
 Microphone permission is requested the first time a video is recorded; audio is captured only while recording and is stored inside the user's video file. Denying it records silent video.
 

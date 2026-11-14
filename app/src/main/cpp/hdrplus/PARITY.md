@@ -1,5 +1,7 @@
 # HDR+ parity proof: RawLens Vulkan port vs Burst Photo (hdr-plus-swift)
 
+> See [current repository state](../../../../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Upstream: https://github.com/martin-marek/hdr-plus-swift at
 `69cb0572bb6712e160c448260125cb6099bdfd87` (2024-08-24), GPL-3.0.
 Intermediate: the `merge_hdrplus` port at `f41e6c2c493cb2ebfe37ca7dcb98a6e38a5d40a5`

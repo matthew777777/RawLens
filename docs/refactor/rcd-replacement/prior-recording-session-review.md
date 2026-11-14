@@ -1,5 +1,7 @@
 # Prior recording work: processing time versus delivered cadence
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The user clarified that our earlier work took the imported backend from roughly
 16 fps recording to stable 30 fps; achieving roughly 33.3 ms processing was an
 intermediate result, not the completed recording fix. That application pipeline

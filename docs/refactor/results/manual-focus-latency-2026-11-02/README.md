@@ -1,5 +1,7 @@
 # Manual lens feedback probe — 2026-11-02
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Connected device: Xiaomi model 25080RABDG, camera 0, RAW_SENSOR 4080x3060 +
 640x480 YUV. Isolated com.matthew.afprobe package; normal RawLens not replaced.
 User confirmed a steady detailed nearby target. Test passed in 24.027 seconds.

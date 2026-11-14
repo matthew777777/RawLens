@@ -1,5 +1,7 @@
 # Validation, traces and comparisons
 
+> Scope: this document describes the generated standalone package. Android app behavior and integration are documented in the source repository’s `docs/CURRENT_STATE.md`.
+
 ## Build checks
 
 ```sh

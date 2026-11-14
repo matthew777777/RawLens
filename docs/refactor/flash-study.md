@@ -1,5 +1,7 @@
 # Flash and torch: study (2026-10-22)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Scope: `RawCameraController` toggleTorch/cycleFlashStill/setTorchEnabled,
 applyStillFlash, captureSingleWithFlash, runFlashPrecaptureThenCapture.
 Decisions already live in `FlashStillPolicy` (A10, with JVM tests).

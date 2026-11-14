@@ -1,5 +1,7 @@
 # Xiaomi encoded recording black preview
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Reviewed the supplied 21,702-line `logcat-20261102_160031_236 (1).txt`,
 including the complete timeline and repeated-message patterns. Device:
 Xiaomi 24129PN74G, Android 16, app 2.0.69, Adreno driver 0800.71.

@@ -1,5 +1,7 @@
 # Contributing
 
+> Scope: this document describes the generated standalone package. Android app behavior and integration are documented in the source repository’s `docs/CURRENT_STATE.md`.
+
 RawLens is the canonical home of the shared sources. Change the same paths in
 RawLens, then export with `python3 tools/lkr-standalone/sync.py DESTINATION` and
 verify with `--check`. Change standalone documentation and packaging in

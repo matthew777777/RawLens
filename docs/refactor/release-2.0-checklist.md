@@ -1,3 +1,5 @@
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
  # RawLens 2.0.0: remaining work (2026-10-22, cut revised 2026-10-25)
 
 Proposed cut: **[2.0]** must land before the 2.0.0 release; **[2.0.x]**

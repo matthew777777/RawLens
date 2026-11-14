@@ -1,5 +1,7 @@
 # PROGRAM AE and ETTR — study before refactor (2026-10-20)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Scope: the PROGRAM custom-AE loop and RAW ETTR in `RawCameraController`
 (26 state fields, 31 functions) and the pure helpers `RawProgramMeter`,
 `AutoExposureBalance`, `RawEttr`.

@@ -1,5 +1,7 @@
 # KernelNet model (verbatim from PhotonCamera)
 
+> See [current repository state](../../../../../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Source: https://github.com/eszdman/PhotonCamera @ b2eff821a858033515eb2700e7292befecc95225
 Files: app/src/main/assets/models/kernelnet_aniso_v2_2_params.ncnn.{param,bin}
 License: GPL-3.0 (PhotonCamera), compatible with RawLens (GPL-3.0-or-later).

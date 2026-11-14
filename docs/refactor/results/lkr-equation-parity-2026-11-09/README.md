@@ -1,5 +1,7 @@
 # Equation parity progress
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Current production policy: no prior by default, optional FFDNet/GAT, RawLens motion and artifact protections retained. No Mini weights or model replacement introduced.
 
 Corrected NumPy FrameOp.jacobian to differentiate the same bilinear taps as forward sampling. Torch Ops and Vulkan global/local Jacobians already use this derivative after the earlier reapplication. Affine coordinate arithmetic in shaders uses precise to preserve boundary validity decisions.

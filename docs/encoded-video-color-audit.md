@@ -1,5 +1,7 @@
 # Encoded Video color audit — 2026-10-26
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 **S-Log3 update 2026-10-28:** the Sony-specific pipeline and interpretation
 below describe the older Rec.709-gamut implementation. New output converts
 linear sRGB to S-Gamut3.Cine before Sony S-Log3. Use S-Gamut3.Cine/S-Log3

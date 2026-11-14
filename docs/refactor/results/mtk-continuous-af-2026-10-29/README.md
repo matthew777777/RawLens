@@ -1,5 +1,7 @@
 # MTK continuous-picture touch-focus investigation
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Local branch: `fix/mtk-continuous-picture-tap-focus`.
 Device connected over ADB: model `25080RABDG`, device `lapis`, camera `0`.
 Do not treat earlier Xiaomi 14T Pro comments in the app as evidence about this device.

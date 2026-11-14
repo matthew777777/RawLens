@@ -1,5 +1,7 @@
 # F1/F2 historical handoff — resumed 2026-10-26
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The owner subsequently requested continuation. The paused snapshot below is
 historical; its UI/default descriptions are superseded by the
 [current implementation and verification audit](raw-exposure-assist-audit.md).

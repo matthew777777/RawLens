@@ -1,5 +1,7 @@
 # LK-R foliage dots: code audit, literature review, and implementation plan
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## Decision
 
 Restore residual rejection as the default while investigating a detail-preserving reconstruction. `SolveParams::guide_confidence` is now 0; explicit `--guide 2` and `debug.lkr.guide 2` retain the experiment. Existing uncommitted `--gres` edits are preserved. No release was published or draft release modified.

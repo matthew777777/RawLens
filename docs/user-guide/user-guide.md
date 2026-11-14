@@ -1,9 +1,22 @@
-# RawLens — User Guide (dishwasher-manual style)
+# RawLens — User Guide
+
+> See [current repository state](../CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
 
 > **Easiest PDF:** open `user-guide.html` in Chrome/Edge/Safari → `Ctrl/Cmd+P` →
 > Destination `Save as PDF` → Background graphics ON → Save.
 > Alternative: `pandoc user-guide.md -o RawLens-Manual.pdf`
 > (or `weasyprint user-guide.html RawLens-Manual.pdf`).
+
+## Current controls
+
+The merge names shown in the app are **KB-SR** (MFSR / kernel-based reconstruction)
+and **LK-SR** (Lucas–Kanade reconstruction). Older screenshots and sections below
+use MFSR or LK-R. Settings now has a separate **Merge** tab alongside Burst.
+The default ZSL buffer is 16 frames, subject to device and memory limits.
+Offline Merges offers KB-SR, LK-SR and HDR+, starts with JPEG output, provides
+JPEG / JPEG XL quality controls and burst sharing, and retains staged orientation.
+LK-SR zoom and output resolution are separate controls. The camera pauses while
+Settings is open. Optional ISP preview can reduce RAW-viewfinder contention.
 
 ## 0. Screenshot map — your 15 images
 

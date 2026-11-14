@@ -1,5 +1,7 @@
 # HDR+ scene-auto validation — 2026-11-05
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 14 real bursts, 110 source DNGs, 56 full-resolution native merges on Apple M1/MoltenVK. All outputs finite. {'tests': 69, 'failures': 0, 'errors': 0, 'skipped': 0} for the final HDR+ test run (including the eight-burst fixture test).
 
 Auto strength and quality are enabled for new and existing settings. The migration marker is persisted on the next settings save; subsequent manual choices round-trip unchanged. HDR+ itself is not forced on.

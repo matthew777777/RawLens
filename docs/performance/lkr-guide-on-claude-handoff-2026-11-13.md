@@ -1,5 +1,7 @@
 # Claude handoff: fix guide-on foliage checkerboard without waxy detail loss
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Date: 2026-11-13. User explicitly requested this handoff after ongoing implementation work.
 
 ## User objective — do not substitute a rollback

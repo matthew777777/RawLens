@@ -23,6 +23,8 @@ remain open. No FP16 arithmetic or fused P010 workaround was introduced.
 
 # Main recording RCD candidate: preserved 200 ms photo implementation
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Decision, 2026-11-01: prioritize the preserved photo implementation as the
 candidate for the main recording RCD, following the user's explicit instruction.
 The newer atlas implementation remains a reference and fallback experiment;

@@ -1,5 +1,7 @@
 # Capture / pairing / save — study before refactor (2026-10-20)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Scope: `RawCameraController` frame pairing (`pendingImages`, `pendingResults`,
 `pendingZslResults`, `pendingTimeouts`, `previewRawTimestamps`;
 `pairAvailableFrame`, `pairRawZslFrame`, `pairAndSave`, `schedulePairTimeout`,

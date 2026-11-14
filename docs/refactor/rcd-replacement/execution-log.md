@@ -1,5 +1,7 @@
 # Replacement execution log
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## 2026-11-01 — initial snapshot and M1
 
 Initial HEAD `28977494032f743742eafbbf77ff437317544554`, branch `refactor/2.0`.

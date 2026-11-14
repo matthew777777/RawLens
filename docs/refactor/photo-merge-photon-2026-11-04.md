@@ -1,5 +1,7 @@
 # Photo merging alongside ZSL
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 HDR+ and MFSR now accept fresh bursts in AUTO, PROGRAM and MANUAL. ZSL
 continues to select buffered RAWs. Enabling, disabling, switching exposure
 modes, and restarting the app no longer force a merger into ZSL or turn it off

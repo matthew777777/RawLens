@@ -1,5 +1,7 @@
 # HDR+ upload memory reduction
 
+> Repository context: [current source state](../../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Baseline: Git HEAD `cb1f496b41cca3cf1ecb3474a9884510dbab1911`.
 
 Reported device: Xiaomi M2004J19C, Android 11/API 30, Mali-G52,

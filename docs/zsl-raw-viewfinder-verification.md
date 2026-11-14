@@ -1,5 +1,7 @@
 # ZSL capture/save and RAW viewfinder verification
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Capture admission is capacity-based: physical capture remains serialized, while prior images develop/save in the background. Up to six JPEG inputs (one developing plus five waiting) are allowed; a multi-frame ZSL selection reserves room for its whole selection. The shutter rearms as soon as capture finishes and sufficient input slots remain. Sidecar-only jobs do not consume image slots. Repeated presses during physical capture or a full queue are discarded. Hybrid OFF retains incomplete selections in the ring during its bounded refill wait.
 
 Grouped ZSL saves now have an explicit image owner. Save admission releases only after that owner closes. Session teardown retires readers until outstanding saves and metering release their images. Completion invalidates capture callbacks and closes pending pairs and top-up holdings.

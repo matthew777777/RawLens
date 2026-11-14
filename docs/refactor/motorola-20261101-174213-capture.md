@@ -1,5 +1,7 @@
 # Motorola 17:42 diagnostic follow-up
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Reviewed all 1,646 lines of logcat-20261101_174213_253 (1).txt.
 
 Unlike the earlier export, this is a forward single-RAW capture with ZSL off.

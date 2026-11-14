@@ -1,5 +1,7 @@
 # Guide foliage: notch feasibility probe
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 The handoff proposes residual-gated cleanup instead of reducing accepted support. Before adding a solver map, tested the existing FinishLook notch offline on its saved native-resolution `sw/guide/{f1,f2,t1,t2}.dng.f32` outputs. These are finished images; this is an additional postprocess probe, not a replay of the complete solver or a validated production feature.
 
 Reproducer: `tools/lkr-pipeline/host/lkr_notch_feasibility.py INPUT OUTPUT`.

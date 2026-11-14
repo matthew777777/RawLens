@@ -1,5 +1,7 @@
 # Claude handoff — full-resolution recording RCD
 
+> Repository context: [current source state](../../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Status: **stopped at the user's request**, 2026-11-02 (Europe/Athens). The user
 wants to move continuation to Claude tomorrow. No further implementation/tests
 are authorized by this handoff alone. Preserve the workspace as it stands.

@@ -1,5 +1,7 @@
 # Scene-driven HDR+ automatic strength
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## Scope and evidence
 
 This changes automatic strength selection, not the Vulkan merge algorithm,

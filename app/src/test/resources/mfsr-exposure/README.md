@@ -1,3 +1,5 @@
+> See [current repository state](../../../../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Four 32x32 camera-linear RGB samples from the owner's local DNGs under
 `~/Downloads/Photos Linear 2`, filenames preserved. Little-endian float32 RGB,
 row-major. Sites are selected using 32 evenly spaced integer x/y coordinates

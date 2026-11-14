@@ -1,3 +1,5 @@
+> See [current repository state](../../../../../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Source: https://github.com/matthew777777/tinydng
 Base commit: 1f181699511e08e51baabd9fdab2311ea1253d4b
 

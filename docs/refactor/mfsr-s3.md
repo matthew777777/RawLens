@@ -1,5 +1,7 @@
 # MFSR supplement S.3: high-frequency artefact rejection
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Wronski et al. 2019, supplement S.3: alignment fails on high-frequency
 repetitive patterns (aperture problem) and the merge then shows blocky
 artefacts; "we compare the local variance before and after the lowpass

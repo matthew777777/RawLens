@@ -1,5 +1,7 @@
 # HDR 3-bracket merge: study (2026-10-22, in progress)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Reported (owner): blockiness, smear, square blocks around moving cars.
 
 ## Current pipeline (HdrBracketSaveJob -> HdrRawMerge), ~2,960 lines

@@ -1,5 +1,7 @@
 # tools/
 
+> See [current repository state](../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Host-side code: the MFSR desktop harness, capture-format checks, shader
 builders, and verification scripts and oracles. Everything here runs on
 Linux/macOS (Apple Silicon included) with no device unless noted. Numerical
@@ -10,8 +12,13 @@ parity for MFSR is judged by the error envelopes in `sr-pipeline/PARITY.md`.
 | Path | What |
 |---|---|
 | `sr-pipeline/` | Desktop JVM CLI for the MFSR engine (DNG burst directory in, `merged.dng` out; CPU or Vulkan backend). Wired into the build as `:tools:sr-pipeline`; [README](sr-pipeline/README.md) has run flags and tests. |
+| `lkr-pipeline/` | LK-SR engine and full-frame Vulkan CLI; also backs the app’s `LkrMerge`. |
+| `lkr-lite/` | Standalone experimental mobile LK-SR Lite CLI with hybrid merge, fp16 frames and optional KernelNet denoise; separate from the app engine. |
+| `lkr-standalone/` | Packaging/export tooling for a standalone LK-SR source tree. |
 | `sr-vulkan/src/main/cpp` | MFSR Vulkan sources compiled into the app NDK build by path (not a standalone Gradle project). |
 | `jamy_parity_oracle.py` | Independent NumPy transcription of the Jamy-L SR core; writes golden files (`python3 tools/jamy_parity_oracle.py --out <dir>`). |
+
+For a launcher that builds the JVM/native/shader components, use `sr-pipeline/run.sh --in BURST_DIR --out OUTPUT_DIR`. Missing DNG NoiseProfile metadata uses a scene-noise estimate.
 
 ```bash
 ./gradlew :tools:sr-pipeline:installDist

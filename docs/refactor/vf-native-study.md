@@ -1,5 +1,7 @@
 # Native viewfinder (vf_vulkan_vf.cpp) split
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 `vf_vulkan_vf.cpp` (7888 lines) is one translation unit by design: its
 first 3240 lines are an anonymous namespace holding the param layouts and
 the global Vulkan `Context` every stage shares, and `dual_raw_vulkan.cpp`

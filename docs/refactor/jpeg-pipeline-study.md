@@ -1,5 +1,7 @@
 # JPEG pipeline study (AgX, auto exposure, AMaZE, quad Bayer, HL, speed)
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 ## Capture-to-file timing baseline (build 418, Xiaomi 25080RABDG, 12 MP)
 
 AUTO, JPEG only, AMaZE, highlight reconstruction ON (user setting):

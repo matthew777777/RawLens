@@ -1,5 +1,7 @@
 # HDR+ burst runner (desktop Vulkan)
 
+> See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+
 Merges a real DNG burst through the exact merge the app ships
 (`app/src/main/cpp/hdrplus/`, minus JNI) on desktop Vulkan
 (MoltenVK on macOS) — the burst-merge workflow: point it at burst

@@ -1,5 +1,7 @@
 # Capture metadata audit
 
+> Repository context: [current source state](CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Reference: [comparison workbook, Summary / OfInterest / Full](https://docs.google.com/spreadsheets/d/159e77LWv6eWM6HZgvuhk74pXCYthOlcaV8J7gK7rf0k/edit#gid=937712955), reviewed 2026-10-25. The Full tab contains 3,062 tag rows; many are proprietary maker notes or derived ExifTool values, rather than portable capture tags. The OfInterest tab narrows the comparison to 63 items. Presence in another camera's output does not establish a valid source for RawLens.
 
 ## Implemented

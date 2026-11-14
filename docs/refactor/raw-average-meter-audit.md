@@ -1,5 +1,7 @@
 # F2 extension: whole-frame RAW average and clipping estimate
 
+> Repository context: [current source state](../CURRENT_STATE.md). This audit, plan or evidence records its original scope; historical defaults, results and pending work do not establish current app behavior.
+
 Implemented 2026-10-26. Host and real-RAW accuracy checks passed. The phone
 disconnected from ADB during the UI test; UI and recording acceptance remain
 pending. This extends the previously closed spot-meter feature.
