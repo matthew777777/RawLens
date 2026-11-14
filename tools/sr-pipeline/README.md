@@ -18,18 +18,66 @@ offline merges: DNG burst directory in, one `merged.dng` out.
 
 ## Run
 
+### Terminal launcher (macOS / Linux)
+
+The launcher builds the JVM CLI, native JNI library and all Vulkan shaders,
+then passes the correct absolute paths to the CLI. Run it from any directory.
+It defaults to **2× Vulkan KernelNet**, all frames, reference 0, full frame,
+automatic noise correction, and a 6 GB maximum Java heap.
+
+Prerequisites: JDK 21 or newer, CMake, Vulkan headers and loader,
+`glslangValidator`, and a working Vulkan driver. On macOS with Homebrew:
+
+```bash
+brew install openjdk cmake glslang vulkan-headers vulkan-loader molten-vk
+export JAVA_HOME="$(brew --prefix openjdk)/libexec/openjdk.jdk/Contents/Home"
+export PATH="$JAVA_HOME/bin:$PATH"
+```
+
 From the repo root:
 
 ```bash
+tools/sr-pipeline/run.sh \
+  --in "/Users/monikamalinowska/Documents/IMG_20261112_125318_179" \
+  --out "$PWD/output/IMG_20261112_125318_179-kernelnet-vulkan-2x"
+```
+
+The result is `merged.dng` inside the output directory (an existing file of
+that name is replaced). This is a demosaiced linear RGB DNG, with camera color
+metadata and orientation copied from the reference, rather than a CFA mosaic.
+`--scale 2` doubles both pixel dimensions. Paths with spaces must be quoted.
+Override defaults by appending flags, e.g. `--scale 1 --kernel wronski`.
+For a quick check, append `--crop 0,0,512,512 --limit 2` and use a separate
+output directory. Use `JAVA_OPTS='-Xmx8g' tools/sr-pipeline/run.sh ...` to
+change the heap limit.
+
+If `NoiseProfile` is absent, the CLI estimates per-plane shot/read noise from
+the full reference frame using same-CFA Haar coefficients and brightness-bin
+MADs, and prints the values. Strong texture can inflate this blind estimate;
+use `--noise-ab a,b` for a measured model. Frames without enough unclipped,
+nonzero-variance samples require this explicit override.
+
+### Manual Gradle invocation
+
+These commands require a built native library **for both backends**.
+`--lib` must point to it unless it is already on `java.library.path`.
+Build it and the shaders with the launcher above, or configure
+`tools/sr-pipeline/host` with CMake and `-DSRP_JAVA_HOME="$JAVA_HOME"`.
+
+```bash
 # Minimal: CPU backend, defaults (ref 0, no crop, all frames)
-./gradlew :tools:sr-pipeline:run --args="--in /tmp/burst --out /tmp/sr-out --backend cpu"
+./gradlew :tools:sr-pipeline:run --args="--in /tmp/burst --out /tmp/sr-out --backend cpu --lib $PWD/tools/sr-pipeline/build/host/libsrpipeline_jni.dylib"
 
 # With reference frame, crop, and frame limit
-./gradlew :tools:sr-pipeline:run --args="--in /tmp/burst --out /tmp/sr-out --ref 2 --crop 0,0,512,512 --limit 8 --backend cpu"
+tools/sr-pipeline/run.sh --in /tmp/burst --out /tmp/sr-out --ref 2 --crop 0,0,512,512 --limit 8 --backend cpu
 
 # Vulkan backend (needs the compiled stage shaders)
-./gradlew :tools:sr-pipeline:run --args="--in /tmp/burst --out /tmp/sr-out --backend vulkan --spv-dir <dir with the 10 stage .spv modules>"
+tools/sr-pipeline/run.sh --in /tmp/burst --out /tmp/sr-out --backend vulkan --kernel kernelnet --scale 2
 ```
+
+On Linux the native library suffix is `.so`. The launcher handles this.
+If Vulkan cannot find a macOS driver, set `VK_DRIVER_FILES` to the installed
+`MoltenVK_icd.json` (typically `$(brew --prefix)/etc/vulkan/icd.d/MoltenVK_icd.json`).
 
 CLI flags (see `Main.kt` usage text):
 
@@ -42,12 +90,13 @@ CLI flags (see `Main.kt` usage text):
 | `--crop x,y,w,h` | no | crop rectangle, `x,y >= 0`, `w,h > 0` |
 | `--limit N` | no | max frames to process, `> 0` |
 | `--scale F` | no, default `1` | super-resolution factor, `>= 1` |
-| `--spv-dir DIR` | with `--backend vulkan` | directory with the 10 stage `.spv` modules |
+| `--spv-dir DIR` | with `--backend vulkan` | directory with the compiled stage `.spv` modules; supplied by launcher |
 | `--lib PATH` | no | JNI library to load (default: `System.loadLibrary`) |
 | `--lut PATH\|auto` | no | noise LUT `.npz`, or `auto` to simulate it in-process; enables noise correction |
 | `--kernel wronski\|kernelnet` | no | reconstruction kernel (`--kn-scale F`, `--kn-cap F` tune KernelNet) |
 | `--s3 on\|off` | no | supplement S.3 high-frequency artefact rejection |
 | `--s1 F --s2 F`, `--kernel-gat on\|off` | no | IPOL-vs-paper A/B parameters |
+| `--noise-ab a,b` | no | explicit normalized noise variance model `a*signal+b`, overriding tags/estimation |
 | `--colour-diff R,B` | no | Z1 zipper fix: colour-difference merge with white-balance gains R,B (e.g. `1/AsShotNeutral`); off by default (Python parity) |
 | `--heap-budget-mb N` | no | fail the run if the JVM heap pool exceeds N MB |
 | `--help` / `-h` | no | print usage |

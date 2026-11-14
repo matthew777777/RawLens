@@ -11,6 +11,7 @@ import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLut
 import com.rawlens.srpipeline.stages.NoiseLutGen
+import com.rawlens.srpipeline.stages.SceneNoise
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
 import com.rawlens.srpipeline.stages.VulkanPipeline
@@ -61,7 +62,7 @@ private fun usage(): String = """
       --backend NAME compute backend, one of: cpu, vulkan (required)
       --scale F      super-resolution factor, >= 1 (default 1, mirroring the Python default)
       --lib PATH     JNI library file to load (default: System.loadLibrary lookup)
-      --spv-dir DIR  directory with the 10 stage .spv modules (required for --backend vulkan)
+      --spv-dir DIR  directory with the compiled stage .spv modules (required for --backend vulkan)
       --lut PATH     noise LUT .npz (or "auto" to simulate it in-process); enables noise correction with its curves, validated
                      against the DNG noise profile (without it, noise correction is off)
       --noise-ab a,b own noise model var = a*x + b (normalised raw) instead of the DNG/Camera2 NoiseProfile
@@ -316,8 +317,13 @@ private fun merge(plan: Plan) {
     val refMeta = DngRead.readMeta(refPath.toString())
     // --noise-ab: our own estimate (e.g. tools/lkr-pipeline NoiseAB on the
     // reference) for all four planes, instead of the vendor NoiseProfile.
+    val fullRef = if (plan.crop == null) refImg else readFrame(refPath, null)
     val (alpha, beta) = plan.noiseAb?.let { DoubleArray(4) { _ -> it[0] } to DoubleArray(4) { _ -> it[1] } }
-        ?: DngRead.noiseAlphaBeta(refMeta.noise, refMeta.noiseCount)
+        ?: if (refMeta.noiseCount == 0) {
+            SceneNoise.estimate(fullRef).also { (a, b) ->
+                println("sr-pipeline: NoiseProfile absent; estimated reference noise alpha=${a.contentToString()} beta=${b.contentToString()}")
+            }
+        } else DngRead.noiseAlphaBeta(refMeta.noise, refMeta.noiseCount)
     if (plan.noiseAb != null) println("sr-pipeline: noise model from --noise-ab a=${plan.noiseAb[0]} b=${plan.noiseAb[1]} (not the DNG profile)")
     // `--lut auto`: simulate in-process (NoiseLutGen, same model as the
     // Python monte_carlo; SRP_LUT_TRIALS overrides the trial count).
@@ -341,7 +347,6 @@ private fun merge(plan: Plan) {
     // supplement S.2) and the IPOL reference measures the full reference
     // in process() before any crop. A crop-local SNR (20.9 vs 29.5 dB on
     // the parity burst) changed tile size and every kernel parameter.
-    val fullRef = if (plan.crop == null) refImg else readFrame(refPath, null)
     val snr = BurstConfig.estimateSnr(fullRef, alpha, beta)
     val fin = BurstConfig.finalize(snr)
     val factors = listOf(1, 2, 4, 4)
