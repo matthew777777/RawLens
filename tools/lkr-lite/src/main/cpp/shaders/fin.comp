@@ -1,0 +1,111 @@
+#version 450
+// SPDX-License-Identifier: Apache-2.0
+// FinishLook (lkrl_finish.cpp) on the GPU, default path (notch, luma notch where frames were lost,
+// clip halo, grain, highlight desaturation). Same order of operations and arithmetic as the CPU;
+// fallback_chroma / shadow stay on the CPU path. Planes: x, z (3 HW), ns (HW), P (4 HW work planes:
+// 0 = L, 1..3 = C_c / Ln), T (HW notch scratch), M (2 HW: hot, halo), KP (3 HW: kept x).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) buffer X { float x[]; };
+layout(std430, binding = 1) readonly buffer Z { float z[]; };
+layout(std430, binding = 2) readonly buffer NS { float ns[]; };
+layout(std430, binding = 3) buffer PB { float P[]; };
+layout(std430, binding = 4) buffer TB { float T[]; };
+layout(std430, binding = 5) buffer MB { float M[]; };
+layout(std430, binding = 6) buffer KB { float KP[]; };
+layout(push_constant) uniform PC {
+  int H, W, mode, pl, sm, has_ns, notch, desat;
+  float wbr, wbg, wbb, clip, grain, eqs, p0, p1;
+} pc;
+const float k5[5] = float[5](1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0);
+int refl(int i, int n) { return i < 0 ? -i : (i >= n ? 2 * n - 2 - i : i); }
+float sg(int X, int Y) { return (((pc.sm == 0 ? X : (pc.sm == 1 ? Y : X + Y)) & 1) != 0) ? -1.0 : 1.0; }
+// mode 12: one notch step fused (row + column filter in shared memory, 2 px reflected apron per axis):
+// = mode 10 then 11, same sums in the same order.
+shared float tl[20][20];
+shared float tr[20][16];
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  if (pc.mode == 12) {
+    int HW0 = pc.H * pc.W;
+    ivec2 org = ivec2(gl_WorkGroupID.xy) * 16 - 2;
+    int lid = int(gl_LocalInvocationIndex);
+    for (int t = lid; t < 400; t += 256) {
+      int ly = t / 20, lx = t - ly * 20;
+      int gy = refl(org.y + ly, pc.H), gx = refl(org.x + lx, pc.W);
+      tl[ly][lx] = P[pc.pl * HW0 + gy * pc.W + gx] * sg(gx, gy);
+    }
+    barrier();
+    for (int t = lid; t < 320; t += 256) {
+      int ly = t / 16, lx = t - ly * 16;
+      float s = 0.0;
+      for (int d = -2; d <= 2; ++d) s += k5[d + 2] * tl[ly][lx + 2 + d];
+      tr[ly][lx] = s;
+    }
+    barrier();
+    if (X >= pc.W || Y >= pc.H) return;
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    float s = 0.0;
+    for (int d = 0; d < 5; ++d) s += k5[d] * tr[l.y + d][l.x];
+    int gi = Y * pc.W + X;
+    T[gi] = P[pc.pl * HW0 + gi] - s * sg(X, Y);   // not in place: neighbours read P as apron
+    return;
+  }
+  if (X >= pc.W || Y >= pc.H) return;
+  int HW = pc.H * pc.W, i = Y * pc.W + X;
+  vec3 wb = vec3(pc.wbr, pc.wbg, pc.wbb);
+  vec3 q = vec3(0.25, 0.5, 0.25) * wb;
+  if (pc.mode == 0) {          // hot: near-clipped
+    M[i] = max(x[i], max(x[HW + i], x[2 * HW + i])) >= 0.92 * pc.clip ? 1.0 : 0.0;
+  } else if (pc.mode == 1) {   // halo (7x7 dilation of hot) + keep x
+    float h = 0.0;
+    for (int dy = -3; dy <= 3 && h == 0.0; ++dy)
+      for (int dx = -3; dx <= 3; ++dx) {
+        int yy = Y + dy, xx = X + dx;
+        if (yy >= 0 && yy < pc.H && xx >= 0 && xx < pc.W && M[yy * pc.W + xx] > 0.5) { h = 1.0; break; }
+      }
+    M[HW + i] = h;
+    for (int c = 0; c < 3; ++c) KP[c * HW + i] = x[c * HW + i];
+  } else if (pc.mode == 2) {   // L and chroma planes from x
+    float L = q.x * x[i] + q.y * x[HW + i] + q.z * x[2 * HW + i];
+    P[i] = L;
+    for (int c = 0; c < 3; ++c) P[(1 + c) * HW + i] = wb[c] * x[c * HW + i] - L;
+  } else if (pc.mode == 10) {  // notch row pass on plane pl, sign mode sm: T = rowfilter(P * sg)
+    int base = pc.pl * HW + Y * pc.W;
+    float s = 0.0;
+    for (int d = -2; d <= 2; ++d) { int xx = refl(X + d, pc.W); s += k5[d + 2] * (P[base + xx] * sg(xx, Y)); }
+    T[i] = s;
+  } else if (pc.mode == 11) {  // notch column pass: P -= colfilter(T) * sg
+    float s = 0.0;
+    for (int d = 0; d < 5; ++d) s += k5[d] * T[refl(Y + d - 2, pc.H) * pc.W + X];
+    P[pc.pl * HW + i] -= s * sg(X, Y);
+  } else if (pc.mode == 3) {   // x_c = (L + C_c) / wb_c; then Lx -> P0 and Ln -> P1
+    for (int c = 0; c < 3; ++c) x[c * HW + i] = (P[i] + P[(1 + c) * HW + i]) / wb[c];
+    float Lx = q.x * x[i] + q.y * x[HW + i] + q.z * x[2 * HW + i];
+    P[i] = Lx; P[HW + i] = Lx;
+  } else if (pc.mode == 4) {   // luma notch where frames were lost
+    float t = clamp((ns[i] - 1.0) / 0.4142, 0.0, 1.0);
+    if (t > 0.0) {
+      float d = t * (P[HW + i] - P[i]);
+      for (int c = 0; c < 3; ++c) x[c * HW + i] += d / wb[c];
+    }
+  } else if (pc.mode == 5) {   // halo restore, grain luma of (z - x) -> P0
+    if (M[HW + i] > 0.5) for (int c = 0; c < 3; ++c) x[c * HW + i] = KP[c * HW + i];
+    P[i] = q.x * (z[i] - x[i]) + q.y * (z[HW + i] - x[HW + i]) + q.z * (z[2 * HW + i] - x[2 * HW + i]);
+  } else if (pc.mode == 13) {  // fused notch write-back
+    P[pc.pl * HW + i] = T[i];
+  } else if (pc.mode == 6) {   // grain add + highlight desaturation
+    if (pc.grain > 0.0) {
+      float den = pc.has_ns != 0 ? 1.0 + pc.eqs * (ns[i] - 1.0) : 1.0;
+      for (int c = 0; c < 3; ++c) x[c * HW + i] += pc.grain * P[i] / den / wb[c];
+    }
+    if (pc.desat != 0) {
+      float lo = 0.92 * pc.clip, hi = pc.clip;
+      float mn = min(x[i], min(x[HW + i], x[2 * HW + i]));
+      float m = clamp((mn - lo) / max(hi - lo, 1e-6), 0.0, 1.0);
+      if (m > 0.0) {
+        float L = q.x * x[i] + q.y * x[HW + i] + q.z * x[2 * HW + i];
+        for (int c = 0; c < 3; ++c) x[c * HW + i] += m * (L / wb[c] - x[c * HW + i]);
+      }
+    }
+  }
+}

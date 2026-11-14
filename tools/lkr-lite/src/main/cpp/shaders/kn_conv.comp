@@ -1,0 +1,35 @@
+#version 450
+// SPDX-License-Identifier: Apache-2.0
+// KernelNet (PhotonCamera kernelnet_aniso_v2_2) conv layer, one invocation per output value
+// (= sr-pipeline kernelnet.comp modes 1/2). Zero padding k/2. mode 1: ReLU or linear; mode 2 (last
+// layer): out = 2 sigmoid(x) (- 1 for channel 2: rho).
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer I { float inp[]; };
+layout(std430, binding = 1) writeonly buffer O { float outp[]; };
+layout(std430, binding = 2) readonly buffer Wt { float w[]; };
+layout(push_constant) uniform P {
+  int cin, cout, inW, inH, outW, outH, stride, k;
+  int relu, wOff, bOff, mode;
+} pc;
+void main() {
+  int id = int(gl_GlobalInvocationID.x);
+  int plane = pc.outW * pc.outH;
+  if (id >= pc.cout * plane) return;
+  int oc = id / plane, rem = id - oc * plane;
+  int oy = rem / pc.outW, ox = rem - oy * pc.outW;
+  int r = pc.k / 2;
+  float acc = w[pc.bOff + oc];
+  int wBase = pc.wOff + oc * pc.cin * pc.k * pc.k;
+  for (int ic = 0; ic < pc.cin; ++ic)
+    for (int ky = 0; ky < pc.k; ++ky) {
+      int iy = oy * pc.stride + ky - r;
+      if (iy < 0 || iy >= pc.inH) continue;
+      for (int kx = 0; kx < pc.k; ++kx) {
+        int ix = ox * pc.stride + kx - r;
+        if (ix < 0 || ix >= pc.inW) continue;
+        acc += w[wBase + (ic * pc.k + ky) * pc.k + kx] * inp[(ic * pc.inH + iy) * pc.inW + ix];
+      }
+    }
+  if (pc.mode == 2) outp[id] = 2.0 / (1.0 + exp(-acc)) - (oc == 2 ? 1.0 : 0.0);
+  else outp[id] = pc.relu != 0 ? max(acc, 0.0) : acc;
+}

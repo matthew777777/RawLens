@@ -1,0 +1,29 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Temporal weight, pass 0: per-sample model-error tolerance for weight_th.comp,
+// computed ONCE per sample instead of once per row tap (5x). Same expression,
+// order and clamps as the inline version it replaces; 0.5 * m is exact, so
+// summing the stored value rounds exactly like the inline accumulation.
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer R { float r[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 2) writeonly buffer TD { float tdet[]; };
+
+void main() {
+  int c = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (c >= pc.w || i >= pc.h) return;
+  int row = (k * pc.h + i) * pc.w;
+  int t = row + c;
+  int cl = row + max(c - 2, 0), cr = row + min(c + 2, pc.w - 1);
+  int cu = (k * pc.h + max(i - 2, 0)) * pc.w + c, cd = (k * pc.h + min(i + 2, pc.h - 1)) * pc.w + c;
+  float yh = yv(int(t)) - 0.5 * (yv(int(cl)) + yv(int(cr))), yv = yv(int(t)) - 0.5 * (yv(int(cu)) + yv(int(cd)));
+  float rh = r[t] - 0.5 * (r[cl] + r[cr]), rv = r[t] - 0.5 * (r[cu] + r[cd]);
+  float dy = yh * yh + yv * yv;
+  float dp = (yh + rh) * (yh + rh) + (yv + rv) * (yv + rv);
+  tdet[t] = 0.5 * min(dy, dp);
+}

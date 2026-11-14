@@ -1,0 +1,116 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// adj.comp with one workgroup per 16x16 LR tile looping over ALL K frames (MFSR's workgroup-per-tile
+// pattern): the residual adjoint is summed in shared memory over the tile's HR footprint (margin MG HR
+// px for motion) and flushed to acc once per cell, instead of one global atomic per tap per frame.
+// Taps outside the window fall back to global atomics. int32 fixed point: integer sums are
+// order-independent, so acc is bit-identical to adj.comp. Coverage (mode >= 1, first step after the
+// weights change) stays on global atomics (shared memory budget).
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 4) readonly buffer WT { float wt[]; };
+layout(std430, binding = 5) buffer ACC { int acc[]; };
+layout(std430, binding = 6) buffer COV { int cov[]; };
+#define MG 4
+#define SMAX (2 * 16 + 2 * MG + 2)   // s = 2 footprint side (s = 1 uses the top-left part)
+shared int sacc[3 * SMAX * SMAX];
+int S, hx0, hy0;
+
+void addAcc(int c, int X, int Y, int v) {
+  if (v == 0) return;
+  int lx = X - hx0, ly = Y - hy0;
+  if (lx >= 0 && ly >= 0 && lx < S && ly < S) atomicAdd(sacc[(c * S + ly) * S + lx], v);
+  else atomicAdd(acc[(c * pc.H + Y) * pc.W + X], v);
+}
+void addCov(int c, int X, int Y, int v) { if (v != 0) atomicAdd(cov[(c * pc.H + Y) * pc.W + X], v); }
+
+void scatter4(int c, ivec2 x0, vec2 f, float v, bool cv_on, float cv) {
+  float w00 = (1.0 - f.x) * (1.0 - f.y), w01 = f.x * (1.0 - f.y), w10 = (1.0 - f.x) * f.y, w11 = f.x * f.y;
+  if (pc.mode != 2) {
+    addAcc(c, x0.x, x0.y, int(round(v * w00))); addAcc(c, x0.x + 1, x0.y, int(round(v * w01)));
+    addAcc(c, x0.x, x0.y + 1, int(round(v * w10))); addAcc(c, x0.x + 1, x0.y + 1, int(round(v * w11)));
+  }
+  if (cv_on) {
+    addCov(c, x0.x, x0.y, int(round(cv * w00))); addCov(c, x0.x + 1, x0.y, int(round(cv * w01)));
+    addCov(c, x0.x, x0.y + 1, int(round(cv * w10))); addCov(c, x0.x + 1, x0.y + 1, int(round(cv * w11)));
+  }
+}
+float cellW(ivec2 d, vec2 f, ivec2 c) {
+  ivec2 t = c - d;
+  float wx = t.x == 0 ? 1.0 - f.x : (t.x == 1 ? f.x : 0.0);
+  float wy = t.y == 0 ? 1.0 - f.y : (t.y == 1 ? f.y : 0.0);
+  return wx * wy;
+}
+void scatter3x3(int c, ivec2 lo, ivec2 da, vec2 fa, ivec2 db, vec2 fb, ivec2 dc, vec2 fc, ivec2 dd, vec2 fd,
+                float v, bool cv_on, float cv) {
+  for (int cy = 0; cy < 3; ++cy)
+    for (int cx = 0; cx < 3; ++cx) {
+      ivec2 cc = ivec2(cx, cy);
+      float w = cellW(da, fa, cc) + cellW(db, fb, cc) + cellW(dc, fc, cc) + cellW(dd, fd, cc);
+      if (w == 0.0) continue;
+      if (pc.mode != 2) addAcc(c, lo.x + cx, lo.y + cy, int(round(v * w)));
+      if (cv_on) addCov(c, lo.x + cx, lo.y + cy, int(round(cv * w)));
+    }
+}
+
+void doSample(int k, int i, int j) {
+  int o = (k * pc.h + i) * pc.w + j;
+  float wk = wt[o];
+  if (pc.rpow < 0.0 && yv(int(o)) >= pc.clip) wk = 1e-3;
+  if (wk == 0.0 || (pc.mode != 2 && pc.rpow >= 0.0 && yv(int(o)) >= pc.clip)) return;
+  int c = bayerChannel(i, j);
+  int base = c * pc.H * pc.W;
+  float invn = 1.0 / float(pc.s * pc.s);
+  ivec2 x0a, x0b, x0c, x0d; vec2 fa, fb, fc, fd;
+  if (!taps(warpQ(k, subPos(i, j, 0, 0)), x0a, fa)) return;
+  int ta = base + x0a.y * pc.W + x0a.x;
+  float sum = mix(mix(z[ta], z[ta + 1], fa.x), mix(z[ta + pc.W], z[ta + pc.W + 1], fa.x), fa.y);
+  if (pc.s == 2) {
+    if (!taps(warpQ(k, subPos(i, j, 1, 0)), x0b, fb) || !taps(warpQ(k, subPos(i, j, 0, 1)), x0c, fc) ||
+        !taps(warpQ(k, subPos(i, j, 1, 1)), x0d, fd)) return;
+    int tb = base + x0b.y * pc.W + x0b.x, tc = base + x0c.y * pc.W + x0c.x, td = base + x0d.y * pc.W + x0d.x;
+    sum += mix(mix(z[tb], z[tb + 1], fb.x), mix(z[tb + pc.W], z[tb + pc.W + 1], fb.x), fb.y);
+    sum += mix(mix(z[tc], z[tc + 1], fc.x), mix(z[tc + pc.W], z[tc + pc.W + 1], fc.x), fc.y);
+    sum += mix(mix(z[td], z[td + 1], fd.x), mix(z[td + pc.W], z[td + pc.W + 1], fd.x), fd.y);
+  }
+  float rs = (sum * invn - yv(int(o))) * wk * invn * pc.scale;
+  bool cv_on = pc.mode >= 1;
+  float cv = wk * invn * pc.dscale;
+  if (pc.s == 2) {
+    ivec2 lo = min(min(x0a, x0b), min(x0c, x0d)), hi = max(max(x0a, x0b), max(x0c, x0d));
+    if (hi.x - lo.x <= 1 && hi.y - lo.y <= 1) {
+      scatter3x3(c, lo, x0a - lo, fa, x0b - lo, fb, x0c - lo, fc, x0d - lo, fd, rs, cv_on, cv);
+    } else {
+      scatter4(c, x0a, fa, rs, cv_on, cv); scatter4(c, x0b, fb, rs, cv_on, cv);
+      scatter4(c, x0c, fc, rs, cv_on, cv); scatter4(c, x0d, fd, rs, cv_on, cv);
+    }
+  } else {
+    scatter4(c, x0a, fa, rs, cv_on, cv);
+  }
+}
+
+void main() {
+  S = pc.s * 16 + 2 * MG + 2;
+  hx0 = pc.s * int(gl_WorkGroupID.x) * 16 - MG;
+  hy0 = pc.s * int(gl_WorkGroupID.y) * 16 - MG;
+  int lid = int(gl_LocalInvocationIndex);
+  for (int t = lid; t < 3 * S * S; t += 256) sacc[t] = 0;
+  barrier();
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  if (j < pc.w && i < pc.h)
+    for (int k = 0; k < pc.K; ++k) doSample(k, i, j);
+  barrier();
+  for (int t = lid; t < 3 * S * S; t += 256) {
+    int v = sacc[t];
+    if (v == 0) continue;
+    int c = t / (S * S), r = t - c * S * S, ly = r / S, lx = r - ly * S;
+    int X = hx0 + lx, Y = hy0 + ly;
+    if (X >= 0 && Y >= 0 && X < pc.W && Y < pc.H) atomicAdd(acc[(c * pc.H + Y) * pc.W + X], v);
+  }
+}

@@ -1,0 +1,89 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Damped Jacobi step z <- z - U^T W (U z - y) / (U^T W 1 + delta); clears acc for the next
+// adjoint. delta (pc.tau, coverage units) keeps weakly observed HR pixels near the start image.
+#include "lite_common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer Z { float z[]; };
+layout(std430, binding = 1) buffer ACC { int acc[]; };
+layout(std430, binding = 2) readonly buffer COV { int cov[]; };
+// Divisor cache: pc.mode 1 computes d from the coverage (first merge step after the weights
+// changed) and stores it; pc.mode 0 reads it (same float: bit-identical, one load instead of 9).
+layout(std430, binding = 3) buffer DV { float dv[]; };
+
+void main() {
+  int n = 3 * pc.H * pc.W;
+  int i = int(gl_GlobalInvocationID.x);
+  if (i >= n) return;
+  // pc.robk > 0 (2x): the update's HR-Nyquist content is removed with a [1 2 1] binomial (zero
+  // response at pi): LK-R's forward model (2x2 sub-sample average) nearly nulls those modes, so its
+  // small global steps never build them up, while Lite's larger per-pixel steps did (a fine
+  // checker on grass and moving subjects). acc is then cleared by a separate fill.
+  // Shift-and-add (pc.rpow < 0): normalised convolution of the weighted sums and the weights with a
+  // binomial (2 LB + 1)^2 window: z = sum(w y) / sum(w) (kernel regression; LB 0 = per pixel). acc
+  // holds -sum(w y) (residual of z = 0). Pixels with no weight keep z = 0 (filled by the next steps).
+  if (pc.rpow < 0.0) {
+    int pl = i / (pc.H * pc.W), rm = i - pl * pc.H * pc.W;
+    int Y0 = rm / pc.W, X0 = rm - Y0 * pc.W;
+    float sa = 0.0, sc = 0.0;
+    for (int dy = -pc.LB; dy <= pc.LB; ++dy)
+      for (int dx = -pc.LB; dx <= pc.LB; ++dx) {
+        int yy = Y0 + dy, xx = X0 + dx;
+        if (yy < 0 || xx < 0 || yy >= pc.H || xx >= pc.W) continue;
+        float wg = float((pc.LB + 1 - abs(dx)) * (pc.LB + 1 - abs(dy)));
+        int t = pl * pc.H * pc.W + yy * pc.W + xx;
+        sa += wg * float(acc[t]); sc += wg * float(cov[t]);
+      }
+    z[i] = sc > 0.0 ? -(sa / pc.scale) / (sc / pc.dscale) : 0.0;
+    return;   // acc is cleared by the caller (neighbours still read it here)
+  }
+  float g;
+  if (pc.robk > 0.0) {
+    int pl = i / (pc.H * pc.W), rm = i - pl * pc.H * pc.W;
+    int Y0 = rm / pc.W, X0 = rm - Y0 * pc.W;
+    float sa = 0.0, sw = 0.0;
+    for (int dy = -1; dy <= 1; ++dy)
+      for (int dx = -1; dx <= 1; ++dx) {
+        int yy = Y0 + dy, xx = X0 + dx;
+        if (yy < 0 || xx < 0 || yy >= pc.H || xx >= pc.W) continue;
+        float wg = float((2 - abs(dx)) * (2 - abs(dy)));
+        sa += wg * float(acc[pl * pc.H * pc.W + yy * pc.W + xx]); sw += wg;
+      }
+    g = sa / (sw * pc.scale);
+  } else {
+    g = float(acc[i]) / pc.scale;
+    acc[i] = 0;
+  }
+  float om = pc.rpow > 0.0 ? pc.rpow : 1.0;   // over-relaxation (LK-R: 24 steps; Lite: few)
+  if (pc.mode == 0) { z[i] -= om * g / dv[i]; return; }
+  // Coverage smoothed over a (2r+1)^2 box of the same plane (pc.LB = r, 0 = per pixel): per-pixel
+  // normalisation stamps the sub-pixel sampling pattern (period ~ s) into the noise as a maze;
+  // LK-R's global step has no such pattern.
+  float cv;
+  if (pc.LB > 0) {
+    int plane = i / (pc.H * pc.W), rem = i - plane * pc.H * pc.W;
+    int Y = rem / pc.W, X = rem - Y * pc.W;
+    float sum = 0.0, n = 0.0;
+    for (int dy = -pc.LB; dy <= pc.LB; ++dy)
+      for (int dx = -pc.LB; dx <= pc.LB; ++dx) {
+        int yy = Y + dy, xx = X + dx;
+        if (yy < 0 || xx < 0 || yy >= pc.H || xx >= pc.W) continue;
+        sum += float(cov[plane * pc.H * pc.W + yy * pc.W + xx]); n += 1.0;   // binomial here: worse
+      }
+    cv = sum / (n * pc.dscale);   // max(.., own coverage) tried 2026-11-13: worse (cat 63.5 -> 54.1 dB)
+  } else {
+    cv = float(cov[i]) / pc.dscale;
+  }
+  float d = max(cv + pc.tau, 1e-6);
+  // LK-R step response (pc.a = N > 0, pc.b = L): LK-R's global step 1.8 / L moves a pixel with
+  // coverage c by 1 - (1 - 1.8 c / L)^N over N data steps. Sparsely covered pixels (frames
+  // rejected) stay near the start image there instead of fitting a few same-colour samples alone
+  // (false colour, maze). One Jacobi step with that gain reproduces it; full pixels are unchanged.
+  if (pc.a > 0.0) {
+    float gain = 1.0 - pow(abs(1.0 - 1.8 * cv / pc.b), pc.a);
+    d = cv > 0.0 ? max(d / max(gain, 1e-4), 1e-6) : d;
+  }
+  dv[i] = d;
+  z[i] -= om * g / d;
+}

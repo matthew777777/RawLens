@@ -1,0 +1,33 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// r = y - U z per LR sample and its validity (0: a tap outside the image or clipped).
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 4) writeonly buffer R { float r[]; };
+layout(std430, binding = 5) writeonly buffer VM { float vm[]; };
+
+void main() {
+  int k, i, j;
+  lrIndex(k, i, j);
+  if (j >= pc.w || i >= pc.h) return;
+  int o = (k * pc.h + i) * pc.w + j;
+  float yv = yv(int(o));
+  int base = bayerChannel(i, j) * pc.H * pc.W;
+  float sum = 0.0;
+  bool ok = yv < pc.clip;
+  for (int oy = 0; oy < pc.s && ok; ++oy)
+    for (int ox = 0; ox < pc.s && ok; ++ox) {
+      ivec2 x0; vec2 f;
+      if (!taps(warpQ(k, subPos(i, j, ox, oy)), x0, f)) { ok = false; break; }
+      int t = base + x0.y * pc.W + x0.x;
+      sum += mix(mix(z[t], z[t + 1], f.x), mix(z[t + pc.W], z[t + pc.W + 1], f.x), f.y);
+    }
+  r[o] = ok ? yv - sum / float(pc.s * pc.s) : 0.0;
+  vm[o] = ok ? 1.0 : 0.0;
+}

@@ -1,0 +1,55 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Temporal weight, deep-shadow window, pass 2 (after weight_t.comp and weight_tv.comp, only when
+// pc.f1 > 0.5): a moving dark object differs from a dark background by about the noise of a 5x5
+// mean, so where the local signal is below pc.f2 (dk > 0, from weight_t.comp) also test a 9 x 15
+// window: the 9-row column sums of weight_tv.comp at j-5, j, j+5. Its mean is ~2.3x less noisy
+// at the same threshold, so static shadows keep their frames while larger dark movers are caught.
+// wt = min(wt, wide test).
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer DK { float dk[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 2) buffer WT { float wt[]; };
+layout(std430, binding = 3) readonly buffer CR { float cr[]; };
+layout(std430, binding = 4) readonly buffer CV { float cv[]; };
+layout(std430, binding = 5) readonly buffer CN { float cn[]; };
+layout(std430, binding = 6) readonly buffer CS { float cs[]; };
+layout(std430, binding = 7) readonly buffer CD { float cd[]; };
+
+// Same test as weight_t.comp.
+float windowWeight(float sr, float sv, float n, float ss, float sd, float g2, float kk) {
+  float m = sr / n;
+  float var = max(2.0 * sv / (n * n) + pc.f3 * pc.f3 * g2, 1e-12);
+  float e = m * m / var, k2 = kk * kk;
+  float w = 1.0 / (1.0 + max(e - k2, 0.0) / k2);
+  float energyVar = max(2.0 * sv / n + pc.f3 * pc.f3 * g2 + pc.f0 * sd / n, 1e-12);
+  float energy = ss / n / energyVar;
+  float limit = 1.0 + kk * sqrt(2.0 / n);
+  float support = clamp(2.0 - energy / limit, 0.0, 1.0);
+  return min(w, support * support);
+}
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  int base = k * pc.h * pc.w;
+  int o = base + i * pc.w + j;
+  float dark = dk[o];
+  if (dark <= 0.0) return;
+  int row = base + i * pc.w;
+  int tl = row + max(j - 5, 0), tr = row + min(j + 5, pc.w - 1);
+  vec4 b4 = vec4(cr[tl], cv[tl], cn[tl], cs[tl]) + vec4(cr[o], cv[o], cn[o], cs[o]) + vec4(cr[tr], cv[tr], cn[tr], cs[tr]);
+  float bd = cd[tl] + cd[o] + cd[tr];
+  if (b4.z <= 0.0) return;
+  int jl = clamp(j - 2, 0, pc.w - 1), jr = clamp(j + 2, 0, pc.w - 1);
+  int iu = clamp(i - 2, 0, pc.h - 1), id = clamp(i + 2, 0, pc.h - 1);
+  float gx = (yv(int(base + i * pc.w + jr)) - yv(int(base + i * pc.w + jl))) * 0.25;
+  float gy = (yv(int(base + id * pc.w + j)) - yv(int(base + iu * pc.w + j))) * 0.25;
+  float g2 = gx * gx + gy * gy;
+  wt[o] = min(wt[o], mix(1.0, windowWeight(b4.x, b4.y, b4.z, b4.w, bd, g2, pc.rob_k), dark));
+}

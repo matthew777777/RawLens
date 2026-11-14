@@ -1,0 +1,46 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Temporal weight, pass 1 (rows): over |dj| <= 2 of the VALID samples,
+// (sum r, sum (a y + b), count, sum r^2) -> tmp. weight_t.comp sums columns.
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer R { float r[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 2) writeonly buffer TM { vec4 tmp[]; };
+// Row sum of the model-error tolerance: per sample, the smaller same-colour
+// Laplacian energy of the frame y and of the prediction y + r. Interpolation
+// error of the single-frame z0 concentrates in fine detail present in BOTH;
+// an object appearing or leaving has detail in only one (minimum stays small).
+layout(std430, binding = 3) writeonly buffer TD { float td[]; };
+layout(std430, binding = 4) readonly buffer TDET { float tdet[]; };   // weight_tdet.comp
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  int row = (k * pc.h + i) * pc.w;
+  vec4 acc = vec4(0.0);
+  float det = 0.0;
+  const bool useDet = pc.f0 > 0.0;
+  for (int dj = -2; dj <= 2; ++dj) {
+    int t = row + clamp(j + dj, 0, pc.w - 1);
+    if (r[t] == 0.0) continue;   // invalid / clipped
+    acc += vec4(r[t], pc.rob_a * max(yv(int(t)), 0.0) + pc.rob_b, 1.0, r[t] * r[t]);
+    if (useDet && pc.f1 >= 0.0) det += tdet[t];   // per-sample term from weight_tdet.comp
+    else if (useDet) {   // A/B reference (debug.lkr.tdet 0): same term computed inline
+      int c = clamp(j + dj, 0, pc.w - 1);
+      int cl = row + max(c - 2, 0), cr = row + min(c + 2, pc.w - 1);
+      int cu = (k * pc.h + max(i - 2, 0)) * pc.w + c, cd = (k * pc.h + min(i + 2, pc.h - 1)) * pc.w + c;
+      float yh = yv(int(t)) - 0.5 * (yv(int(cl)) + yv(int(cr))), yv = yv(int(t)) - 0.5 * (yv(int(cu)) + yv(int(cd)));
+      float rh = r[t] - 0.5 * (r[cl] + r[cr]), rv = r[t] - 0.5 * (r[cu] + r[cd]);
+      float dy = yh * yh + yv * yv;
+      float dp = (yh + rh) * (yh + rh) + (yv + rv) * (yv + rv);
+      det += 0.5 * min(dy, dp);
+    }
+  }
+  tmp[row + j] = acc;
+  td[row + j] = det;
+}

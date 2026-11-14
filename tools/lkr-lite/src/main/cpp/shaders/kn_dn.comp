@@ -1,0 +1,73 @@
+#version 450
+// SPDX-License-Identifier: Apache-2.0
+// PhotonCamera dynamicgaussian_kernelnet.glsl on Lite's merged HR image (planar camera RGB): the
+// reference's KernelNet kernel (s1, s2, rho map, sampled bilinearly at the pixel), its area scaled by
+// merged / single-frame variance (per pixel ns^2 / K; shadow headroom x2 below luma 0.1), times the
+// Wiener range weight N^2 / (dl^2 + N^2) on luma. Window 4 s px.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) writeonly buffer O { float o[]; };
+layout(std430, binding = 2) readonly buffer NS { float ns[]; };
+layout(std430, binding = 3) readonly buffer M { float map[]; };
+layout(push_constant) uniform P {
+  int H, W, mh, mw, s, K, pad0, pad1;
+  float a, b, strength, pad2;
+} pc;
+float lum(int i) { int HW = pc.H * pc.W; return 0.299 * z[i] + 0.587 * z[HW + i] + 0.114 * z[2 * HW + i]; }
+// Shared window (as PhotonCamera's dynamicgaussian): 16 x 16 outputs + an 8 px apron (R = 4 s <= 8),
+// rgb + luma per texel, loaded once per workgroup; the tap loop then reads shared memory only.
+#define TS 16
+#define AP 8
+#define WIN (TS + 2 * AP)
+shared vec4 tile[WIN][WIN];
+float mapAt(int c, int y, int x) { return map[(c * pc.mh + y) * pc.mw + x]; }
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  int HW = pc.H * pc.W;
+  ivec2 org = ivec2(gl_WorkGroupID.xy) * TS - AP;
+  for (int t = int(gl_LocalInvocationIndex); t < WIN * WIN; t += TS * TS) {
+    int ty = t / WIN, tx = t - ty * WIN;
+    int gi = clamp(org.y + ty, 0, pc.H - 1) * pc.W + clamp(org.x + tx, 0, pc.W - 1);
+    vec3 c = vec3(z[gi], z[HW + gi], z[2 * HW + gi]);
+    tile[ty][tx] = vec4(c, dot(c, vec3(0.299, 0.587, 0.114)));
+  }
+  barrier();
+  if (X >= pc.W || Y >= pc.H) return;
+  int i = Y * pc.W + X;
+  ivec2 lc = ivec2(gl_LocalInvocationID.xy) + AP;
+  float l = 0.0;
+  for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) l += tile[lc.y + dy][lc.x + dx].w;
+  l /= 9.0;
+  float preVar = pc.a * max(l, 0.0) + pc.b;
+  float n = ns[i];
+  float postVar = preVar * n * n / float(pc.K);
+  float areaRatio = clamp(postVar / max(preVar, 1e-9), 0.0, 1.0);
+  float shadow = mix(2.0, 1.0, smoothstep(0.0, 0.1, l));
+  float u = (float(X) + 0.5) / float(pc.W) * float(pc.mw) - 0.5, v = (float(Y) + 0.5) / float(pc.H) * float(pc.mh) - 0.5;
+  int u0 = clamp(int(floor(u)), 0, pc.mw - 1), v0 = clamp(int(floor(v)), 0, pc.mh - 1);
+  int u1 = min(u0 + 1, pc.mw - 1), v1 = min(v0 + 1, pc.mh - 1);
+  float fu = clamp(u - float(u0), 0.0, 1.0), fv = clamp(v - float(v0), 0.0, 1.0);
+  vec3 kp;
+  for (int c = 0; c < 3; ++c)
+    kp[c] = mix(mix(mapAt(c, v0, u0), mapAt(c, v0, u1), fu), mix(mapAt(c, v1, u0), mapAt(c, v1, u1), fu), fv);
+  float corr = pc.strength * 2.0 * float(pc.s) * sqrt(areaRatio * shadow);
+  float s1 = max(kp.x * corr, 0.02), s2 = max(kp.y * corr, 0.02);
+  float rho = clamp(kp.z, -0.95, 0.95);
+  float ir2 = 1.0 / (2.0 * (1.0 - rho * rho));
+  float i11 = ir2 / (s1 * s1), i22 = ir2 / (s2 * s2), i12 = -ir2 * 2.0 * rho / (s1 * s2);
+  int R = min(4 * pc.s, AP);
+  vec3 sum = vec3(0.0); float ws = 0.0;
+  for (int j = -R; j <= R; ++j)
+    for (int q = -R; q <= R; ++q) {
+      float e = float(q * q) * i11 + float(q * j) * i12 + float(j * j) * i22;
+      if (e > 12.0) continue;
+      vec4 tv = tile[lc.y + j][lc.x + q];
+      float dl = tv.w - l;
+      float wg = exp(-e) * postVar / (dl * dl + postVar);
+      sum += wg * tv.rgb;
+      ws += wg;
+    }
+  ws = max(ws, 1e-6);
+  o[i] = sum.x / ws; o[HW + i] = sum.y / ws; o[2 * HW + i] = sum.z / ws;
+}

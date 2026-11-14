@@ -1,0 +1,37 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Reference-guide statistics (as LK-R guide_stats): per Bayer quad of every frame, the 3x3-quad
+// mean of sqrt RAW RGB and the delta-method noise variance of that mean (.w); for the
+// reference frame also the local variances. Frames only: computed once per burst tile.
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 1) writeonly buffer M { vec4 means[]; };
+layout(std430, binding = 2) writeonly buffer V { vec4 vars[]; };
+
+void main() {
+  int x = int(gl_GlobalInvocationID.x), yy = int(gl_GlobalInvocationID.y), k = int(gl_GlobalInvocationID.z);
+  int w = pc.w / 2, h = pc.h / 2;
+  if (x >= w || yy >= h) return;
+  vec3 m = vec3(0.0), v = vec3(0.0);
+  float vn = 0.0;
+  for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) {
+      int qx = clamp(x + dx, 0, w - 1), qy = clamp(yy + dy, 0, h - 1);
+      int t = k * pc.w * pc.h + 2 * qy * pc.w + 2 * qx;
+      vec3 raw = vec3(yv(int(t)), 0.5 * (yv(int(t + 1)) + yv(int(t + pc.w))), yv(int(t + pc.w + 1)));
+      vec3 a = sqrt(max(raw, vec3(0.0)));
+      m += a; v += a * a;
+      vec3 nv = (pc.a * max(raw, vec3(0.0)) + pc.b) / max(4.0 * raw, vec3(4e-5));
+      nv.y *= 0.5;
+      vn += nv.x + nv.y + nv.z;
+    }
+  m /= 9.0;
+  v = max(v / 9.0 - m * m, vec3(0.0));
+  int o = (k * h + yy) * w + x;
+  means[o] = vec4(m, vn / 81.0);
+  if (k == 0) vars[o] = vec4(v, 0.0);
+}

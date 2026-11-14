@@ -1,0 +1,60 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+// SPDX-License-Identifier: Apache-2.0
+// One Gauss-Newton pass of LkAffine (lkrl_host.cpp) for a batch of fits at one pyramid level, all
+// fits the same size: per pixel u = (j + .5, i + .5) of the moving image, the reference
+// (r, gx, gy) bilinear at A u + t (valid only if the 2x2 taps are inside, as LkAffine), e = m - r,
+// J = (gx ux, gx uy, gx, gy ux, gy uy, gy). Per group the 27 sums (21 of J J^T upper, 6 of J e);
+// the host adds groups in double, solves and stops each fit like LkAffine. fitRef < 0: inactive.
+layout(local_size_x = 256) in;
+layout(push_constant) uniform PC { int H, W, nFit, groupsPerFit; } pc;
+layout(std430, binding = 0) readonly buffer RF { vec4 ref[]; };     // nRef x H x W: r, gx, gy, 0
+layout(std430, binding = 1) readonly buffer MV { float mov[]; };    // nFit x H x W
+layout(std430, binding = 2) readonly buffer FT { int fitRef[]; };   // per fit: reference index, -1 = done
+layout(std430, binding = 3) readonly buffer PP { float pp[]; };     // nFit x 6
+layout(std430, binding = 4) writeonly buffer PT { float part[]; };  // nFit x groupsPerFit x 27
+shared float sh[64][27];   // >= 256 / minimum subgroup size (4)
+
+void main() {
+  int fit = int(gl_WorkGroupID.y), g = int(gl_WorkGroupID.x);
+  int ri = fitRef[fit];
+  if (ri < 0) return;   // uniform per group
+  int n = pc.H * pc.W;
+  int idx = g * 256 + int(gl_LocalInvocationIndex);
+  float J0 = 0.0, J1 = 0.0, J2 = 0.0, J3 = 0.0, J4 = 0.0, J5 = 0.0, e = 0.0;
+  if (idx < n) {
+    int i = idx / pc.W, j = idx - i * pc.W;
+    float ux = float(j) + 0.5, uy = float(i) + 0.5;
+    int o6 = fit * 6;
+    float fx = pp[o6] * ux + (pp[o6 + 1] * uy + pp[o6 + 2] - 0.5);
+    float fy = pp[o6 + 3] * ux + (pp[o6 + 4] * uy + pp[o6 + 5] - 0.5);
+    if (fx >= 0.0 && fy >= 0.0) {
+      int x0 = int(fx), y0 = int(fy);
+      if (x0 + 1 < pc.W && y0 + 1 < pc.H) {
+        float ax = fx - float(x0), ay = fy - float(y0);
+        int o = ri * n + y0 * pc.W + x0;
+        vec4 t = (ref[o] * (1.0 - ax) + ref[o + 1] * ax) * (1.0 - ay) +
+                 (ref[o + pc.W] * (1.0 - ax) + ref[o + pc.W + 1] * ax) * ay;
+        e = mov[fit * n + idx] - t.x;
+        J0 = t.y * ux; J1 = t.y * uy; J2 = t.y; J3 = t.z * ux; J4 = t.z * uy; J5 = t.z;
+      }
+    }
+  }
+  float v[27] = float[27](J0 * J0, J0 * J1, J0 * J2, J0 * J3, J0 * J4, J0 * J5,
+                          J1 * J1, J1 * J2, J1 * J3, J1 * J4, J1 * J5,
+                          J2 * J2, J2 * J3, J2 * J4, J2 * J5,
+                          J3 * J3, J3 * J4, J3 * J5,
+                          J4 * J4, J4 * J5,
+                          J5 * J5,
+                          J0 * e, J1 * e, J2 * e, J3 * e, J4 * e, J5 * e);
+  for (int t = 0; t < 27; ++t) v[t] = subgroupAdd(v[t]);
+  if (subgroupElect())
+    for (int t = 0; t < 27; ++t) sh[gl_SubgroupID][t] = v[t];
+  barrier();
+  int lid = int(gl_LocalInvocationIndex);
+  if (lid < 27) {
+    float s = 0.0;
+    for (uint q = 0u; q < gl_NumSubgroups; ++q) s += sh[q][lid];
+    part[(fit * pc.groupsPerFit + g) * 27 + lid] = s;
+  }
+}

@@ -1,0 +1,39 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Regularised Gauss-Newton step of the local block translations (LK-R solveblk):
+//   (J^T W J + lam I) delta = -(J^T W r + lam (d - dbar)),  d <- d + delta,
+// dbar = mean of the 4-neighbour blocks, so flat blocks follow their neighbours instead
+// of drifting; lam = lambda * (trace + floor); step clamped to +-1 LR px; frame 0 fixed.
+// pc.robk = lambda, pc.tau = floor (reused push slots). Reads din, writes dout.
+#include "lite_common.glsl"
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer BLK { float blk[]; };
+layout(std430, binding = 1) readonly buffer DIN { vec2 din[]; };
+layout(std430, binding = 2) writeonly buffer DOUT { vec2 dout[]; };
+
+void main() {
+  int nbx = (pc.w + pc.LB - 1) / pc.LB, nby = (pc.h + pc.LB - 1) / pc.LB, nb = nbx * nby;
+  int idx = int(gl_GlobalInvocationID.x);
+  if (idx >= pc.K * nb) return;
+  int k = idx / nb, b = idx - k * nb;
+  if (k == 0) { dout[idx] = vec2(0.0); return; }
+  int by = b / nbx, bx = b - by * nbx;
+  vec2 d = din[idx];
+  vec2 dbar = vec2(0.0);
+  float nn = 0.0;
+  if (bx > 0) { dbar += din[idx - 1]; nn += 1.0; }
+  if (bx + 1 < nbx) { dbar += din[idx + 1]; nn += 1.0; }
+  if (by > 0) { dbar += din[idx - nbx]; nn += 1.0; }
+  if (by + 1 < nby) { dbar += din[idx + nbx]; nn += 1.0; }
+  dbar = nn > 0.0 ? dbar / nn : d;
+  int o = ((k - 1) * nb + b) * 5;
+  float a = blk[o], c = blk[o + 1], e = blk[o + 2];
+  vec2 jr = vec2(blk[o + 3], blk[o + 4]);
+  float lam = pc.robk * (a + e + pc.tau);
+  float A00 = a + lam, A11 = e + lam;
+  vec2 rhs = -(jr + lam * (d - dbar));
+  float det = A00 * A11 - c * c;
+  vec2 delta = det > 1e-20 ? vec2(A11 * rhs.x - c * rhs.y, -c * rhs.x + A00 * rhs.y) / det : vec2(0.0);
+  dout[idx] = d + clamp(delta, vec2(-1.0), vec2(1.0));
+}

@@ -1,0 +1,25 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Robust weight from the 3x3 mean of e (all colours of a Bayer area share one decision):
+// w = 1 / (1 + (mean e / k^2)^p); reference frame 1. Pre-spread (wminh/wminv follow).
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer E { float e[]; };
+layout(std430, binding = 1) writeonly buffer WR { float wr[]; };
+
+void main() {
+  int k, i, j;
+  lrIndex(k, i, j);
+  if (j >= pc.w || i >= pc.h) return;
+  int base = k * pc.h * pc.w;
+  float w = 1.0;
+  if (k != 0 && pc.robk > 0.0) {
+    float s = 0.0;
+    for (int di = -1; di <= 1; ++di)
+      for (int dj = -1; dj <= 1; ++dj)
+        s += e[base + clamp(i + di, 0, pc.h - 1) * pc.w + clamp(j + dj, 0, pc.w - 1)];
+    w = 1.0 / (1.0 + pow((s / 9.0) / (pc.robk * pc.robk), pc.rpow));
+  }
+  wr[base + i * pc.w + j] = w;
+}

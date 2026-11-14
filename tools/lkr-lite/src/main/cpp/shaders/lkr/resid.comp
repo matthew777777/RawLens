@@ -1,0 +1,50 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Residual r_k = m (U_k z - y_k) for all K frames (paper Eq. 5, first half).
+// Written to r[K][h][w]; invalid (out-of-frame) and clipped samples get 0, so
+// the gather adjoint (zstep_gather.comp) needs no mask of its own.
+// mode 1: r = U z (power iteration); mode 2: r = 1 on valid samples (U^T 1).
+#define LKR_LOCAL_BINDING 4
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 2) readonly buffer P { float p[]; };
+layout(std430, binding = 3) writeonly buffer R { float r[]; };
+
+void main() {
+  // Frame-innermost workgroup order (dispatch gx = K * blocks), see resid_adj_w.comp:
+  // the K frames of one block share HR taps while they are still in cache.
+  // Dispatched with z = K: classic frame-outer order (A/B switch, debug.lkr.korder 0).
+  const bool inner = gl_NumWorkGroups.z == 1u;
+  int wx = int(gl_WorkGroupID.x);
+  int k = inner ? wx % pc.K : int(gl_GlobalInvocationID.z);
+  int j = inner ? (wx / pc.K) * 16 + int(gl_LocalInvocationID.x) : int(gl_GlobalInvocationID.x);
+  int i = int(gl_GlobalInvocationID.y);
+  if (j >= pc.w || i >= pc.h) return;
+  int o = (k * pc.h + i) * pc.w + j;
+  float yv = yv(int(o));
+  if (pc.mode == 0 && yv >= pc.f2) { r[o] = 0.0; return; }   // clipped: no data
+  int c = bayerChannel(i, j);
+  int base = c * pc.H * pc.W;
+  float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
+  float a3 = p[k * 6 + 3], a4 = p[k * 6 + 4], a5 = p[k * 6 + 5];
+  float sf = float(pc.s);
+  float sum = 0.0;
+  for (int oy = 0; oy < pc.s; ++oy)
+    for (int ox = 0; ox < pc.s; ++ox) {
+      vec2 u = subPos(i, j, ox, oy);
+      precise vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
+      ivec2 x0; vec2 a;
+      if (!taps(q, x0, a)) { r[o] = 0.0; return; }        // invalid LR pixel
+      int t = base + x0.y * pc.W + x0.x;
+      sum += (z[t] * (1.0 - a.x) + z[t + 1] * a.x) * (1.0 - a.y) +
+             (z[t + pc.W] * (1.0 - a.x) + z[t + pc.W + 1] * a.x) * a.y;
+    }
+  float v = sum / (sf * sf);
+  float rv = pc.mode == 2 ? 1.0 : (pc.mode == 1 ? v : v - yv);
+  r[o] = rv;
+}

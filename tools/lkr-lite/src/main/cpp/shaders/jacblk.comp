@@ -1,0 +1,60 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+// SPDX-License-Identifier: Apache-2.0
+// Gauss-Newton normal equations of the local translation of one 16x16 LR block of
+// frame k >= 1 (after the affine update), robust-weighted like LK-R's jacblk:
+// blk[(k-1) nb + b] = (JxJx, JxJy, JyJy, Jx r, Jy r) with r = U z - y. solveblk.comp
+// solves them with the neighbour-smoothness regulariser.
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 4) readonly buffer WT { float wt[]; };
+layout(std430, binding = 5) writeonly buffer BLK { float blk[]; };
+shared float sh[64][5];   // >= 256 / minimum subgroup size (4)
+
+void main() {
+  int k = int(gl_WorkGroupID.z) + 1;
+  int lid = int(gl_LocalInvocationIndex);
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  float v[5] = float[5](0.0, 0.0, 0.0, 0.0, 0.0);
+  if (i < pc.h && j < pc.w) {
+    int o = (k * pc.h + i) * pc.w + j;
+    float wk = pc.mode == 1 ? (yv(int(o)) < pc.clip ? 1.0 : 0.0) : wt[o];   // mode 1: validity only (taps checked below)
+    if (wk != 0.0) {
+      int base = bayerChannel(i, j) * pc.H * pc.W;
+      float sf = float(pc.s), invn = 1.0 / (sf * sf);
+      bool ok = true;
+      float pred = 0.0, jx = 0.0, jy = 0.0;
+      for (int oy = 0; oy < pc.s; ++oy)
+        for (int ox = 0; ox < pc.s; ++ox) {
+          ivec2 x0; vec2 f;
+          if (!taps(warpQ(k, subPos(i, j, ox, oy)), x0, f)) { ok = false; continue; }
+          int t = base + x0.y * pc.W + x0.x;
+          float z00 = z[t], z01 = z[t + 1], z10 = z[t + pc.W], z11 = z[t + pc.W + 1];
+          pred += mix(mix(z00, z01, f.x), mix(z10, z11, f.x), f.y);
+          jx += mix(z01 - z00, z11 - z10, f.y) * sf * invn;
+          jy += mix(z10 - z00, z11 - z01, f.x) * sf * invn;
+        }
+      float yv = yv(int(o));
+      float r = pred * invn - yv;
+      float wv = ok ? wk : 0.0;   // a sample the affine step moved out of the image: 0
+      v[0] = wv * jx * jx; v[1] = wv * jx * jy; v[2] = wv * jy * jy; v[3] = wv * jx * r; v[4] = wv * jy * r;
+    }
+  }
+  for (int c = 0; c < 5; ++c) v[c] = subgroupAdd(v[c]);
+  if (subgroupElect())
+    for (int c = 0; c < 5; ++c) sh[gl_SubgroupID][c] = v[c];
+  barrier();
+  if (lid < 5) {
+    int nb = ((pc.w + pc.LB - 1) / pc.LB) * ((pc.h + pc.LB - 1) / pc.LB);
+    int b = int(gl_WorkGroupID.y) * int(gl_NumWorkGroups.x) + int(gl_WorkGroupID.x);
+    float t = 0.0;
+    for (uint g = 0u; g < gl_NumSubgroups; ++g) t += sh[g][lid];
+    blk[((k - 1) * nb + b) * 5 + lid] = t;
+  }
+}

@@ -1,0 +1,22 @@
+#version 450
+// SPDX-License-Identifier: Apache-2.0
+// Last step of the DCT x-step: planes (Y, R-G, B-G) in white-balanced space to
+// planar camera RGB, in place. H and W % 4 == 0.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) buffer X { vec4 x[]; };
+layout(push_constant) uniform P {
+  int H, W, ny, nx, py, px, ixo, has_ns;
+  float sigma2, lv_a, lv_b, k_y2, k_c2, wb_r, wb_g, wb_b;
+} pc;
+
+void main() {
+  int i = int(gl_GlobalInvocationID.y), j = int(gl_GlobalInvocationID.x);
+  int row = pc.W / 4;
+  if (j >= row || i >= pc.H) return;
+  int plane = pc.H * row, o = i * row + j;
+  vec4 y = x[o], u = x[o + plane], v = x[o + 2 * plane];
+  vec4 g = y - 0.25 * (u + v);
+  x[o] = (u + g) / pc.wb_r;
+  x[o + plane] = g / pc.wb_g;
+  x[o + 2 * plane] = (v + g) / pc.wb_b;
+}

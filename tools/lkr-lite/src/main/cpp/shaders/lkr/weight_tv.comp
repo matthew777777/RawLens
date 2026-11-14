@@ -1,0 +1,42 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Temporal weight, deep-shadow window, pass 1 (columns): 9-row sums (rows i-4..i+4) of the 5-wide
+// row sums of weight_th.comp, for the columns a dark sample (dk > 0, weight_t.comp) will read:
+// its own and those 5 to either side. weight_td.comp adds three of them for the 9 x 15 window
+// (54 loads per sample when done in one pass; this way 18 here and 15 there). The five sums go
+// to buffers that are free between the temporal test and the data step.
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer DK { float dk[]; };
+layout(std430, binding = 1) readonly buffer TM { vec4 tmp[]; };
+layout(std430, binding = 2) readonly buffer TD { float td[]; };
+layout(std430, binding = 3) writeonly buffer CR { float cr[]; };   // sum r
+layout(std430, binding = 4) writeonly buffer CV { float cv[]; };   // sum a y + b
+layout(std430, binding = 5) writeonly buffer CN { float cn[]; };   // count
+layout(std430, binding = 6) writeonly buffer CS { float cs[]; };   // sum r^2
+layout(std430, binding = 7) writeonly buffer CD { float cd[]; };   // model error
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h || k == 0) return;
+  int base = k * pc.h * pc.w;
+  int row = base + i * pc.w;
+  // The border columns also stand in for the clamped positions beyond them.
+  if (j != 0 && j != pc.w - 1 && dk[row + j] <= 0.0 && dk[row + max(j - 5, 0)] <= 0.0 &&
+      dk[row + min(j + 5, pc.w - 1)] <= 0.0)
+    return;
+  vec4 b4 = vec4(0.0);
+  float bd = 0.0;
+  for (int di = -4; di <= 4; ++di) {
+    int t = base + clamp(i + di, 0, pc.h - 1) * pc.w + j;
+    b4 += tmp[t];
+    bd += td[t];
+  }
+  cr[row + j] = b4.x;
+  cv[row + j] = b4.y;
+  cn[row + j] = b4.z;
+  cs[row + j] = b4.w;
+  cd[row + j] = bd;
+}

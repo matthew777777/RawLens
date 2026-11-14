@@ -1,0 +1,22 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Separable min filter (radius pc.mode) of the robust weights (Wronski-style spread:
+// a rejected sample rejects its neighbourhood). Vertical half: also multiplies by validity.
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer A { float src[]; };
+layout(std430, binding = 1) writeonly buffer B { float dst[]; };
+layout(std430, binding = 2) readonly buffer VM { float vm[]; };
+
+void main() {
+  int k, i, j;
+  lrIndex(k, i, j);
+  if (j >= pc.w || i >= pc.h) return;
+  int base = k * pc.h * pc.w;
+  float m = 1.0;
+  for (int d = -pc.mode; d <= pc.mode; ++d)
+    m = min(m, src[base + clamp(i + d, 0, pc.h - 1) * pc.w + j]);
+  int o = base + i * pc.w + j;
+  dst[o] = (k == 0 ? 1.0 : m) * vm[o];
+}

@@ -1,0 +1,73 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+// SPDX-License-Identifier: Apache-2.0
+// Gauss-Newton normal equations of the 6-parameter affine of frame k >= 1 against z.
+// One LR sample per lane: bilinear gradient of z summed over the sub-samples (gx, gy),
+// residual r = y - U z, weight wv = w / (a y + b). The affine Jacobian is
+// (gx x, gx y, gx, gy x, gy y, gy) with x, y the pixel centre relative to the tile centre
+// (float precision; the host moves the translation back), so J^T W J and J^T W r are
+// 24 moments of 5 per-sample values: (gx^2, gx gy, gy^2) x (x^2, x y, y^2, x, y, 1)
+// and (gx r, gy r) x (x, y, 1). Subgroup sums, then one partial row per group.
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 4) readonly buffer WT { float wt[]; };
+layout(std430, binding = 5) writeonly buffer PART { float part[]; };
+shared float sh[64][24];   // >= 256 / minimum subgroup size (4)
+
+void main() {
+  int k = int(gl_WorkGroupID.y) + 1;
+  int n = pc.h * pc.w;
+  int idx = int(gl_GlobalInvocationID.x);
+  float gxx = 0.0, gxy = 0.0, gyy = 0.0, rx = 0.0, ry = 0.0, cx = 0.0, cy = 0.0;
+  if (idx < n) {
+    int i = idx / pc.w, j = idx - i * pc.w;
+    int o = k * n + idx;
+    float wk = pc.mode == 1 ? (yv(int(o)) < pc.clip ? 1.0 : 0.0) : wt[o];   // mode 1: validity only (taps checked below)
+    if (wk != 0.0) {
+      int base = bayerChannel(i, j) * pc.H * pc.W;
+      float sf = float(pc.s), invn = 1.0 / (sf * sf);
+      float pred = 0.0, gx = 0.0, gy = 0.0;
+      bool ok = true;
+      for (int oy = 0; oy < pc.s; ++oy)
+        for (int ox = 0; ox < pc.s; ++ox) {
+          ivec2 x0; vec2 f;
+          if (!taps(warpQ(k, subPos(i, j, ox, oy)), x0, f)) { ok = false; continue; }
+          int t = base + x0.y * pc.W + x0.x;
+          float z00 = z[t], z01 = z[t + 1], z10 = z[t + pc.W], z11 = z[t + pc.W + 1];
+          pred += mix(mix(z00, z01, f.x), mix(z10, z11, f.x), f.y);
+          gx += mix(z01 - z00, z11 - z10, f.y);
+          gy += mix(z10 - z00, z11 - z01, f.x);
+        }
+      if (ok) {
+        float yv = yv(int(o));
+        float wv = wk / max(pc.a * max(yv, 0.0) + pc.b, 1e-12);
+        gx *= sf * invn; gy *= sf * invn;
+        float r = yv - pred * invn;
+        gxx = wv * gx * gx; gxy = wv * gx * gy; gyy = wv * gy * gy;
+        rx = wv * gx * r; ry = wv * gy * r;
+        cx = float(j) + 0.5 - 0.5 * float(pc.w);
+        cy = float(i) + 0.5 - 0.5 * float(pc.h);
+      }
+    }
+  }
+  float m[6] = float[6](cx * cx, cx * cy, cy * cy, cx, cy, 1.0);
+  float v[24];
+  for (int t = 0; t < 6; ++t) { v[t] = gxx * m[t]; v[6 + t] = gxy * m[t]; v[12 + t] = gyy * m[t]; }
+  v[18] = rx * cx; v[19] = rx * cy; v[20] = rx; v[21] = ry * cx; v[22] = ry * cy; v[23] = ry;
+  for (int t = 0; t < 24; ++t) v[t] = subgroupAdd(v[t]);
+  if (subgroupElect())
+    for (int t = 0; t < 24; ++t) sh[gl_SubgroupID][t] = v[t];
+  barrier();
+  int lid = int(gl_LocalInvocationIndex);
+  if (lid < 24) {
+    float s = 0.0;
+    for (uint g = 0u; g < gl_NumSubgroups; ++g) s += sh[g][lid];
+    part[((k - 1) * int(gl_NumWorkGroups.x) + int(gl_WorkGroupID.x)) * 24 + lid] = s;
+  }
+}

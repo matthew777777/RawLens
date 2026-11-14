@@ -1,0 +1,102 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Fused residual + weighted adjoint: acc += U^T W (U z - y) as int32 fixed point
+// (associative: identical across GPUs and dispatch orders, no float atomics).
+// mode 1 also accumulates the Jacobi coverage U^T W 1 into cov (geometry/weights changed);
+// mode 2 only accumulates coverage (no residual): with the validity bound as wt, U^T 1.
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+// Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 4) readonly buffer WT { float wt[]; };
+layout(std430, binding = 5) buffer ACC { int acc[]; };
+layout(std430, binding = 6) buffer COV { int cov[]; };
+
+void scatter4(int t, vec2 f, float v, bool c, float cv) {
+  float w00 = (1.0 - f.x) * (1.0 - f.y), w01 = f.x * (1.0 - f.y), w10 = (1.0 - f.x) * f.y, w11 = f.x * f.y;
+  if (pc.mode != 2) {
+    atomicAdd(acc[t], int(round(v * w00)));
+    atomicAdd(acc[t + 1], int(round(v * w01)));
+    atomicAdd(acc[t + pc.W], int(round(v * w10)));
+    atomicAdd(acc[t + pc.W + 1], int(round(v * w11)));
+  }
+  if (c) {
+    atomicAdd(cov[t], int(round(cv * w00)));
+    atomicAdd(cov[t + 1], int(round(cv * w01)));
+    atomicAdd(cov[t + pc.W], int(round(cv * w10)));
+    atomicAdd(cov[t + pc.W + 1], int(round(cv * w11)));
+  }
+}
+
+// Bilinear weight that a sub-sample with anchor offset d (0 or 1 per axis, relative to the block
+// anchor) and fractions f puts on block cell c (0..2 per axis); 0 when the cell is not one of its
+// taps. Selects only (no dynamic indexing: Mali would spill to stack).
+float cellW(ivec2 d, vec2 f, ivec2 c) {
+  ivec2 t = c - d;
+  float wx = t.x == 0 ? 1.0 - f.x : (t.x == 1 ? f.x : 0.0);
+  float wy = t.y == 0 ? 1.0 - f.y : (t.y == 1 ? f.y : 0.0);
+  return wx * wy;
+}
+
+// 2x: the 4 sub-samples' taps normally lie in one 3x3 HR block. Sum their weights per cell and add
+// once per non-zero cell (<= 9 atomics, 4 at integer alignment) instead of 16. Same sums up to the
+// fixed-point rounding of each addend (~1e-7 relative).
+void scatter3x3(int tb0, ivec2 da, vec2 fa, ivec2 db, vec2 fb, ivec2 dc, vec2 fc, ivec2 dd, vec2 fd,
+                float v, bool c, float cv) {
+  for (int cy = 0; cy < 3; ++cy)
+    for (int cx = 0; cx < 3; ++cx) {
+      ivec2 cc = ivec2(cx, cy);
+      float w = cellW(da, fa, cc) + cellW(db, fb, cc) + cellW(dc, fc, cc) + cellW(dd, fd, cc);
+      if (w == 0.0) continue;
+      int t = tb0 + cy * pc.W + cx;
+      if (pc.mode != 2) atomicAdd(acc[t], int(round(v * w)));
+      if (c) atomicAdd(cov[t], int(round(cv * w)));
+    }
+}
+
+void main() {
+  int k, i, j;
+  lrIndex(k, i, j);
+  if (j >= pc.w || i >= pc.h) return;
+  int o = (k * pc.h + i) * pc.w + j;
+  float wk = wt[o];   // 0 for invalid / clipped samples (wminv)
+  // pc.rpow < 0 (shift-and-add step): clipped samples enter with a tiny weight so an all-clipped HR
+  // pixel averages to blown instead of 0 (taps are still checked below), without pulling single colour
+  // channels of the pixels around a glint (full weight gave RGB blobs next to highlights).
+  if (pc.rpow < 0.0 && yv(int(o)) >= pc.clip) wk = 1e-3;
+  if (wk == 0.0 || (pc.mode != 2 && pc.rpow >= 0.0 && yv(int(o)) >= pc.clip)) return;
+  int base = bayerChannel(i, j) * pc.H * pc.W;
+  float invn = 1.0 / float(pc.s * pc.s);
+  // s is 1 or 2: keep the taps of up to 4 sub-samples in registers (no arrays: Mali stack).
+  ivec2 x0a, x0b, x0c, x0d; vec2 fa, fb, fc, fd;
+  // Every tap is checked here too: the weights may predate the last motion step (weights_once).
+  if (!taps(warpQ(k, subPos(i, j, 0, 0)), x0a, fa)) return;
+  int ta = base + x0a.y * pc.W + x0a.x;
+  float sum = mix(mix(z[ta], z[ta + 1], fa.x), mix(z[ta + pc.W], z[ta + pc.W + 1], fa.x), fa.y);
+  int tb = 0, tc = 0, td = 0;
+  if (pc.s == 2) {
+    if (!taps(warpQ(k, subPos(i, j, 1, 0)), x0b, fb) || !taps(warpQ(k, subPos(i, j, 0, 1)), x0c, fc) ||
+        !taps(warpQ(k, subPos(i, j, 1, 1)), x0d, fd)) return;
+    tb = base + x0b.y * pc.W + x0b.x; tc = base + x0c.y * pc.W + x0c.x; td = base + x0d.y * pc.W + x0d.x;
+    sum += mix(mix(z[tb], z[tb + 1], fb.x), mix(z[tb + pc.W], z[tb + pc.W + 1], fb.x), fb.y);
+    sum += mix(mix(z[tc], z[tc + 1], fc.x), mix(z[tc + pc.W], z[tc + pc.W + 1], fc.x), fc.y);
+    sum += mix(mix(z[td], z[td + 1], fd.x), mix(z[td + pc.W], z[td + pc.W + 1], fd.x), fd.y);
+  }
+  float rs = (sum * invn - yv(int(o))) * wk * invn * pc.scale;
+  bool c = pc.mode >= 1;
+  float cv = wk * invn * pc.dscale;
+  if (pc.s == 2) {
+    ivec2 lo = min(min(x0a, x0b), min(x0c, x0d)), hi = max(max(x0a, x0b), max(x0c, x0d));
+    if (hi.x - lo.x <= 1 && hi.y - lo.y <= 1) {
+      scatter3x3(base + lo.y * pc.W + lo.x, x0a - lo, fa, x0b - lo, fb, x0c - lo, fc, x0d - lo, fd, rs, c, cv);
+    } else {
+      scatter4(ta, fa, rs, c, cv); scatter4(tb, fb, rs, c, cv); scatter4(tc, fc, rs, c, cv); scatter4(td, fd, rs, c, cv);
+    }
+  } else {
+    scatter4(ta, fa, rs, c, cv);
+  }
+}

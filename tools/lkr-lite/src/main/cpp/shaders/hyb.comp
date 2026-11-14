@@ -1,0 +1,54 @@
+#version 450
+// SPDX-License-Identifier: Apache-2.0
+// Hybrid merge combine on the GPU (= lkrl_solver.cpp mode 5 with chroma from the average):
+//   mode 0: D = Yf - Ya (wb-space luma of fit z and average za) and a near-clip flag per pixel;
+//   mode 1: luma = Ya + w D, w = max(E - t nv, 0) / E (E = 5x5 clamped box mean of D^2, nv = model
+//           noise of the average's camera luma / K); chroma = the average's, except within 2 px of a
+//           near-clipped pixel (>= 0.85 clip in fit or average), where the fit's chroma is kept.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer A { float za[]; };
+layout(std430, binding = 2) buffer D { float d[]; };     // [0, HW): D, [HW, 2 HW): hot flag
+layout(std430, binding = 3) writeonly buffer O { float o[]; };
+layout(push_constant) uniform P {
+  int H, W, K, mode;
+  float a, b, t, clip;
+  float wbr, wbg, wbb, pad;
+} pc;
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  if (X >= pc.W || Y >= pc.H) return;
+  int HW = pc.H * pc.W, i = Y * pc.W + X;
+  vec3 wb = vec3(pc.wbr, pc.wbg, pc.wbb);
+  vec3 f = vec3(z[i], z[HW + i], z[2 * HW + i]) * wb;
+  vec3 av = vec3(za[i], za[HW + i], za[2 * HW + i]) * wb;
+  float yf = 0.25 * f.r + 0.5 * f.g + 0.25 * f.b, ya = 0.25 * av.r + 0.5 * av.g + 0.25 * av.b;
+  if (pc.mode == 0) {
+    d[i] = yf - ya;
+    float m = max(max(max(z[i], z[HW + i]), z[2 * HW + i]), max(max(za[i], za[HW + i]), za[2 * HW + i]));
+    d[HW + i] = m >= 0.85 * pc.clip ? 1.0 : 0.0;
+    return;
+  }
+  float sumr = 0.0; int nr = 0; bool near = false;
+  for (int dy = -2; dy <= 2; ++dy) {
+    int yy = Y + dy;
+    if (yy < 0 || yy >= pc.H) continue;
+    float a = 0.0; int n = 0;
+    for (int dx = -2; dx <= 2; ++dx) {
+      int xx = X + dx;
+      if (xx < 0 || xx >= pc.W) continue;
+      float v = d[yy * pc.W + xx]; a += v * v; ++n;
+      if (d[HW + yy * pc.W + xx] > 0.5) near = true;
+    }
+    sumr += a / float(n); ++nr;
+  }
+  float E = sumr / float(nr);
+  float yc = 0.25 * za[i] + 0.5 * za[HW + i] + 0.25 * za[2 * HW + i];
+  float wbl = 0.25 * pc.wbr + 0.5 * pc.wbg + 0.25 * pc.wbb;
+  float nv = wbl * wbl * max(pc.a * yc + pc.b, 1e-12) / float(pc.K);
+  float w = E > 0.0 ? max(E - pc.t * nv, 0.0) / E : 0.0;
+  float y = ya + w * d[i];
+  float u = near ? f.r - yf : av.r - ya, v = near ? f.b - yf : av.b - ya;
+  float rr = y + u, bb = y + v, gg = (y - 0.25 * rr - 0.25 * bb) / 0.5;
+  o[i] = rr / pc.wbr; o[HW + i] = gg / pc.wbg; o[2 * HW + i] = bb / pc.wbb;
+}

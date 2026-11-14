@@ -1,0 +1,54 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Reference-guide confidence (as LK-R weight_guide): one invocation per Bayer quad of frame k;
+// the frame's quad statistics are compared with the reference's at the warped quad centre,
+// w = clamp(g exp(-d / var) - 0.12, 0, 1) with the shrunk colour distance d. All four samples
+// of a quad share it. pc.robk = g (strength). pc.mode 1: min(guide, residual weight already
+// in wr) instead of replacing it. Writes the pre-spread weights (wminh / wminv follow).
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer M { vec4 means[]; };
+layout(std430, binding = 1) readonly buffer V { vec4 vars[]; };
+layout(std430, binding = 4) buffer WR { float wr[]; };
+
+void put(int o, float v) {
+  if (pc.mode == 1) {
+    wr[o] = min(wr[o], v); wr[o + 1] = min(wr[o + 1], v);
+    wr[o + pc.w] = min(wr[o + pc.w], v); wr[o + pc.w + 1] = min(wr[o + pc.w + 1], v);
+  } else {
+    wr[o] = v; wr[o + 1] = v; wr[o + pc.w] = v; wr[o + pc.w + 1] = v;
+  }
+}
+
+void main() {
+  int qx = int(gl_GlobalInvocationID.x), qy = int(gl_GlobalInvocationID.y), k = int(gl_GlobalInvocationID.z);
+  int w = pc.w / 2, h = pc.h / 2;
+  if (qx >= w || qy >= h) return;
+  int j = 2 * qx, i = 2 * qy;
+  int o = (k * pc.h + i) * pc.w + j;
+  if (k == 0) {
+    wr[o] = 1.0; wr[o + 1] = 1.0; wr[o + pc.w] = 1.0; wr[o + pc.w + 1] = 1.0;
+    return;
+  }
+  vec2 ref = warpLR(k, vec2(j + 1, i + 1));
+  vec2 q = (ref - 1.0) * 0.5;
+  ivec2 t = ivec2(floor(q));
+  vec2 a = q - floor(q);
+  if (t.x < 0 || t.y < 0 || t.x + 1 >= w || t.y + 1 >= h) { put(o, 0.0); return; }
+  vec4 m = vec4(0.0), v = vec4(0.0);
+  for (int dy = 0; dy < 2; ++dy)
+    for (int dx = 0; dx < 2; ++dx) {
+      float tap = (dx == 0 ? 1.0 - a.x : a.x) * (dy == 0 ? 1.0 - a.y : a.y);
+      m += tap * means[(t.y + dy) * w + t.x + dx];
+      v += tap * vars[(t.y + dy) * w + t.x + dx];
+    }
+  vec4 c = means[(k * h + qy) * w + qx];
+  vec3 diff = c.xyz - m.xyz;
+  float d = dot(diff, diff), n = max(m.w + c.w, 1e-10);
+  float shrink = d / (d + n);
+  d *= shrink * shrink;
+  float variance = max(v.x + v.y + v.z, 9.0 * m.w);
+  put(o, clamp(pc.robk * exp(-d / max(variance, 1e-10)) - 0.12, 0.0, 1.0));
+}

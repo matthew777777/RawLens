@@ -1,0 +1,15 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// LK-R's final weights (lkr/weight_min.comp output) times validity (resid.comp): Lite's merge
+// skips samples whose weight is 0 (LK-R's adjoint tests clipping / taps itself).
+#include "lite_common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer WL { float wl[]; };
+layout(std430, binding = 1) readonly buffer VM { float vm[]; };
+layout(std430, binding = 2) writeonly buffer WT { float wt[]; };
+void main() {
+  int i = int(gl_GlobalInvocationID.x);
+  if (i >= pc.K * pc.h * pc.w) return;
+  wt[i] = wl[i] * vm[i];
+}

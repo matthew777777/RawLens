@@ -1,0 +1,34 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Spread rejection (Wronski et al. 2019 robustness: minimum filter): a frame
+// that disagrees anywhere in a (2R+1)^2 LR neighbourhood is rejected across
+// it. Without this, the low-contrast interior of a moving object (car body)
+// next to its rejected edges kept other frames -> ghosted / soft object.
+// R = pc.f3 (LR px). Separable: pass 2 (columns) over the row minima of
+// weight_minh.comp (binding 1); writes rw, wt, wv.
+#include "lkr_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer R { float r[]; };
+layout(std430, binding = 1) readonly buffer WR { float wraw[]; };   // row minima (weight_minh)
+layout(std430, binding = 2) writeonly buffer RW { float rw[]; };
+layout(std430, binding = 3) writeonly buffer WT { float wt[]; };
+layout(std430, binding = 4) writeonly buffer WV { float wv[]; };
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
+  int k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  int base = k * pc.h * pc.w;
+  int o = base + i * pc.w + j;
+  int Rr = int(pc.f3);
+  float w = 1.0;
+  if (k != 0 && pc.rob_on > 0.5)
+    for (int di = -Rr; di <= Rr; ++di) {
+      int ii = clamp(i + di, 0, pc.h - 1);
+      w = min(w, wraw[base + ii * pc.w + j]);
+    }
+  rw[o] = r[o] * w;
+  wt[o] = w;
+  wv[o] = r[o] != 0.0 ? w : 0.0;
+}
