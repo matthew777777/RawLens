@@ -55,3 +55,6 @@ codex-session-*.md
 
 # Generated local benchmark and visual study output
 /artifacts/
+
+# Local benchmark / render output (generated, large)
+output/
