@@ -106,7 +106,7 @@ fun dogsonQuadratic(x: Float): Float {
  * Warps + normalises local-stat maps by half the raw-basis flow using the
  * 3x3 Dodgson biquadratic kernel. Out-of-bounds targets yield `+Inf`
  * (forcing `R = 0` downstream). Mirrors `cpu_warp_dogson`
- * (`tile_size //= 2`, `round_half_away` centres, weight normalisation).
+ * (`tile_size //= 2`, ties-to-even `round` centres, weight normalisation).
  */
 fun warpStats(
     source: Array<Array<FloatArray>>,
@@ -130,8 +130,8 @@ fun warpStats(
                 for (ch in 0 until c) warped[ch][y][x] = Float.POSITIVE_INFINITY
                 continue
             }
-            val cy = roundHalfAway(yMov)
-            val cx = roundHalfAway(xMov)
+            val cy = roundHalfEven(yMov)
+            val cx = roundHalfEven(xMov)
             val buf = FloatArray(c)
             var wAcc = 0f
             for (i in -1..1) {
@@ -184,7 +184,7 @@ fun computeDSigma(
                 var brightness = 0f
                 for (ch in 0 until c) brightness += meansR[ch][y][x]
                 brightness = (brightness / c).coerceIn(0f, 1f)
-                val idx = roundHalfAway((sigmaSqCurve.size - 1) * brightness)
+                val idx = roundHalfEven((sigmaSqCurve.size - 1) * brightness)
                     .coerceIn(0, sigmaSqCurve.size - 1)
                 val dNoise = dSqCurve[idx]
                 s = max(s, sigmaSqCurve[idx])

@@ -29,9 +29,13 @@ import kotlin.math.round
 /** Search metrics per pyramid level, cf. `config.alignment.block_matching.metrics`. */
 enum class BlockMetric { L1, L2 }
 
-/** Rounds half away from zero; mirrors `utils.round_half_away` (CUDA `round`). */
-fun roundHalfAway(x: Float): Int =
-    if (x >= 0f) floor(x + 0.5f).toInt() else ceil(x - 0.5f).toInt()
+/**
+ * Rounds to nearest, ties to even: what the reference CUDA kernels get from
+ * Python `round(x)` (numba.cuda lowers it to libdevice `__nv_llrint`,
+ * `ptx_round` in numba/cuda/cudaimpl.py). Checklist C9a, 2026-11-14: the CPU
+ * port had half-away here and claimed it was CUDA semantics; it is not.
+ */
+fun roundHalfEven(x: Float): Int = Math.rint(x.toDouble()).toInt()
 
 /**
  * Exhaustive L1 block matching around the current flow, one tile per task.
@@ -52,8 +56,8 @@ fun l1LocalSearch(
     val nTx = flow[0].size
     for (tileY in 0 until nTy) {
         for (tileX in 0 until nTx) {
-            val flowX = roundHalfAway(flow[tileY][tileX][0])
-            val flowY = roundHalfAway(flow[tileY][tileX][1])
+            val flowX = roundHalfEven(flow[tileY][tileX][0])
+            val flowY = roundHalfEven(flow[tileY][tileX][1])
             var bestErr = Float.POSITIVE_INFINITY
             var bestSx = -searchRadius
             var bestSy = -searchRadius
@@ -88,7 +92,7 @@ fun l1LocalSearch(
  * Patches of `2*radius+patchSize` centred on `tile*patchSize + round(flow)`,
  * clamped to the image borders. Mirrors `extract_flow_patches` (which uses
  * `flow.round()`, i.e. round-half-to-even, hence [round] here and not
- * [roundHalfAway]).
+ * [roundHalfEven]; both are ties-to-even).
  *
  * @return `[nTy][nTx][search][search]` patch grid.
  */
@@ -180,8 +184,8 @@ fun l2BlockMatch(
     val nTx = flow[0].size
     for (tileY in 0 until nTy) {
         for (tileX in 0 until nTx) {
-            val flowX = roundHalfAway(flow[tileY][tileX][0])
-            val flowY = roundHalfAway(flow[tileY][tileX][1])
+            val flowX = roundHalfEven(flow[tileY][tileX][0])
+            val flowY = roundHalfEven(flow[tileY][tileX][1])
             val scores = l2CorrelationScores(ref, moving, tileY, tileX, flowX, flowY, tileSize, searchRadius)
             var best = Float.POSITIVE_INFINITY
             var bSx = 0
@@ -199,7 +203,7 @@ fun l2BlockMatch(
             // to the *full* float flow (`alignment += (dx, dy)`), keeping
             // the upscaled subpixel part; only the search is centred on
             // the rounded flow. (The L1 path instead stores
-            // `round_half_away(flow) + shift`; see [l1LocalSearch].)
+            // `round(flow) + shift`, ties to even; see [l1LocalSearch].)
             flow[tileY][tileX][0] = flow[tileY][tileX][0] + bSx
             flow[tileY][tileX][1] = flow[tileY][tileX][1] + bSy
         }

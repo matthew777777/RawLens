@@ -386,12 +386,19 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
             line by line): Eq. 1-9 and constants 1:1 except four IPOL
             choices RawLens keeps (A formula, k-hat law, Dth/Dtr in GAT
             units, s1/s2 swap).
-            - [ ] C9a [owner decision] RawLens copied the port's
-                  round-half-away (Align.kt/Robustness.kt roundHalfAway,
-                  align.comp, robustness.comp; comments wrongly call it CUDA
-                  semantics). CUDA is half-even. Affects exact .5 ties only
-                  (frame-border warp, L1 start, LUT index); changes output,
-                  so not touched.
+            - [x] C9a (2026-11-14, owner) Ties-to-even rounding like CUDA
+                  `__nv_llrint` in Kotlin + align.comp/robustness.comp.
+                  malioc G615/G57: same registers, no spills, arithmetic
+                  cycles slightly lower; C9 crop bit-identical on Vulkan.
+                  Also fixed the CLI `--backend cpu` upside-down output
+                  (double row flip since 7fabb64f; app unaffected).
+            - [x] C9b (2026-11-14) Paper-vs-IPOL benchmark on known truth
+                  (PaperVsIpolBenchTest): IPOL wins on the A formula and the
+                  k-hat law (paper -0.7..-1.4 dB, NaNs) and on Dth/Dtr
+                  (paper -2.4 dB dim). The paper's s1/s2 order gains
+                  <= 0.21 dB static but ghosts more. No default change.
+            - [ ] C9c CLI CPU vs Vulkan residual: 57.5 dB, 0.58 % px > 1/255,
+                  max 0.38 on the C9 crop (app is Vulkan-only).
       - [ ] C10 [2.0.x] Scale > 1 for zoom; S.3 thresholds; failed-tile
             alignment check (mfsr-paper-gaps.md).
             Failed-tile leg 2026-11-03: border band root-caused (zero-padded

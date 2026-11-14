@@ -27,7 +27,12 @@ import kotlin.math.sqrt
 // non-linearity branch).
 
 /** Kernel selection law, cf. `config.merging.selection_law`. */
-enum class SelectionLaw { HARD_THRESHOLD, LINEAR }
+/**
+ * Kernel-width law. LINEAR / HARD_THRESHOLD are the IPOL reference laws.
+ * PAPER is Wronski et al. 2019 supplement S.1 as printed (benchmark only):
+ * across the edge kDetail/(kShrink*A), along it kDetail*kStretch*A.
+ */
+enum class SelectionLaw { HARD_THRESHOLD, LINEAR, PAPER }
 
 /** Kernel covariance parameters, cf. `config.merging.kernel`. */
 data class KernelParams(
@@ -45,6 +50,12 @@ data class KernelParams(
      * 0.62x, sharpness 0.941x vs none). 0 = paper/IPOL-exact (parity tests).
      */
     val kMin: Float = 0f,
+    /**
+     * Anisotropy formula. false (default): IPOL `A = 1 + sqrt((l1-l2)/(l1+l2))`,
+     * in [1, 2]. true: Wronski 2019 S.1 as printed, `A = 1 + sqrt(l1/l2)`, in
+     * [2, inf) (benchmark only, see mfsr-c9-reference-parity.md).
+     */
+    val paperAnisotropy: Boolean = false,
 )
 
 /**
@@ -297,11 +308,18 @@ fun computeK(l1: Float, l2: Float, params: KernelParams): Pair<Float, Float> {
     // Same guard as kernels.comp (the app's GPU path): a perfectly flat
     // window (clipped highlight, l1 = l2 = 0) gave 0/0 = NaN here, NaN
     // kernels, NaN weights and black holes in blown lamps on the CPU path.
-    val a = 1f + sqrt(maxOf(l1 - l2, 0f) / maxOf(l1 + l2, 1e-30f))
+    val a = if (params.paperAnisotropy) {
+        // Paper S.1. l2 = 0 (perfectly straight edge or flat window) is unbounded
+        // in the paper; clamp so the covariance stays finite.
+        1f + sqrt(maxOf(l1, 0f) / maxOf(l2, 1e-12f)).coerceAtMost(1e6f)
+    } else {
+        1f + sqrt(maxOf(l1 - l2, 0f) / maxOf(l1 + l2, 1e-30f))
+    }
     val d = (1f - sqrt(l1) / params.dTr + params.dTh).coerceIn(0f, 1f)
     val (k1, k2) = when (params.selection) {
         SelectionLaw.HARD_THRESHOLD -> hardThreshold(a, params.kShrink, params.kStretch)
         SelectionLaw.LINEAR -> linearSelection(a, params.kShrink, params.kStretch)
+        SelectionLaw.PAPER -> Pair(1f / (params.kShrink * a), params.kStretch * a)
     }
     return Pair(
         maxOf(params.kDetail * ((1f - d) * k1 + d * params.kDenoise), params.kMin),

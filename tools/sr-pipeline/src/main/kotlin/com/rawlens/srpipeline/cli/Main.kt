@@ -400,7 +400,7 @@ private fun merge(plan: Plan) {
             }
             val buf = SrpBridge.directFloats(outH * outW * 3)
             val fb = buf.asFloatBuffer()
-            for (y in 0 until outH) fb.put(merged[outH - 1 - y])
+            for (y in 0 until outH) fb.put(merged[y]) // same bottom-up row order as the Vulkan buffer; the shared tail flips once
             buf.rewind()
             buf
         }

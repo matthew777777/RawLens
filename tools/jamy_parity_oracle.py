@@ -8,7 +8,7 @@ https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution
   tuning      params.update_snr_config + utils_image.estimate_image_snr
   guide       robustness.cuda_compute_guide_image (Alg. 7)
   stats       robustness.cuda_compute_local_stats (Alg. 8, unfloored)
-  warp        robustness.cuda_warp_dogson (Dogson biquadratic, half-away centers)
+  warp        robustness.cuda_warp_dogson (Dogson biquadratic, ties-to-even centers)
   d/sigma     robustness.cuda_compute_d_sigma (analytic path, no LUT)
   S           robustness.cuda_compute_s (raw-unit spread vs Mt)
   threshold   robustness.cuda_robustness_threshold (Alg. 6 tail)
@@ -322,14 +322,13 @@ def dogson(x):
     return 0.0
 
 
-def round_half_away(x):
-    """utils.round_half_away (CUDA round()): halves away from zero."""
-    import math
-    return math.floor(x + 0.5) if x >= 0 else math.ceil(x - 0.5)
+def round_half_even(x):
+    """CUDA round(): numba.cuda lowers it to __nv_llrint, ties to even (C9a)."""
+    return int(np.rint(x))
 
 
 def warp_means(mov_mean, flow_raw, tile_raw):
-    """robustness.cuda_warp_dogson: nearest tile, flow*0.5, half-away centers."""
+    """robustness.cuda_warp_dogson: nearest tile, flow*0.5, ties-to-even centers."""
     _, h, w = mov_mean.shape
     ts = tile_raw // 2
     out = np.empty_like(mov_mean)
@@ -344,8 +343,8 @@ def warp_means(mov_mean, flow_raw, tile_raw):
                 oob[y, x] = True
                 out[:, y, x] = np.inf
                 continue
-            cx = int(round_half_away(xm))
-            cy = int(round_half_away(ym))
+            cx = int(round_half_even(xm))
+            cy = int(round_half_even(ym))
             wacc = 0.0
             buf = [0.0, 0.0, 0.0]
             for i in (-1, 0, 1):

@@ -158,3 +158,54 @@ Verdict: the merge, kernel and robustness structure (Eq. 1-9) and every
 supplement constant except four are 1:1 with the paper. The four differences
 (A formula, k-hat law, Dth/Dtr units, s1/s2 order) are IPOL design choices
 already in the reference; RawLens follows IPOL, as decided by the owner.
+
+## Benchmark: IPOL (current) vs paper (2026-11-14)
+
+`PaperVsIpolBenchTest` (CPU engine, Python-exact otherwise) on the
+`Sr2xTruthTest` known-truth burst (8 frames, detail above Bayer Nyquist) at
+three noise levels, scored against ground truth; plus a moving-disc scene.
+The paper's S.1 law ships with switches (`SelectionLaw.PAPER`,
+`KernelParams.paperAnisotropy`), CPU only; Vulkan refuses them.
+
+PSNR / detailSNR in dB (2x merge; the 1x merge + bicubic ranks the same):
+
+| Variant | clean | ISO100 | dim |
+|---|---|---|---|
+| IPOL (current) | 43.86 / 1.31 | 42.49 / 0.67 | 39.08 / -0.41 |
+| paper A + paper law (S.1 as printed) | 42.46 / 0.47 | 41.79 / 0.25 | 38.94 / -0.60 |
+| paper law, IPOL A | 42.79 / 0.38 | 41.95 / 0.11 | 39.00 / -0.68 |
+| paper Dth/Dtr, no GAT | 43.80 / 1.25 | 41.82 / -0.60 | 36.64 / -5.25 |
+| paper s1 = 12, s2 = 2 | 43.89 / 1.30 | 42.55 / 0.66 | 39.29 / -0.34 |
+| all paper | 42.48 / 0.46 | 41.83 / 0.16 | 39.11 / -1.37 |
+| IPOL + RawLens kMin 0.64 / S.3 | 43.09 / 1.48 | 42.14 / 1.05 | 38.91 / -0.37 |
+
+Moving disc (ISO100), PSNR inside the disc (ghosting) / static area: IPOL
+46.98 / 42.35; paper s1/s2 46.54 / 42.40; paper law + A 47.78 / 41.63.
+
+The paper's printed S.1 law also produces NaN pixels (13-176 per frame)
+because A = 1 + sqrt(l1/l2) is unbounded; IPOL produces 0-2.
+
+Result: keep IPOL for items 1-3. The paper law loses 0.7-1.4 dB and most
+of the detail band at every noise level. The paper's Dth/Dtr without GAT
+loses 2.4 dB in the dim case. The paper's s1/s2 order gains 0.03-0.21 dB on
+static scenes but ghosts more on motion (-0.44 dB in the disc), the
+trade-off the owner already rejected on the sea burst. No engine or app
+default changes.
+
+## C9a done (2026-11-14)
+
+The Kotlin `roundHalfEven`, `align.comp` and `robustness.comp` now use
+ties-to-even (GLSL `roundEven`), as CUDA does. The dead copy in
+`ica.comp` and the oracle were fixed too. All sr-pipeline tests pass.
+malioc, Mali-G615 / G57: same work registers (27 / 32), no spilling,
+load/store-bound cycles unchanged; arithmetic cycles fall slightly
+(align 1.34 -> 1.28, robustness 16.44 -> 16.38). On the C9 crop the Vulkan
+output is bit-identical before and after (no exact ties hit). Adreno: no
+offline compiler is installed here; `roundEven` is a core GLSL function
+with a native instruction there too, but this is not measured.
+
+Found on the way: the CLI `--backend cpu` wrote bottom-up-CFA bursts upside
+down (rows reversed twice since 7fabb64f; the app uses Vulkan only and was
+not affected). Fixed: CPU vs Vulkan went from 13.5 dB to 57.5 dB on the C9
+crop. The remaining 0.58 % of pixels > 1/255 (max 0.38) is a separate CPU
+vs Vulkan item, not investigated here.

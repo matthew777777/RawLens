@@ -54,11 +54,14 @@ class AlignTest {
     }
 
     @Test
-    fun `round half away from zero`() {
-        assertEquals(3, roundHalfAway(2.5f))
-        assertEquals(-3, roundHalfAway(-2.5f))
-        assertEquals(2, roundHalfAway(2.4f))
-        assertEquals(-2, roundHalfAway(-2.4f))
+    fun `round half to even like CUDA llrint`() {
+        assertEquals(2, roundHalfEven(2.5f))
+        assertEquals(4, roundHalfEven(3.5f))
+        assertEquals(-2, roundHalfEven(-2.5f))
+        assertEquals(0, roundHalfEven(0.5f))
+        assertEquals(0, roundHalfEven(-0.5f))
+        assertEquals(2, roundHalfEven(2.4f))
+        assertEquals(-3, roundHalfEven(-2.6f))
     }
 
     @Test

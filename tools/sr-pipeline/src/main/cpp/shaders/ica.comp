@@ -26,9 +26,6 @@ layout(set = 0, binding = 4) buffer Hess { vec4 hess[]; }; // h00,h01,h11,unused
 layout(set = 0, binding = 5) buffer Flow { vec2 flow[]; };
 
 int clampInt(int x, int lo, int hi) { return min(max(x, lo), hi); }
-int round_half_away(float x) {
-  return (x >= 0.0) ? int(floor(x + 0.5)) : int(ceil(x - 0.5));
-}
 
 void main() {
   uint t = gl_GlobalInvocationID.x;

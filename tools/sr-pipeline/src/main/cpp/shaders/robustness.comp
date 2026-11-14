@@ -8,7 +8,7 @@
 // dispatch per stage selected by push pad[0]; generic float buffers are
 // reinterpreted per op as documented below. Order and formulas match the
 // CPU njit kernels exactly (clamped 3x3/5x5 windows, biquadratic Dogson,
-// round-half-away tile math, first-minimum-free threshold).
+// ties-to-even rounding as CUDA __nv_llrint (C9a), first-minimum-free threshold).
 //
 // Push overlay: pad[0]=op (0 guide,1 stats,2 warp,3 dsigma,4 thresh,5 min,
 //   6 smap, 7 accum, 9 S.3 hf map) pad[1]=W pad[2]=H (op grid), pad[3]=nc,
@@ -35,9 +35,7 @@ layout(set = 0, binding = 5) readonly buffer S { float S_[]; };
 layout(set = 0, binding = 6) readonly buffer LUT { float lut[]; };
 
 int clampInt(int x, int lo, int hi) { return min(max(x, lo), hi); }
-int round_half_away(float x) {
-  return (x >= 0.0) ? int(floor(x + 0.5)) : int(ceil(x - 0.5));
-}
+int round_half_even(float x) { return int(roundEven(x)); }  // CUDA round() = __nv_llrint
 float dogson_q(float x) {
   float ax = abs(x);
   if (ax <= 0.5) return -2.0 * ax * ax + 1.0;
@@ -103,8 +101,8 @@ void main() {
       for (uint c = 0u; c < nc; c++) D_[c * plane + i] = 1.0 / 0.0; // +inf -> R=0
       return;
     }
-    int cy = round_half_away(ymov);
-    int cx = round_half_away(xmov);
+    int cy = round_half_even(ymov);
+    int cx = round_half_even(xmov);
     float wacc = 0.0;
     float b0 = 0.0, b1 = 0.0, b2 = 0.0;
     for (int dy = -1; dy <= 1; dy++) {
@@ -144,7 +142,7 @@ void main() {
       float bright = 0.0;
       for (uint c = 0u; c < nc; c++) bright += A_[c * plane + i];
       bright = clamp(bright / float(nc), 0.0, 1.0);
-      uint idn = uint(round_half_away(float(lutN - 1u) * bright));
+      uint idn = uint(round_half_even(float(lutN - 1u) * bright));
       float dnoise = lut[lutN + idn];
       float snoise = lut[idn];
       s = max(s, snoise);

@@ -388,6 +388,9 @@ object VulkanPipeline {
         val rSize0 = if (config.bayer) gw * gh else w * h
         val kernPre = scratch.floats(w * h)
         val kp = config.kernelParams
+        require(kp.selection != SelectionLaw.PAPER && !kp.paperAnisotropy) {
+            "paper S.1 kernel variants are CPU-only (benchmark)"
+        }
         val kpBuf = pack(floatArrayOf(kp.kDetail, kp.kDenoise, kp.dTh, kp.dTr,
             kp.kStretch, kp.kShrink,
             java.lang.Float.intBitsToFloat(if (kp.selection == SelectionLaw.HARD_THRESHOLD) 0 else 1),

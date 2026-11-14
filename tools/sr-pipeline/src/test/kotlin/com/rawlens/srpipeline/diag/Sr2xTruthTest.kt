@@ -37,8 +37,8 @@ import kotlin.math.tanh
  * Run: ./gradlew :tools:sr-pipeline:test --tests '*Sr2xTruthTest*' -PsrpDiag=1 -i
  */
 class Sr2xTruthTest {
-    private val n = 512
-    private val gains = doubleArrayOf(0.7, 1.0, 1.0, 0.55)
+    internal val n = 512
+    internal val gains = doubleArrayOf(0.7, 1.0, 1.0, 0.55)
     private val chGain = doubleArrayOf(0.7, 1.0, 0.55)
 
     private data class Wave(val fx: Double, val fy: Double, val ph: Double, val a: Double)
@@ -61,13 +61,13 @@ class Sr2xTruthTest {
         return s
     }
 
-    private fun box(u: Double, v: Double): Double {
+    internal fun box(u: Double, v: Double): Double {
         var acc = 0.0
         for (j in 0 until 4) for (i in 0 until 4) acc += scene(u + (i + 0.5) / 4 - 0.5, v + (j + 0.5) / 4 - 0.5)
         return acc / 16
     }
 
-    private fun frame(sx: Double, sy: Double, a: Double, b: Double, seed: Long): Array<FloatArray> {
+    internal fun frame(sx: Double, sy: Double, a: Double, b: Double, seed: Long): Array<FloatArray> {
         val rng = java.util.Random(seed)
         return Array(n) { y -> FloatArray(n) { x ->
             val v = (box(x - sx, y - sy) * gains[(y and 1) * 2 + (x and 1)]).coerceIn(0.0, 1.0)
@@ -75,12 +75,12 @@ class Sr2xTruthTest {
         } }
     }
 
-    private fun truth2x(): Array<Array<FloatArray>> = Array(2 * n) { i -> Array(2 * n) { j ->
+    internal fun truth2x(): Array<Array<FloatArray>> = Array(2 * n) { i -> Array(2 * n) { j ->
         val v = box((j + 0.5) / 2 - 0.5, (i + 0.5) / 2 - 0.5)
         FloatArray(3) { c -> (v * chGain[c]).toFloat() }
     } }
 
-    private fun bilinear(raw: Array<FloatArray>): Array<Array<FloatArray>> {
+    internal fun bilinear(raw: Array<FloatArray>): Array<Array<FloatArray>> {
         val h = raw.size; val w = raw[0].size
         return Array(h) { y -> Array(w) { x -> FloatArray(3) { c ->
             var s = 0f; var k = 0
@@ -98,7 +98,7 @@ class Sr2xTruthTest {
     private fun keys(t: Double): Double { val a = abs(t); return when { a <= 1 -> (1.5 * a - 2.5) * a * a + 1; a < 2 -> ((-0.5 * a + 2.5) * a - 4) * a + 2; else -> 0.0 } }
 
     /** 1x RGB (pixel centre = scene coord x) -> 2x at scene coords ((j+.5)/2-.5). */
-    private fun bicubic2x(img: Array<Array<FloatArray>>): Array<Array<FloatArray>> {
+    internal fun bicubic2x(img: Array<Array<FloatArray>>): Array<Array<FloatArray>> {
         val h = img.size; val w = img[0].size
         return Array(2 * h) { i -> Array(2 * w) { j -> FloatArray(3) { c ->
             val x = (j + 0.5) / 2 - 0.5; val y = (i + 0.5) / 2 - 0.5
@@ -116,7 +116,7 @@ class Sr2xTruthTest {
         return Array(h) { y -> DoubleArray(w) { x -> var s = 0.0; for (q in -3..3) s += k[q + 3] * t[(y + q).coerceIn(0, h - 1)][x]; img[y][x][c] - s } }
     }
 
-    private fun score(est: Array<Array<FloatArray>>, truth: Array<Array<FloatArray>>): Pair<Double, Double> {
+    internal fun score(est: Array<Array<FloatArray>>, truth: Array<Array<FloatArray>>): Pair<Double, Double> {
         val m = 24
         var se = 0.0; var cnt = 0; var hs = 0.0; var he = 0.0
         for (c in 0..2) {

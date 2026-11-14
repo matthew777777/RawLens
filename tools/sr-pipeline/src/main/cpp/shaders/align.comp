@@ -23,11 +23,10 @@ layout(set = 0, binding = 0) readonly buffer Ref { float refImg[]; };
 layout(set = 0, binding = 1) readonly buffer Tgt { float tgtImg[]; };
 layout(set = 0, binding = 2) buffer Flow { vec2 flow[]; };
 
-// CUDA round() semantics used by the CPU (round half away from zero;
-// GLSL round() is round-to-even and must NOT be used here).
-int round_half_away(float x) {
-  return (x >= 0.0) ? int(floor(x + 0.5)) : int(ceil(x - 0.5));
-}
+// CUDA round() semantics: numba.cuda lowers round() to __nv_llrint, round to
+// nearest, ties to even (checklist C9a). GLSL roundEven() is exactly that;
+// round() leaves ties implementation-defined, so it must not be used.
+int round_half_even(float x) { return int(roundEven(x)); }
 
 void main() {
   uint t = gl_GlobalInvocationID.x;
@@ -40,8 +39,8 @@ void main() {
 
   uint tile_y = t / nTilesX;
   uint tile_x = t % nTilesX;
-  int flow_x = round_half_away(flow[t].x);
-  int flow_y = round_half_away(flow[t].y);
+  int flow_x = round_half_even(flow[t].x);
+  int flow_y = round_half_even(flow[t].y);
 
   float best_err = 1.0 / 0.0; // +inf
   int best_sx = -int(searchRadius);
