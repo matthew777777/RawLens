@@ -66,6 +66,8 @@ object VulkanPipeline {
          * padding or host staging). Null keeps the Bluestein chain.
          */
         val greyFft: ByteArray? = null,
+        /** grey_fir.comp: required when [PipelineConfig.greyMethod] is FIR7/FIR11/FIR15. */
+        val greyFir: ByteArray? = null,
     )
 
     /** Last KernelNet (s1, s2, rho) map of this process, for parity dumps: 3 x mapH x mapW. */
@@ -231,6 +233,12 @@ object VulkanPipeline {
         heapLog("ref-decoded")
         val h = refBox!!.size
         val w = refBox!![0].size
+        // Mobile grey (FIR7/11/15): half-band taps shared with Grey.firLowpass.
+        val firRadius = when (config.greyMethod) { "FIR", "FIR7" -> 7; "FIR11" -> 11; "FIR15" -> 15; else -> 0 }
+        val firTaps = if (firRadius == 0) FloatArray(0) else Grey.halfBandTaps(firRadius).let { t ->
+            FloatArray((firRadius + 1) / 2 + 1) { i -> if (i == 0) t[0] else t[2 * i - 1] }
+        }
+        require(firRadius == 0 || spirvs.greyFir != null) { "greyMethod ${config.greyMethod} needs grey_fir.spv" }
         val tile = config.tileSizes.first()
         val loop = EndToEnd.loopConfig(config)
         val outH = (h * config.scale).toInt()
@@ -247,6 +255,21 @@ object VulkanPipeline {
             out: ByteBuffer,
             rows: Array<FloatArray>,
         ): Array<FloatArray> {
+            if (config.bayer && firRadius != 0) {
+                val tmp = SrpBridge.createResident(handle, (w * h).toLong())
+                require(tmp != 0L) { "VulkanPipeline: grey resident alloc failed" }
+                try {
+                    checkRc("greyUpload", SrpBridge.uploadResident(handle, tmp, packImageInto(frame, packBuf), (w * h).toLong()))
+                    timed("greyFir") { checkRc("greyFir", SrpBridge.nativeGreyFirRes(handle, tmp, out.apply { rewind() },
+                        spirvs.greyFir!!, w, h, firTaps, firRadius)) }
+                } finally {
+                    SrpBridge.freeResident(handle, tmp)
+                }
+                out.rewind()
+                val fb = out.asFloatBuffer()
+                for (y in 0 until h) fb.get(rows[y])
+                return rows
+            }
             if (!config.bayer || config.greyMethod != "FFT") {
                 return if (config.bayer) Grey.computeGreyImages(frame, config.greyMethod) else frame
             }
@@ -490,6 +513,14 @@ object VulkanPipeline {
         fun greyOfIntoRes(frame: Array<FloatArray>, rows: Array<FloatArray>): Array<FloatArray> {
             timed("frameUpload") { checkRc("frameUpload", SrpBridge.uploadResident(handle, frameRes,
                 packImageInto(frame, frameBuf), (w * h).toLong())) }
+            if (config.bayer && firRadius != 0) {
+                timed("greyFir") { checkRc("greyFir", SrpBridge.nativeGreyFirRes(handle, frameRes, kernPre.apply { rewind() },
+                    spirvs.greyFir!!, w, h, firTaps, firRadius)) }
+                kernPre.rewind()
+                val fb = kernPre.asFloatBuffer()
+                for (y in 0 until h) fb.get(rows[y])
+                return rows
+            }
             if (!config.bayer || config.greyMethod != "FFT") {
                 return if (config.bayer) Grey.computeGreyImages(frame, config.greyMethod) else frame
             }

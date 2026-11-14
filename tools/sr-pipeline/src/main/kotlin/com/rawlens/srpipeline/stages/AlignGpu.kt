@@ -57,6 +57,10 @@ object AlignGpu {
         val corrDirect: ByteArray? = null,
         /** ica_wg.comp: ICA refinement with a workgroup per tile (non-8 tiles). */
         val icaWg: ByteArray? = null,
+        /** align_wg.comp: L1 search with a workgroup per tile (mobile path). */
+        val alignWg: ByteArray? = null,
+        /** corr_argmin_wg.comp: L2 argmin with a workgroup per tile (bit-identical energies). */
+        val argminWg: ByteArray? = null,
     )
 
     /** One coarse-to-fine row, cf. `AlignmentInit` (spectra replaced). */
@@ -557,7 +561,7 @@ object AlignGpu {
             }
             val current = flow
             when (config.metrics[c]) {
-                BlockMetric.L1 -> gpuL1(lvl, moving, current, handle, spirvs.align)
+                BlockMetric.L1 -> gpuL1(lvl, moving, current, handle, spirvs.align, spirvs.alignWg)
                 BlockMetric.L2 -> gpuL2(lvl, moving, current, handle, spirvs)
             }
             ptime("ica") { gpuIca(lvl, moving, current, config, c, handle, spirvs.ica, spirvs.icaWg) }
@@ -572,6 +576,7 @@ object AlignGpu {
         flow: Array<Array<FloatArray>>,
         handle: Long,
         spirv: ByteArray,
+        alignWg: ByteArray? = null,
     ) {
         // Sized from `moving` (same shape as the ref level by the
         // circular-pad contract): `lvl.ref` is stripped post-pin.
@@ -589,9 +594,10 @@ object AlignGpu {
         val movBuf = packImgInto(moving, sc.direct("mov", w * h))
         // Pinned levels skip the ref upload; unpinned levels stage both.
         val rc = if (lvl.refRes != 0L) {
+            val wg = alignWg != null && lvl.radius <= 4
             ptime("alignL1Res") { SrpBridge.alignL1Res(handle, lvl.refRes, movBuf,
-                flowBuf, spirv, w, h, tc, lvl.tileSize, lvl.radius,
-                lvl.nTx) }
+                flowBuf, if (wg) alignWg!! else spirv, w, h, tc, lvl.tileSize, lvl.radius,
+                lvl.nTx, wg) }
         } else {
             ptime("alignL1") { SrpBridge.alignL1(handle,
                 packImgInto(lvl.ref, sc.direct("ref", w * h)), movBuf,
@@ -700,9 +706,10 @@ object AlignGpu {
                     }
                     packInto(croppedChunk, cropChunk)
                 }
+                val argWg = spirvs.argminWg?.takeIf { lvl.radius <= 4 && s <= 72 }
                 rc = ptime("corrArgmin") { SrpBridge.corrArgmin(handle, patchChunk, cropChunk,
-                    dflowChunk, spirvs.corr, tc, lvl.tileSize, lvl.radius, lvl.nTx,
-                    ct * s * s, ct * c * c, t0, ct) }
+                    dflowChunk, argWg ?: spirvs.corr, tc, lvl.tileSize, lvl.radius, lvl.nTx,
+                    ct * s * s, ct * c * c, t0, ct, argWg != null) }
                 require(rc == 0) { "corrArgmin failed with status $rc" }
                 dflowChunk.rewind()
                 val dflowSmall = FloatArray(ct * 2)

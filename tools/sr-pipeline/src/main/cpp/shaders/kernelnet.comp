@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #version 450
+#extension GL_EXT_control_flow_attributes : require
 // PhotonCamera KernelNet (eszdman/PhotonCamera @ b2eff82,
 // assets/models/kernelnet_aniso_v2_2_params.ncnn.{param,bin}) evaluated
 // in-engine, plus its conversion to Wronski merge covariances.
@@ -54,8 +55,41 @@ float inputAt(uint c, int x, int y, uint inW, uint inH, bool layer0, float sigma
 float sigmoid(float v) { return 1.0 / (1.0 + exp(-v)); }
 float roundToFp16(float v) { return unpackHalf2x16(packHalf2x16(vec2(v, 0.0))).x; }
 
+// CONV/HEAD weights of the current layer as vec4 over output channels:
+// sw4[(ic*k*k + ky*k + kx)*4 + q] = w[oc = 4q..4q+3][ic][ky][kx] (zero for
+// oc >= cout), biases in sb4[q]. One broadcast vec4 load feeds 4 FMAs
+// (Mali: shared loads go through the load/store unit, the old bottleneck).
+shared vec4 sw4[16 * 9 * 4];
+shared vec4 sb4[4];
+
 void main() {
   uint stride = gl_NumWorkGroups.x * 256u;
+  if (p.mode == 1u || p.mode == 2u) {
+    // Mobile path: pixel-major conv. One invocation per OUTPUT PIXEL computes
+    // all cout channels (each input tap read once, not cout times) from
+    // weights staged in shared memory. Per channel the accumulation order is
+    // unchanged (bias, then ic, ky, kx), so values match the old
+    // channel-major dispatch.
+    uint cin = p.pad[0], cout = p.pad[1], kk = p.pad[7] * p.pad[7];
+    for (uint i = gl_LocalInvocationID.x; i < cin * kk * 4u; i += 256u) {
+      uint tap = i / 4u, q = i % 4u;   // tap = ic*kk + ky*k + kx
+      vec4 v = vec4(0.0);
+      for (uint j = 0u; j < 4u; j++) {
+        uint oc = 4u * q + j;
+        if (oc < cout) v[j] = w_[p.pad[9] + oc * cin * kk + tap];
+      }
+      sw4[i] = v;
+    }
+    if (gl_LocalInvocationID.x < 4u) {
+      vec4 b = vec4(0.0);
+      for (uint j = 0u; j < 4u; j++) {
+        uint oc = 4u * gl_LocalInvocationID.x + j;
+        if (oc < cout) b[j] = w_[p.pad[10] + oc];
+      }
+      sb4[gl_LocalInvocationID.x] = b;
+    }
+    barrier();
+  }
   for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount; id += stride) {
     if (p.mode == 0u) {
       uint rawW = p.pad[0], lumaW = p.pad[2], lumaH = p.pad[3];
@@ -69,28 +103,39 @@ void main() {
       uint cin = p.pad[0], inW = p.pad[2], inH = p.pad[3];
       uint outW = p.pad[4], outH = p.pad[5], st = p.pad[6], k = p.pad[7];
       bool layer0 = p.pad[11] != 0u;
+      uint cout = p.pad[1];
       uint plane = outW * outH;
-      uint oc = id / plane, rem = id % plane;
-      uint oy = rem / outW, ox = rem % outW;
+      uint oy = id / outW, ox = id % outW;
       int r = int(k) / 2;
-      float acc = w_[p.pad[10] + oc];
-      uint wBase = p.pad[9] + oc * cin * k * k;
+      uint kk = k * k;
+      // Constant trip counts keep acc[] in registers (a runtime bound spills
+      // it to the stack on Mali); lanes >= cout are computed and discarded.
+      vec4 acc0 = sb4[0], acc1 = sb4[1], acc2 = sb4[2], acc3 = sb4[3];
       for (uint ic = 0u; ic < cin; ic++) {
         for (uint ky = 0u; ky < k; ky++) {
           for (uint kx = 0u; kx < k; kx++) {
             int ix = int(ox * st) + int(kx) - r;
             int iy = int(oy * st) + int(ky) - r;
-            acc += w_[wBase + (ic * k + ky) * k + kx] *
-                   inputAt(ic, ix, iy, inW, inH, layer0, p.alpha);
+            float v = inputAt(ic, ix, iy, inW, inH, layer0, p.alpha);
+            uint wi = ((ic * k + ky) * k + kx) * 4u;
+            acc0 += sw4[wi] * v;
+            acc1 += sw4[wi + 1u] * v;
+            acc2 += sw4[wi + 2u] * v;
+            acc3 += sw4[wi + 3u] * v;
           }
         }
       }
-      if (p.mode == 1u) {
-        b_[id] = (p.pad[8] != 0u) ? max(acc, 0.0) : acc;
-      } else {
-        // out0 = cat(2 sig(c0), 2 sig(c1), 2 sig(c2) - 1), stored fp16.
-        float v = 2.0 * sigmoid(acc) - (oc == 2u ? 1.0 : 0.0);
-        b_[id] = roundToFp16(v);
+      float acc[16] = float[16](acc0.x, acc0.y, acc0.z, acc0.w, acc1.x, acc1.y, acc1.z, acc1.w,
+                                acc2.x, acc2.y, acc2.z, acc2.w, acc3.x, acc3.y, acc3.z, acc3.w);
+      [[unroll]] for (uint oc = 0u; oc < 16u; oc++) {
+        if (oc >= cout) break;
+        if (p.mode == 1u) {
+          b_[oc * plane + id] = (p.pad[8] != 0u) ? max(acc[oc], 0.0) : acc[oc];
+        } else {
+          // out0 = cat(2 sig(c0), 2 sig(c1), 2 sig(c2) - 1), stored fp16.
+          float v = 2.0 * sigmoid(acc[oc]) - (oc == 2u ? 1.0 : 0.0);
+          b_[oc * plane + id] = roundToFp16(v);
+        }
       }
     } else {
       // COV. Map texel (s1, s2, rho) sampled bilinearly at the grey cell's

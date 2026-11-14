@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// L2 energy + argmin (corr.comp op 1), one 256-thread workgroup per tile
+// instead of one thread per tile. The tile's S*S moving patch is loaded into
+// shared memory once; thread c < C*C evaluates candidate shift c with the SAME
+// summation order as op 1 (iy outer, jx inner), so energies are bit-identical;
+// thread 0 then takes the strict-< first minimum in (cy, cx) scan order.
+// Inputs/outputs and push layout as op 1: A = patches (n*S*S), B = cropped
+// corrs (n*C*C), C = flow delta (n*2); pad[4] = S, pad[5] = radius (<= 4),
+// tileCount = chunk tiles. Workgroups stride over tiles (host caps at 65535).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float A_[]; };
+layout(set = 0, binding = 1) readonly buffer B { float B_[]; };
+layout(set = 0, binding = 2) buffer C { float C_[]; };
+
+shared float patch_[72 * 72];   // S <= 64 + 2*4
+shared float energy[81];        // C*C, radius <= 4
+
+void main() {
+  const uint lid = gl_LocalInvocationID.x;
+  const uint S = p.pad[4];
+  const uint Csz = 2u * p.pad[5] + 1u;
+  const uint ts = p.tileSize;
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    for (uint k = lid; k < S * S; k += 256u) patch_[k] = A_[t * S * S + k];
+    barrier();
+    if (lid < Csz * Csz) {
+      const uint cy = lid / Csz, cx = lid % Csz;
+      float e = 0.0;
+      for (uint iy = 0u; iy < ts; iy++) {
+        for (uint jx = 0u; jx < ts; jx++) {
+          const float v = patch_[(cy + iy) * S + (cx + jx)];
+          e += v * v;
+        }
+      }
+      e -= 2.0 * B_[t * Csz * Csz + lid];
+      energy[lid] = e;
+    }
+    barrier();
+    if (lid == 0u) {
+      float best = 3.402823466e+38;
+      uint bs = 0u;
+      for (uint c = 0u; c < Csz * Csz; c++) {
+        if (energy[c] < best) { best = energy[c]; bs = c; }
+      }
+      C_[t * 2u] = float(int(bs % Csz) - int(Csz / 2u));
+      C_[t * 2u + 1u] = float(int(bs / Csz) - int(Csz / 2u));
+    }
+    barrier();
+  }
+}

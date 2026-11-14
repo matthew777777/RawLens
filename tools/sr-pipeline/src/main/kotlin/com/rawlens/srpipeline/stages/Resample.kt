@@ -102,7 +102,8 @@ object Resample {
         val W = w + padW
         if (factor == 1) {
             require(out.size == H && out[0].size == W) { "downsampleInto factor-1 out shape mismatch" }
-            for (y in 0 until H) {
+            // Rows are independent: parallel, bit-identical (mobile cut).
+            java.util.stream.IntStream.range(0, H).parallel().forEach { y ->
                 val orow = out[y]
                 val irow = image[y % h]
                 for (x in 0 until W) orow[x] = irow[x % w]
@@ -122,8 +123,11 @@ object Resample {
         // (h2-1)*factor+k-1 <= H-1 (and likewise for width): h2 is the
         // floored quotient, so every tap below stays in bounds; taps at
         // row >= h (col >= w) wrap once by construction of the branch.
-        val tmpRow = FloatArray(W)
-        for (y2 in 0 until h2) {
+        // Output rows are independent: parallel over rows with one temp row
+        // per worker, same per-element accumulation order => bit-identical.
+        val tmpRows = ThreadLocal.withInitial { FloatArray(W) }
+        java.util.stream.IntStream.range(0, h2).parallel().forEach { y2 ->
+            val tmpRow = tmpRows.get()
             val r = y2 * factor
             for (x in 0 until W) {
                 val xx = if (x < w) x else x - w

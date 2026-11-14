@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// L1 local search (align_lvl_block_matching_L1), one 256-thread workgroup per
+// tile instead of one thread per tile (align.comp): each thread owns
+// tileSize^2/256 pixels (1 at 16 px, 4 at 32, 16 at 64; tiles < 16 px leave
+// threads idle), sums |ref - mov| for every candidate shift, and a fixed-order
+// shared-memory tree reduces the 256 partials. Same math as align.comp; only
+// the float summation order differs. Strict < keeps the first minimum in scan
+// order, as the CPU does. Rounding: ties to even (CUDA __nv_llrint, C9a).
+// Workgroups stride over tiles (the host caps the group count at 65535).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer Ref { float refImg[]; };
+layout(set = 0, binding = 1) readonly buffer Tgt { float tgtImg[]; };
+layout(set = 0, binding = 2) buffer Flow { vec2 flow[]; };
+
+shared float partial[256];
+shared float errs[81];   // (2R+1)^2, R <= 4
+
+void main() {
+  const uint lid = gl_LocalInvocationID.x;
+  const uint R = p.pad[1];
+  const uint nTilesX = p.pad[2];
+  const uint ts = p.tileSize;
+  const uint W = p.width, H = p.height;
+  const uint side = 2u * R + 1u;
+  const uint nPix = ts * ts;
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    const uint tileY = t / nTilesX, tileX = t % nTilesX;
+    const vec2 f = flow[t];
+    const int fx = int(roundEven(f.x)), fy = int(roundEven(f.y));
+    for (uint s = 0u; s < side * side; ++s) {
+      const int sx = int(s % side) - int(R), sy = int(s / side) - int(R);
+      float acc = 0.0;
+      for (uint i = lid; i < nPix; i += 256u) {
+        const uint x = tileX * ts + i % ts, y = tileY * ts + i / ts;
+        const int mx = int(x) + fx + sx, my = int(y) + fy + sy;
+        const float m = (my >= 0 && my < int(H) && mx >= 0 && mx < int(W))
+            ? tgtImg[uint(my) * W + uint(mx)] : 0.0;
+        acc += abs(refImg[y * W + x] - m);
+      }
+      partial[lid] = acc;
+      barrier();
+      for (uint k = 128u; k > 0u; k >>= 1u) {
+        if (lid < k) partial[lid] += partial[lid + k];
+        barrier();
+      }
+      if (lid == 0u) errs[s] = partial[0];
+      barrier();
+    }
+    if (lid == 0u) {
+      float best = 1.0 / 0.0;
+      uint bs = 0u;
+      for (uint s = 0u; s < side * side; ++s) {
+        if (errs[s] < best) { best = errs[s]; bs = s; }
+      }
+      flow[t] = vec2(float(fx + int(bs % side) - int(R)), float(fy + int(bs / side) - int(R)));
+    }
+    barrier();
+  }
+}

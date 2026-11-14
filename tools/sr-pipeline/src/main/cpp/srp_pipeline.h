@@ -222,6 +222,11 @@ Status SrpGreyFftGpu(Context* ctx, uint32_t w, uint32_t h, const float* in,
 Status SrpGreyFftMixedGpu(Context* ctx, uint32_t w, uint32_t h,
                           VkBuffer real_buffer, float* out,
                           VkShaderModule grey_module);
+// SrpGreyFirGpu: separable half-band FIR grey (grey_fir.comp), mobile
+// replacement for the FFT grey; taps from Grey.halfBandTaps.
+Status SrpGreyFirGpu(Context* ctx, uint32_t w, uint32_t h, VkBuffer real_buffer,
+                     float* out, VkShaderModule fir_module, const float* taps,
+                     uint32_t radius);
 Status SrpGreyFftHaveGpu(Context* ctx, uint32_t w, uint32_t h,
                          VkBuffer real_buffer, float* out,
                          VkShaderModule fft_module,
@@ -262,7 +267,8 @@ Status SrpCorrArgminGpu(Context* ctx, uint32_t tile_count, uint32_t tile_size,
                         uint32_t chunk_tiles, uint32_t patch_count,
                         uint32_t corr_count, VkBuffer patch_buffer,
                         VkBuffer corr_buffer, VkBuffer dflow_buffer,
-                        VkShaderModule shader_module);
+                        VkShaderModule shader_module,
+                        bool workgroup_per_tile = false);
 // SrpCorrCropGpu: `full_buffer` holds tile_count*S*S floats (full S×S
 // corr maps), `crop_buffer` receives tile_count*C*C floats (centre C×C
 // crop, C = 2*radius+1, crop=(S-1-C)/2 with the +1 offset — the host
@@ -296,7 +302,8 @@ Status SrpAlignL1Gpu(Context* ctx, uint32_t width, uint32_t height,
                      uint32_t tile_count, uint32_t tile_size,
                      uint32_t search_radius, uint32_t ntx, VkBuffer ref_buffer,
                      VkBuffer mov_buffer, VkBuffer flow_buffer,
-                     VkShaderModule shader_module);
+                     VkShaderModule shader_module,
+                     bool workgroup_per_tile = false);
 
 // 128-byte HmsrPush mirror shared by the port-style shaders (gat.comp,
 // align.comp, ...; port PUSH_FMT "<6I4fI21I"): 6x u32, 4x f32, mode u32,

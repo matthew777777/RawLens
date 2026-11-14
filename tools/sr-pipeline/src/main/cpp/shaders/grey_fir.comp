@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Mobile grey image for alignment: separable half-band FIR low-pass that
+// replaces the IPOL FFT grey (grey_fft.comp, ~16 full-frame passes and two
+// complex frame buffers) with two short passes. Taps come from
+// Grey.halfBandTaps (Kotlin) through the push block so CPU and GPU agree:
+//   out[x] = t0*in[x] + sum_{k odd <= R} t_k*(in[x-k] + in[x+k])
+// Circular borders, like the FFT it replaces.
+//
+// p.mode: 0 horizontal pass (rows), 1 vertical pass (columns).
+// p.pad[0] = R (odd, <= 15); p.pad[1] = t0 bits; p.pad[2 + j] = t_{2j+1} bits.
+// Buffers: 0 = A (in), 1 = B (out). Grid-stride over p.pixelCount pixels
+// (the host caps the group count at 65535).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float a_[]; };
+layout(set = 0, binding = 1) writeonly buffer B { float b_[]; };
+
+void main() {
+  const uint w = p.width, h = p.height;
+  const int R = int(p.pad[0]);
+  const float t0 = uintBitsToFloat(p.pad[1]);
+  const uint stride = gl_NumWorkGroups.x * 256u;
+  for (uint i = gl_GlobalInvocationID.x; i < p.pixelCount; i += stride) {
+    const int x = int(i % w), y = int(i / w);
+    float s = t0 * a_[i];
+    if (p.mode == 0u) {
+      const uint row = uint(y) * w;
+      for (int k = 1, j = 0; k <= R; k += 2, ++j) {
+        const int xl = (x - k + int(w)) % int(w), xr = (x + k) % int(w);
+        s += uintBitsToFloat(p.pad[2 + j]) * (a_[row + uint(xl)] + a_[row + uint(xr)]);
+      }
+    } else {
+      for (int k = 1, j = 0; k <= R; k += 2, ++j) {
+        const int yu = (y - k + int(h)) % int(h), yd = (y + k) % int(h);
+        s += uintBitsToFloat(p.pad[2 + j]) * (a_[uint(yu) * w + uint(x)] + a_[uint(yd) * w + uint(x)]);
+      }
+    }
+    b_[i] = s;
+  }
+}

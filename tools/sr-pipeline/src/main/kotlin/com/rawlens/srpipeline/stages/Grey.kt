@@ -34,10 +34,60 @@ object Grey {
         requireRectImage(image, "image")
         return when (method) {
             "FFT" -> fftLowpass(image)
+            "FIR", "FIR7" -> firLowpass(image, 7)
+            "FIR11" -> firLowpass(image, 11)
+            "FIR15" -> firLowpass(image, 15)
             "decimating" -> Decimate.decimateToGrey(image)
             "demosaicing" -> Demosaic.demosaicToGrey(image)
             else -> throw IllegalArgumentException("Unknown grayscale method: $method")
         }
+    }
+
+    /**
+     * Half-band taps approximating the FFT grey's brick-wall mask (keep
+     * |f| < 0.25 cycles/px on each axis): h[n] = 0.5*sinc(n/2) with a Lanczos
+     * window of radius R+1, normalised to unit DC gain. Every even tap except
+     * the centre is exactly 0, so a pass costs R/2+1 multiply-adds per pixel.
+     * Shared with grey_fir.comp (the GPU path must use these exact values).
+     */
+    fun halfBandTaps(radius: Int): FloatArray {
+        val h = DoubleArray(radius + 1) { n ->
+            when {
+                n == 0 -> 0.5
+                n % 2 == 0 -> 0.0
+                else -> {
+                    val x = Math.PI * n / 2.0
+                    val wx = Math.PI * n / (radius + 1.0)
+                    0.5 * (kotlin.math.sin(x) / x) * (kotlin.math.sin(wx) / wx)
+                }
+            }
+        }
+        val sum = h[0] + 2 * (1..radius).sumOf { h[it] }
+        return FloatArray(radius + 1) { (h[it] / sum).toFloat() }
+    }
+
+    /**
+     * Separable FIR replacement for [fftLowpass] (mobile cost: two short
+     * passes instead of two full-frame 2-D FFTs). Circular borders, like the
+     * FFT it replaces. Output is NOT bit-equal to the FFT grey; it only feeds
+     * alignment (validated by flow error against known shifts).
+     */
+    fun firLowpass(image: Array<FloatArray>, radius: Int): Array<FloatArray> {
+        val h = image.size; val w = image[0].size
+        val t = halfBandTaps(radius)
+        fun wrap(i: Int, n: Int) = ((i % n) + n) % n
+        val tmp = Array(h) { y -> val row = image[y]; FloatArray(w) { x ->
+            var s = t[0] * row[x]
+            var k = 1
+            while (k <= radius) { s += t[k] * (row[wrap(x - k, w)] + row[wrap(x + k, w)]); k += 2 }
+            s
+        } }
+        return Array(h) { y -> FloatArray(w) { x ->
+            var s = t[0] * tmp[y][x]
+            var k = 1
+            while (k <= radius) { s += t[k] * (tmp[wrap(y - k, h)][x] + tmp[wrap(y + k, h)][x]); k += 2 }
+            s
+        } }
     }
 
     /**

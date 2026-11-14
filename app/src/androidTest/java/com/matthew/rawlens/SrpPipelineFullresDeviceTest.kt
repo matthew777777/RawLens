@@ -129,6 +129,8 @@ class SrpPipelineFullresDeviceTest {
             BurstConfig.sanitize(1f, fin.tileSize, factors, fin.tileSizes, h, w)
             val config = PipelineConfig(
                 scale = 1f, bayer = true, factors = factors, tileSizes = fin.tileSizes,
+                // -e rawlensSrpGrey FIR7|FIR11|FIR15 (mobile FIR grey) or FFT (default).
+                greyMethod = args.getString("rawlensSrpGrey") ?: "FFT",
                 kernelParams = KernelParams(
                     kDetail = fin.kDetail.toFloat(), kDenoise = fin.kDenoise.toFloat(),
                     dTh = fin.dTh.toFloat(), dTr = fin.dTr.toFloat()),
@@ -166,13 +168,16 @@ class SrpPipelineFullresDeviceTest {
                 refThunk, compImgs, config, handle,
                 AlignGpu.Spirvs(
                     align = assetBytes("align"), corr = assetBytes("corr"),
-                    fft = fft, ica = assetBytes("ica"), corrDirect = assetBytes("corr_direct"), icaWg = assetBytes("ica_wg")),
+                    fft = fft, ica = assetBytes("ica"), corrDirect = assetBytes("corr_direct"), icaWg = assetBytes("ica_wg"),
+                    // -e rawlensSrpAlignWg true: workgroup-per-tile L1 search.
+                    alignWg = if (args.getString("rawlensSrpAlignWg") == "true") assetBytes("align_wg") else null,
+                    argminWg = if (args.getString("rawlensSrpArgminWg") == "true") assetBytes("corr_argmin_wg") else null),
                 VulkanPipeline.Spirvs(
                     gat = assetBytes("gat"), grad = assetBytes("grad"),
                     kernels = assetBytes("kernels"), divide = assetBytes("divide"),
                     robust = assetBytes("robustness"),
                     mergeSplat = assetBytes("merge_splat"),
-                    fft = fft, corr = assetBytes("corr"), greyFft = assetBytes("grey_fft"),
+                    fft = fft, corr = assetBytes("corr"), greyFft = assetBytes("grey_fft"), greyFir = assetBytes("grey_fir"),
                     kernelNet = if (args.getString("rawlensSrpKernel") == "kernelnet") assetBytes("kernelnet") else null),
             )
             val outH = h

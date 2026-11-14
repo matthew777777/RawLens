@@ -1167,6 +1167,43 @@ Status SrpGreyFftMixedGpu(Context* ctx, uint32_t w, uint32_t h,
   return st;
 }
 
+// Separable half-band FIR grey (grey_fir.comp), the mobile replacement for
+// the FFT grey: two passes, one scratch frame. taps[0] = centre, taps[1+j] =
+// tap 2j+1 (even taps are 0); radius odd, <= 15 (fits the push block).
+Status SrpGreyFirGpu(Context* ctx, uint32_t w, uint32_t h, VkBuffer real_buffer,
+                     float* out, VkShaderModule fir_module, const float* taps,
+                     uint32_t radius) {
+  if (ctx == nullptr || w < 4 || h < 4 || real_buffer == VK_NULL_HANDLE ||
+      out == nullptr || fir_module == VK_NULL_HANDLE || taps == nullptr ||
+      radius == 0 || (radius & 1u) == 0 || radius > 15 || radius >= w || radius >= h) {
+    return Status::kInitFailed;
+  }
+  const size_t n = static_cast<size_t>(w) * h;
+  if (n > 0x0FFFFFFFu) return Status::kInitFailed;
+  const int64_t tr = SrpCreateResident(ctx, n);
+  const int64_t ro = SrpCreateResident(ctx, n);
+  Status st = Status::kInitFailed;
+  VkBuffer T = VK_NULL_HANDLE, R = VK_NULL_HANDLE;
+  if (tr != 0 && ro != 0 && SrpResidentBuffer(ctx, tr, n, &T) == Status::kOk &&
+      SrpResidentBuffer(ctx, ro, n, &R) == Status::kOk) {
+    SrpHmsrPush p{};
+    p.width = w; p.height = h; p.pixel_count = static_cast<uint32_t>(n); p.scale = 1.0f;
+    p.pad[0] = radius;
+    std::memcpy(&p.pad[1], &taps[0], 4);
+    for (uint32_t j = 0; 2 * j + 1 <= radius; ++j) std::memcpy(&p.pad[2 + j], &taps[1 + j], 4);
+    p.mode = 0;
+    st = GreyDispatch(ctx, real_buffer, T, &p, fir_module);
+    if (st == Status::kOk) {
+      p.mode = 1;
+      st = GreyDispatch(ctx, T, R, &p, fir_module);
+    }
+    if (st == Status::kOk) st = SrpDownloadResident(ctx, ro, out, n);
+  }
+  if (tr != 0) SrpFreeResident(ctx, tr);
+  if (ro != 0) SrpFreeResident(ctx, ro);
+  return st;
+}
+
 Status SrpGreyFftHaveGpu(Context* ctx, uint32_t w, uint32_t h,
                          VkBuffer real_buffer, float* out,
                          VkShaderModule fft_module,

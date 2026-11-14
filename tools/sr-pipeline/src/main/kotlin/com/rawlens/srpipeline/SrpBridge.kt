@@ -452,6 +452,17 @@ object SrpBridge {
      * `inRes` into `out` (`width*height` floats). Returns 3 (kInitFailed)
      * when an axis has a prime factor > 32: use [nativeGreyFftRes] instead.
      */
+    /**
+     * Half-band FIR grey (grey_fir.comp) from resident `inRes` into `out`
+     * (`width*height` floats). `taps` = [Grey.halfBandTaps] centre then odd
+     * taps 1, 3, .., `radius` (odd, <= 15). Mobile replacement for the FFT grey.
+     */
+    @JvmStatic
+    external fun nativeGreyFirRes(
+        handle: Long, inRes: Long, out: ByteBuffer, spirv: ByteArray,
+        width: Int, height: Int, taps: FloatArray, radius: Int,
+    ): Int
+
     @JvmStatic
     external fun nativeGreyFftMixedRes(
         handle: Long,
@@ -1403,6 +1414,7 @@ object SrpBridge {
         tileSize: Int,
         searchRadius: Int,
         ntx: Int,
+        workgroupPerTile: Int,
     ): Int
 
     /**
@@ -1422,6 +1434,8 @@ object SrpBridge {
         tileSize: Int,
         searchRadius: Int,
         ntx: Int,
+        /** true: [spirv] is align_wg.comp (one workgroup per tile, radius <= 4). */
+        workgroupPerTile: Boolean = false,
     ): Int {
         require(handle != 0L) { "SrpBridge: null context handle" }
         require(refRes != 0L) { "SrpBridge: null resident handle" }
@@ -1435,7 +1449,7 @@ object SrpBridge {
             "SrpBridge: spirv must be a non-empty multiple of 4 bytes"
         }
         return nativeAlignL1Res(handle, refRes, movBuffer, flowBuffer, spirv,
-            width, height, tileCount, tileSize, searchRadius, ntx)
+            width, height, tileCount, tileSize, searchRadius, ntx, if (workgroupPerTile) 1 else 0)
     }
 
     /**
@@ -1486,6 +1500,7 @@ object SrpBridge {
         corrCount: Int,
         tileOffset: Int,
         chunkTiles: Int,
+        workgroupPerTile: Int,
     ): Int
 
     /**
@@ -1605,6 +1620,8 @@ object SrpBridge {
         corrCount: Int,
         tileOffset: Int,
         chunkTiles: Int,
+        /** true: [spirv] is corr_argmin_wg.comp (radius <= 4). */
+        workgroupPerTile: Boolean = false,
     ): Int {
         require(handle != 0L) { "SrpBridge: null context handle" }
         require(tileCount > 0 && tileSize > 0 && ntx > 0 && patchCount > 0 && corrCount > 0) {
@@ -1629,7 +1646,8 @@ object SrpBridge {
             "SrpBridge: spirv must be a non-empty multiple of 4 bytes"
         }
         return nativeCorrArgmin(handle, patchBuffer, corrBuffer, dflowBuffer,
-            spirv, tileCount, tileSize, radius, ntx, patchCount, corrCount, tileOffset, chunkTiles)
+            spirv, tileCount, tileSize, radius, ntx, patchCount, corrCount, tileOffset, chunkTiles,
+            if (workgroupPerTile) 1 else 0)
     }
 
     /**
