@@ -104,6 +104,12 @@ void main() {
   float mov_i = mov_y - 0.5;
   vec3 val = vec3(0.0);
   vec3 acc = vec3(0.0);
+  // R/B kernel width factor (p.alpha, 0 = 1): with the colour-difference merge
+  // R/B hold smooth wb*C - G_hat differences; a wider R/B kernel spreads their
+  // weight over the few same-colour samples of the 3x3 gather (zipper source
+  // at 2x) without touching green, which carries the luma detail.
+  float cs = p.alpha > 0.0 ? p.alpha : 1.0;
+  float chromaInv = 1.0 / (cs * cs);
   for (int di = -1; di <= 1; di++) {
     for (int dj = -1; dj <= 1; dj++) {
       int j = center_j + dj;
@@ -115,6 +121,7 @@ void main() {
       float dy = float(i2) - mov_i;
       float z = ixx * dx * dx + 2.0 * ixy * dx * dy + iyy * dy * dy;
       z = max(z, 0.0);
+      if (bayer && ch != 1u) z *= chromaInv;
       float w = exp(-0.5 * z);
       val[ch] += w * local_r * c;
       acc[ch] += w * local_r;

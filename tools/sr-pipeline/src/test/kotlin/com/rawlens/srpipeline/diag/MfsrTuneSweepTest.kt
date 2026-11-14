@@ -73,6 +73,7 @@ class MfsrTuneSweepTest {
             listOf(.2f, .3f, .35f).map { "knScale $it" to d.copy(knSigmaScale = it) } +
             listOf(1.0f, 1.4f, 1.6f).map { "knCap $it" to d.copy(knSigmaCap = it) } +
             listOf(.9f, .7f, .55f, .4f).map { "knFloor $it" to d.copy(knSigmaFloor = it, knSigmaFloor2x = it) } +
+            listOf(1f, 1.25f, 1.5f, 2f).map { "chroma $it" to d.copy(chromaScale2x = it) } +
             listOf(.7f, .55f, .4f).map { "knFloorCap $it" to d.copy(knSigmaFloor = it, knSigmaFloor2x = it, knSigmaCap = 1.0f) } + robust
         val wr = listOf("default" to d) +
             listOf(.8f, .9f, 1.15f, 1.3f).map { "kDetail x$it" to d.copy(kDetailScale = it) } +
@@ -129,7 +130,7 @@ class MfsrTuneSweepTest {
             kernelAlpha = FloatArray(4) { b.alpha[it].toFloat() }, kernelBeta = FloatArray(4) { b.beta[it].toFloat() },
             robustnessParams = tune.robustnessParams(haveNoiseLut = b.curves != null, s3 = true), robustnessEnabled = true,
             sigmaSqCurve = b.curves?.sigmaSq ?: floatArrayOf(0f, 0f), dSqCurve = b.curves?.dSq ?: floatArrayOf(0f, 0f),
-            icaIterations = tune.icaIterations, colourDiff = floatArrayOf(b.wbR, b.wbB),
+            icaIterations = tune.icaIterations, colourDiff = floatArrayOf(b.wbR, b.wbB), chromaScale = tune.chromaScale(scale),
             kernelNet = if (!kernelNet) null else KernelNetConfig(weights = KernelNet.bundledWeights(),
                 sigma = KernelNet.sigma(FloatArray(4) { b.alpha[it].toFloat() }, FloatArray(4) { b.beta[it].toFloat() }),
                 sigmaScale = tune.knSigmaScale, sigmaCap = tune.knSigmaCap, sigmaFloor = tune.knFloor(scale),

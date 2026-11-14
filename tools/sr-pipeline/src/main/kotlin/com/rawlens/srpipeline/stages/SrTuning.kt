@@ -55,7 +55,18 @@ data class SrTuning(
      * zipper x1.03, checker x1.00, speckles x0.89 vs 0.90.
      */
     val knSigmaFloor2x: Float = 0.70f,
+    /**
+     * R/B kernel width relative to green at 2x (colour-difference merge).
+     * The 2x zipper is aliasing from incomplete sub-pixel coverage
+     * (ZipperRootCauseTest): green keeps the narrow kernel for detail, the
+     * colour differences get x1.5 (R/B zipper 1.38/1.30 -> 1.15/1.17 on the
+     * reported burst, green unchanged). 1 = one kernel for all channels.
+     */
+    val chromaScale2x: Float = 1.5f,
 ) {
+    /** R/B width factor for an output [scale]. */
+    fun chromaScale(scale: Float): Float = if (scale > 1f) chromaScale2x else 1f
+
     /** KernelNet floor for an output [scale]. */
     fun knFloor(scale: Float): Float = if (scale > 1f) knSigmaFloor2x else knSigmaFloor
 

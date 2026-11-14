@@ -87,6 +87,12 @@ data class PipelineConfig(
      * accumulation (Python-exact, today's merge). Bayer only.
      */
     val colourDiff: FloatArray? = null,
+    /**
+     * Vulkan merge: R/B kernel width relative to green (colour-difference
+     * merge only; 1 = Wronski, one kernel for all channels). Zipper fix at 2x
+     * without blurring luma: the zipper there is chroma aliasing.
+     */
+    val chromaScale: Float = 1f,
 )
 
 object EndToEnd {

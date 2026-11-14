@@ -589,7 +589,8 @@ object VulkanPipeline {
                 timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.nativeMergeSplatFrameRes(handle, frameRes,
                     packInto(mergeFlowFlat, mergeFlow), covRes, rBuf, numRes, denRes,
                     spirvs.mergeSplat, w, h, outW, outH, gw * gh * 4, gw * gh, tile,
-                    config.scale, mergeMode, ftx, fty)) }
+                    config.scale, mergeMode, ftx, fty,
+                    if (config.colourDiff != null) config.chromaScale else 1f)) }
             }
         }
 

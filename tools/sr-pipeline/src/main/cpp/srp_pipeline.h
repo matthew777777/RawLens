@@ -467,7 +467,7 @@ Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
                         VkBuffer den_buffer, uint32_t tile_size, float scale,
                         uint32_t mode, uint32_t ftx, uint32_t fty,
                         VkShaderModule shader_module,
-                        uint32_t ref_kernels = 0);
+                        uint32_t ref_kernels = 0, float chroma_scale = 1.0f);
 
 // SrpCorrDirectGpu: L2 block-matching cross term (corr_direct.comp) for
 // `chunk_tiles` tiles from `tile_offset`: `ref_buffer` = pinned reference

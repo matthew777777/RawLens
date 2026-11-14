@@ -604,6 +604,8 @@ object SrpBridge {
         mode: Int,
         ftx: Int,
         fty: Int,
+        /** R/B kernel width factor (colour-difference merge); 1 = unchanged. */
+        chromaScale: Float = 1f,
     ): Int
 
     /**

@@ -838,7 +838,8 @@ Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
                         VkBuffer r_buffer, VkBuffer num_buffer,
                         VkBuffer den_buffer, uint32_t tile_size, float scale,
                         uint32_t mode, uint32_t ftx, uint32_t fty,
-                        VkShaderModule shader_module, uint32_t ref_kernels) {
+                        VkShaderModule shader_module, uint32_t ref_kernels,
+                        float chroma_scale) {
   if (ctx == nullptr || lr_w == 0 || lr_h == 0 || hr_w == 0 || hr_h == 0 ||
       tile_size == 0 || scale <= 0.0f || mode > 1 || ftx == 0 || fty == 0 ||
       comp_buffer == VK_NULL_HANDLE || flow_buffer == VK_NULL_HANDLE ||
@@ -867,6 +868,7 @@ Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
   push.pad[1] = ftx;
   push.pad[2] = hr_w;
   push.pad[3] = ref_kernels;  // 1: covariances on the reference grid
+  push.alpha = chroma_scale;  // R/B kernel width factor (colour-difference merge)
   VkBuffer buffers[6] = {comp_buffer, flow_buffer, cov_buffer, r_buffer,
                          num_buffer, den_buffer};
   return DispatchStorageCompute(ctx, buffers, 6, &push, sizeof(push),

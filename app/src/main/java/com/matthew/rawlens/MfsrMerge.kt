@@ -666,6 +666,8 @@ internal object MfsrMerge {
                 dSqCurve = curves?.dSq ?: floatArrayOf(0f, 0f),
                 memoryTight = true,
                 colourDiff = if (!settings.zipperFix) null else zipperWb(neutral),
+                // 2x zipper fix: R/B colour differences get a wider kernel than green.
+                chromaScale = tuning.chromaScale(scale.toFloat()),
                 icaIterations = tuning.icaIterations,
                 // KernelNet (when selected): one kernel map from the reference
                 // frame, which on the device IS the full frame, so no

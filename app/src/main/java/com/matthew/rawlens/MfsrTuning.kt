@@ -66,7 +66,9 @@ internal object MfsrTuning {
         KN_FLOOR("KernelNet minimum width, 1× (px)", "KernelNet kernel only. Smallest kernel at sensor size. Lower = sharper; below ~0.9 a checker pattern can appear in texture.",
             Kind.FLOAT, .3f, 1.2f, .05f, { it.knSigmaFloor }, { t, v -> t.copy(knSigmaFloor = v) }),
         KN_FLOOR_2X("KernelNet minimum width, 2× (px)", "KernelNet kernel only. Smallest kernel at 2×: the main sharpness control. Lower = crisper, slightly more false colour and noise.",
-            Kind.FLOAT, .3f, 1.2f, .05f, { it.knSigmaFloor2x }, { t, v -> t.copy(knSigmaFloor2x = v) });
+            Kind.FLOAT, .3f, 1.2f, .05f, { it.knSigmaFloor2x }, { t, v -> t.copy(knSigmaFloor2x = v) }),
+        CHROMA_2X("Colour kernel width, 2× (×)", "R/B colour-difference kernel width relative to green at 2× (needs the zipper fix). Higher = less colour zipper; green detail unchanged.",
+            Kind.FLOAT, 1f, 3f, .05f, { it.chromaScale2x }, { t, v -> t.copy(chromaScale2x = v) });
 
         val key: String get() = "mfsr_lab_" + name.lowercase()
         fun defaultValue(): Float = default(SrTuning())

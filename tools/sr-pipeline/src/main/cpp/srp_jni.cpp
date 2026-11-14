@@ -2455,7 +2455,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeMergeSplatFra
     jobject flow_buffer, jlong cov_res, jobject r_buffer, jlong num_res,
     jlong den_res, jbyteArray spirv, jint lr_w, jint lr_h, jint hr_w,
     jint hr_h, jint cov_count, jint r_count, jint tile_size, jfloat scale,
-    jint mode, jint ftx, jint fty) {
+    jint mode, jint ftx, jint fty, jfloat chroma_scale) {
   VkDevice device = VK_NULL_HANDLE;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   srp::Context* ctx = CorrContext(handle, &device, &physical);
@@ -2527,7 +2527,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeMergeSplatFra
         static_cast<uint32_t>(tile_size), scale,
         static_cast<uint32_t>(mode & 1), static_cast<uint32_t>(ftx),
         static_cast<uint32_t>(fty), module,
-        static_cast<uint32_t>((mode >> 1) & 1));
+        static_cast<uint32_t>((mode >> 1) & 1), chroma_scale > 0.0f ? chroma_scale : 1.0f);
   }
   for (int i = 0; i < 2; ++i) {
     if (vks[i] != VK_NULL_HANDLE) vkDestroyBuffer(device, vks[i], nullptr);
