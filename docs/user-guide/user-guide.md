@@ -1,325 +1,250 @@
-# RawLens — User Guide
+# RawLens user guide
 
-> See [current repository state](../CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
+RawLens captures and develops RAW photos, combines bursts, and records RAW or encoded video. This guide covers the current app controls. Available lenses, sensor modes and recording options depend on your phone.
 
-> **Easiest PDF:** open `user-guide.html` in Chrome/Edge/Safari → `Ctrl/Cmd+P` →
-> Destination `Save as PDF` → Background graphics ON → Save.
-> Alternative: `pandoc user-guide.md -o RawLens-Manual.pdf`
-> (or `weasyprint user-guide.html RawLens-Manual.pdf`).
+For a printable copy, open [the HTML guide](user-guide.html) in a browser and choose Print → Save as PDF.
 
-## Current controls
+## 1. First setup
 
-The merge names shown in the app are **KB-SR** (MFSR / kernel-based reconstruction)
-and **LK-SR** (Lucas–Kanade reconstruction). Older screenshots and sections below
-use MFSR or LK-R. Settings now has a separate **Merge** tab alongside Burst.
-The default ZSL buffer is 16 frames, subject to device and memory limits.
-Offline Merges offers KB-SR, LK-SR and HDR+, starts with JPEG output, provides
-JPEG / JPEG XL quality controls and burst sharing, and retains staged orientation.
-LK-SR zoom and output resolution are separate controls. The camera pauses while
-Settings is open. Optional ISP preview can reduce RAW-viewfinder contention.
+1. Allow camera access when asked.
+2. Open **Settings → Lenses** and choose **Recommended**, or select the RAW-capable lenses you want. Save the selection. If a route fails, try another route for that lens.
+3. Choose a photo format. **JPEG** gives a developed image ready to share; **JPEG+DNG** also keeps a RAW master; **DNG** saves RAW for later editing. The developed format can be changed to JPEG XL in Photo settings.
+4. Start in **AUTO**, select a lens, tap your subject to focus, and press the photo shutter.
+5. Open the gallery thumbnail to check the result.
 
-## 0. Screenshot map — your 15 images
+Microphone permission is requested for video sound. Denying it allows silent recording. Location is optional. The photo-folder grant lets burst motion sidecars sit next to your DNGs; choose `DCIM/RawLens` when asked.
 
-Save chat images into `docs/user-guide/images/` with these exact names,
-then re-open the HTML and they appear inline:
+## 2. Viewfinder and quick controls
 
-| # | Save as | Shows | Chapter |
-|---|---------|-------|---------|
-| Image 1 | `images/screenshot-01-lens-discovery.png` | Lens discovery: 5 RAW lenses, DIRECT 3, LOGICAL 3 | Ch.7 |
-| Image 2 | `images/screenshot-02-jpeg-adaptive.png` | Settings Photo lower: hue/highlight/shadow/adaptive | Ch.8 |
-| Image 3 | `images/screenshot-03-exposure.png` | Settings Exposure + ETTR | Ch.9 |
-| Image 4 | `images/screenshot-04-jpeg-output.png` | Settings Photo upper: UltraHDR/P3/chroma/quality/AgX | Ch.8 |
-| Image 5–9 | `images/screenshot-05 … 09.png` | **Arrived corrupted (white + CMY streaks). Re-export.** | slots kept |
-| Image 10 | `images/screenshot-10-program-ae.png` | PROGRAM AE custom panel | Ch.6 |
-| Image 11 | `images/screenshot-11-manual-slider.png` | Viewfinder + S 1/14 ruler, LIMITS/AUTO | Ch.5 |
-| Image 12 | `images/screenshot-12-zsl.png` | Viewfinder ZSL ACTIVE, 0.7×/1× | Ch.1 |
-| Image 13 | `images/screenshot-13-auto.png` | Viewfinder AUTO AE | Ch.1 |
-| Image 14–15 | `images/screenshot-14 … 15.png` | Spare: General tab, Burst tab | Ch.10 |
+Use the mode control to select AUTO, PROGRAM, ZSL or MANUAL. Lens buttons switch cameras; only selected lenses appear. The capture-format control chooses which files to save. The preview control chooses how the screen displays the image. Changing the preview does not change the saved file format.
 
-![Fig1](images/screenshot-01-lens-discovery.png)
-![Fig10](images/screenshot-10-program-ae.png)
-![Fig12](images/screenshot-12-zsl.png)
+Tap the ISO, shutter, white-balance or focus chip to open its controls. The quick panel provides shortcuts for capture, merge and monitoring options. Some controls are unavailable during a save, a recording or on cameras without the required hardware capability.
 
-## 1. Viewfinder at a glance (Images 11–13)
+Tap the subject to focus. Move the exposure target to meter another part of the scene. Face-priority AF/AE can follow a face when enabled; an explicit tap target takes priority. Fixed-focus lenses do not offer a focus-distance slider.
 
-Top = selectors, middle = window, bottom = chips + shutter.
+Use the histogram or waveform to judge brightness. The SCOPE quick control toggles scopes; hold it to change the graph. RAW zebras, false colour and the RAW exposure meter are enabled under **General**. These measure sensor data before the display look. They can differ from the brightness of the developed image, and sparse measurements may miss tiny clipped highlights.
 
-1. **Top-left ⚙ ⚡ ⏱** — Settings / torch / 2s-5s timer. White = on.
-2. **Top-right DNG● + sub-line** — status lamp. `AUTO AE`, `P NONE (both auto)`,
-   `ZSL ACTIVE / ZSL … / ZSL OFF / ZSL N/A`, `HDR ±2 EV`.
-3. **Middle window** — tap = AF, drag = AE target. Grid = thirds.
-   Dark/grainy shots at ISO 20000 are a dark room, not a bug.
-4. **Scope (histogram / waveform)** — left shadows, right highlights. Tap toggles the graph; the SCOPE tile toggles on/off on tap and switches graphs on long-press. Data is linear RAW with DNG, AgX JPEG preview with a JPEG format (auto).
-5. **Lens pills `0.7× / 1×`** — lime = active. Only checked lenses appear.
-6. **Chips ISO/S/WB/AF/EV** — tap = slider, hold = lock (PROGRAM).
-7. **White shutter** = photo. Red = video. Sliders icon = quick panel.
-8. **Mode `A/P/Z/M` + `RAW•A`** — tap mode to cycle.
+Grid, level, timer, torch and OIS controls help with framing and capture. Focus peaking highlights detail during manual or tap focus; use it as an aid alongside the preview.
 
-First-light: check only DIRECT lenses → SAVE → one daylight AUTO shot →
-check `DCIM/RawLens/<stem>.dng + .jpg`.
+## 3. Exposure modes
 
-## 2. Chips in detail
+| Mode | What it does | Typical use |
+|---|---|---|
+| AUTO | The camera chooses exposure. EV adjusts exposure compensation. | Everyday photos and a starting point on an unfamiliar lens. |
+| PROGRAM | RawLens meters RAW and balances shutter speed against ISO using a per-lens profile. | Control over motion blur, noise and highlights without setting both axes manually. |
+| ZSL | Keeps recent RAW frames ready before the shutter press. | Catching a moment or feeding a burst merge. |
+| MANUAL | You set ISO and shutter speed. | Consistent exposure, tripod work or deliberate motion rendering. |
 
-| Chip | AUTO/ZSL | PROGRAM | MANUAL |
-|------|----------|---------|--------|
-| ISO | readout | tap slider, hold lock | direct |
-| S | readout, handheld-capped | tap slider, hold lock, AUTO HANDHELD floor | direct 1/10000–1/2 |
-| WB 6769K | auto Kelvin, JPEG only | same | same |
-| AF -- | tap/drag focus | same | same |
-| EV +0.0 | compensation | brightness bias, disabled in M | disabled |
+### PROGRAM controls
 
-Line below: `DNG 10-BIT   RAW 4080×3060` = bit depth + active RAW size
-(8 MP 3264×2448 on 0.7×, 12.5 MP 4080×3060 on 1×).
+Tap ISO or shutter to adjust that axis. Hold a chip to lock its value while the other remains automatic. Release locks with Auto. Holding the second axis when one is already locked enters MANUAL.
 
-## 2B. ★ Capture format DNG ↔ JPEG ↔ JPEG+DNG — how to switch
+The PROGRAM editor is available through **Settings → Exposure → PROGRAM custom AE**. It includes shutter/ISO priority, axis locks, sensor bounds, an automatic handheld shutter limit, metering and brightness bias. Profiles are saved per lens. Use a faster shutter limit for moving subjects; allowing a slower shutter can reduce ISO but increases blur risk.
 
-**Short answer: tap the top-right `DNG / JPEG / JPEG+DNG` pill.**
-Each tap cycles one step. No Settings menu needed.
+Scene-brightness controls choose Natural, Fixed or Protect highlights behavior. Experimental curves expose brightness targets for different scene levels. Reset the targets if you want to return to the supplied curve.
 
-Two different switches — do not mix them:
+Cameras without manual sensor control use Android AE and cannot apply the full PROGRAM profile.
 
-- **A. Top-right pill = FILE format (what lands in `DCIM/RawLens`).**
-  Tap to cycle `DNG ONLY → JPEG → JPEG+DNG → DNG ONLY …`.
-  Toast confirms `DNG ONLY / JPG / JPG+DNG`. Green dot = RAW will save.
-  Persisted across restarts. Locked while saving (`LOCKED • SAVING`).
-- **B. Bottom-right `RAW•A / JPG•A / RAW / JPG` = PREVIEW only.**
-  Tap to cycle `FOLLOW (RAW•A) → RAW → JPG → FOLLOW …`.
-  `RAW•A` = auto-follow the file format. Changes screen only, not files.
+### ETTR and Active D-Lighting
 
-| You want… | Tap A until… | Files per press | When |
-|---|---|---|---|
-| Max latitude | `DNG` | 1× .DNG | Default, grading |
-| Share instantly | `JPEG` | 1× .JPG (AgX from RAW) | Messaging, small files |
-| Both | `JPEG + DNG` | 1× .DNG + 1× .JPG | Master + share copy |
+**ETTR single exposure** under Exposure measures RAW highlights and tries to raise exposure while retaining the chosen headroom. It respects its exposure/noise limits; once converged it can hold exposure. If PROGRAM appears held, check ETTR and axis locks. Movement or changing light can make a simpler automatic exposure more useful.
 
-Try: tap pill → `JPG` → shoot → only .jpg. Tap twice → `JPG+DNG` →
-both. Tap once more → back to `DNG ONLY`.
-If tap does nothing: you hit `RAW•A` (preview) not the top pill,
-or a save is in flight — wait and tap top-right again.
-ZSL note: JPEG modes bounded to 6 frames; DNG-only saves the whole ring (up to 59).
+**Active D-Lighting** under Photo protects highlights through PROGRAM/ETTR and lifts developed shadows and midtones. It can change capture exposure as well as the developed look. EV is unavailable in MANUAL.
 
-## 3. Ruler panel (Image 11: S 1/14 + LIMITS + AUTO)
+### White balance and focus
 
-- Ruler = drag shutter scale, green tick = current.
-- `LIMITS` (dark) = per-lens min/max editor.
-- `AUTO` (lime) = release this axis to auto.
-- Top `P NONE (both auto) 0.50 Br…` = PROGRAM mirror.
+Tap WB for the current control. Hold WB to switch between Kelvin and the camera's advertised presets. Kelvin adjustment requires usable camera calibration; automatic Kelvin readouts are estimates, particularly under mixed or strongly coloured light. White balance also applies to video and can be changed during a take.
 
-Hold vs tap (PROGRAM): tap = slider, hold = lock, hold second = MANUAL.
+Manual focus uses the focus slider. For video, save A/B marks and pull between them as described in the video section.
 
-## 4. PROGRAM AE custom (Image 10)
+## 4. Photo settings
 
-Header: `PROGRAM • per-lens • RAW-driven (sensor ISO + shutter)`.
+Open **Settings → Photo** for output format and the shared RAW development look.
 
-- **Priority 0.50 balanced** — 0.00 ISO priority (sharp, noisy) ↔ 1.00 shutter
-  priority (clean, blur risk). Damped ~1 stop/s.
-- **LOCK NONE (BOTH AUTO)** — tap cycles NONE → ISO_LOCK → SHUTTER_LOCK.
-- **LOCKED ISO/SHUTTER --** — frozen value or -- = off.
-- **ISO/SHUTTER MIN/MAX** — tap cycles bounds. `SHUTTER MAX: AUTO HANDHELD`
-  (lime = editing) = shake-safe floor.
-- **Brightness bias +0.0 EV** — trim around target.
-- **METERING CENTER** — tap: CENTER → AVERAGE → SPOT → HIGHLIGHT (RAW metering).
-  PROGRAM follows libcamera's Raspberry Pi AGC; Active D-Lighting (Photo tab
-  or quick panel) shifts its target to protect highlights.
-- **RESET PER-LENS DEFAULTS + DONE** — per-lens save.
+| Setting | Purpose |
+|---|---|
+| Developed format | Choose JPEG or JPEG XL for developed output. The capture-format control separately decides whether to save DNG, developed output or both. |
+| JPEG quality and chroma subsampling | Balance file size and compression quality. Ultra HDR uses the platform encoder, which controls its chroma subsampling. |
+| JPEG XL options | Set quality, effort, decoding speed, bit depth and pixel type. Higher effort can take longer to save. |
+| HDR transfer | JPEG XL can use SDR or HDR PQ. PQ needs compatible HDR viewing software and a suitable display. |
+| Ultra HDR JPEG | Adds an HDR gain map on supported Android versions. An editor or viewer may display only the SDR base or discard the gain map. |
+| Display P3 | Writes wider-gamut developed output; use colour-managed software when viewing or editing it. |
+| Demosaic | AMaZE or RCD for still development. Quad-Bayer follows its supported AMaZE path. |
+| Highlight reconstruction | Attempts to reconstruct clipped colour before demosaic; it cannot recover every fully clipped highlight. |
+| False-color suppression | Reduces colour speckles and moiré using colour-difference cleanup. |
+| Purple defringe | Reduces purple/magenta fringes at high-contrast edges. |
+| AgX look and adjustments | Choose the supplied look and adjust contrast, saturation, purity, hue preservation, highlight/shadow range and gamut compression. |
+| Adaptive development exposure | Adjusts development brightness from scene statistics. Separate PROGRAM strength controls how much adaptation it receives. |
 
-ETTR converged freezes PROGRAM and owns exposure.
+Headroom, sky protection and shoulder controls shape how bright areas enter the tone mapping. **Reset official AgX Base** restores the supplied base settings.
 
-## 5. Lens discovery (Image 1)
+Photo look adjustments affect developed files. DNG compression and calibration are separate controls under General; AI RAW denoise is an exception that can write modified RAW data.
 
-One card per lens. Checked = viewfinder pill, widest first.
+### Device-specific sensor modes
 
-- Header reads `N lenses • M routes`: routes are the IDs that reach a
-  lens, optics are the lenses themselves.
-- Each card shows a `★ RECOMMENDED` route first (direct beats logical
-  beats vendor). Extra routes to the same lens hide under
-  `+ N more routes (same lens)` — open only when the recommended ID
-  fails or a special sensor mode needs it.
-- Capability notes ride on each card: ISO range, slowest exposure, max
-  RAW size when it differs from the sensor array, `N RAW sizes` when
-  several are advertised, `Lists RAW10/RAW12/RAW14` when packed formats
-  exist (info only — capture stays `RAW_SENSOR`, no unpack path), and
-  `Sensor-mode switch` when the HAL advertises one (special modes still
-  need a per-lens vendor key in Settings). Routes also carry verdicts
-  from real camera use: `RAW verified on this device` (frames flowed),
-  `Opened OK before`, or dimmed `Open rejected before · try anyway`.
-  Verified routes win the recommendation. The lens report enumerates
-  every RAW size per route.
-- Lenses with several RAW sizes offer a `RAW size` row on the card
-  (`Auto` = largest first, as before). The choice moves to the front of
-  the session ladder; a refused or stale size falls back automatically.
-  Full-res knowingly shrinks ZSL burst depth.
-- Lenses listing packed formats offer a `RAW format` row (`Auto` =
-  `RAW_SENSOR`, always the default). Packed capture unpacks to 16-bit
-  and follows the same development and DNG path; a refused session
-  clears the choice back to auto and rebuilds unpacked.
-- `Recommended / All / Clear` presets. First install starts unchecked;
-  `Recommended` checks the suggested set in one tap. `SAVE` persists,
-  empty rejected with `PICK A RAW LENS`.
-- `Copy lens report` copies every route plus capabilities for support
-  chats — no second app needed.
+On supported Redmi Note 15 Pro 5G hardware, Photo may show **Redmi sensor modes**. This requires root access granted to RawLens and compatible firmware. The lens switcher then exposes the supported resolution/crop and DCG14 routes. DCG14 requires automatic exposure; manual ISO/shutter and flash are unavailable. Use the capability notes shown in the app, rather than assuming another phone supports these routes.
 
-Recommended: keep the pre-checked set → `0.7× / 1×`.
+## 5. ZSL and burst capture
 
-## 6. Settings Photo (Images 2 + 4)
+Open **Settings → Burst** to enable **RAW zero shutter lag** and set the shared burst/merge frame count. The default is **16**; the selectable range is 1–59. Device buffer capacity, RAW resolution and the chosen capture method can reduce the usable count. Larger buffers consume more memory, and very long exposures slow the available history.
 
-JPEG and JPEG XL are always developed from paired RAW. The format row also
-offers JPEG XL (bit depth, quality, effort, decoding speed); the demosaic row
-cycles AMaZE ↔ RCD; Active D-Lighting runs Off … Extra high.
+ZSL buffers full-resolution RAW with matching capture metadata. Wait for an active/ready status before relying on pre-shutter frames. A warming status means the buffer is filling; unavailable/fallback means ordinary capture is being used. The camera can also fall back when a stream configuration is refused.
 
-Top: Ultra HDR gainmap (Android 14+) ☐, Display P3 ☐,
-chroma `4:2:2` (tap cycles), quality `100%` (92–95% = same look, smaller),
-AgX purity/contrast/saturation `100%`.
+**Top-up: complete a thin ring with fresh frames** allows new frames to fill a short buffer. It can increase the delay after pressing the shutter. Developed unmerged ZSL output has tighter memory limits than DNG-only output. The separate six-frame burst gesture produces individual captures rather than a single merged photo.
 
-Bottom: Preserve hue `0%`, Highlight `+6.5 EV`, Shadow `10.0 EV`,
-Gamut `0%`, Adaptive (AUTO/ZSL) ☑, PROGRAM adaptive `50%`,
-headroom `1.00`, sky `0.85`, shoulder `100%`, Reset official AgX Base.
+### Save now, merge later
 
-Helper: headroom caps p99.5 spike, sky caps p95, shoulder rolls into AgX.
+Enable **Save ZSL bursts to .craw for offline merge** to stage a take as `IMG_<timestamp>_BURST.craw`. This saves the buffered take for later processing instead of immediately merging it.
 
-## 7. Settings Exposure (Image 3)
+**Burst gyro sidecars** stores motion information alongside a DNG burst. Use **Save sidecars next to DNGs (choose photo folder)** to grant or restore the folder permission. Keep `burst.json` and the `gyro/` directory with the DNGs when copying a burst to a desktop tool.
 
-Badge `HDR ±2 EV` = HDR on.
+## 6. Merge settings
 
-Lock NONE, Metering CENTER, ISO min/max SENSOR MIN/MAX,
-Shutter min SENSOR MIN / max AUTO HANDHELD, Brightness `+0.0 EV`,
-ETTR ☐ (`Expose-To-The-Right` after Magic Lantern, RAW-measured; keeps shutter
-cap, accepts darker frame vs noise/blur), highlight headroom `-0.5 EV`
-(tap: 0.5 / 1 / 1.5 / 2 EV), ISO ceiling SENSOR MAX (or 400–6400).
+Use the **KB-SR**, **LK-SR** or **HDR+** quick control to choose a merge, then configure it under **Settings → Merge**. AUTO, PROGRAM and MANUAL capture fresh frames after the shutter; ZSL uses buffered frames, with top-up/reference behavior where enabled. Flash capture uses its supported single-frame path.
 
-HDR block (same scroll): save 3 brackets vs merged single DNG,
-range ±2 vs ±4 EV, sequential trio 0 / −2 / 0 EV, experimental two-exposure
-RAW HDR (camera 0 only), face priority. Debug frames under Debug tab.
+Keep the camera steady while frames are being collected. More frames can reduce noise but extend processing and do not guarantee more detail when the subject is moving.
 
-## 8. General / Video / Burst / Denoise / Lenses / Debug / About
+### KB-SR
 
-- **General:** RAW capture, DNG backend, DNG compression (lossless JPEG XL,
-  off by default), GPS, viewfinder, settings backup, per-ID DNG calibration
-  (black/white, noise, matrices; Reset = defaults).
-- **Video:** see chapter 8B.
-- **Burst/ZSL:** offline merges (`OPEN MERGES`; optionally save the whole
-  ZSL ring to `IMG_<ts>_BURST.craw` and merge later), master checkbox
-  (= Z button), frames 1–59 (default 8), 30 fps ≈ 1 s history, JPEG bounded
-  to 6, DNG-only saves the ring. Badges: `RAW•ZSL` buffered, `ZSL …` warming,
-  `ZSL OFF`, `ZSL N/A` fallback. Scoring: recency/AF/AE/lens/ISO/shutter/gyro;
-  epochs block stale frames. ZSL top-up, MFSR sharp merge (Wronski or
-  KernelNet kernel, S.3 artefact rejection), HDR+ merge (AUTO or manual
-  strength), burst gyro sidecars.
-- **Denoise:** profiled wavelet (Vulkan) and RawNIND AI (needs models,
-  strength blends, keep-original halves storage).
-- **Lenses:** opens lens discovery (chapter 5).
-- **Debug:** HDR debug frames, camera diagnostics, app log.
-- **About:** version, GPLv3+, open-source notices; GitHub builds add the
-  update-check switch (off = no network at all).
+KB-SR means Kernel-Based Super-Resolution; older documents call this engine MFSR. Choose **KernelNet** or **Wronski** reconstruction kernels. **S.3 artefact rejection** helps reject inconsistent high-frequency detail. **Zipper fix (colour-difference merge)** targets coloured edge patterns. **Learned noise model** controls the noise-model option used by the engine.
 
-HDR+ and MFSR also work in **AUTO, PROGRAM and MANUAL**. These modes
-capture a fresh burst after the shutter press and merge it into one output;
-ZSL uses buffered frames. Enabling a merger keeps the selected exposure mode.
-Use Settings → Burst's frame count for both paths (each merger applies its
-own limits). PROGRAM uses its exposure curve; MANUAL keeps your ISO/shutter;
-AUTO freezes the metered exposure across the burst. Long manual exposures
-extend the burst's capture time. Flash stills use the existing single-frame
-path. Explicit BURST 6 / long-press remains a separate unmerged burst.
+### LK-SR
 
-## 8B. Video
+LK-SR uses Lucas–Kanade alignment and reconstruction. Its viewfinder zoom control cycles **1×, 1.5× and 2×**. The separate resolution button selects sensor-size or 2× reconstruction output and displays the resulting megapixel count. Zoom controls framing; resolution controls output dimensions.
 
-Tap the red shutter mode. Video temporarily starts in Auto exposure for both
-recording formats. PROGRAM, ZSL, ETTR and photo burst processing stay suspended
-while video is active. Manual video ISO/shutter controls remain available.
-Switching back restores the previous photo mode and manual controls without
-rewriting the saved photo preferences.
+The Merge tab provides:
 
-Two recorders:
+- **ISP preview during LK-SR merge:** temporarily replaces the RAW viewfinder with the camera preview, pausing RAW scopes and peaking to reduce competition for the GPU.
+- **LK-SR denoise: sliding DCT:** optional denoise during reconstruction; off by default.
+- **LK-SR reference: middle of the burst:** on by default, collects around the shutter press and chooses a reference near the middle. Turning it off uses pre-press frames and a recent reference.
+- **Show LK-SR Lab (expert tuning):** exposes advanced reconstruction settings. These apply to subsequent live and offline LK-SR merges. Use **Reset LK-SR Lab to defaults** to remove overrides.
 
-- **RAW video** → `.craw` (lossless, Cinematic RAW Studio). Codec CRAW Live
-  (default) / CRAW Live v1 — Legacy / CRAW Balanced, crop, binning (half resolution, RGB best or
-  CFA cheap), sound (32-bit float stereo, PCM16 fallback). Gyro and
-  accelerometer go into the file for desktop stabilization.
-- **Encoded Video** → video file. Profile Rec.709 / S-Log3 (S-Gamut3.Cine) /
-  HLG / ACES, resolution, frame rate, demosaic MHC (default) /
-  Super pixel, crop, gain. Real time on the test phone: 4K 24 fps,
-  1440p and 1080p 30 fps. Sound is uncompressed 48 kHz, 16-bit
-  little-endian stereo PCM (`sowt`, 1,536 kb/s; about 11 MiB per minute).
-  Devices without stereo input duplicate the mono microphone to both channels.
-- **S-Log3 LUT library:** `Import LUT (.cube)` (up to 16), choose assist or
-  LUT, intensity. The LUT shows while recording; tick *Bake selected LUT*
-  to record Rec.709 (`_LUT709` file). The before-record viewfinder does not
-  show the LUT.
-- **Recording health:** the video HUD reports OK, busy, warm/hot, recent frame
-  drops, low space, slow cadence, or stalled output. The drop total stays visible
-  after a recent-drop warning clears. Free space refers to the active recording
-  destination; unavailable storage readings are omitted.
-- **Preview sleep:** open Quick controls and tap Preview during a take to pause monitoring and show a
-  black preview; tap the black area or Wake to resume. Capture and sound continue.
-  Hold Preview in Quick controls, or open Settings → Video → Preview sleep, to select Never
-  (default), 5, 10, 30, or 60 seconds of inactivity. Recording controls and audio
-  meters stay available. Sleep pauses preview rendering and assist analysis.
-- **A/B rack focus:** tap the focus chip to open the focus slider and its A/B controls.
-  Set focus with the slider, then tap Set A or
-  Set B to remember that position. Tap a saved mark to pull to it; hold a mark to
-  replace it with the current position. Tap the duration to cycle 0.5, 1.2, 2.5,
-  and 5 seconds (also stops an active pull); hold it to clear both marks. Manual
-  focus adjustments, lens changes, recording start/stop, and leaving the app
-  cancel a pull. Marks reset on lens changes. Fixed-focus lenses disable these
-  controls. Pull duration describes the requested movement; actual lens response
-  depends on the device.
-- **Locks on record:** AE / AF / AWB lock or stay continuous during takes.
-- First video press asks for the microphone; deny = silent video.
+The standalone LK-SR Lite research tool is separate from the app's LK-SR engine.
 
-## 9. Recipes
+### HDR+
 
-- Everyday: AUTO, 1×, Adaptive ON, 92% → focus → shutter.
-- Street: P 0.50 CENTER, ISO MAX 3200, AUTO HANDHELD.
-- Kids: ZSL ×6, wait ACTIVE → fire.
-- Handheld detail: ZSL + MFSR, hold still-ish, one press.
-- Night: M ISO 1600 1/30, histogram right without clipping.
-- Sunset: HDR ±2 (±4 harsh), merged.
-- Landscape: ETTR ON -0.5 ceiling 1600 tripod, let converge.
-- Grading video: Encoded Video S-Log3, monitor with a LUT, don't bake.
+HDR+ combines aligned RAW frames to reduce noise. **Auto strength** selects strength from measured noise and motion; it ignores the manual slider. With Auto off, higher strength can clean up a static scene but increase ghosting on moving subjects.
 
-Never: PROGRAM+ZSL together, ETTR+action, UltraHDR+old editor, Select-all.
+HDR+ burst merging and HDR exposure bracketing are separate features.
 
-## 10. Files + troubleshooting
+## 7. Offline Merges
 
-- Stills `DCIM/RawLens/<stem>.{dng,jpg,jxl}`, video `.craw` / Encoded Video, sidecars next to the DNGs
-  (`burst.json + gyro/*.csv`, photo folder granted on first install;
-  `Download/RawLens/<stem>/` fallback until granted).
-- Black preview = dark room ISO 20000 — add light.
-- Only 1× = re-check ID 2 → SAVE.
-- PROGRAM stuck = ETTR converged → uncheck.
-- Streaky Images 5–9 = chat corruption → re-export.
-- No DNG = set `RAW•A` + DIRECT RAW lens.
+1. Open **Settings → Burst → Open merges**.
+2. Select a staged burst. Ordinary RAW Video recordings are excluded from this list.
+3. Choose **KB-SR**, **LK-SR** or **HDR+**, then the available zoom and source-frame options.
+4. Choose DNG, developed output, or both. JPEG is the initial output choice; choose JPEG or JXL as the developed format and set its quality.
+5. Use **Fine-tune method** if needed, then start the merge and watch the progress/status display.
 
-## Appendix — defaults
+**Process all** queues the listed bursts. During batch processing, the stop action finishes the current job before stopping the queue. Burst sharing lets you transfer staged source data for later processing. Keep source bursts until you have checked the result. Staged orientation is retained when the take is loaded.
 
-100%/4:2:2/off/off; AgX 100/100/100/0%; +6.5/10.0/0%; Adaptive ON/50%;
-1.00/0.85/100%; P 0.50/NONE/CENTER/+0.0; SENSOR bounds + AUTO HANDHELD;
-ETTR OFF/-0.5/SENSOR MAX; ZSL 8; Encoded Video demosaic MHC; RAW video codec CRAW Live.
+## 8. HDR brackets
 
-Glossary: DNG = sensor + metadata; AgX = filmic mapper; ETTR = brightest
-unclipped; ZSL = pre-press memory; DIRECT = real, LOGICAL = virtual;
-gainmap = HDR layer; P3 = wide gamut; p99.5/p95 = brightest pixels;
-MFSR = multi-frame super-resolution; `.craw` = lossless RAW video;
-S-Log3 = Sony log curve; LUT = colour look-up table.
+Under **Settings → Exposure**, HDR bracketing offers ±2 EV or ±4 EV sequences. Save a merged DNG or choose to keep all three brackets separately. Sequential trio uses 0 / −2 / 0 EV to combine repeated base exposures with a highlight-protecting frame.
 
+**Experimental two-exposure RAW HDR** is a separate, camera-0-only option. Sequential captures can show motion differences; use a steady scene. **Debug → Save debug HDR frames** retains extra source/output files for investigation and uses additional storage.
 
-### White balance: Kelvin and Camera2 presets
+## 9. Denoise and capture sharpening
 
-Tap WB to adjust the active white balance control. Press and hold WB to switch
-between the Kelvin slider and the Camera2 preset picker, and hold again to switch
-back. Presets include Auto, Incandescent, Fluorescent, Warm fluorescent, Daylight,
-Cloudy daylight, Twilight and Shade when the selected camera advertises them.
-Video recording inherits the selected white balance; both Kelvin and presets
-can also be changed while recording.
+Open **Settings → Denoise**.
 
-Kelvin values use the selected camera's color and calibration matrices, a
-Planckian white point, reciprocal-temperature interpolation and a matching color
-correction transform. The range is 2000–10000 K. Cameras without usable manual
-color calibration do not offer a Kelvin slider. Automatic readings are estimated
-correlated color temperatures (shown with `~`); colored light, LEDs, fluorescent
-lamps and manufacturer calibration errors can limit their accuracy. Presets use
-the manufacturer's settings and are not represented as exact Kelvin values.
+**Capture sharpening** restores detail in developed photos. Choose its strength preset here; it does not sharpen the saved sensor DNG.
 
-Implementation references: [Camera2 requests](https://developer.android.com/reference/android/hardware/camera2/CaptureRequest),
-[camera calibration matrices](https://developer.android.com/reference/android/hardware/camera2/CameraCharacteristics),
-and [Android AWB modes](https://source.android.com/docs/core/camera/camera3_3Amodes).
+**Profiled wavelet (Vulkan)** processes camera-linear developed output. Strength controls overall reduction; Detail changes texture preservation; Luma controls luminance smoothing. The default algorithm is RAWR. **RawLens Wiener algorithm** switches to the alternative rule; its Grain control adjusts how much fine grain remains. These controls do not denoise the sensor DNG.
+
+**AI RAW denoise (RawNIND Bayer)** requires the model files supplied by a compatible build. It writes a denoised DNG and develops from that data. **Save original DNG alongside** also retains the untouched capture. AI strength blends the source and denoised result, from untouched at 0% to full model output at 100%.
+
+LK-SR sliding DCT and RAW Video DCT have separate switches. Changing photo wavelet settings does not enable them.
+
+## 10. Video recording
+
+Switch to video mode and choose **Encoded Video** or RAW Video under **Settings → Video**. Entering video starts with automatic exposure; manual video ISO/shutter controls remain available. Photo PROGRAM, ZSL, ETTR and burst processing are suspended, and the previous photo mode is restored when you leave video.
+
+Choose your recording folder and format before starting. Changes marked for the next take require stopping and starting a new recording. Watch the health display for frame drops, heat, low space or stalled output. Recording performance depends on sensor readout, exposure, resolution and processing load.
+
+### Encoded Video
+
+Encoded Video writes **10-bit HEVC MP4**. Choose output profile, frame rate, resolution, crop and demosaic:
+
+- **Rec.709:** conventional developed video.
+- **ACES fitted:** a baked filmic approximation in Rec.709, suitable for normal viewing; it is not ACES scene data.
+- **S-Log3:** S-Gamut3.Cine / S-Log3 for grading. Interpret the recording as video/limited range.
+- **HLG:** HDR output for a compatible editing and display workflow.
+
+**MHC** is the default demosaic. **Super pixel** reduces processing and detail by combining each Bayer quad. Digital gain brightens the encoded image without changing sensor exposure. Saturation and vibrance adjust colour; these grading controls can change during a take.
+
+### LUT monitoring and baking
+
+Import extracted `.cube` files through **Import LUT (.cube)**, select a LUT and adjust its intensity. The library accepts up to 16 imports. Use a LUT intended for S-Gamut3.Cine/S-Log3.
+
+With baking off, the take monitor uses the selected assist/LUT while the recording retains S-Log3. Enable **Bake selected LUT into S-Log3 recordings** to save the imported look as SDR Rec.709 in a `_LUT709` file. The built-in assist is monitor-only; other output profiles ignore the baking option.
+
+### RAW Video
+
+RAW Video writes `.craw` files. **CRAW Live** is the default codec, **CRAW Balanced** trades CPU work for potentially smaller files, and **CRAW Live v1 — Legacy** remains available for compatibility. Compression preserves the input samples; file size and speed vary with the scene.
+
+Select the advertised RAW frame-rate range, crop and optional half-resolution binning. **RGB** binning saves demosaiced colour; **CFA** saves a smaller half-resolution mosaic for later demosaic.
+
+**DCT denoise (RAW Video)** applies temporal/spatial denoise before writing the file. It is off by default, is baked into the saved samples, and applies to the next take. Turn it off when you want an untouched sensor-sample recording. Motion metadata is stored for later stabilization.
+
+### Audio, locks and focus pulls
+
+**Video sound** enables microphone capture during recording. Current capture uses PCM16 audio; microphone availability and permission determine whether sound is present. The on-screen meters show recording levels.
+
+**Lock exposure**, **Lock white balance** and **Lock focus on record** freeze the automatic values at recording start. Leave them off for continuous automatic adjustment. Manual controls remain available during a take.
+
+For an A/B focus pull, set a manual focus distance and tap an empty mark to store it. Tap a stored mark to pull to it; hold a mark to replace it. Cycle the duration through 0.5, 1.2, 2.5 and 5 seconds; hold the duration control to clear the marks. Lens changes clear marks. Actual lens response depends on the camera.
+
+### Preview sleep
+
+During a take, **Preview** in quick controls pauses monitoring. Tap the black preview or Wake to resume. Hold Preview, or use Video settings, to set an idle timeout of Never, 5, 10, 30 or 60 seconds. Video and audio keep recording while monitoring and assist analysis sleep.
+
+### Stabilization
+
+**Stabilized output** selects **OG only**, **Stabilized only** or **Both** for Encoded Video. Stabilization runs on the phone after recording stops and writes a `_STAB.mp4` copy. The implementation uses gyro motion, path smoothing and self-calibration. If processing fails, the original is retained. Allow processing to finish and inspect the result before deleting originals.
+
+### Recording folder
+
+Use **Choose recording folder** to record directly to a permitted phone folder or attached USB drive. Without a selected folder, the destination is `Downloads/RawLens`. Reconnect an unavailable drive before recording. **Recover older RAW recordings** is available for recordings from the older storage workflow.
+
+## 11. General settings
+
+| Control | What to know |
+|---|---|
+| DNG sensor calibration | Per-camera black/white levels, noise and colour metadata overrides. Reset restores the device declarations. Use measured values when overriding calibration. |
+| Vendor keys | Per-lens request/session options exposed by the manufacturer. Availability and accepted values depend on firmware. |
+| DNG writer backend | Choose the platform writer or the available TinyDNG/fallback option. |
+| DNG compression | Optional lossless JPEG XL mosaic compression on supported output paths; older RAW editors may lack DNG 1.7 support. |
+| Pause camera while in Settings | Saves power by closing the camera behind Settings. Active recordings continue. |
+| ISP preview | Uses the camera's preview instead of the RAW-developed viewfinder. Its appearance can differ from the saved RAW development. |
+| Preview resolution and mode | Adjust monitoring cost and choose RAW, developed or format-following preview. |
+| Exposure overlay and RAW meter | Choose zebras/false colour and spot/average RAW readings. These aids do not change exposure. |
+| Focus peaking | Enable it and choose its overlay colour. |
+| Save GPS location | Adds a fresh location to supported photos and MP4 recordings after permission is granted. |
+| Settings backup | Export a JSON backup. Import replaces settings and asks for a restart. |
+
+## 12. Lenses, Debug and About
+
+**Lenses** groups routes that reach the same lens and recommends a route using capabilities and previous use. Rear and front camera routes are grouped separately. A lens can advertise RAW but refuse a particular stream combination. Try another route or RAW size if needed. RAW size/format choices are per lens; unsupported choices can fall back. **Copy lens report** provides route and capability information for support.
+
+**Debug** contains HDR source-frame saving, Camera2/RAW viewfinder overlays and app logging. Enable only the diagnostics you need, reproduce the issue, then use **Share latest log**. Check logs before sharing, since device and capture details can be included.
+
+**About** provides installed build information, licences and notices. GitHub builds also offer a manual update check and an optional startup check. F-Droid builds disable the updater.
+
+## 13. Files and common problems
+
+Photos normally appear under `DCIM/RawLens`. Burst sidecars use the granted photo folder, with a Download fallback when the grant is unavailable. Video uses the recording destination selected in Video settings. Changing preview mode does not select DNG output; use the capture-format control.
+
+| Problem | Try |
+|---|---|
+| A lens will not open | Select its recommended route, try another RAW size, or return vendor keys to known working values. |
+| ZSL is warming or falls back | Wait for fresh frames; reduce buffer depth or RAW resolution if the device cannot sustain the stream. |
+| Exposure seems held | Check MANUAL, PROGRAM axis locks, ETTR and video record locks. |
+| Preview is black | Wake a sleeping recording preview; otherwise check exposure, light and camera status. |
+| RAW and developed previews look different | Check preview mode, white balance, AgX/adaptive exposure and whether ISP preview is active. |
+| Merge ghosts or loses detail | Try less subject motion, fewer frames, HDR+ auto strength or reset LK-SR Lab overrides. |
+| Recording drops frames | Reduce resolution/frame rate or processing load, check free space and the destination, and let an overheated device cool. |
+| No audio | Check Video sound, microphone permission and microphone availability. |
+| Missing burst motion files | Restore the photo-folder grant and keep sidecars with the DNGs. |
+| JXL or AI output is unavailable | Check whether this build includes the required encoder or model assets. |
+
+For a device report, include the phone model, Android version, affected lens/Camera2 ID, selected mode and steps to reproduce. See [Contributing](../../CONTRIBUTING.md). For engineering details, see [current repository state](../CURRENT_STATE.md).
