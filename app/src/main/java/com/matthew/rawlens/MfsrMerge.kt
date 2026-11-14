@@ -639,6 +639,9 @@ internal object MfsrMerge {
             }
             val config = PipelineConfig(
                 scale = 1f, bayer = true, factors = factors, tileSizes = fin.tileSizes,
+                // Mobile grey for alignment (perf 2026-11-14): half-band FIR,
+                // known-truth flow error <= the IPOL FFT grey, ~8x cheaper on Mali.
+                greyMethod = "FIR7",
                 // C26: the SNR-tuned Wronski kernel params (update_snr_config) were
                 // computed above but never passed, so the app ran KernelParams()
                 // defaults (kDetail 1.0 vs 0.25-0.33); kMin 0.64 = the checker fix.
@@ -685,14 +688,16 @@ internal object MfsrMerge {
                 config, handle,
                 AlignGpu.Spirvs(
                     align = asset("align"), corr = asset("corr"),
-                    fft = fft, ica = asset("ica"), corrDirect = asset("corr_direct"), icaWg = asset("ica_wg")
+                    fft = fft, ica = asset("ica"), corrDirect = asset("corr_direct"), icaWg = asset("ica_wg"),
+                    // Workgroup-per-tile L1 search and L2 argmin (perf 2026-11-14).
+                    alignWg = asset("align_wg"), argminWg = asset("corr_argmin_wg")
                 ),
                 VulkanPipeline.Spirvs(
                     gat = asset("gat"), grad = asset("grad"),
                     kernels = asset("kernels"), divide = asset("divide"),
                     robust = asset("robustness"),
                     mergeSplat = asset("merge_splat"),
-                    fft = fft, corr = asset("corr"), greyFft = asset("grey_fft"),
+                    fft = fft, corr = asset("corr"), greyFft = asset("grey_fft"), greyFir = asset("grey_fir"),
                     kernelNet = if (settings.kernel == MfsrKernel.KERNELNET) asset("kernelnet") else null
                 ),
                 output = nativeOut
