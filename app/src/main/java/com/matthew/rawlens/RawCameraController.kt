@@ -2015,54 +2015,32 @@ class RawCameraController(
         return false
     }
 
-    /**
-     * HAL 3A probe on the raw-only default session (camera thread, every
-     * repeating result). Any sign of life from AF, AE or AWB ends the probe
-     * with no verdict. Continuous AF pinned at INACTIVE for the whole settle
-     * window with AE and AWB equally silent means the HAL built this session
-     * without 3A: rebuild with a preview target.
-     */
+    /** Probe AF independently: working AE/AWB does not prove the lens is focusing. */
     private fun noteThreeAProbe(result: TotalCaptureResult) {
-        if (!threeAProbeArmed) return
-        val now = SystemClock.elapsedRealtime()
-        if (threeAProbeFirstMs == 0L) threeAProbeFirstMs = now
+        if (!threeAProbeArmed || selectedFocusDistanceDiopters != null || touchFocus.active) return
         val afMode = result.get(CaptureResult.CONTROL_AF_MODE)
         val continuousAf = afMode == CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE ||
             afMode == CaptureResult.CONTROL_AF_MODE_CONTINUOUS_VIDEO
-        if (continuousAf) threeAProbeAfFrames++
-        val afAlive = continuousAf && (result.get(CaptureResult.CONTROL_AF_STATE)
+        if (!continuousAf) return
+        val now = SystemClock.elapsedRealtime()
+        if (threeAProbeFirstMs == 0L) threeAProbeFirstMs = now
+        threeAProbeAfFrames++
+        val afAlive = (result.get(CaptureResult.CONTROL_AF_STATE)
             ?: CaptureResult.CONTROL_AF_STATE_INACTIVE) != CaptureResult.CONTROL_AF_STATE_INACTIVE
-        val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
-        val aeAlive = aeMode != null && aeMode != CaptureResult.CONTROL_AE_MODE_OFF &&
-            (result.get(CaptureResult.CONTROL_AE_STATE)
-                ?: CaptureResult.CONTROL_AE_STATE_INACTIVE) != CaptureResult.CONTROL_AE_STATE_INACTIVE
-        val awbAlive = result.get(CaptureResult.CONTROL_AWB_MODE) == CaptureResult.CONTROL_AWB_MODE_AUTO &&
-            ((result.get(CaptureResult.CONTROL_AWB_STATE)
-                ?: CaptureResult.CONTROL_AWB_STATE_INACTIVE) != CaptureResult.CONTROL_AWB_STATE_INACTIVE ||
-                !RawWhiteBalanceFallback.halAwbMissing(
-                    result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
-                        ?.let { values -> DoubleArray(values.size) { values[it].toDouble() } },
-                    result.get(CaptureResult.COLOR_CORRECTION_GAINS)
-                        ?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
-                ))
-        if (afAlive || aeAlive || awbAlive) {
+        if (afAlive) {
             threeAProbeArmed = false
             return
         }
-        if (now - threeAProbeFirstMs < THREE_A_PROBE_SETTLE_MS) return
-        // A still capture owns the session; judge on the next idle result.
-        if (captureInProgress.get()) return
+        if (now - threeAProbeFirstMs < THREE_A_PROBE_SETTLE_MS || captureInProgress.get()) return
+        // Slow RAW streams need more than the settling window to collect enough evidence.
+        if (!SessionStreamSelection.previewRequestNeededFor3a(threeAProbeAfFrames, afAlive = false)) return
         threeAProbeArmed = false
         val cameraId = selectedCameraId ?: return
-        if (!SessionStreamSelection.previewRequestNeededFor3a(threeAProbeAfFrames, anyAlive = false)) {
-            // Manual or fixed focus: nothing to judge AF by; re-arms next session.
-            return
-        }
         // The route is not at fault: do not let the AWB verdict demote it.
         awbVerdictIdentity = null
         persistThreeAPreviewState(cameraId, threeAPreviewState(cameraId) + 1)
         threeATrialCameraId = cameraId
-        Log.w(LOG_TAG, "Route $cameraId: HAL ran no AF/AE/AWB for ${now - threeAProbeFirstMs}ms raw-only " +
+        Log.w(LOG_TAG, "Route $cameraId: HAL reported no continuous AF activity for ${now - threeAProbeFirstMs}ms raw-only " +
             "(afFrames=$threeAProbeAfFrames); adding preview target")
         val generation = lifecycleGeneration
         cameraHandler.post {

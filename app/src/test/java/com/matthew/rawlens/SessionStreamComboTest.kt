@@ -100,12 +100,12 @@ class SessionStreamComboTest {
     }
 
     @Test
-    fun threeAProbeVerdict() {
-        assertEquals(true, SessionStreamSelection.previewRequestNeededFor3a(90, anyAlive = false))
-        assertEquals(false, SessionStreamSelection.previewRequestNeededFor3a(90, anyAlive = true))
+    fun silentAfNeedsPreviewRegardlessOfExposureOrWhiteBalance() {
+        assertEquals(true, SessionStreamSelection.previewRequestNeededFor3a(90, afAlive = false))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededFor3a(90, afAlive = true))
         // Manual/fixed focus: AF was never observable, so no verdict.
-        assertEquals(false, SessionStreamSelection.previewRequestNeededFor3a(0, anyAlive = false))
-        assertEquals(false, SessionStreamSelection.previewRequestNeededFor3a(44, anyAlive = false))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededFor3a(0, afAlive = false))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededFor3a(44, afAlive = false))
     }
 
     @Test

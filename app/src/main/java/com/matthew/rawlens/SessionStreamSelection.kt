@@ -213,14 +213,10 @@ internal object SessionStreamSelection {
     /** Continuous-AF results needed before a silent AF counts as dead (~1.5 s at 30 fps). */
     internal const val THREE_A_PROBE_MIN_AF_FRAMES = 45
 
-    /**
-     * 3A probe verdict for a raw-only session: the preview target is added
-     * only when nothing in AF/AE/AWB showed life and continuous AF was
-     * observable long enough to prove it never left INACTIVE. Too few
-     * continuous-AF results (manual or fixed focus) is no verdict.
-     */
-    internal fun previewRequestNeededFor3a(continuousAfFrames: Int, anyAlive: Boolean): Boolean =
-        !anyAlive && continuousAfFrames >= THREE_A_PROBE_MIN_AF_FRAMES
+    /** Missing/inactive continuous AF warrants a bounded preview trial even when AE/AWB work.
+     * Manual/fixed-focus sessions never accumulate these frames. */
+    internal fun previewRequestNeededFor3a(continuousAfFrames: Int, afAlive: Boolean): Boolean =
+        !afAlive && continuousAfFrames >= THREE_A_PROBE_MIN_AF_FRAMES
 
     /**
      * First ladder step carrying any preview target (the 20 fps remedy),

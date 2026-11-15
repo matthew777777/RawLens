@@ -234,4 +234,81 @@ class PhotoAutoFocusTest {
         assertTrue(host.triggers.isEmpty())
     }
 
+    @Test fun abandonedAutoRetriesContinuousAndRequiresItsOwnStartFrame() {
+        val oldRun = tap(); af.onStartFrame(oldRun, 100)
+        result(100, CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN)
+        result(101, CaptureResult.CONTROL_AF_STATE_INACTIVE)
+        host.fire(PhotoAutoFocus.SCAN_TIMEOUT_MS)
+        val continuous = CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        assertEquals(continuous, af.requestedMode)
+        assertTrue(af.scanning)
+        assertEquals(4, host.triggers.size)
+        af.onStartFrame(oldRun, 102)
+        result(103, focused, continuous)
+        assertTrue(af.scanning)
+        af.onStartFrame(host.triggers.last().second, 110)
+        result(110, focused, auto)
+        assertTrue(af.scanning)
+        result(111, focused, continuous)
+        assertEquals("FOCUS LOCKED", host.states.last())
+    }
+
+    @Test fun continuousRetryIsBoundedAndPassiveFocusCannotFakeLock() {
+        val run = tap(); af.onStartFrame(run, 100)
+        result(100, CaptureResult.CONTROL_AF_STATE_INACTIVE)
+        host.fire(PhotoAutoFocus.SCAN_TIMEOUT_MS)
+        af.onStartFrame(host.triggers.last().second, 110)
+        result(110, CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED,
+            CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+        host.fire(PhotoAutoFocus.SCAN_TIMEOUT_MS)
+        assertEquals("FOCUS NOT LOCKED", host.states.last())
+        assertFalse(host.locks.last().first)
+        assertFalse(host.hasPending(PhotoAutoFocus.SCAN_TIMEOUT_MS))
+    }
+
+    @Test fun autoOnlyTimeoutCannotRequestUnsupportedContinuousMode() {
+        host.modes = intArrayOf(auto)
+        val run = tap(); af.onStartFrame(run, 100)
+        result(100, CaptureResult.CONTROL_AF_STATE_INACTIVE)
+        host.fire(PhotoAutoFocus.SCAN_TIMEOUT_MS)
+        assertEquals("FOCUS NOT LOCKED", host.states.last())
+        assertEquals(auto, af.requestedMode)
+    }
+
+    @Test fun explicitUnfocusedVerdictDoesNotRetry() {
+        val run = tap(); af.onStartFrame(run, 100)
+        result(100, missed)
+        assertEquals(3, host.triggers.size)
+        assertEquals("FOCUS NOT LOCKED", host.states.last())
+        assertFalse(host.hasPending(PhotoAutoFocus.SCAN_TIMEOUT_MS))
+    }
+
+    @Test fun retapInvalidatesContinuousRetryTimeout() {
+        val run = tap(); af.onStartFrame(run, 100)
+        result(100, CaptureResult.CONTROL_AF_STATE_INACTIVE)
+        host.fire(PhotoAutoFocus.SCAN_TIMEOUT_MS)
+        val retryRun = host.triggers.last().second
+        val newRun = tap()
+        af.onStartFrame(retryRun, 110)
+        result(111, focused, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+        assertTrue(af.scanning)
+        assertEquals(auto, af.requestedMode)
+        af.onStartFrame(newRun, 120); result(120, focused)
+        assertEquals("FOCUS LOCKED", host.states.last())
+        assertFalse(host.hasPending(PhotoAutoFocus.SCAN_TIMEOUT_MS))
+    }
+
+    @Test fun continuousRetryPreservesIndefiniteAeAfHold() {
+        val run = tap(true); af.onStartFrame(run, 100)
+        result(100, CaptureResult.CONTROL_AF_STATE_INACTIVE)
+        host.fire(PhotoAutoFocus.SCAN_TIMEOUT_MS)
+        af.onStartFrame(host.triggers.last().second, 110)
+        result(110, focused, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+        assertEquals("AE/AF LOCKED ∞", host.states.last())
+        assertTrue(host.aeRegion != null)
+        assertTrue(host.afRegion != null)
+        assertTrue(af.aeLockIndefinite)
+        assertTrue(host.delayed.isEmpty())
+    }
+
 }

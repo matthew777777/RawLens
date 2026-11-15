@@ -102,7 +102,7 @@ internal class PhotoAutoFocus(private val host: Host) {
             val currentRun = runId
             timeout = Runnable {
                 timeout = null
-                if (currentRun == runId && scanning) finish(false)
+                if (currentRun == runId && scanning && !retryContinuousLock()) finish(false)
             }.also { host.handler.postDelayed(it, SCAN_TIMEOUT_MS) }
             Log.i(TAG, "Photo AF run=$runId mode=$requestedMode START queued")
         } catch (failure: CameraAccessException) {
@@ -114,6 +114,37 @@ internal class PhotoAutoFocus(private val host: Host) {
         } finally {
             host.publishPeakingActiveIfChanged()
         }
+    }
+
+    /** Some HALs abandon AUTO immediately after START but support continuous-picture locks.
+     * Retry once with that advertised mode; only a real LOCKED result can succeed. */
+    private fun retryContinuousLock(): Boolean {
+        if (requestedMode != CONTROL_AF_MODE_AUTO && requestedMode != CONTROL_AF_MODE_MACRO) return false
+        if (startFrame == null || lastFrame < 0L || lastState == null) return false
+        if (CONTROL_AF_MODE_CONTINUOUS_PICTURE !in host.afAvailableModes()) return false
+        ++runId
+        startFrame = null
+        lastFrame = -1L
+        lastState = null
+        requestedMode = CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        try {
+            host.updateRepeatingRequest()
+            host.sendAfTrigger(CONTROL_AF_TRIGGER_CANCEL, runId)
+            host.sendAfTrigger(CONTROL_AF_TRIGGER_START, runId)
+            val currentRun = runId
+            timeout = Runnable {
+                timeout = null
+                if (currentRun == runId && scanning) finish(false)
+            }.also { host.handler.postDelayed(it, SCAN_TIMEOUT_MS) }
+            Log.i(TAG, "Photo AF run=$runId retry CONTINUOUS_PICTURE lock")
+        } catch (failure: CameraAccessException) {
+            requestFailed(failure)
+        } catch (failure: IllegalStateException) {
+            requestFailed(failure)
+        } catch (failure: IllegalArgumentException) {
+            requestFailed(failure)
+        }
+        return true
     }
 
     /** A command from a replaced tap/session cannot arm the current run. */
