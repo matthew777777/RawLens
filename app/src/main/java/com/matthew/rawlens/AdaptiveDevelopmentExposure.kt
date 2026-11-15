@@ -90,9 +90,12 @@ data class AdaptiveExposureTuning(
             )
             return AdaptiveExposureTuning(
                 highlightHeadroom = resolved.highlightHeadroom.toDouble(),
-                highlightSoftHeadroom = AgxDisplayTransform.invertScopeCurve(
-                    encodedAnchor, resolved
-                ).toDouble(),
+                // Basic shoulder is display-only: keep the sensor-domain sky guard
+                // fixed so rolling off clouds cannot buy more capture/develop exposure.
+                highlightSoftHeadroom = if (resolved.toneMapper == PhotoToneMapper.BASIC)
+                    resolved.highlightSoftHeadroom.toDouble() else AgxDisplayTransform.invertScopeCurve(
+                        encodedAnchor, resolved
+                    ).toDouble(),
                 highlightShoulder = if (resolved.toneMapper == PhotoToneMapper.BASIC) 0f else resolved.highlightShoulder,
                 centerWeight = resolved.centerWeight,
                 focusX = focus?.first,

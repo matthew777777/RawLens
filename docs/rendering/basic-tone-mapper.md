@@ -17,8 +17,12 @@ Basic follows the RAW display response in RapidRAW revision
 This implements the Basic display transform, not RapidRAW's separate exposure,
 highlight/shadow, curves, or other editing controls. RawLens retains its own
 calibration, metering, highlight reconstruction and sensor-white protection.
-AgX look parameters, gamut compression and the AgX highlight shoulder do not
-alter Basic. Its meter uses the Basic response and disables that shoulder.
+AgX look parameters and gamut compression do not alter Basic. Basic now has its
+own optional ratio-preserving rational highlight shoulder, controlled by the shared
+Highlight shoulder slider. A zero strength reproduces the original RapidRAW Basic
+response. The default strength is one. Its meter keeps the sensor-domain sky guard
+fixed and does not pre-compress meter samples, so the display shoulder cannot buy
+additional exposure and cancel its highlight protection.
 
 The curve runs inside the existing fused AMaZE/output pass and the existing RAW
 viewfinder fragment tail. CPU/Vulkan/AHB preview routes share the same GLSL tail;
@@ -88,3 +92,60 @@ Follow-up validation (2026-11-15):
 
 Both failures from the initial run are resolved. PROGRAM AE required correcting
 its stale test expectation; blue-channel identity required the shared shader fix.
+
+## Cloud headroom and accurate JPEG descriptions
+
+The supplied `IMG_20261115_085914_296.dng` / `.jpg` pair exposed the hard clipping
+boundary of Basic. In the sampled cloud ROI (oriented x=0..0.34, y=0.17..0.37),
+none of the normalized sensor quads reaches sensor white; green peaks around
+0.533. In the supplied JPEG, 36.45% of the ROI has every channel above 0.98.
+Its legacy EXIF description incorrectly claims `AgX Base`, so the file alone
+cannot establish which mapper was actually selected at capture.
+
+Basic now rolls off the maximum output-primary channel above scene-linear 0.6:
+`compressed = 0.6 + (peak - 0.6) / (1 + (peak - 0.6) / 0.4)`.
+All RGB channels share `mix(1, compressed/peak, strength)`, preserving their ratios.
+The knee is continuous with slope one; the full-strength curve approaches white
+without hard-clipping ordinary scene highlights. Values whose maximum channel is
+at or below 0.6 are unchanged. Shoulder zero bypasses the compression. This is a
+RawLens highlight-handling extension before the original Basic display response,
+not a claim that upstream RapidRAW uses this shoulder.
+
+The same arithmetic runs in the CPU scope/reference transform, shared RAW
+viewfinder tail, standalone/fused JPEG and JXL output, and low-resolution BGU
+operator. No new texture or GPU pass is added. The sky guard remains in sensor
+linear units and does not brighten the develop to undo the shoulder.
+
+JPEG ImageDescription now has JPEG DEVELOPMENT, PARAMETERS, DEVELOPMENT SETTINGS,
+optional TIMINGS, and Source sections. It records the selected mapper and active
+curve controls, working/output space, output dimensions, encoding/quality, cleanup,
+configured metering/highlight controls, and frozen source exposure/ISO/camera facts.
+Existing HDR+/LK-SR/KB-SR merge records remain intact before that development block.
+Unknown actual demosaic backends are not guessed: the preference is labeled as a
+preference, including its fallback possibility. JPEG/R is reported only after a
+successful HDR encode; otherwise the record explicitly states SDR fallback.
+Existing saved files are not rewritten.
+
+`BasicCloudDngDeviceTest` is an optional full-resolution device regression using an
+external decoded sensor plane, not a bundled personal photograph. It compares
+shoulder off/on with identical exposure settings and writes both renders and cloud
+metrics. `JpegImageDescriptionTest` and the existing EXIF round-trip tests cover
+mapper-specific fields, locale stability, merge provenance and HDR fallbacks.
+
+Cloud/metadata validation (2026-11-15):
+
+- Full JVM suite: 2,011 tests, zero failures, nine skipped (2,002 passed).
+- Halide scalar/AOT checks: 16 cases passed, maximum absolute error 1.37e-5;
+  all four Android ABI look archives regenerated.
+- Isolated `.cloudcheck` app and instrumentation APK build successfully.
+- All 16 selected phone tests passed, including the optional full-resolution DNG
+  fixture, CPU/GPU output parity, fused/separate output, Basic preview at shoulder
+  strengths zero and one, shader precision and BGU checks.
+- Both DNG re-develops used +1.5 EV. Of 212,160 sampled cloud pixels, 35,234
+  (16.61%) had every channel >=250 without the shoulder; zero did with it.
+  141,111 cloud samples became darker by more than six summed RGB code values.
+  Maximum sampled midtone difference was zero codes. This paired re-develop tests
+  the new shoulder at identical exposure; the old JPEG lacks enough development
+  metadata to reproduce all original capture settings exactly.
+- The test JPEGs and metrics were pulled for visual/numeric verification. Personal
+  source pixels and rendered photos are not added to the repository.

@@ -645,7 +645,7 @@ internal class PhotoSettingsTab(
             { String.format(Locale.US, "%.2f", 0.6f + it / 100f) },
             { settings, value -> settings.copy(highlightSoftHeadroom = 0.6f + value / 100f) }
         )
-        if (currentJpegSettings.toneMapper == PhotoToneMapper.AGX) addAgxSlider(
+        addAgxSlider(
             "Highlight shoulder", 100,
             (currentJpegSettings.highlightShoulder * 100f).toInt(),
             { "$it%" },

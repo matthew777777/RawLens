@@ -53,7 +53,8 @@ object AgxDisplayTransform {
         val sceneRec2020 = map(ACESCG_TO_REC2020_D65, acescg)
         if (settings.toneMapper == PhotoToneMapper.BASIC) {
             val output = map(outputMatrix, sceneRec2020)
-            return FloatArray(3) { BasicDisplayTransform.decode(BasicDisplayTransform.encode(output[it])) }
+            val encoded = BasicDisplayTransform.encodeRgb(output, settings.highlightShoulder)
+            return FloatArray(3) { BasicDisplayTransform.decode(encoded[it]) }
         }
         // AgX's log domain is non-negative. This is the pinned view-transform domain guard,
         // not the final display-gamut boundary.
@@ -142,7 +143,7 @@ object AgxDisplayTransform {
     fun scopeCurve(linear: Float, settings: JpegOutputSettings = JpegOutputSettings()): Float {
         val resolved = settings.resolvedForPlatform()
         if (!linear.isFinite()) return 0f
-        if (resolved.toneMapper == PhotoToneMapper.BASIC) return BasicDisplayTransform.encode(linear)
+        if (resolved.toneMapper == PhotoToneMapper.BASIC) return BasicDisplayTransform.encode(linear, resolved.highlightShoulder)
         val positive = max(0f, linear)
         val shoulder = resolved.highlightShoulder.coerceIn(0f, 1f)
         val soft = when {

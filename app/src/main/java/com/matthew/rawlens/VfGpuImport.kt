@@ -286,7 +286,11 @@ internal object VfGpuImport {
             " vec3 scene2020 = acesCgToRec2020() * (u_camToAces * cam);" +
             " if (u_basic != 0) {" +
             "  mat3 basicMat = rec2020ToSrgb(); if (u_displayP3 != 0) basicMat = rec2020ToDisplayP3();" +
-            "  vec3 x = pow(srgbOetf(clamp(basicMat * scene2020, 0.0, 1.0)), vec3(1.0 / 1.1));" +
+            "  vec3 basicScene = basicMat * scene2020; float peak = max(basicScene.r, max(basicScene.g, basicScene.b));" +
+            "  if (peak > 0.6 && u_highlightShoulder > 0.0) { float t = peak - 0.6;" +
+            "   float compressed = 0.6 + t / (1.0 + t / 0.4);" +
+            "   basicScene *= mix(1.0, compressed / peak, clamp(u_highlightShoulder, 0.0, 1.0)); }" +
+            "  vec3 x = pow(srgbOetf(clamp(basicScene, 0.0, 1.0)), vec3(1.0 / 1.1));" +
             "  vec3 encBasic = 0.25 * x + 0.75 * x * x * (3.0 - 2.0 * x);" +
             "  vec3 noiseBasic = vec3(ign(gl_FragCoord.xy, 0.0), ign(gl_FragCoord.xy, 1.0), ign(gl_FragCoord.xy, 2.0));" +
             "  @OUT@ = vec4(encBasic + (noiseBasic - vec3(0.5)) / 255.0, 1.0); return; }" +

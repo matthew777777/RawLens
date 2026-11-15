@@ -295,8 +295,16 @@ public:
         // JPEG mode 3: Basic, in output primaries before the transfer curve.
         Vec3 basicSrgb = matVecConst(REC2020_TO_SRGB, rec);
         Vec3 basicP3 = matVecConst(REC2020_TO_DISPLAY_P3, rec);
+        Vec3 basicDisplay{select(displayP3_ != 0, basicP3.r, basicSrgb.r),
+                          select(displayP3_ != 0, basicP3.g, basicSrgb.g),
+                          select(displayP3_ != 0, basicP3.b, basicSrgb.b)};
+        Expr basicPeak = max(basicDisplay.r, max(basicDisplay.g, basicDisplay.b));
+        Expr t = max(basicPeak - 0.6f, 0.0f);
+        Expr basicCompressed = 0.6f + t / (1.0f + t / 0.4f);
+        Expr basicScale = select(basicPeak > 0.6f,
+            lerp(1.0f, basicCompressed / max(basicPeak, 1e-6f), clamp(highlightShoulder_, 0.0f, 1.0f)), 1.0f);
         auto basicChannel = [&](Expr srgb, Expr p3) {
-            Expr linear = clamp(select(displayP3_ != 0, p3, srgb), 0.0f, 1.0f);
+            Expr linear = clamp(select(displayP3_ != 0, p3, srgb) * basicScale, 0.0f, 1.0f);
             Expr x = pow(srgbOetfCh(linear), 1.0f / 1.1f);
             return 0.25f * x + 0.75f * x * x * (3.0f - 2.0f * x);
         };

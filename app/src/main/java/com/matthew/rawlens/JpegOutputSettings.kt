@@ -39,8 +39,10 @@ data class JpegOutputSettings(
      */
     val highlightSoftHeadroom: Float = 0.85f,
     /**
-     * Scene-linear highlight shoulder strength: 0 = pinned Filament AgX only,
-     * 1 = full exponential soft shoulder (knee 0.9, scale 0.8). Default 1.
+     * Highlight shoulder strength: 0 bypasses compression, 1 is full strength.
+     * AgX uses a per-channel exponential shoulder (knee 0.9, scale 0.8).
+     * Basic uses one RGB scale from a rational shoulder (knee 0.6, white limit 1),
+     * preserving channel ratios before its display curve. Default 1.
      */
     val highlightShoulder: Float = 1f,
     /**

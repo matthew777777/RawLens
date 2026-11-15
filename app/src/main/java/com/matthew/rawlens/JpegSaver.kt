@@ -44,6 +44,7 @@ class JpegSaver(private val context: Context) {
             ?: throw IOException("Could not create pending JPEG media entry")
         val insertedAt = SystemClock.elapsedRealtime()
         try {
+            var ultraHdrEncoded = false
             if (developed.settings.ultraHdr) {
                 // RAWR-parity Full Ultra HDR: native dual-encode (SDR base +
                 // fitted gain map) + JPEG_R mux. A null map or any native
@@ -60,6 +61,7 @@ class JpegSaver(private val context: Context) {
                         resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
                             NativeUltraHdrWriter.encode(bitmap, gainmap, descriptor, developed.settings)
                         } ?: throw IOException("Could not open Ultra HDR JPEG output descriptor")
+                        ultraHdrEncoded = true
                     } catch (failure: IOException) {
                         Log.w(LOG_TAG, "Native Ultra HDR encode failed; writing SDR fallback", failure)
                         resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
@@ -99,7 +101,10 @@ class JpegSaver(private val context: Context) {
                     CaptureExifAttributes.writeTo(this, metadata, captureTimeMillis)
                     setAttribute(
                         ExifInterface.TAG_IMAGE_DESCRIPTION,
-                        jpegImageDescription(developed.settings, typeSuffix, description)
+                        jpegImageDescription(
+                            developed.settings, typeSuffix, description, metadata,
+                            bitmap.width, bitmap.height, ultraHdrEncoded, encodedAt - insertedAt
+                        )
                     )
                     // A missing fix writes no GPS tags at all: an absent geotag
                     // is truthful, a stale or zeroed one is not.
@@ -119,7 +124,7 @@ class JpegSaver(private val context: Context) {
                 LOG_TAG,
                 "JPEG save ${bitmap.width}x${bitmap.height} q=${developed.settings.jpegQuality} " +
                     "subsampling=${developed.settings.chromaSubsampling.label} " +
-                    "encoder=${if (developed.settings.ultraHdr) "Android JPEG/R" else "libjpeg-turbo"}: " +
+                    "encoder=${if (ultraHdrEncoded) "native JPEG/R" else "libjpeg-turbo"}: " +
                     "insert=${insertedAt - startedAt}ms encode=${encodedAt - insertedAt}ms exif=${exifAt - encodedAt}ms " +
                     "publish=${publishedAt - exifAt}ms total=${publishedAt - startedAt}ms"
             )
@@ -141,14 +146,3 @@ class JpegSaver(private val context: Context) {
         const val LOG_TAG = "RawLensDevelop"
     }
 }
-
-internal fun jpegImageDescription(
-    settings: JpegOutputSettings,
-    typeSuffix: String?,
-    description: String?
-): String = (description?.let { "$it\nJPEG DEVELOPMENT\n" } ?: "") +
-    (if (typeSuffix == CaptureFileNames.TYPE_MFSR || typeSuffix == CaptureFileNames.TYPE_LKR)
-        "Merged linear camera RGB -> ACEScg -> AgX " else "RAW_SENSOR -> AMaZE -> ACEScg -> AgX ") +
-    "${settings.agxLook.label} -> " +
-        (if (settings.displayP3) "Display P3" else "sRGB") +
-        if (settings.ultraHdr) " -> Ultra HDR gainmap (JPEG_R)" else ""

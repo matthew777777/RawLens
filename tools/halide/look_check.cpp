@@ -156,8 +156,15 @@ static void refLook(const float q[4], int x, int y, const Buffer<float> &lensMap
     if (p.jpeg == 3) {
         double display[3];
         matVecD(p.p3 ? R2P : R2S, rec, display);
+        double peak = fmax(display[0], fmax(display[1], display[2]));
+        double scale = 1.0;
+        if (peak > 0.6) {
+            double t = peak - 0.6;
+            double compressed = 0.6 + t / (1.0 + t / 0.4);
+            scale += clampD(p.shoulder, 0.0, 1.0) * (compressed / peak - 1.0);
+        }
         for (int i = 0; i < 3; ++i) {
-            double x = pow(oetfD(clampD(display[i], 0.0, 1.0)), 1.0 / 1.1);
+            double x = pow(oetfD(clampD(display[i] * scale, 0.0, 1.0)), 1.0 / 1.1);
             out[i] = 0.25 * x + 0.75 * x * x * (3.0 - 2.0 * x);
         }
         return;

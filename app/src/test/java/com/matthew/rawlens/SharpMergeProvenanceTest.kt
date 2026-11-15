@@ -54,10 +54,12 @@ class SharpMergeProvenanceTest {
 
     @Test fun jpegPreservesHdrPlusRecordAndSingleFrameDefault() {
         val description = "Captured with RawLens\nHDR+ GPU merge\nPARAMETERS\nFrames: 16\nTIMINGS\nMerge: 21789 ms"
-        assertJpegRoundTrip(jpegImageDescription(JpegOutputSettings(), CaptureFileNames.TYPE_HDRPLUS, description))
+        for (mode in PhotoToneMapper.entries) {
+            assertJpegRoundTrip(jpegImageDescription(JpegOutputSettings(toneMapper = mode), CaptureFileNames.TYPE_HDRPLUS, description))
+        }
         assertTrue(jpegImageDescription(JpegOutputSettings(), CaptureFileNames.TYPE_HDRPLUS,
             description).startsWith(description))
-        assertTrue(jpegImageDescription(JpegOutputSettings(), null, null).startsWith("RAW_SENSOR -> AMaZE"))
+        assertTrue(jpegImageDescription(JpegOutputSettings(), null, null).contains("RAW_SENSOR -> ACEScg"))
     }
     private fun assertJpegRoundTrip(description: String) {
         mockConstruction(Pair::class.java) { pair, context ->
