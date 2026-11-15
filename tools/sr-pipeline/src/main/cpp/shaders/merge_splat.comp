@@ -35,6 +35,48 @@ vec4 flowWeights(float t) {
               1.0+3.0*t+3.0*t*t-3.0*t*t*t, t*t*t) / 6.0;
 }
 
+// Interpolating cubic on the native green lattice, whose axes are the
+// two sensor diagonals. Unlike a tiny normalized Gaussian this reproduces
+// constants and linear ramps at every subpixel phase.
+float greenCubic(float x) {
+  x = abs(x);
+  if (x < 1.0) return ((1.5*x-2.5)*x)*x+1.0;
+  if (x < 2.0) return ((-0.5*x+2.5)*x-4.0)*x+2.0;
+  return 0.0;
+}
+
+float greenReconstruction(float x) {
+  // Compensate the interpolation's low-pass response with a symmetric
+  // lattice second difference. It has zero constant/linear response, so
+  // this detail recovery cannot move an edge with Bayer sample phase.
+  float a = 0.125*clamp(p.scale,1.0,2.0);
+  return (1.0+2.0*a)*greenCubic(x)-a*(greenCubic(x-1.0)+greenCubic(x+1.0));
+}
+
+float interpolateGreen(vec2 position) {
+  vec2 uv = vec2((position.x+position.y-2.0)*0.5,
+                 (position.x-position.y-1.0)*0.5);
+  ivec2 base = ivec2(floor(uv));
+  float wx[6], wy[6];
+  for (int k = 0; k < 6; ++k) {
+    wx[k] = greenReconstruction(uv.x-float(base.x+k-2));
+    wy[k] = greenReconstruction(uv.y-float(base.y+k-2));
+  }
+  float value = 0.0, low = 3.402823e38, high = -3.402823e38;
+  for (int a = -2; a <= 3; ++a) for (int b = -2; b <= 3; ++b) {
+    int u = base.x+a, v = base.y+b;
+    int j = u+v+1, i = u-v;
+    // Constant border extension must preserve the CFA colour/parity.
+    int jp = j & 1, ip = i & 1;
+    j = clamp(j, jp, int(p.width)-2+jp);
+    i = clamp(i, ip, int(p.height)-2+ip);
+    float c = compImg[uint(i)*p.width+uint(j)];
+    value += wx[a+2]*wy[b+2]*c;
+    low = min(low,c); high = max(high,c);
+  }
+  return clamp(value,low,high);
+}
+
 void main() {
   uint id = gl_GlobalInvocationID.x;
   if (id >= p.pixelCount) return;
@@ -144,30 +186,21 @@ void main() {
   // ring of a 7x7 gather, making entering/leaving weights continuously zero.
   // The original Jamy-L/Wronski gather stays 3x3.
   int radius = refKernels ? 3 : 1;
+  bool detailGreen = bayer && refKernels && p.pad[4] == 0u && p.pad[5] != 0u;
   for (int di = -radius; di <= radius; di++) {
     for (int dj = -radius; dj <= radius; dj++) {
       int j = center_j + dj;
       int i2 = center_i + di;
       if (!(j >= 0 && j < int(lrW) && i2 >= 0 && i2 < int(lrH))) continue;
       uint ch = bayer ? uint(i2 % 2 + j % 2) : 0u; // RGGB hardcoded, as on CPU
+      if (detailGreen && ch == 1u) continue;
       float c = compImg[uint(i2) * lrW + uint(j)];
       float dx = float(j) - mov_j;
       float dy = float(i2) - mov_i;
       float z = ixx * dx * dx + 2.0 * ixy * dx * dy + iyy * dy * dy;
       z = max(z, 0.0);
       if (bayer && ch != 1u) z *= chromaInv;
-      // Detail reconstruction uses half the model bandwidth in OUTPUT
-      // pixels, at both 1x and SR. The unscaled raw-space bandwidth was
-      // an additional low-pass filter rather than a sampling footprint.
-      // The wider reference remains a stable fallback when comparisons are
-      // rejected; colour differences keep their established wider support.
-      bool detail = refKernels && p.pad[4] == 0u && p.pad[5] != 0u &&
-                    ch == 1u;
-      float area = detail ? 4.0*p.scale*p.scale : 1.0;
-      z *= area;
-      // Compensate the two-dimensional Gaussian area so narrowing does
-      // not silently reduce the comparison frame's total contribution.
-      float w = exp(-0.5 * z) * area;
+      float w = exp(-0.5 * z);
       if (refKernels) {
         w *= (1.0 - smoothstep(2.5, 3.5, abs(dx))) *
              (1.0 - smoothstep(2.5, 3.5, abs(dy)));
@@ -175,6 +208,15 @@ void main() {
       val[ch] += w * local_r * c;
       acc[ch] += w * local_r;
     }
+  }
+  if (detailGreen && local_r > 0.0) {
+    // The former 4*scale^2 narrowing undersampled the green checkerboard.
+    // Its mass and centroid oscillated with CFA phase, creating zipper
+    // edges even with perfect flow. Interpolate on that lattice and use
+    // the Gaussian's integrated green mass, independent of sample phase.
+    float weight = 3.14159265359*sqrt(max(det,0.0))*local_r;
+    val.g = weight*interpolateGreen(vec2(mov_x,mov_y));
+    acc.g = weight;
   }
   for (uint ch = 0u; ch < nch; ch++) {
     num_[id * 3u + ch] += val[ch];

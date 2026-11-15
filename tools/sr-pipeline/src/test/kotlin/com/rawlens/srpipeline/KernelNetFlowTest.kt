@@ -75,14 +75,42 @@ class KernelNetFlowTest {
                             for (yy in my.toInt()-3..my.toInt()+3) for (xx in mx.toInt()-3..mx.toInt()+3) {
                                 if (xx !in 0 until w || yy !in 0 until height) continue
                                 val c = yy % 2 + xx % 2
+                                if (mode==10 && c==1) continue
                                 val dx = xx - (mx - .5); val dy = yy - (my - .5)
                                 fun taper(d: Double): Double {
                                     val t = (kotlin.math.abs(d) - 2.5).coerceIn(0.0, 1.0)
                                     return 1.0 - t*t*(3 - 2*t)
                                 }
-                                val area = if(mode==10 && c==1) (4*scale*scale).toDouble() else 1.0
-                                val weight = area * exp(-.5 * area * (dx*dx + dy*dy)) * taper(dx) * taper(dy)
+                                val weight = exp(-.5 * (dx*dx + dy*dy)) * taper(dx) * taper(dy)
                                 expectedN[c] += weight * raw[yy*w+xx]; expectedD[c] += weight
+                            }
+                            if (mode==10) {
+                                fun cubic(t0: Double): Double {
+                                    val t=kotlin.math.abs(t0)
+                                    return when { t<1 -> 1.5*t*t*t-2.5*t*t+1
+                                        t<2 -> -.5*t*t*t+2.5*t*t-4*t+2
+                                        else -> 0.0 }
+                                }
+                                fun reconstruction(t: Double)=(1+.25*scale)*cubic(t)-.125*scale*(cubic(t-1)+cubic(t+1))
+                                val u=(mx+my-2)/2; val v=(mx-my-1)/2
+                                val bu=kotlin.math.floor(u).toInt(); val bv=kotlin.math.floor(v).toInt()
+                                var value=0.0; var lo=Double.POSITIVE_INFINITY; var hi=Double.NEGATIVE_INFINITY
+                                for(a in -2..3) for(b in -2..3) {
+                                    val j0=bu+a+bv+b+1; val i0=bu+a-bv-b
+                                    val j=j0.coerceIn(j0 and 1,w-2+(j0 and 1))
+                                    val iy=i0.coerceIn(i0 and 1,height-2+(i0 and 1))
+                                    val c=raw[iy*w+j].toDouble()
+                                    value+=reconstruction(u-bu-a)*reconstruction(v-bv-b)*c
+                                    lo=minOf(lo,c); hi=maxOf(hi,c)
+                                }
+                                expectedN[1]=Math.PI*value.coerceIn(lo,hi); expectedD[1]=Math.PI
+                                // Ground truth, independent of the reconstruction oracle:
+                                // a linear scene must have no Bayer-phase displacement.
+                                if(mx>6 && mx<w-6 && my>6 && my<height-6) {
+                                    assertEquals("linear scene at $scale x ($x,$y)",
+                                        ((mx-.5)+2*(my-.5))/100,
+                                        gotN.get((y*ow+x)*3+1).toDouble()/gotD.get((y*ow+x)*3+1),1e-6)
+                                }
                             }
                         }
                         for (c in 0..2) {
@@ -90,7 +118,7 @@ class KernelNetFlowTest {
                             // Narrower kernels amplify fp32 coordinate rounding;
                             // the peak density also grows by the Gaussian area ratio.
                             val tolerance = if(mode==10 && c==1) 1e-5*4*scale*scale else 1e-5
-                            assertEquals("num ($x,$y,$c)", expectedN[c], gotN.get(i).toDouble(), tolerance)
+                            assertEquals("num mode=$mode scale=$scale ($x,$y,$c)", expectedN[c], gotN.get(i).toDouble(), tolerance)
                             assertEquals("den ($x,$y,$c)", expectedD[c], gotD.get(i).toDouble(), tolerance)
                         }
                     }
