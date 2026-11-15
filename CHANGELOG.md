@@ -4,27 +4,30 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
-## Unreleased
+## [2.3.42] - 2026-11-15
 
-Repository changes since the 2.2.46 snapshot; generated build numbers live in
-`app/version.properties`.
+Changes since the previous published release, **2.2.86**. See the
+[complete release notes and commit inventory](docs/releases/2.3.42.md).
 
-- Rename user-facing merge engines to KB-SR and LK-SR and add a Merge settings tab.
-- Add independent LK-SR zoom/output-resolution controls and reference-guide rejection.
-- Add optional ISP SurfaceView preview, including during LK-SR merges; pause the camera behind Settings.
-- Default offline merges to JPEG, expose output quality controls, support burst sharing,
-  and retain device orientation when loading staged takes.
-- Add two-radius chroma cleanup to ordinary and merged development, revised RAW
-  white-balance fallback, and lens-shading transport for root RAW / merged DNGs.
-- Add gyro stabilization v2 with L1 path smoothing and self-calibration, Encoded
-  Video saturation/vibrance and orientation fixes, and optional RAW Video DCT denoise.
-- Reduce Encoded Video preview work to the viewfinder budget while retaining the selected demosaic.
-- Optimize mobile MFSR; estimate scene noise when a DNG lacks NoiseProfile in the desktop CLI.
-- Add the `tools/sr-pipeline/run.sh` launcher and standalone LK-SR Lite host/mobile CLI.
-- Keep foliage/rejection experiments and optional Lite denoise controls distinct from shipped defaults.
-- Fix update-dialog actions on narrow displays.
+- Rename merge engines to KB-SR / LK-SR; integrate LK-R Lite, keep reference-guide
+  rejection enabled, prewarm Vulkan pipelines and refine hybrid chroma handling.
+- Add KB-SR Lab and 2× output controls; improve 2× detail/zipper handling and
+  mobile processing, with scene-noise fallback and a desktop launcher.
+- Default offline merges to JPEG, add quality controls and burst sharing, and
+  preserve orientation when loading staged takes.
+- Add Basic / AgX tone mapping across saved photos, previews, scopes and metering.
+- Add two-radius chroma cleanup, improve RAW white-balance fallback and root /
+  merged-DNG lens shading, and fix defringe stripping flat blue/purple colour.
+- Add experimental supported-firmware root lapis 200→50 MP capture, tiled Vulkan
+  development, LinearRaw DNG and shared JPEG development with early preview return.
+- Add gyro stabilization v2 and reduce Encoded Video preview processing work.
+- Pause the camera behind Settings and fix narrow-screen update-dialog actions.
+- Refresh user/developer guides, GPU audits, parity evidence and research tools.
+- Correct PROGRAM AE startup regression expectations for adaptive profiles.
 
-See [current repository state](docs/CURRENT_STATE.md) for source pointers and validation limits.
+Validation: 2,006 JVM tests (nine skipped; zero failures/errors) and native debug
+build passed. Earlier device evidence and experimental-mode limits are detailed
+in the release notes. APK signing/installation are separate release steps.
 
 ## [2.2.46] - Historical development snapshot
 
