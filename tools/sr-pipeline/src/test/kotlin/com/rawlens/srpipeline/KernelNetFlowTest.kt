@@ -91,17 +91,26 @@ class KernelNetFlowTest {
                                         t<2 -> -.5*t*t*t+2.5*t*t-4*t+2
                                         else -> 0.0 }
                                 }
-                                fun reconstruction(t: Double)=cubic(t)
-                                val u=(mx+my-2)/2; val v=(mx-my-1)/2
-                                val bu=kotlin.math.floor(u).toInt(); val bv=kotlin.math.floor(v).toInt()
-                                var value=0.0; var lo=Double.POSITIVE_INFINITY; var hi=Double.NEGATIVE_INFINITY
-                                for(a in -2..3) for(b in -2..3) {
-                                    val j0=bu+a+bv+b+1; val i0=bu+a-bv-b
+                                fun at(j0: Int,i0: Int): Double {
                                     val j=j0.coerceIn(j0 and 1,w-2+(j0 and 1))
                                     val iy=i0.coerceIn(i0 and 1,height-2+(i0 and 1))
-                                    val c=raw[iy*w+j].toDouble()
-                                    value+=reconstruction(u-bu-a)*reconstruction(v-bv-b)*c
-                                    lo=minOf(lo,c); hi=maxOf(hi,c)
+                                    return raw[iy*w+j].toDouble()
+                                }
+                                fun dense(j: Int,i: Int): Double {
+                                    if((j+i) and 1==1) return at(j,i)
+                                    val l=at(j-1,i);val r=at(j+1,i)
+                                    val up=at(j,i-1);val down=at(j,i+1)
+                                    val dh=kotlin.math.abs(l-r);val dv=kotlin.math.abs(up-down)
+                                    val wh=1/(1e-8+dh*dh);val wv=1/(1e-8+dv*dv)
+                                    return (wh*(l+r)+wv*(up+down))/(2*(wh+wv))
+                                }
+                                val qx=mx-.5;val qy=my-.5
+                                val bx=kotlin.math.floor(qx).toInt();val by=kotlin.math.floor(qy).toInt()
+                                var value=0.0; var lo=Double.POSITIVE_INFINITY;var hi=Double.NEGATIVE_INFINITY
+                                for(a in -1..2) for(b in -1..2) {
+                                    val c=dense(bx+a,by+b)
+                                    value+=cubic(qx-bx-a)*cubic(qy-by-b)*c
+                                    lo=minOf(lo,c);hi=maxOf(hi,c)
                                 }
                                 expectedN[1]=Math.PI*value.coerceIn(lo,hi); expectedD[1]=Math.PI
                                 // Ground truth, independent of the reconstruction oracle:

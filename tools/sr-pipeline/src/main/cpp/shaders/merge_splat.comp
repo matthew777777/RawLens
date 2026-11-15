@@ -35,9 +35,8 @@ vec4 flowWeights(float t) {
               1.0+3.0*t+3.0*t*t-3.0*t*t*t, t*t*t) / 6.0;
 }
 
-// Interpolating cubic on the native green lattice, whose axes are the
-// two sensor diagonals. Unlike a tiny normalized Gaussian this reproduces
-// constants and linear ramps at every subpixel phase.
+// Interpolating cubic on the complete sensor grid after directional green
+// reconstruction. No inverse-filter sharpening or narrowed Gaussian.
 float greenCubic(float x) {
   x = abs(x);
   if (x < 1.0) return ((1.5*x-2.5)*x)*x+1.0;
@@ -45,35 +44,34 @@ float greenCubic(float x) {
   return 0.0;
 }
 
-float greenReconstruction(float x) {
-  // Interpolate without inverse-filter sharpening. The former separable
-  // second-difference boost had gain (1+4a)^2 at diagonal-lattice Nyquist
-  // (4x at scale 2), amplifying aliases into teeth on foliage and railings.
-  return greenCubic(x);
+// Reconstruct missing green samples along locally smooth sensor axes before
+// regular-grid interpolation. Fixed diagonal-only interpolation crosses
+// axis-aligned edges and imprints the Bayer phase on their contours.
+float sensorGreen(int j,int i) {
+  int jp=j&1, ip=i&1;
+  j=clamp(j,jp,int(p.width)-2+jp);i=clamp(i,ip,int(p.height)-2+ip);
+  return compImg[uint(i)*p.width+uint(j)];
 }
-
+float denseGreen(int j,int i) {
+  if(((j+i)&1)==1) return sensorGreen(j,i);
+  float l=sensorGreen(j-1,i),r=sensorGreen(j+1,i);
+  float u=sensorGreen(j,i-1),d=sensorGreen(j,i+1);
+  float dh=abs(l-r),dv=abs(u-d);
+  // Prefer the direction that varies least, with continuous positive weights
+  // instead of a hard horizontal/vertical switch. The small floor bounds the
+  // inverse weights in normalized RAW units; it is not a spatial grain mask.
+  float wh=1.0/(1e-8+dh*dh),wv=1.0/(1e-8+dv*dv);
+  return (wh*(l+r)+wv*(u+d))/(2.0*(wh+wv));
+}
 float interpolateGreen(vec2 position) {
-  vec2 uv = vec2((position.x+position.y-2.0)*0.5,
-                 (position.x-position.y-1.0)*0.5);
-  ivec2 base = ivec2(floor(uv));
-  float wx[6], wy[6];
-  for (int k = 0; k < 6; ++k) {
-    wx[k] = greenReconstruction(uv.x-float(base.x+k-2));
-    wy[k] = greenReconstruction(uv.y-float(base.y+k-2));
+  vec2 q=position-0.5;ivec2 base=ivec2(floor(q));vec2 t=fract(q);
+  float value=0.0,lo=3.402823e38,hi=-3.402823e38;
+  for(int y=-1;y<=2;++y) for(int x=-1;x<=2;++x) {
+    float c=denseGreen(base.x+x,base.y+y);
+    value+=greenCubic(float(x)-t.x)*greenCubic(float(y)-t.y)*c;
+    lo=min(lo,c);hi=max(hi,c);
   }
-  float value = 0.0, low = 3.402823e38, high = -3.402823e38;
-  for (int a = -2; a <= 3; ++a) for (int b = -2; b <= 3; ++b) {
-    int u = base.x+a, v = base.y+b;
-    int j = u+v+1, i = u-v;
-    // Constant border extension must preserve the CFA colour/parity.
-    int jp = j & 1, ip = i & 1;
-    j = clamp(j, jp, int(p.width)-2+jp);
-    i = clamp(i, ip, int(p.height)-2+ip);
-    float c = compImg[uint(i)*p.width+uint(j)];
-    value += wx[a+2]*wy[b+2]*c;
-    low = min(low,c); high = max(high,c);
-  }
-  return clamp(value,low,high);
+  return clamp(value,lo,hi);
 }
 
 void main() {
