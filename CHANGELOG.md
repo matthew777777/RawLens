@@ -7,7 +7,7 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 ## [2.3.43] - 2026-11-15
 
 Changes since the previous published release, **2.2.86**. See the
-[complete release notes and commit inventory](docs/releases/2.3.43.md).
+[release notes](docs/releases/2.3.43.md).
 
 - Default automatic LK-SR KernelNet denoising to on, retaining the off switch,
   saved choices and low-noise bypass; raise 2× burst capacity to 30 frames.
@@ -15,6 +15,8 @@ Changes since the previous published release, **2.2.86**. See the
   rejection; enable desktop colour-difference correction with valid white balance.
 - Recover silent autofocus and abandoned tap scans with bounded retries.
 - Expand sequential two-exposure RAW HDR to manual RAW lenses and rooted DCG14.
+- Default photo tone mapping to Basic while preserving explicit saved choices.
+- Default HDR+ to HQ with strength 3, preserving saved automatic/manual choices.
 - Preserve Basic highlights, describe saved tone mapping in JPEG metadata, fix
   developed merge filenames/status labels, and rename Denoise settings to Details.
 - Rename merge engines to KB-SR / LK-SR; integrate LK-R Lite, keep reference-guide
