@@ -20,9 +20,9 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.system.exitProcess
 
-private data class Crop(val x: Int, val y: Int, val w: Int, val h: Int)
+internal data class Crop(val x: Int, val y: Int, val w: Int, val h: Int)
 
-private data class Plan(
+internal data class Plan(
     val inputDir: Path,
     val outputDir: Path,
     val ref: Int,
@@ -45,8 +45,9 @@ private data class Plan(
     val s2: Float = 12f,
     /** GAT before Wronski kernel estimation (IPOL; the paper has none). */
     val kernelGat: Boolean = true,
-    /** Z1 colour-difference merge white balance (R, B gains); null = off. */
+    /** Explicit Z1 white-balance gains; null = automatic for Vulkan KernelNet. */
     val colourDiff: FloatArray? = null,
+    val colourDiffDisabled: Boolean = false,
     /** Own noise model var = a x + b (normalised raw) replacing the DNG/Camera2 NoiseProfile; null = profile. */
     val noiseAb: DoubleArray? = null,
 )
@@ -65,6 +66,8 @@ private fun usage(): String = """
       --spv-dir DIR  directory with the compiled stage .spv modules (required for --backend vulkan)
       --lut PATH     noise LUT .npz (or "auto" to simulate it in-process); enables noise correction with its curves, validated
                      against the DNG noise profile (without it, noise correction is off)
+      --colour-diff auto|off|R,B
+                     zipper correction (default: auto for Vulkan KernelNet with valid AsShotNeutral)
       --noise-ab a,b own noise model var = a*x + b (normalised raw) instead of the DNG/Camera2 NoiseProfile
       --heap-budget-mb N
                      peak JVM heap-pool gate in MB; fails the run when exceeded
@@ -87,7 +90,7 @@ private fun parseCrop(raw: String): Crop {
     return Crop(x, y, w, h)
 }
 
-private fun parseArgs(args: Array<String>): Plan {
+internal fun parseArgs(args: Array<String>): Plan {
     var inDir: String? = null
     var outDir: String? = null
     var ref = 0
@@ -107,6 +110,7 @@ private fun parseArgs(args: Array<String>): Plan {
     var s2 = 12f
     var kernelGat = true
     var colourDiff: FloatArray? = null
+    var colourDiffDisabled = false
     var noiseAb: DoubleArray? = null
 
     var i = 0
@@ -184,9 +188,15 @@ private fun parseArgs(args: Array<String>): Plan {
                 i++
             }
             "--colour-diff" -> {
-                val parts = args.getOrNull(++i)?.split(",")?.mapNotNull { it.toFloatOrNull() }
-                colourDiff = parts?.takeIf { it.size == 2 && it.all { g -> g > 0f } }?.toFloatArray()
-                    ?: fail("--colour-diff requires wbR,wbB (positive gains, e.g. 1.88,1.49)")
+                val value = args.getOrNull(++i) ?: fail("--colour-diff requires auto, off or wbR,wbB")
+                colourDiffDisabled = value == "off"
+                colourDiff = if (value == "off" || value == "auto") null else {
+                    val parts = value.split(",").map { it.trim().toFloatOrNull() }
+                    if (parts.size != 2 || parts.any { it == null || !it.isFinite() || it <= 0f })
+                        fail("--colour-diff requires auto, off or two positive finite gains")
+                    floatArrayOf(parts[0]!!, parts[1]!!)
+                }
+                i++
             }
             "--kernel-gat" -> {
                 kernelGat = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--kernel-gat requires on|off") }
@@ -244,6 +254,7 @@ private fun parseArgs(args: Array<String>): Plan {
         s2 = s2,
         kernelGat = kernelGat,
         colourDiff = colourDiff,
+        colourDiffDisabled = colourDiffDisabled,
         noiseAb = noiseAb,
     )
 }
@@ -275,6 +286,17 @@ private fun spv(dir: Path, base: String): ByteArray {
     val f = dir.resolve("$base.spv").toFile()
     require(f.isFile) { "sr-pipeline: missing stage module: $f" }
     return f.readBytes()
+}
+
+/** Desktop KernelNet uses the same colour-difference reconstruction as the app. */
+internal fun colourDiffGains(plan: Plan, neutral: DoubleArray?): FloatArray? {
+    if (plan.colourDiffDisabled) return null
+    plan.colourDiff?.let { return it.copyOf() }
+    if (plan.kernel != "kernelnet" || plan.backend != "vulkan") return null
+    if (neutral == null || neutral.size != 3 || neutral.any { !it.isFinite() || it <= 0.0 }) return null
+    val r = (neutral[1] / neutral[0]).toFloat()
+    val b = (neutral[1] / neutral[2]).toFloat()
+    return if (r.isFinite() && b.isFinite() && r > 0f && b > 0f) floatArrayOf(r,b) else null
 }
 
 private fun merge(plan: Plan) {
@@ -351,6 +373,8 @@ private fun merge(plan: Plan) {
     val fin = BurstConfig.finalize(snr)
     val factors = listOf(1, 2, 4, 4)
     BurstConfig.sanitize(plan.scale, fin.tileSize, factors, fin.tileSizes, h, w)
+    val profile = SrpBridge.readDngColorProfile(refPath.toString())
+    val colourDiff = colourDiffGains(plan, profile.neutral)
     val config = PipelineConfig(
         scale = plan.scale,
         bayer = true,
@@ -363,7 +387,8 @@ private fun merge(plan: Plan) {
             dTr = fin.dTr.toFloat(),
         ),
         kernelPreprocessing = if (plan.kernelGat) "gat" else null,
-        colourDiff = plan.colourDiff,
+        colourDiff = colourDiff,
+        chromaScale = com.rawlens.srpipeline.stages.SrTuning().chromaScale(plan.scale),
         kernelAlpha = FloatArray(4) { alpha[it].toFloat() },
         kernelBeta = FloatArray(4) { beta[it].toFloat() },
         robustnessParams = RobustnessParams(noiseCorrection = noiseCorrection, s3 = plan.s3, s1 = plan.s1, s2 = plan.s2),
@@ -388,6 +413,7 @@ private fun merge(plan: Plan) {
             )
         },
     )
+    println("sr-pipeline: colour-difference reconstruction ${colourDiff?.contentToString() ?: "off"}")
     println("sr-pipeline: ${w}x$h snr=${"%.2f".format(snr)} tile=${fin.tileSize} " +
         "backend=${plan.backend} noiseCorrection=$noiseCorrection kernel=${plan.kernel}" +
         (if (plan.kernel == "kernelnet") " knScale=${plan.knScale} knCap=${plan.knCap}" else ""))
@@ -480,7 +506,6 @@ private fun merge(plan: Plan) {
     // the app's merge writer; absent tags select the writer defaults.
     // Orientation rides along so raw editors display the file exactly
     // like the finished PNG (0 = unknown, tag omitted).
-    val profile = SrpBridge.readDngColorProfile(refPath.toString())
     val orientation = SrpBridge.readDngOrientation(refPath.toString())
     val rc = SrpBridge.writeDng(out, outW, outH, rgb, profile.make, profile.model,
         profile.colorMatrix, profile.neutral, profile.illuminant, orientation)

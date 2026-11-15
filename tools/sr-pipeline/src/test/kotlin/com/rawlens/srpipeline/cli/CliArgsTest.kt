@@ -9,13 +9,14 @@ import org.junit.Test
  * Unit tests for the sr-pipeline CLI argument contract.
  *
  * NOTE (scope): [Main.kt](/Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/sr-pipeline/src/main/kotlin/com/rawlens/srpipeline/cli/Main.kt)
- * declares its arg parser (`parseArgs`/`parseCrop`) as file-`private` and
+ * originally declared its arg parser (`parseArgs`/`parseCrop`) as file-`private` and
  * reports errors via `exitProcess(2)`, so it cannot be called directly from
  * a unit test. These tests therefore exercise a tiny parser defined below in
  * test scope that mirrors the documented CLI contract (flags, defaults, and
  * validation rules from the `Main.kt` usage text). If the real parser is
- * ever made testable (e.g. returning a sealed result instead of exiting),
- * these tests should be re-pointed at it.
+ * error paths are made testable (e.g. returning a sealed result instead of exiting),
+ * these tests should be re-pointed at it. ColourDiffCliTest exercises the
+ * internal production parser directly for successful argument sequences.
  */
 internal data class TestCrop(val x: Int, val y: Int, val w: Int, val h: Int)
 

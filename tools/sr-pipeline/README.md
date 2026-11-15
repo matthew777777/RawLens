@@ -99,7 +99,7 @@ CLI flags (see `Main.kt` usage text):
 | `--s3 on\|off` | no | supplement S.3 high-frequency artefact rejection |
 | `--s1 F --s2 F`, `--kernel-gat on\|off` | no | IPOL-vs-paper A/B parameters |
 | `--noise-ab a,b` | no | explicit normalized noise variance model `a*signal+b`, overriding tags/estimation |
-| `--colour-diff R,B` | no | Z1 zipper fix: colour-difference merge with white-balance gains R,B (e.g. `1/AsShotNeutral`); off by default (Python parity) |
+| `--colour-diff auto\|off\|R,B` | no | Z1 zipper correction; Vulkan KernelNet defaults to reference `AsShotNeutral` gains and the app's scale-dependent chroma width. `off` retains independent-channel reconstruction. Wronski/CPU defaults remain off for parity. |
 | `--heap-budget-mb N` | no | fail the run if the JVM heap pool exceeds N MB |
 | `--help` / `-h` | no | print usage |
 
