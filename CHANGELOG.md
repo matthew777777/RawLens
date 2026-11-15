@@ -4,29 +4,25 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
-## [Unreleased]
-
-- Restore MFSR / LK-R display names across capture, settings, offline merges and
-  saved-photo labels; retain KernelNet / Wronski as MFSR kernel choices.
-
 ## [2.3.43] - 2026-11-15
 
 Changes since the previous published release, **2.2.86**. See the
 [release notes](docs/releases/2.3.43.md).
 
-- Default automatic LK-SR KernelNet denoising to on, retaining the off switch,
+- Default automatic LK-R KernelNet denoising to on, retaining the off switch,
   saved choices and low-noise bypass; raise 2× burst capacity to 30 frames.
-- Reduce KB-SR tile seams/boxy contours through shared continuous motion and
+- Improve 1×/2× detail and reduce Bayer-phase zipper; reduce MFSR tile seams/boxy contours through shared continuous motion and
   rejection; enable desktop colour-difference correction with valid white balance.
+- Add lens-profile ZIP export and replacement import with confirmation.
 - Recover silent autofocus and abandoned tap scans with bounded retries.
 - Expand sequential two-exposure RAW HDR to manual RAW lenses and rooted DCG14.
 - Default photo tone mapping to Basic while preserving explicit saved choices.
 - Default HDR+ to HQ with strength 3, preserving saved automatic/manual choices.
 - Preserve Basic highlights, describe saved tone mapping in JPEG metadata, fix
   developed merge filenames/status labels, and rename Denoise settings to Details.
-- Rename merge engines to KB-SR / LK-SR; integrate LK-R Lite, keep reference-guide
+- Retain MFSR / LK-R names consistently; integrate LK-R Lite, keep reference-guide
   rejection enabled, prewarm Vulkan pipelines and refine hybrid chroma handling.
-- Add KB-SR Lab and 2× output controls; improve 2× detail/zipper handling and
+- Add MFSR Lab and 2× output controls; improve 2× detail/zipper handling and
   mobile processing, with scene-noise fallback and a desktop launcher.
 - Default offline merges to JPEG, add quality controls and burst sharing, and
   preserve orientation when loading staged takes.
