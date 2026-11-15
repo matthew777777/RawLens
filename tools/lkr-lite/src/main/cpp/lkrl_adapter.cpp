@@ -65,16 +65,21 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   if (const char* v = std::getenv("LKRL_CAVG")) lp.chroma_from_avg = std::atoi(v);
   lp.dct = prm.dct_prior;
   lp.dct_sigma = prm.sigma_end * prm.prior_gain;
-  // Fallback (lost frames only): LK-R's level = the merged noise sigma / sqrt(K); luma off by default
-  // (LK-R: colour only), LKRL_FBLUMA = luma threshold.
-  if (!prm.dct_prior && (prm.dct_fallback || std::getenv("LKRL_FB"))) {
+  // Lost-frame cleanup is colour-only: the DCT switch owns luma shrinkage.
+  // Previously off silently used a stronger luma threshold (2) than on (1).
+  const char* fb = std::getenv("LKRL_FB");
+  if (!prm.dct_prior && (fb ? std::atoi(fb) != 0 : prm.dct_fallback)) {
     lp.dct = true; lp.dct_fallback = true;
     lp.dct_sigma = prm.sigma_noise / std::sqrt(float(K));
   }
   lp.dct_luma = prm.dct_luma; lp.dct_chroma = prm.dct_chroma;
   lp.dct_dark_level = prm.dct_dark_level; lp.dct_dark_cap = prm.dct_dark_cap; lp.dct_dark_luma = prm.dct_dark_luma;
   for (int c = 0; c < 3; ++c) lp.wb[c] = prm.wb[c];
-  if (lp.dct_fallback) lp.dct_luma = std::getenv("LKRL_FBLUMA") ? float(std::atof(std::getenv("LKRL_FBLUMA"))) : 2.0f;
+  if (lp.dct_fallback) {
+    lp.dct_luma = std::getenv("LKRL_FBLUMA") ? float(std::atof(std::getenv("LKRL_FBLUMA"))) : 0.0f;
+    // Shadow texture energy must not amplify the fitted noise threshold.
+    lp.dct_dark_cap = 1.0f;
+  }
   if (const char* v = std::getenv("LKRL_DSIG")) lp.dct_sigma *= float(std::atof(v));
   if (const char* v = std::getenv("LKRL_DLUMA")) lp.dct_luma = float(std::atof(v));
   if (const char* v = std::getenv("LKRL_DCHROMA")) lp.dct_chroma = float(std::atof(v));

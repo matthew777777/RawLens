@@ -1,5 +1,23 @@
 # lkr-lite
 
+### Foliage / wall correction (2026-11-15)
+
+Rejection weights now refresh after geometry changes. Temporal texture tolerance
+retains its curvature-based model-error allowance: a noise-only cap was rejected
+after it falsely rejected static 2x foliage and rocks. Hybrid fit-chroma smoothing uses the aligned
+average as a colour-edge guide, preserving leaf/wall boundaries.
+
+Lost-frame DCT cleanup is colour-only (luma threshold zero), without the
+texture-energy shadow boost. The colour threshold is 2 noise sigmas, previously
+16. `--prior 0` / app DCT off disables DCT luma shrinkage; `--prior 1` enables it.
+Automatic KernelNet and noise-gated hybrid luma denoising remain independent.
+`--fallback 0` disables the remaining colour DCT pass; `LKRL_FB=0` now works too.
+Research environment overrides can still explicitly change these settings.
+
+`lkrl_denoise_check` exercises the shared CLI/JNI adapter at 1x/2x: off-path
+luma invariance, active colour cleanup, active on-path luma shrinkage, finite
+output, and green/grey colour-boundary preservation at both filter radii.
+
 > See [current repository state](../../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
 
 A cheaper LK-Reloaded for mobile GPUs (Mali, Adreno; Vulkan compute). Same

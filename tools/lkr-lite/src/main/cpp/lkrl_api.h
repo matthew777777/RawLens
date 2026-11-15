@@ -42,14 +42,14 @@ struct SolveParams {
   bool dct_prior = false;
   float kernelnet_denoise = -1.0f;   // < 0: CLI environment (default on); app explicitly selects 0 or 1
   // Without dct_prior: one DCT pass at the end, only on tiles that lost frames and only for the
-  // noise those pixels have in excess of fully merged ones (EXPERIMENT).
+  // excess colour noise. Luma is unchanged unless dct_prior is explicitly on.
   bool dct_fallback = true;    // Lite: light DCT cleanup only where frames were lost (2026-11-14; --fallback 0 = off)
   // Opt-in pixel-aperture frequency shaping; zero preserves existing DCT thresholds.
   float dct_aperture = 0.0f;
   const float* model_error = nullptr;  // optional H*W nonnegative variance map, tile HR coordinates
   bool band_rejection = false;  // experimental same-CFA, cycle-spun Haar confidence; requires model_error
   float band_k = 1.0f;          // high-band noise standard deviations (1 = noise-calibrated)
-  float dct_luma = 1.0f, dct_chroma = 16.0f;   // luma 1.5-2 flattened asphalt and foliage at 2x; colour carries the cleaning   // shrinkage thresholds, multiples of the noise level
+  float dct_luma = 1.0f, dct_chroma = 2.0f;   // noise-sigma multipliers; 16 erased real leaf colour
   // Dark blocks (mean luma below dct_dark_level, full effect below a quarter) use their measured
   // AC energy as the noise level when it exceeds the model, up to dct_dark_cap x (1 = off).
   float dct_dark_level = 0.02f, dct_dark_cap = 8.0f;

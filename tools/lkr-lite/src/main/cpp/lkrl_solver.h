@@ -31,15 +31,15 @@ struct LiteParams {
   // (detail term, dark-wide window) x reference guide, min spread; recomputed per geometry.
   // Needs guide > 0 (LK-R --guide); false = Lite's own residual test (guide_mode).
   bool lkr_weights = true;
-  // LK-R's chain once per tile (after the first motion steps); later refreshes only update the
-  // validity of the moved geometry (13.4 s of 39 s GPU on Mali car 1x was the chain, run twice).
-  bool lkr_weights_once = true;
+  // Refresh rejection with geometry. Reusing the first weights saves work but
+  // admits moved edges and leaves static wall samples rejected after alignment.
+  bool lkr_weights_once = false;
   // DCT x-step after the merge (LK-R's dct_x shaders, one pass on the final z): x = denoise(z).
   int chroma_from_avg = 5;   // 1: chroma of the 'A' average, fit continues from it; 2: fit restarts from the start image   // schedule with 'A': output chroma from the average, luma from the fit
   bool dct = false;
   bool dct_fallback = false;   // shrink only the excess noise of lost frames (noise map sqrt(ns^2 - 1))
   float dct_sigma = 0.0f;                      // noise level handed to the shrinkage (LK-R: sigma_t * prior_gain)
-  float dct_luma = 1.0f, dct_chroma = 16.0f;   // thresholds, multiples of the noise level
+  float dct_luma = 1.0f, dct_chroma = 2.0f;   // thresholds, multiples of the noise level
   float dct_dark_level = 0.02f, dct_dark_cap = 8.0f, dct_dark_luma = 0.25f;
   float wb[3] = {1.0f, 1.0f, 1.0f};
   bool robust = true;

@@ -63,6 +63,13 @@ void main() {
         float wx = r == 1 ? (dx == 0 ? 2.0 : 1.0) : (dx == 0 ? 6.0 : (abs(dx) == 1 ? 4.0 : 1.0));
         float wg = r == 0 ? 1.0 : wy * wx;
         int t = yy * pc.W + xx;
+        // Use the aligned average as a colour-edge guide. An unconditional
+        // binomial filter mixes grey wall into green leaves, even at zero noise.
+        vec3 ag = vec3(za[t], za[HW+t], za[2*HW+t]) * wb;
+        vec3 delta = ag - av;
+        float guideNoise = 16.0 * dot(wb * wb, vec3(0.25, 0.5, 0.25)) *
+            max(pc.a * max(yc, 0.0) + pc.b, 1e-12) / float(pc.K);
+        wg *= exp(-dot(delta, delta) / max(guideNoise, 1e-8));
         su += wg * d[2 * HW + t]; sv += wg * d[3 * HW + t]; sw += wg;
       }
     u = su / sw; v = sv / sw;

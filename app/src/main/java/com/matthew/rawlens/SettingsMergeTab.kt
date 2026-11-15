@@ -144,8 +144,8 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc(
-            "Off (default): no sliding-DCT prior. On: a fast GPU denoiser " +
-                "removes colour noise and a little luma noise during reconstruction."
+            "Off (default): no DCT luma smoothing; light colour cleanup remains where frames were rejected. " +
+                "On: also reduces luma noise after merging. Automatic KernelNet denoise is controlled separately."
         ))
         content.addView(settingsCheck("LK-R reference: middle of the burst", mfsrSettings.lkrMiddleReference).apply {
             setOnCheckedChangeListener { _, checked ->

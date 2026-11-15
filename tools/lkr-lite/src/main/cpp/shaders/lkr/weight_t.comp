@@ -26,6 +26,8 @@ float windowWeight(float sr, float sv, float n, float ss, float sd, float g2, fl
   float var = max(2.0 * sv / (n * n) + pc.f3 * pc.f3 * g2, 1e-12);
   float e = m * m / var, k2 = kk * kk;
   float w = 1.0 / (1.0 + max(e - k2, 0.0) / k2);
+  // Curvature includes CFA/interpolation model error, even for static texture.
+  // A sensor-noise-only cap falsely rejects clean 2x foliage and rock detail.
   float energyVar = max(2.0 * sv / n + pc.f3 * pc.f3 * g2 + pc.f0 * sd / n, 1e-12);
   float energy = ss / n / energyVar;
   float limit = 1.0 + kk * sqrt(2.0 / n);
