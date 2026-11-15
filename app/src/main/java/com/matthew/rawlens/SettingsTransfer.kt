@@ -26,32 +26,34 @@ class SettingsTransfer(
     private val activity: Activity,
     private val exportRequestCode: Int,
     private val importRequestCode: Int,
+    private val lensProfiles: Boolean = false,
     private val setStatus: (String) -> Unit,
 ) {
     /** Serialized settings held while the export picker is open. */
-    private var pendingJson: String? = null
+    private var pendingBytes: ByteArray? = null
 
     fun export() {
-        val json = try {
-            SettingsBackup.toJson(SettingsBackup.KNOWN_STORES.associateWith { name ->
-                activity.getSharedPreferences(name, Context.MODE_PRIVATE).all
-            })
+        val bytes = try {
+            val stores = (if (lensProfiles) LensProfilesBackup.stores else SettingsBackup.KNOWN_STORES)
+                .associateWith { name -> activity.getSharedPreferences(name, Context.MODE_PRIVATE).all }
+            if (lensProfiles) LensProfilesBackup.encode(stores)
+            else SettingsBackup.toJson(stores).toByteArray(Charsets.UTF_8)
         } catch (_: IllegalArgumentException) {
-            setStatus("SETTINGS EXPORT FAILED")
+            setStatus(if (lensProfiles) "LENS PROFILE EXPORT FAILED" else "SETTINGS EXPORT FAILED")
             return
         }
-        pendingJson = json
+        pendingBytes = bytes
         try {
             val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
-                type = "application/json"
-                putExtra(Intent.EXTRA_TITLE, "rawlens-settings-$stamp.json")
+                type = if (lensProfiles) "application/zip" else "application/json"
+                putExtra(Intent.EXTRA_TITLE, if (lensProfiles) "rawlens-lens-profiles-$stamp.zip" else "rawlens-settings-$stamp.json")
             }
             @Suppress("DEPRECATION")
             activity.startActivityForResult(intent, exportRequestCode)
         } catch (_: Exception) {
-            pendingJson = null
+            pendingBytes = null
             setStatus("FILE PICKER UNAVAILABLE")
         }
     }
@@ -61,7 +63,8 @@ class SettingsTransfer(
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "*/*"
-                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain"))
+                putExtra(Intent.EXTRA_MIME_TYPES, if (lensProfiles) arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")
+                    else arrayOf("application/json", "text/plain"))
             }
             @Suppress("DEPRECATION")
             activity.startActivityForResult(intent, importRequestCode)
@@ -71,20 +74,20 @@ class SettingsTransfer(
     }
 
     fun onExportResult(resultCode: Int, data: Intent?) {
-        val json = pendingJson
-        pendingJson = null
+        val bytes = pendingBytes
+        pendingBytes = null
         val uri = data?.data
-        if (resultCode == Activity.RESULT_OK && uri != null && json != null) {
+        if (resultCode == Activity.RESULT_OK && uri != null && bytes != null) {
             try {
                 activity.contentResolver.openOutputStream(uri)?.use {
-                    it.write(json.toByteArray(Charsets.UTF_8))
+                    it.write(bytes)
                 } ?: throw IOException("cannot open export file")
-                setStatus("SETTINGS EXPORTED")
+                setStatus(if (lensProfiles) "LENS PROFILES EXPORTED" else "SETTINGS EXPORTED")
             } catch (_: Exception) {
-                setStatus("SETTINGS EXPORT FAILED")
+                setStatus(if (lensProfiles) "LENS PROFILE EXPORT FAILED" else "SETTINGS EXPORT FAILED")
             }
         } else if (resultCode == Activity.RESULT_OK) {
-            setStatus("SETTINGS EXPORT FAILED")
+            setStatus(if (lensProfiles) "LENS PROFILE EXPORT FAILED" else "SETTINGS EXPORT FAILED")
         }
     }
 
@@ -92,10 +95,27 @@ class SettingsTransfer(
         val uri = data?.data
         if (resultCode == Activity.RESULT_OK && uri != null) {
             try {
-                val count = apply(SettingsBackup.fromJson(read(uri)))
-                promptRestart(count)
+                if (lensProfiles) {
+                    val stores = activity.contentResolver.openInputStream(uri)?.use(LensProfilesBackup::decode)
+                        ?: throw IOException("cannot open profiles")
+                    RawLensDialogBuilder(activity)
+                        .setTitle("Replace lens profiles?")
+                        .setMessage("Replace all current lens profiles, vendor keys and saved presets, DNG calibration overrides, PROGRAM exposure profiles, virtual lenses, RAW size/format choices and saved lens selection with this ZIP? Camera IDs must match this device. The app will reload to apply the imported profiles.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Replace and reload") { _, _ ->
+                            try {
+                                apply(stores)
+                                activity.recreate()
+                            } catch (_: Exception) {
+                                setStatus("LENS PROFILE IMPORT FAILED")
+                            }
+                        }.show()
+                } else {
+                    val count = apply(SettingsBackup.fromJson(read(uri)))
+                    promptRestart(count)
+                }
             } catch (_: Exception) {
-                setStatus("SETTINGS IMPORT FAILED")
+                setStatus(if (lensProfiles) "LENS PROFILE IMPORT FAILED" else "SETTINGS IMPORT FAILED")
             }
         }
     }
@@ -124,10 +144,29 @@ class SettingsTransfer(
      * crafted backup can touch another preferences file.
      */
     private fun apply(stores: Map<String, Map<String, Any>>): Int {
+        if (!lensProfiles) return writeStores(stores)
+        val original = LensProfilesBackup.stores.associateWith { name ->
+            activity.getSharedPreferences(name, Context.MODE_PRIVATE).all
+                .filterValues { it != null }.mapValues { it.value!! }
+                .filterKeys { name != SettingsBackup.STORE_MAIN || it in LensProfilesBackup.selectionKeys }
+        }
+        return try {
+            writeStores(stores)
+        } catch (failure: Exception) {
+            try { writeStores(original) } catch (rollback: Exception) { failure.addSuppressed(rollback) }
+            throw failure
+        }
+    }
+
+    private fun writeStores(stores: Map<String, Map<String, Any>>): Int {
         var count = 0
         for ((name, entries) in stores) {
-            if (name !in SettingsBackup.KNOWN_STORES) continue
-            val editor = activity.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear()
+            if (name !in (if (lensProfiles) LensProfilesBackup.stores else SettingsBackup.KNOWN_STORES)) continue
+            val prefs = activity.getSharedPreferences(name, Context.MODE_PRIVATE)
+            val editor = prefs.edit()
+            if (lensProfiles && name == SettingsBackup.STORE_MAIN) {
+                LensProfilesBackup.selectionKeys.forEach { editor.remove(it) }
+            } else editor.clear()
             for ((key, value) in entries) {
                 when (value) {
                     is Boolean -> editor.putBoolean(key, value)

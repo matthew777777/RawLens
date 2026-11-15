@@ -255,6 +255,19 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     quickRow.addView(clear, clearParams)
     container.addView(quickRow)
     container.addView(selectionSummary)
+    container.addView(LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        addView(Button(context).apply {
+            text = "Export profiles ZIP"
+            styleQuickButton(this)
+            setOnClickListener { lensProfilesTransfer.export() }
+        }, LinearLayout.LayoutParams(0, wrapContent(), 1f))
+        addView(Button(context).apply {
+            text = "Import profiles ZIP"
+            styleQuickButton(this)
+            setOnClickListener { lensProfilesTransfer.import() }
+        }, LinearLayout.LayoutParams(0, wrapContent(), 1f))
+    })
     // Secondary action as a plain text link: a third full-width chip
     // made the preset block dominate the screen.
     val copyReport = TextView(this).apply {

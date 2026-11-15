@@ -206,6 +206,8 @@ class MainActivity : Activity() {
     /** Settings JSON awaiting the export picker result; cleared once written or cancelled. */
     internal val settingsTransfer =
         SettingsTransfer(this, SETTINGS_EXPORT_REQUEST, SETTINGS_IMPORT_REQUEST) { setStatus(it) }
+    internal val lensProfilesTransfer =
+        SettingsTransfer(this, LENS_PROFILES_EXPORT_REQUEST, LENS_PROFILES_IMPORT_REQUEST, lensProfiles = true) { setStatus(it) }
     /** Update consent, release checks, download and install ([UpdateFlow]). */
     internal val updateFlow = UpdateFlow(this, UPDATE_INSTALL_SOURCES) { setStatus(it) }
     internal var videoCrop = VideoCrop.OPEN_GATE
@@ -1103,6 +1105,13 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == EncodedVideoLutLibrary.PICK_REQUEST) {
             handleEncodedVideoLutResult(resultCode, data)
+            return
+        }
+        if (requestCode == LENS_PROFILES_EXPORT_REQUEST) {
+            lensProfilesTransfer.onExportResult(resultCode, data)
+            return
+        } else if (requestCode == LENS_PROFILES_IMPORT_REQUEST) {
+            lensProfilesTransfer.onImportResult(resultCode, data)
             return
         }
         if (requestCode == SETTINGS_EXPORT_REQUEST) {
@@ -4467,6 +4476,8 @@ class MainActivity : Activity() {
         const val LOCATION_PERMISSION = 43
         const val SIDECAR_TREE_REQUEST = 44
         private const val RECORDING_TREE_REQUEST = 0x5246
+        private const val LENS_PROFILES_EXPORT_REQUEST = 0x4c50
+        private const val LENS_PROFILES_IMPORT_REQUEST = 0x4c51
         const val SETTINGS_EXPORT_REQUEST = 45
         const val SETTINGS_IMPORT_REQUEST = 46
         const val UPDATE_INSTALL_SOURCES = 47

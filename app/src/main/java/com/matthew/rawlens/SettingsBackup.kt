@@ -56,7 +56,7 @@ object SettingsBackup {
      * Parses an export back to per-store maps. Unknown stores are skipped;
      * anything else malformed throws [IllegalArgumentException].
      */
-    fun fromJson(json: String): Map<String, Map<String, Any>> {
+    fun fromJson(json: String, allowedStores: Set<String> = KNOWN_STORES): Map<String, Map<String, Any>> {
         val root = JsonParser(json).parse() as? Map<*, *>
             ?: throw IllegalArgumentException("settings backup must be a JSON object")
         if (root["format"] != FORMAT) throw IllegalArgumentException("not a RawLens settings backup")
@@ -67,7 +67,7 @@ object SettingsBackup {
             ?: throw IllegalArgumentException("settings backup has no stores object")
         return buildMap {
             for ((storeName, storeValue) in stores) {
-                if (storeName !is String || storeName !in KNOWN_STORES) continue
+                if (storeName !is String || storeName !in allowedStores) continue
                 val entries = storeValue as? Map<*, *>
                     ?: throw IllegalArgumentException("store \"$storeName\" must be an object")
                 put(storeName, EncodedVideoSettingsMigration.normalizeEntries(entries.map { (key, entry) ->

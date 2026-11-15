@@ -226,6 +226,8 @@ Use **Choose recording folder** to record directly to a permitted phone folder o
 
 **Lenses** groups routes that reach the same lens and recommends a route using capabilities and previous use. Rear and front camera routes are grouped separately. A lens can advertise RAW but refuse a particular stream combination. Try another route or RAW size if needed. RAW size/format choices are per lens; unsupported choices can fall back. **Copy lens report** provides route and capability information for support.
 
+Use **Export profiles ZIP** in **Settings → Lenses** to save lens profiles, including all vendor keys and saved vendor presets, DNG calibration overrides, PROGRAM exposure profiles, virtual lenses, RAW size/format choices and the saved lens selection. **Import profiles ZIP** reads a RawLens lens-profile ZIP and asks before replacing all current lens profiles, including profiles absent from the ZIP. Confirm **Replace and reload** to apply them. Camera IDs must match the destination device.
+
 **Debug** contains HDR source-frame saving, Camera2/RAW viewfinder overlays and app logging. Enable only the diagnostics you need, reproduce the issue, then use **Share latest log**. Check logs before sharing, since device and capture details can be included.
 
 **About** provides installed build information, licences and notices. GitHub builds also offer a manual update check and an optional startup check. F-Droid builds disable the updater.

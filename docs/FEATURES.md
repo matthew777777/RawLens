@@ -51,6 +51,7 @@ See the [README](../README.md) for a quick start and [current repository state](
 - Shared translucent overlay style for focus, level, framing guides, zebras and spot meter
 - Feature tags (gold = active/manual), lens discs in a recessed track, video quick panel with torch, gallery seat with the last capture's thumbnail
 - RAW-capable lens discovery with verdicts from real use, and per-lens RAW size / packed RAW format selection
+- Lens profile ZIP export/import, including vendor keys and presets, DNG calibration overrides, PROGRAM profiles, virtual lenses, RAW size/format choices and saved lens selection; confirmed import replaces current profiles and reloads the app
 - Portrait viewfinder layout with rotation-aware controls
 - Optional ISP SurfaceView preview, including during LK-SR merges; the camera pauses behind Settings
 
