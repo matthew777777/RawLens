@@ -166,6 +166,34 @@ public class RootRawProbe {
     while(!frameResults.containsKey(selectedTimestamp) && SystemClock.elapsedRealtime()<deadline)Thread.sleep(10);
     TotalCaptureResult metadata=frameResults.get(selectedTimestamp);
     if(metadata==null)throw new Exception("No timestamp-matched result for selected image");
+    if(opt.containsKey("metadataOut")) {
+      org.json.JSONObject sidecar=new org.json.JSONObject();
+      sidecar.put("width",width);sidecar.put("height",height);
+      sidecar.put("timestampNs",selectedTimestamp);
+      sidecar.put("white",c.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL));
+      sidecar.put("iso",metadata.get(CaptureResult.SENSOR_SENSITIVITY));
+      sidecar.put("exposureNs",metadata.get(CaptureResult.SENSOR_EXPOSURE_TIME));
+      sidecar.put("focalLength",metadata.get(CaptureResult.LENS_FOCAL_LENGTH));
+      sidecar.put("aperture",metadata.get(CaptureResult.LENS_APERTURE));
+      sidecar.put("illuminant1",c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1));
+      sidecar.put("illuminant2",c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2));
+      CameraCharacteristics.Key<?>[] matrixKeys={CameraCharacteristics.SENSOR_COLOR_TRANSFORM1,CameraCharacteristics.SENSOR_COLOR_TRANSFORM2,CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1,CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2,CameraCharacteristics.SENSOR_FORWARD_MATRIX1,CameraCharacteristics.SENSOR_FORWARD_MATRIX2};
+      String[] matrixNames={"colorMatrix1","colorMatrix2","cameraCalibration1","cameraCalibration2","forwardMatrix1","forwardMatrix2"};
+      for(int k=0;k<matrixKeys.length;k++) {
+        ColorSpaceTransform matrix=(ColorSpaceTransform)c.get(matrixKeys[k]);
+        if(matrix!=null) {
+          org.json.JSONArray values=new org.json.JSONArray();
+          for(int row=0;row<3;row++)for(int col=0;col<3;col++)values.put(matrix.getElement(col,row).doubleValue());
+          sidecar.put(matrixNames[k],values);
+        }
+      }
+      android.util.Rational[] neutral=metadata.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT);
+      if(neutral!=null){org.json.JSONArray values=new org.json.JSONArray();for(android.util.Rational v:neutral)values.put(v.doubleValue());sidecar.put("asShotNeutral",values);}
+      float[] blacks=metadata.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL);
+      if(blacks!=null){org.json.JSONArray values=new org.json.JSONArray();for(float v:blacks)values.put(v);sidecar.put("blackRggb",values);}
+      try(Writer out=new FileWriter(opt.get("metadataOut"))){out.write(sidecar.toString(2));}
+      log("METADATA_SIDECAR "+opt.get("metadataOut"));
+    }
     if(frameTimes.size()>1) {
       long first=frameTimes.get(0),last=frameTimes.get(frameTimes.size()-1);
       log("CADENCE frames="+frameTimes.size()+" first="+first+" last="+last+" fps="+((frameTimes.size()-1)*1e9/(last-first)));

@@ -1,0 +1,21 @@
+Rawr (RawrCam)
+Copyright (C) 2026 adityawarmanfw
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, version 3 of the License.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+The complete license text is in the `LICENSE` file at the repository root.
+
+Rawr is distributed as **GPL-3.0-only**. The combined work links components that
+are licensed only under version 3 of the GNU General Public License (notably the
+spektrafilm-derived module), so no "or later" option is offered for the combined
+work. Third-party components, their copyright holders, and their full notices are
+listed in `THIRD_PARTY_NOTICES.md`.

@@ -13,6 +13,7 @@ import java.io.IOException
 class LapisRootProfileInstrumentedTest {
     @Test fun capture50MpHeadless() = capture(LapisRootProfile.Mode.FULL)
     @Test fun capture2xHeadless() = capture(LapisRootProfile.Mode.CROP_2X)
+    @Test fun capture200To50MpHeadless() = capture(LapisRootProfile.Mode.HEXADECA_200)
 
     @Test fun failedCaptureRestoresHeadless() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("lapisRootCapture") == "true")

@@ -3447,6 +3447,7 @@ class MainActivity : Activity() {
     /** Badge-style pairing label: developed container plus DNG when paired. */
     private fun captureBadgeLabel(): String =
         when (redmiRootMode()) {
+            LapisRootProfile.Mode.HEXADECA_200 -> "200→50 MP • DNG"
             LapisRootProfile.Mode.FULL -> "50 MP • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.DCG14 -> "DCG14 • AUTO AE • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.CROP_4X -> "4× • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"

@@ -662,10 +662,14 @@ class RawCameraController(
     @SuppressLint("MissingPermission")
     private fun open() {
         if (!running || destroyed || opening || camera != null) return
+        // The root worker owns camera 0 during a 200→50 MP shot; its completion restarts us.
+        if (hexadecaBusy.get() && !cameraReleasedForHexadeca) { running = false; return }
         if (LapisRootProfile.supported()) {
             val intended = selectedCameraId ?: preferredCameraId() ?: "0"
             val requested = LapisRootProfile.mode(context)
-            val desired = if (intended == "0" && (photoControlsBeforeVideo == null || requested==LapisRootProfile.Mode.DCG14))
+            // 200→50 MP is captured one-shot by the root worker; the preview uses the stock mode.
+            val desired = if (intended == "0" && requested != LapisRootProfile.Mode.HEXADECA_200 &&
+                (photoControlsBeforeVideo == null || requested==LapisRootProfile.Mode.DCG14))
                 requested else LapisRootProfile.Mode.NORMAL
             if (lapisPreparedMode != desired) {
                 opening = true
@@ -2352,9 +2356,63 @@ class RawCameraController(
         // Freeze physical orientation with the shutter press. ZSL selection and asynchronous RAW
         // saving may run later; they must never observe a newer handset orientation.
         val orientationSnapshot = deviceOrientationDegrees
+        if (LapisRootProfile.mode(context) == LapisRootProfile.Mode.HEXADECA_200 &&
+            selectedCameraId == "0" && photoControlsBeforeVideo == null) {
+            postShutter { captureHexadeca200(orientationSnapshot) }
+            return
+        }
         postShutter {
             beginSingleCapture(pressElapsedNanos, sensorCutoffSnapshot, outputFormat, orientationSnapshot)
         }
+    }
+
+    private val hexadecaBusy = AtomicBoolean(false)
+    /** Set once the worker restored the sensor; the preview may run while the 200 MP frame converts. */
+    @Volatile private var cameraReleasedForHexadeca = false
+
+    /**
+     * 200→50 MP one-shot (camera thread): freeze the live 12.5 MP exposure, white balance
+     * and focus, close the app camera, let the root worker capture the 200 MP readout and
+     * write the remosaiced 50 MP DNG, then reopen the normal preview.
+     */
+    private fun captureHexadeca200(orientationDegrees: Int) {
+        if (!hexadecaBusy.compareAndSet(false, true)) return
+        val result = latestPreviewResult
+        val gains = result?.get(CaptureResult.COLOR_CORRECTION_GAINS)
+        val settings = LapisRootCapture.Settings(
+            iso = (result?.get(CaptureResult.SENSOR_SENSITIVITY) ?: 400).coerceIn(50, 6400),
+            exposureNanos = (result?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 20_000_000L).coerceIn(100_000L, 1_000_000_000L),
+            orientation = dngOrientation(characteristics, orientationDegrees).coerceIn(1, 8),
+            gains = gains?.let { listOf(it.red, it.greenEven, it.greenOdd, it.blue) }
+                ?.takeIf { g -> g.all { it.isFinite() && it > 0f } } ?: listOf(2f, 1f, 1f, 1.5f),
+            focusDiopters = (result?.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f).takeIf { it.isFinite() }?.coerceIn(0f, 20f) ?: 0f)
+        val outputSnapshot = captureFormat
+        val jpegSnapshot = jpegOutputSettings
+        val denoiseSnapshot = denoiseSettings
+        onCaptureEnabled(false)
+        onState("200 MP CAPTURE • HOLD STILL")
+        stop()
+        Thread({
+            val outcome = runCatching {
+                LapisRootCapture.capture(context, LapisRootProfile.Mode.HEXADECA_200, settings,
+                    outputFormat = outputSnapshot, jpegSettings = jpegSnapshot, denoise = denoiseSnapshot) {
+                    // Sensor restored: preview comes back while the GPU converts the 200 MP frame.
+                    cameraHandler.post {
+                        cameraReleasedForHexadeca = true
+                        if (!destroyed) start()
+                        onState("PROCESSING 200 MP • PREVIEW READY")
+                    }
+                }
+            }
+            outcome.exceptionOrNull()?.let { Log.e(LOG_TAG, "200→50 MP root capture failed", it) }
+            cameraHandler.post {
+                hexadecaBusy.set(false)
+                if (!cameraReleasedForHexadeca && !destroyed) start()
+                cameraReleasedForHexadeca = false
+                onCaptureEnabled(true)
+                onState(outcome.fold({ "SAVED $it" }, { "200 MP CAPTURE FAILED • ${it.message}" }))
+            }
+        }, "lapis-200mp-capture").start()
     }
 
     fun captureBurst() {
@@ -4796,14 +4854,16 @@ class RawCameraController(
             val at=options.indexOfFirst { it.cameraId=="0" }+1
             options.add(at,LensOption("0","${mainLabel()} · 50 MP",selectedCameraId=="0" && mode==LapisRootProfile.Mode.FULL,
                 "50mp","Main camera, 50 megapixel RAW"))
-            options.add(at+1,LensOption("0","${mainLabel(2f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X,
+            options.add(at+1,LensOption("0","${mainLabel()} · 200→50 MP",selectedCameraId=="0" && mode==LapisRootProfile.Mode.HEXADECA_200,
+                "200mp","Main camera, 200 megapixel readout remosaiced to 50 megapixel RAW, one shot"))
+            options.add(at+2,LensOption("0","${mainLabel(2f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X,
                 "2x","Main camera, 2× in-sensor crop RAW"))
-            options.add(at+2,LensOption("0","${mainLabel(4f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_4X,
+            options.add(at+3,LensOption("0","${mainLabel(4f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_4X,
                 "4x","Main camera, 4× in-sensor crop RAW"))
         }
         if(extended) options.add(LensOption("0","${mainLabel()} · DCG14",selectedCameraId=="0" && mode==LapisRootProfile.Mode.DCG14,
             "dcg14","DCG/DSG 14-bit RAW, automatic exposure, 30 fps sensor mode"))
-        if(photoControlsBeforeVideo!=null) options.removeAll { it.readout=="50mp" || it.readout=="2x" || it.readout=="4x" }
+        if(photoControlsBeforeVideo!=null) options.removeAll { it.readout=="50mp" || it.readout=="200mp" || it.readout=="2x" || it.readout=="4x" }
         // User-made virtual lenses sit right after their base route; the base itself
         // only reads as selected while no virtual lens on it is active.
         val active = virtualLensStore.activeOn(selectedCameraId)

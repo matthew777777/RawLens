@@ -1,0 +1,37 @@
+#version 450
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Hexadeca v2: separable 1-D filter over one T x T vec4 slot, per-channel tap weights.
+// Taps live in slot `kern` (vec4 per tap, index 0..2r). Each 16x16 workgroup stages its line
+// segment plus the filter apron in shared memory once. Reads clamp at the tile edge; the tile
+// halo keeps interior results exact.
+#define R_MAX 9
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) buffer Data { vec4 d[]; };
+layout(push_constant) uniform P { ivec4 a; ivec4 b; ivec4 c; vec4 f; } p;
+// a: - src dst kern (z = slot index within the batch: src+z -> dst+z) | b: T radius dir(0=x,1=y) kernOffset
+shared vec4 line[16][16 + 2 * R_MAX];
+shared vec4 taps[2 * R_MAX + 1];
+void main() {
+    int T = p.b.x, r = p.b.y, TT = T * T;
+    int z = int(gl_WorkGroupID.z);
+    int src = (p.a.y + z) * TT, dst = (p.a.z + z) * TT, k = p.a.w * TT + p.b.w;
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * 16;
+    int li = l.y * 16 + l.x;
+    if (li <= 2 * r) taps[li] = d[k + li];
+    // along = coordinate in the filter direction, across = the other one
+    int across = p.b.z == 0 ? l.y : l.x;
+    int along0 = (p.b.z == 0 ? base.x : base.y) - r;
+    int acrossG = clamp((p.b.z == 0 ? base.y : base.x) + across, 0, T - 1);
+    int along = p.b.z == 0 ? l.x : l.y;
+    for (int i = along; i < 16 + 2 * r; i += 16) {
+        int g = clamp(along0 + i, 0, T - 1);
+        line[across][i] = p.b.z == 0 ? d[src + acrossG * T + g] : d[src + g * T + acrossG];
+    }
+    barrier();
+    ivec2 q = base + l;
+    if (q.x >= T || q.y >= T) return;
+    vec4 s = vec4(0.0);
+    for (int i = 0; i <= 2 * r; ++i) s += taps[i] * line[across][along + i];
+    d[dst + q.y * T + q.x] = s;
+}

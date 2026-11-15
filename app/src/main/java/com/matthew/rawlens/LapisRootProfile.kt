@@ -18,9 +18,12 @@ internal object LapisRootProfile {
     const val SMH_CUSTOM_SHA256 = "c1eecbf9ff25c137b59eb48a62cef8bef15c22b9006e910fc1d118fdaa654fd2"
     const val SENSOR_ZOOM_4X = "sensor_zoom_4x"
     const val DCG_ENABLED = "dcg14"
+    const val HEXADECA_200 = "hexadeca200"
 
     enum class Mode(val argument: String, val label: String) {
-        NORMAL("normal", "12.5 MP"), FULL("50mp", "50 MP RAW"), CROP_2X("2x", "2× sensor RAW"), CROP_4X("4x", "4× sensor RAW"), DCG14("dcg14", "DCG14 · Auto AE")
+        NORMAL("normal", "12.5 MP"), FULL("50mp", "50 MP RAW"), CROP_2X("2x", "2× sensor RAW"), CROP_4X("4x", "4× sensor RAW"), DCG14("dcg14", "DCG14 · Auto AE"),
+        /** One-shot: 200 MP block-CFA readout, remosaiced to 50 MP Bayer by the root worker. */
+        HEXADECA_200("200mp", "200→50 MP RAW")
     }
 
     fun matches(device: String, model: String, fingerprint: String, display: String): Boolean =
@@ -33,7 +36,8 @@ internal object LapisRootProfile {
     fun mode(context: Context): Mode {
         if (!enabled(context)) return Mode.NORMAL
         val p = preferences(context)
-        return if (p.getBoolean(DCG_ENABLED, false)) Mode.DCG14
+        return if (p.getBoolean(HEXADECA_200, false)) Mode.HEXADECA_200
+        else if (p.getBoolean(DCG_ENABLED, false)) Mode.DCG14
         else if (p.getBoolean(SENSOR_ZOOM_4X, false)) Mode.CROP_4X
         else if (p.getBoolean(SENSOR_ZOOM, false)) Mode.CROP_2X
         else if (p.getBoolean(FULL_RESOLUTION, true)) Mode.FULL else Mode.NORMAL
@@ -41,7 +45,7 @@ internal object LapisRootProfile {
 
     fun select(context:Context,mode:Mode) {
         preferences(context).edit().putBoolean(FULL_RESOLUTION,mode==Mode.FULL)
-            .putBoolean(SENSOR_ZOOM_4X,mode==Mode.CROP_4X).putBoolean(SENSOR_ZOOM,mode==Mode.CROP_2X).putBoolean(DCG_ENABLED,mode==Mode.DCG14).apply()
+            .putBoolean(SENSOR_ZOOM_4X,mode==Mode.CROP_4X).putBoolean(SENSOR_ZOOM,mode==Mode.CROP_2X).putBoolean(DCG_ENABLED,mode==Mode.DCG14).putBoolean(HEXADECA_200,mode==Mode.HEXADECA_200).apply()
     }
 
     fun fromArgument(value:String):Mode? = Mode.entries.firstOrNull { it.argument==value }
