@@ -71,6 +71,7 @@ struct NoiseModelRef {
   float iso = 0;
 };
 thread_local NoiseModelRef g_noise_model;
+thread_local bool g_kernelnet_denoise = false;
 
 // stats layout (float[16]): tiles, sigma, a, b, ms_noise, ms_coarse, ms_tiles,
 // ms_gpu, ms_prior, ms_total, prior_calls, out_w, out_h, backend (0 none,
@@ -107,6 +108,9 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     return nullptr;
   }
   lkrl::FullParams prm = lkrl::AppDefaults();
+  prm.solve.kernelnet_denoise = g_kernelnet_denoise ? 1.0f : 0.0f;
+  g_kernelnet_denoise = false;
+  LKR_LOG("KernelNet denoise: %s (noise-gated)", prm.solve.kernelnet_denoise > 0 ? "on" : "off");
   // x2 buffers are large and a third worker gains about 3 % on Mali (measured); debug.lkr.workers still overrides.
   if (s >= 2) {
     prm.workers = std::min(prm.workers, 2);
@@ -280,6 +284,11 @@ extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMe
     jint out_w, jint out_h) {
   return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, dct, stats, tuning, out_w,
                out_h);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetKernelNetDenoise(
+    JNIEnv*, jclass, jboolean enabled) {
+  g_kernelnet_denoise = enabled == JNI_TRUE;
 }
 
 // Learned noise model for the next merge on the calling thread (path null = none).

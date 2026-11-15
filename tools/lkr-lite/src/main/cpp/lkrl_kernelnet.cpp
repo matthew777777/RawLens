@@ -9,6 +9,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#ifdef __ANDROID__
+#include "lkrl_kn_model.h"
+#endif
 #include <vector>
 
 namespace lkrl {
@@ -32,13 +35,18 @@ float half_to_float(uint16_t h) {
 }
 
 bool load(std::vector<Layer>& L, const char* path) {
+  std::vector<uint8_t> b;
+#ifdef __ANDROID__
+  (void)path;
+  b.assign(lkrl_kn_model, lkrl_kn_model + sizeof(lkrl_kn_model));
+#else
   FILE* f = std::fopen(path, "rb");
   if (!f) return false;
-  std::vector<uint8_t> b;
   std::fseek(f, 0, SEEK_END); b.resize(size_t(std::ftell(f))); std::fseek(f, 0, SEEK_SET);
   const bool ok = std::fread(b.data(), 1, b.size(), f) == b.size();
   std::fclose(f);
   if (!ok) return false;
+#endif
   const int spec[6][5] = {{2, 16, 3, 2, 1}, {16, 16, 3, 1, 1}, {16, 16, 3, 1, 1},
                           {16, 16, 3, 1, 1}, {16, 16, 3, 1, 1}, {16, 3, 1, 1, 0}};
   size_t off = 0;
@@ -60,14 +68,13 @@ bool load(std::vector<Layer>& L, const char* path) {
 }  // namespace
 
 bool KernelNetPacked(std::vector<float>* wb) {
-  static std::vector<Layer> L;
-  static bool tried = false, ok = false;
-  if (!tried) {
-    tried = true;
+  static const std::vector<Layer> L = [] {
+    std::vector<Layer> layers;
     const char* p = std::getenv("LKRL_KN_BIN");
-    ok = load(L, p ? p : LKRL_KN_DEFAULT_BIN);
-  }
-  if (!ok) return false;
+    if (!load(layers, p ? p : LKRL_KN_DEFAULT_BIN)) layers.clear();
+    return layers;
+  }();
+  if (L.empty()) return false;
   wb->clear();
   for (const Layer& l : L) { wb->insert(wb->end(), l.w.begin(), l.w.end()); wb->insert(wb->end(), l.b.begin(), l.b.end()); }
   return true;
@@ -85,15 +92,13 @@ void KernelNetInput(const float* raw, int h, int w, float sigma, std::vector<flo
 }
 
 bool KernelNetMap(const float* raw, int h, int w, float sigma, std::vector<float>* map, int* mh, int* mw) {
-  static std::vector<Layer> L;
-  static bool tried = false, ok = false;
-  if (!tried) {
-    tried = true;
+  static const std::vector<Layer> L = [] {
+    std::vector<Layer> layers;
     const char* p = std::getenv("LKRL_KN_BIN");
-    ok = load(L, p ? p : LKRL_KN_DEFAULT_BIN);
-    if (!ok) std::fprintf(stderr, "lkr-lite: KernelNet weights not loaded\n");
-  }
-  if (!ok) return false;
+    if (!load(layers, p ? p : LKRL_KN_DEFAULT_BIN)) layers.clear();
+    return layers;
+  }();
+  if (L.empty()) return false;
   const int lh = h / 2, lw = w / 2;
   std::vector<float> x(size_t(2) * lh * lw);
   for (int i = 0; i < lh; ++i)

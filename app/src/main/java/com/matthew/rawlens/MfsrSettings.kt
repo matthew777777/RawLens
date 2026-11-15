@@ -61,6 +61,8 @@ data class MfsrSettings(
     val engine: MfsrEngine = MfsrEngine.MFSR,
     /** LK-R: regularise with the Vulkan sliding-DCT x-step; false (default) = no prior. */
     val lkrDctPrior: Boolean = false,
+    /** Noise-gated PhotonCamera KernelNet post-denoise; daylight bypass, opt-in. */
+    val lkrKernelNetDenoise: Boolean = false,
     /**
      * LK-R: reference = sharpest of the middle three frames instead of the
      * newest three ([BurstSharpness.plan]); more frames survive motion
@@ -101,6 +103,7 @@ data class MfsrSettings(
         "mfsr_zipper_fix" to zipperFix,
         "mfsr_engine" to engine.name,
         "lkr_dct_prior" to lkrDctPrior,
+        "lkr_kernelnet_denoise" to lkrKernelNetDenoise,
         "lkr_middle_reference" to lkrMiddleReference,
         "lkr_zoom" to lkrZoom.name,
         "lkr_full_res" to lkrFullRes,
@@ -131,6 +134,7 @@ data class MfsrSettings(
             zipperFix = values["mfsr_zipper_fix"] as? Boolean ?: true,
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,
             lkrDctPrior = values["lkr_dct_prior"] as? Boolean ?: false,
+            lkrKernelNetDenoise = values["lkr_kernelnet_denoise"] as? Boolean ?: false,
             lkrMiddleReference = values["lkr_middle_reference"] as? Boolean ?: true,
             // Legacy FULL_2X (zoom and resolution in one value) splits into 1x + full res.
             lkrZoom = (LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1)

@@ -123,6 +123,18 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 "the GPU (~5-10 % faster) and the camera's own ISP preview (no noise reduction, " +
                 "no sharpening) is shown instead of a frozen frame."
         ))
+        content.addView(settingsCheck("LK-SR denoise: automatic KernelNet", mfsrSettings.lkrKernelNetDenoise).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.lkrKernelNetDenoise &&
+                    !applyMfsrSettings(mfsrSettings.copy(lkrKernelNetDenoise = checked))) {
+                    isChecked = mfsrSettings.lkrKernelNetDenoise
+                }
+            }
+        })
+        content.addView(sectionDesc(
+            "Off by default. When enabled, PhotonCamera-based KernelNet denoising increases in noisy, " +
+                "low-light scenes. Low-noise scenes skip it."
+        ))
         content.addView(settingsCheck("LK-SR denoise: sliding DCT", mfsrSettings.lkrDctPrior).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrDctPrior &&
@@ -132,7 +144,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc(
-            "Off (default): no denoiser, the most organic result. On: a fast GPU denoiser " +
+            "Off (default): no sliding-DCT prior. On: a fast GPU denoiser " +
                 "removes colour noise and a little luma noise during reconstruction."
         ))
         content.addView(settingsCheck("LK-SR reference: middle of the burst", mfsrSettings.lkrMiddleReference).apply {

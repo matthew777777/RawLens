@@ -40,6 +40,7 @@ struct SolveParams {
   std::vector<int> prior_at;   // empty = every iteration
   // Non-learned x-step on the prior iterations (shaders/dct_x.comp). H and W must be multiples of 4.
   bool dct_prior = false;
+  float kernelnet_denoise = -1.0f;   // < 0: CLI environment; app explicitly selects 0 or 1
   // Without dct_prior: one DCT pass at the end, only on tiles that lost frames and only for the
   // noise those pixels have in excess of fully merged ones (EXPERIMENT).
   bool dct_fallback = true;    // Lite: light DCT cleanup only where frames were lost (2026-11-14; --fallback 0 = off)

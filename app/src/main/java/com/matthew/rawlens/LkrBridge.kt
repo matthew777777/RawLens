@@ -84,6 +84,9 @@ internal object LkrBridge {
         tuning: FloatArray?, outWidth: Int, outHeight: Int
     ): ByteBuffer?
 
+    /** Per-merge switch; enabled strength is gated by the measured scene noise. */
+    @JvmStatic external fun nativeSetKernelNetDenoise(enabled: Boolean)
+
     @JvmStatic external fun nativeSetCacheDir(dir: String)
 
     /** Builds every LK-SR (LK-R Lite) pipeline into the persistent cache in [dir]; wall ms, -1 = no Vulkan. */

@@ -947,7 +947,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       (*noise_scale)[i] = std::min(std::sqrt(std::max(0.8f / std::max(rho, 1e-3f), 1.0f)), std::sqrt(float(K)));
     }
   }
-  static const float kndn_env = std::getenv("LKRL_KNDN") ? float(std::atof(std::getenv("LKRL_KNDN"))) : 0.0f;
+  const float kndn_env = prm.kernelnet_denoise >= 0.0f ? prm.kernelnet_denoise :
+      (std::getenv("LKRL_KNDN") ? float(std::atof(std::getenv("LKRL_KNDN"))) : 0.0f);
   // Noise-gated (daylight keeps its fine grain and texture): x 0 at <= 4 % relative noise
   // at mid-grey, x 1 at >= 8 % (user 2026-11-14: "on" lost HF noise and detail on IMG_20210228, 3.7 %).
   const float kn_rel = std::sqrt(std::max(0.18f * prm.noise_a + prm.noise_b, 0.0f)) / 0.18f;
@@ -955,8 +956,12 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   static const bool kn_cpu = std::getenv("LKRL_KNDN_CPU") != nullptr;
   if (kndn > 0.0f && !kn_cpu && noise_scale && noise_scale->size() == size_t(H) * W) {
     // GPU (as PhotonCamera runs it): KernelNet conv layers (kn_conv) then the denoise (kn_dn).
-    static std::vector<float> wpk;
-    if (wpk.empty() && !KernelNetPacked(&wpk)) return fail("KernelNet weights");
+    static const std::vector<float> wpk = [] {
+      std::vector<float> weights;
+      KernelNetPacked(&weights);
+      return weights;
+    }();
+    if (wpk.empty()) return fail("KernelNet weights");
     std::vector<float> xin;
     KernelNetInput(frames, h, w, std::sqrt(std::max(0.5f * prm.noise_a + prm.noise_b, 0.0f)), &xin);
     const int lh = h / 2, lw = w / 2, mh = (lh - 1) / 2 + 1, mw = (lw - 1) / 2 + 1;
@@ -990,7 +995,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     DnPush dp{H, W, mh, mw, s, K, 0, 0, prm.noise_a, prm.noise_b, kndn, 0.0f};
     VkDescriptorSet sd = gpu_->set(kndn_, {&kz, &kout, &kns, &kmap});
     gpu_->dispatch(kndn_, sd, &dp, div_up(uint32_t(W), 16), div_up(uint32_t(H), 16));
-    if (!gpu_->submit()) return fail("kernelnet submit");
+    if (!submit()) return fail("kernelnet submit");
     z_out->assign(kout.as<float>(), kout.as<float>() + 3 * HW);
   } else if (kndn > 0.0f && noise_scale && noise_scale->size() == size_t(H) * W) {
     // PhotonCamera dynamicgaussian_kernelnet.glsl (post-merge denoise, same math): KernelNet kernel

@@ -110,6 +110,28 @@ frame storage are implemented. KernelNet post-denoise (`LKRL_KNDN`), GPU LK
 (`LKRL_GPU_LK`), and motion look (`LKRL_MLOOK`) remain opt-in experiments.
 The measured results below describe their named datasets and configurations.
 
+### App KernelNet denoising switch (2026-11-15)
+
+The app's Merge settings and saved-burst LK-SR options expose **Automatic
+KernelNet denoise**, off by default. Its per-merge selection is passed explicitly
+through JNI to the tiled solver; the desktop `LKRL_KNDN` override remains separate.
+When enabled, strength is zero at or below 4% estimated relative noise at mid-grey,
+ramps to full strength at 8%, and follows the existing per-pixel noise/coverage
+model. This uses estimated noise, not time of day or an ISO threshold. Low-noise
+merges bypass both model inference and the denoising pass entirely.
+
+Android builds embed the existing PhotonCamera model in the native library, so
+the device needs no host filesystem path. Model initialization is safe across
+concurrent tile workers. This switch is independent of the sliding-DCT prior.
+
+`lkrl_kernelnet_check` is a standalone Vulkan synthetic regression (host target;
+the same source can be linked with the Android core). On Mali-G615, all six
+1×/2× cases passed: 2% noise was byte-identical with the switch off/on and used
+the same four GPU submissions; 6% and 10% noise ran an additional submission,
+produced finite output and reduced interior flat-field variance. This validates
+the bypass and noise reduction, not full-scene texture/motion quality or the
+wall-clock cost of low-light processing.
+
 ## Phone performance (2026-11-13, Mali-G615 MC2, car burst 8 frames, full frame, `--guide 2 --msmooth 1 --msr 1`)
 
 | | LK-R | Lite |

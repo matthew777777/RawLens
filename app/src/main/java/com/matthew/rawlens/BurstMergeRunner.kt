@@ -212,7 +212,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
     ): Completed {
         val captureId = take.lastModified()
         val merged = LkrMerge.mergeDecoded(appContext, frames,
-            LkrMerge.Settings(dctPrior = inputs.mfsr.lkrDctPrior, tuning = LkrTuning.overrides(appContext),
+            LkrMerge.Settings(kernelNetDenoise = inputs.mfsr.lkrKernelNetDenoise, dctPrior = inputs.mfsr.lkrDctPrior, tuning = LkrTuning.overrides(appContext),
                 zoom = inputs.mfsr.lkrZoom, fullRes = inputs.mfsr.lkrFullRes))
             ?: throw IllegalStateException("LK-SR merge failed")
         try {
