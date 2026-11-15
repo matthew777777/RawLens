@@ -100,26 +100,26 @@ Enable **Save ZSL bursts to .craw for offline merge** to stage a take as `IMG_<t
 
 ## 6. Merge settings
 
-Use the **KB-SR**, **LK-SR** or **HDR+** quick control to choose a merge, then configure it under **Settings → Merge**. AUTO, PROGRAM and MANUAL capture fresh frames after the shutter; ZSL uses buffered frames, with top-up/reference behavior where enabled. Flash capture uses its supported single-frame path.
+Use the **MFSR**, **LK-R** or **HDR+** quick control to choose a merge, then configure it under **Settings → Merge**. AUTO, PROGRAM and MANUAL capture fresh frames after the shutter; ZSL uses buffered frames, with top-up/reference behavior where enabled. Flash capture uses its supported single-frame path.
 
 Keep the camera steady while frames are being collected. More frames can reduce noise but extend processing and do not guarantee more detail when the subject is moving.
 
-### KB-SR
+### MFSR
 
-KB-SR means Kernel-Based Super-Resolution; older documents call this engine MFSR. Choose **KernelNet** or **Wronski** reconstruction kernels. **S.3 artefact rejection** helps reject inconsistent high-frequency detail. **Zipper fix (colour-difference merge)** targets coloured edge patterns. **Learned noise model** controls the noise-model option used by the engine.
+MFSR means Multi-Frame Super-Resolution and uses kernel-based burst reconstruction. Choose **KernelNet** or **Wronski** reconstruction kernels. **S.3 artefact rejection** helps reject inconsistent high-frequency detail. **Zipper fix (colour-difference merge)** targets coloured edge patterns. **Learned noise model** controls the noise-model option used by the engine.
 
-### LK-SR
+### LK-R
 
-LK-SR uses Lucas–Kanade alignment and reconstruction. Its viewfinder zoom control cycles **1×, 1.5× and 2×**. The separate resolution button selects sensor-size or 2× reconstruction output and displays the resulting megapixel count. Zoom controls framing; resolution controls output dimensions.
+LK-R uses Lucas–Kanade alignment and reconstruction. Its viewfinder zoom control cycles **1×, 1.5× and 2×**. The separate resolution button selects sensor-size or 2× reconstruction output and displays the resulting megapixel count. Zoom controls framing; resolution controls output dimensions.
 
 The Merge tab provides:
 
-- **ISP preview during LK-SR merge:** temporarily replaces the RAW viewfinder with the camera preview, pausing RAW scopes and peaking to reduce competition for the GPU.
-- **LK-SR denoise: sliding DCT:** optional denoise during reconstruction; off by default.
-- **LK-SR reference: middle of the burst:** on by default, collects around the shutter press and chooses a reference near the middle. Turning it off uses pre-press frames and a recent reference.
-- **Show LK-SR Lab (expert tuning):** exposes advanced reconstruction settings. These apply to subsequent live and offline LK-SR merges. Use **Reset LK-SR Lab to defaults** to remove overrides.
+- **ISP preview during LK-R merge:** temporarily replaces the RAW viewfinder with the camera preview, pausing RAW scopes and peaking to reduce competition for the GPU.
+- **LK-R denoise: sliding DCT:** optional denoise during reconstruction; off by default.
+- **LK-R reference: middle of the burst:** on by default, collects around the shutter press and chooses a reference near the middle. Turning it off uses pre-press frames and a recent reference.
+- **Show LK-R Lab (expert tuning):** exposes advanced reconstruction settings. These apply to subsequent live and offline LK-R merges. Use **Reset LK-R Lab to defaults** to remove overrides.
 
-The standalone LK-SR Lite research tool is separate from the app's LK-SR engine.
+The standalone LK-R Lite research tool is separate from the app's LK-R engine.
 
 ### HDR+
 
@@ -131,7 +131,7 @@ HDR+ burst merging and HDR exposure bracketing are separate features.
 
 1. Open **Settings → Burst → Open merges**.
 2. Select a staged burst. Ordinary RAW Video recordings are excluded from this list.
-3. Choose **KB-SR**, **LK-SR** or **HDR+**, then the available zoom and source-frame options.
+3. Choose **MFSR**, **LK-R** or **HDR+**, then the available zoom and source-frame options.
 4. Choose DNG, developed output, or both. JPEG is the initial output choice; choose JPEG or JXL as the developed format and set its quality.
 5. Use **Fine-tune method** if needed, then start the merge and watch the progress/status display.
 
@@ -153,7 +153,7 @@ Open **Settings → Denoise**.
 
 **AI RAW denoise (RawNIND Bayer)** requires the model files supplied by a compatible build. It writes a denoised DNG and develops from that data. **Save original DNG alongside** also retains the untouched capture. AI strength blends the source and denoised result, from untouched at 0% to full model output at 100%.
 
-LK-SR sliding DCT and RAW Video DCT have separate switches. Changing photo wavelet settings does not enable them.
+LK-R sliding DCT and RAW Video DCT have separate switches. Changing photo wavelet settings does not enable them.
 
 ## 10. Video recording
 
@@ -243,7 +243,7 @@ Photos normally appear under `DCIM/RawLens`. Burst sidecars use the granted phot
 | Exposure seems held | Check MANUAL, PROGRAM axis locks, ETTR and video record locks. |
 | Preview is black | Wake a sleeping recording preview; otherwise check exposure, light and camera status. |
 | RAW and developed previews look different | Check preview mode, white balance, AgX/adaptive exposure and whether ISP preview is active. |
-| Merge ghosts or loses detail | Try less subject motion, fewer frames, HDR+ auto strength or reset LK-SR Lab overrides. |
+| Merge ghosts or loses detail | Try less subject motion, fewer frames, HDR+ auto strength or reset LK-R Lab overrides. |
 | Recording drops frames | Reduce resolution/frame rate or processing load, check free space and the destination, and let an overheated device cool. |
 | No audio | Check Video sound, microphone permission and microphone availability. |
 | Missing burst motion files | Restore the photo-folder grant and keep sidecars with the DNGs. |

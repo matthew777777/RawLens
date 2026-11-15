@@ -17,7 +17,7 @@ Camera behavior varies significantly across Android devices, so camera-pipeline 
 
 The current activity is portrait-locked in the source manifest. Preview and control positioning still account for sensor/display rotation, but contributions should not assume that the activity can rotate into a separate landscape layout.
 
-The app currently supports AUTO, PROGRAM (libcamera AGC port), ZSL, and MANUAL exposure modes with ETTR and Active D-Lighting; single-frame and six-frame forward capture; optional 1–59-frame ZSL output targeting up to 30 FPS; KB-SR (MFSR), LK-SR, HDR+, HDR bracket and offline burst merges; JPEG, JPEG XL, Ultra HDR and (optionally JXL-compressed) DNG output; `.craw` RAW video and Encoded Video with user LUTs; wavelet and AI denoise; per-lens PROGRAM AE profiles and vendor keys; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior.
+The app currently supports AUTO, PROGRAM (libcamera AGC port), ZSL, and MANUAL exposure modes with ETTR and Active D-Lighting; single-frame and six-frame forward capture; optional 1–59-frame ZSL output targeting up to 30 FPS; MFSR, LK-R, HDR+, HDR bracket and offline burst merges; JPEG, JPEG XL, Ultra HDR and (optionally JXL-compressed) DNG output; `.craw` RAW video and Encoded Video with user LUTs; wavelet and AI denoise; per-lens PROGRAM AE profiles and vendor keys; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior.
 
 ## Pull requests
 

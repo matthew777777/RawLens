@@ -8,21 +8,21 @@ and tags. It is intentionally not repeated in the README.
 
 - Camera2 RAW capture, PROGRAM / ETTR / manual exposure, DNG, JPEG, JPEG XL and
   Ultra HDR development remain supported, subject to camera capabilities.
-- **KB-SR** is the user-facing name of the MFSR engine (`MfsrMerge`);
-  **LK-SR** uses `LkrMerge` and `tools/lkr-lite` (LK-R Lite; it replaced `tools/lkr-pipeline` on 2026-11-14). HDR+ remains a separate option.
-  Internal MFSR/LKR identifiers and historical LK-R labels still occur in source.
+- **MFSR** uses `MfsrMerge` with KernelNet or Wronski reconstruction kernels;
+  **LK-R** uses `LkrMerge` and `tools/lkr-lite` (LK-R Lite; it replaced `tools/lkr-pipeline` on 2026-11-14). HDR+ remains a separate option.
+  Internal MFSR/LKR identifiers remain unchanged. Earlier releases used the display names KB-SR / LK-SR.
 - The default ZSL buffer is 16 frames (`MainActivity.DEFAULT_RAW_ZSL_FRAME_COUNT`).
   Saved preferences, available reader capacity and mode-specific limits still apply.
 - Settings has General, Photo, Video, Exposure, Burst, Merge, Denoise, Lenses,
   Debug and About pages (`SettingsDialog`). Camera capture pauses behind Settings.
 - Offline Merges starts with JPEG output and offers JPEG / JPEG XL quality
-  controls, burst sharing and KB-SR / LK-SR / HDR+ (`MergesActivity`). Staged burst
-  loading preserves device orientation (`OfflineBurstFrame`). LK-SR output
+  controls, burst sharing and MFSR / LK-R / HDR+ (`MergesActivity`). Staged burst
+  loading preserves device orientation (`OfflineBurstFrame`). LK-R output
   resolution and viewfinder zoom are independent controls.
 - RAW development includes revised histogram-posterior white-balance fallback,
   two-radius chroma cleanup and lens-shading transport for root RAW / merged DNGs.
 - The RAW viewfinder can use an optional ISP SurfaceView route, including during
-  LK-SR merges. This is an explicit preview tradeoff, not proof that every
+  LK-R merges. This is an explicit preview tradeoff, not proof that every
   manufacturer's ISP stream matches the RAW develop.
 - RAW Video uses `.craw`, with optional temporal DCT denoise. Encoded Video uses
   MHC or Super pixel demosaic, offers saturation/vibrance controls and retains
@@ -36,11 +36,11 @@ and tags. It is intentionally not repeated in the README.
 
 | Component | Current role |
 |---|---|
-| [sr-pipeline](../tools/sr-pipeline/README.md) | JVM MFSR / KB-SR CLI, CPU and Vulkan; `run.sh` builds the required components. DNGs without NoiseProfile use a scene-noise estimate. |
-| [lkr-lite](../tools/lkr-lite/README.md) | LK-SR engine (LK-R Lite), host CLI and app native integration (liblkrpipeline.so). |
+| [sr-pipeline](../tools/sr-pipeline/README.md) | JVM MFSR CLI, CPU and Vulkan; `run.sh` builds the required components. DNGs without NoiseProfile use a scene-noise estimate. |
+| [lkr-lite](../tools/lkr-lite/README.md) | LK-R engine (LK-R Lite), host CLI and app native integration (liblkrpipeline.so). |
 | [Tools index](../tools/README.md) | Shader builders, format checks, numerical oracles and device validation utilities. |
 
-Mobile MFSR optimizations, guide-based LK-SR rejection and foliage experiments
+Mobile MFSR optimizations, guide-based LK-R rejection and foliage experiments
 are recorded under [performance](performance/). Timings and image-quality numbers
 apply to the stated hardware, datasets and flags. Experimental RAW denoise and
 GALOSH comparison code does not imply a shipped GALOSH option.

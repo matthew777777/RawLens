@@ -8,7 +8,7 @@ RawLens is an open-source Android camera built around a scene-referred RAW pipel
 
 - **RAW photos:** DNG, JPEG, JPEG+DNG, JPEG XL and Ultra HDR, with AMaZE / RCD demosaic, AgX looks, highlight reconstruction and denoise.
 - **Exposure controls:** AUTO, PROGRAM, ZSL and MANUAL modes, ETTR, RAW metering, zebras, false colour and focus peaking.
-- **Burst merging:** KB-SR, LK-SR and HDR+, with zero-shutter-lag capture and offline merges of saved bursts.
+- **Burst merging:** MFSR, LK-R and HDR+, with zero-shutter-lag capture and offline merges of saved bursts.
 - **RAW Video:** lossless `.craw` recording with audio and motion metadata.
 - **Encoded Video:** Rec.709, S-Log3 / S-Gamut3.Cine, HLG and ACES profiles, custom LUTs and gyro stabilization.
 - **Viewfinder:** histogram / waveform scopes, lens selection, manual controls and optional ISP preview.

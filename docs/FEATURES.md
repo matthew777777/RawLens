@@ -9,10 +9,10 @@ See the [README](../README.md) for a quick start and [current repository state](
 - Full-resolution `RAW_SENSOR` capture saved as DNG, JPEG, JPEG+DNG, or JPEG XL
 - AUTO, PROGRAM, ZSL, and MANUAL exposure modes; single-frame and six-frame (pipelined) burst release
 - Optional RAW zero-shutter-lag capture from a bounded pre-shutter frame buffer
-- **KB-SR** (the MFSR engine) handheld multi-frame super-resolution (Wronski et al. 2019 / IPOL reference) as a ZSL shutter merge or an offline merge, with Wronski or KernelNet reconstruction kernels
+- **MFSR** handheld multi-frame super-resolution (Wronski et al. 2019 / IPOL reference) as a ZSL shutter merge or an offline merge, with Wronski or KernelNet reconstruction kernels
 - **HDR+** burst merge, HDR brackets (±2 / ±4 EV, merged or separate DNGs), sequential-DCG trio merge (0 / −2 / 0 EV), and experimental two-exposure RAW HDR
-- Offline merges of staged `IMG_<ts>_BURST.craw` takes from the Merges screen (KB-SR, LK-SR or HDR+)
-- **LK-SR** Lucas–Kanade burst reconstruction, with independent zoom and sensor / 2× output-resolution controls
+- Offline merges of staged `IMG_<ts>_BURST.craw` takes from the Merges screen (MFSR, LK-R or HDR+)
+- **LK-R** Lucas–Kanade burst reconstruction, with independent zoom and sensor / 2× output-resolution controls
 - Offline merges default to JPEG, expose JPEG / JPEG XL quality controls, support burst sharing, and retain the staged take’s device orientation
 - darktable **inpaint-opposed** highlight reconstruction on normalized Bayer data before demosaic
 - RAW development with AMaZE (or RCD) demosaic and AgX Base, Golden, and Punchy looks; contrast, saturation, purity, hue preservation, highlight/shadow range, and gamut-compression controls
@@ -53,7 +53,7 @@ See the [README](../README.md) for a quick start and [current repository state](
 - RAW-capable lens discovery with verdicts from real use, and per-lens RAW size / packed RAW format selection
 - Lens profile ZIP export/import, including vendor keys and presets, DNG calibration overrides, PROGRAM profiles, virtual lenses, RAW size/format choices and saved lens selection; confirmed import replaces current profiles and reloads the app
 - Portrait viewfinder layout with rotation-aware controls
-- Optional ISP SurfaceView preview, including during LK-SR merges; the camera pauses behind Settings
+- Optional ISP SurfaceView preview, including during LK-R merges; the camera pauses behind Settings
 
 ## RAW ZSL
 
@@ -78,7 +78,7 @@ Settings has General, Photo, Video, Exposure, Burst, Merge, Denoise, Lenses, Deb
 | Video | Encoded Video (profile, resolution, frame rate, demosaic, crop, gain, LUT library), RAW Video (codec, crop, binning, sound), locks on record, stabilization |
 | Exposure | PROGRAM custom AE per lens, ETTR, HDR brackets, two-exposure RAW HDR, face priority |
 | Burst | Offline burst staging, zero shutter lag, burst gyro sidecars |
-| Merge | HDR+, KB-SR and LK-SR burst merge controls |
+| Merge | HDR+, MFSR and LK-R burst merge controls |
 | Denoise | Profiled wavelet (Vulkan), AI RAW denoise (RawNIND Bayer) |
 | Lenses | Lens discovery and per-lens selection |
 | Debug | HDR debug frames, camera diagnostics, app log |
