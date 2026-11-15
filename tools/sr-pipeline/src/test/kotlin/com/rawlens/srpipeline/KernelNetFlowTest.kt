@@ -47,8 +47,14 @@ class KernelNetFlowTest {
                 for (y in 0 until oh) for (x in 0 until ow) {
                     val lx = (x + .5) / 2; val ly = (y + .5) / 2
                     // Closed-form affine field on tile centres, extended constantly at edges.
-                    val mx = lx + if (affine) .1 + .2 * ((lx - 8) / 16).coerceIn(0.0, 2.0) else offset.toDouble()
-                    val my = ly + if (affine) -.1 + .15 * ((ly - 8) / 16).coerceIn(0.0, 1.0) else offset.toDouble()
+                    // Analytic mean index of a cubic B-spline on a constant-
+                    // extended linear ramp (including both border corrections).
+                    fun indexMean(g: Double, last: Double): Double {
+                        fun bump(x: Double): Double = maxOf(0.0, 1.0-kotlin.math.abs(x)).let { it*it*it/6 }
+                        return g.coerceIn(0.0,last)+bump(g)-bump(g-last)
+                    }
+                    val mx = lx + if (affine) .1 + .2 * indexMean((lx - 8) / 16, 2.0) else offset.toDouble()
+                    val my = ly + if (affine) -.1 + .15 * indexMean((ly - 8) / 16, 1.0) else offset.toDouble()
                     val expectedN = DoubleArray(3); val expectedD = DoubleArray(3)
                     if (mx >= 0 && mx < w && my >= 0 && my < height) {
                         for (yy in my.toInt()-3..my.toInt()+3) for (xx in mx.toInt()-3..mx.toInt()+3) {

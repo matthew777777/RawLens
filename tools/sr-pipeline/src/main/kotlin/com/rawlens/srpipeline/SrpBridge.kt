@@ -545,6 +545,7 @@ object SrpBridge {
         height: Int,
         tileSize: Int,
         lutN: Int,
+        /** Bit 0: noise LUT correction; bit 1: continuous KernelNet field. */
         noiseCorrection: Int,
         tBits: Int,
         ftx: Int,

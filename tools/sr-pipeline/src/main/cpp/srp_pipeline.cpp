@@ -996,10 +996,11 @@ namespace {
 Status RobDispatch(Context* ctx, const uint32_t ex[13], uint32_t W,
                    uint32_t H, uint32_t grid, VkBuffer a, VkBuffer b,
                    VkBuffer c, VkBuffer d, VkBuffer e, VkBuffer s,
-                   VkBuffer lut, VkShaderModule mod) {
+                   VkBuffer lut, VkShaderModule mod, uint32_t continuous_flow = 0) {
   SrpHmsrPush push{};
   push.pixel_count = grid;
   push.scale = 1.0f;
+  push.pad[13] = continuous_flow;
   push.pad[0] = ex[0];
   push.pad[1] = W;
   push.pad[2] = H;
@@ -1079,6 +1080,7 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
   if (n64 == 0 || n64 > 0x0FFFFFFFULL) return Status::kInitFailed;
   const uint32_t n = static_cast<uint32_t>(n64);
   const uint32_t tile_half = tile_size / 2;
+  const uint32_t continuous_flow = (noise_correction >> 1u) & 1u;
 
   DemoArena arena;
   arena.ctx = ctx;
@@ -1119,7 +1121,7 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
     ex[4] = tile_half;
     ex[11] = ftx;
     status = RobDispatch(ctx, ex, gw, gh, n, cmeans, flow_buffer, dummy,
-                         warped, dummy, dummy, dummy, shader_module);
+                         warped, dummy, dummy, dummy, shader_module, continuous_flow);
   }
   // op 3 d/sigma (ref means vs warped means, ref vars, LUT).
   if (status == Status::kOk) {
@@ -1127,7 +1129,7 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
     ex[3] = 3;
     ex[4] = 0;
     ex[5] = lut_n;
-    ex[10] = noise_correction;
+    ex[10] = noise_correction & 1u;
     ex[11] = 0;
     status = RobDispatch(ctx, ex, gw, gh, n, means_buffer, warped,
                          vars_buffer, d, sg, dummy, lut_buffer,
@@ -1146,7 +1148,7 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
     ex[11] = ftx;
     status = RobDispatch(ctx, ex, gw, gh, n, d, sg,
                          hf_buffer != VK_NULL_HANDLE ? hf_buffer : dummy, r,
-                         dummy, s_buffer, dummy, shader_module);
+                         dummy, s_buffer, dummy, shader_module, continuous_flow);
     ex[7] = 0;
     ex[8] = 0;
   }

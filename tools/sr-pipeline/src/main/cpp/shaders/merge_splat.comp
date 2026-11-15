@@ -27,6 +27,13 @@ layout(set = 0, binding = 3) readonly buffer Rob { float rob[]; };
 layout(set = 0, binding = 4) buffer Num { float num_[]; }; // tightly packed H*W*3
 layout(set = 0, binding = 5) buffer Den { float den_[]; };
 
+// Positive cubic B-spline basis: C2 motion field with no tile-edge slope jumps.
+vec4 flowWeights(float t) {
+  float u = 1.0-t;
+  return vec4(u*u*u, 4.0-6.0*t*t+3.0*t*t*t,
+              1.0+3.0*t+3.0*t*t-3.0*t*t*t, t*t*t) / 6.0;
+}
+
 void main() {
   uint id = gl_GlobalInvocationID.x;
   if (id >= p.pixelCount) return;
@@ -46,24 +53,29 @@ void main() {
   uint py = uint(lr_y / float(tileSize));
   vec2 F = align_[py * nTilesX + px];
   if (p.pad[3] == 1u) {
-    // KernelNet reconstruction: nearest-tile flow imprints hard tile edges
-    // (16 LR / 32 output px at 2x) even with a smooth reference kernel map.
-    // Interpolate at tile centres and extend the field constantly at borders.
-    // Keep Jamy-L/Wronski sampling unchanged when refKernels is disabled;
-    // alignment and conservative robustness rejection still use original tiles.
-    vec2 g = max(vec2(lr_x, lr_y) / float(tileSize) - 0.5, vec2(0.0));
-    uvec2 lo = uvec2(g);
-    uint nTilesY = (lrH + tileSize - 1u) / tileSize;
-    lo = min(lo, uvec2(nTilesX - 1u, nTilesY - 1u));
-    uvec2 hi = min(lo + 1u, uvec2(nTilesX - 1u, nTilesY - 1u));
-    vec2 f = fract(g);
-    F = mix(mix(align_[lo.y*nTilesX+lo.x], align_[lo.y*nTilesX+hi.x], f.x),
-            mix(align_[hi.y*nTilesX+lo.x], align_[hi.y*nTilesX+hi.x], f.x), f.y);
+    vec2 g = vec2(lr_x, lr_y) / float(tileSize) - 0.5;
+    ivec2 base = ivec2(floor(g));
+    vec4 wx = flowWeights(fract(g.x)), wy = flowWeights(fract(g.y));
+    int ny = int((lrH + tileSize - 1u) / tileSize);
+    F = vec2(0);
+    for (int y = 0; y < 4; ++y) for (int x = 0; x < 4; ++x) {
+      int xx = clamp(base.x+x-1, 0, int(nTilesX)-1);
+      int yy = clamp(base.y+y-1, 0, ny-1);
+      F += wx[x]*wy[y]*align_[uint(yy)*nTilesX+uint(xx)];
+    }
   }
 
-  // Robustness sampled on the guide grid (nearest), bayer vs grey paths.
+  // Guide-grid robustness: continuous KernelNet sampling or reference-port lookup.
   float local_r;
-  if (bayer) {
+  if (bayer && p.pad[3] == 1u) {
+    // Same reference-grid guide centres as the rejection stage. The old
+    // floor-then-truncate lookup both shifted and stair-stepped this map.
+    vec2 q = clamp(vec2(lr_x,lr_y)*0.5-0.5, vec2(0), vec2(lrW/2u-1u,lrH/2u-1u));
+    uvec2 lo = uvec2(q), hi = min(lo+1u,uvec2(lrW/2u-1u,lrH/2u-1u));
+    vec2 f = fract(q); uint rw = lrW/2u;
+    local_r = mix(mix(rob[lo.y*rw+lo.x],rob[lo.y*rw+hi.x],f.x),
+                  mix(rob[hi.y*rw+lo.x],rob[hi.y*rw+hi.x],f.x),f.y);
+  } else if (bayer) {
     // CPU is int(lr//2 - 0.5): Python // FLOORS before subtracting, so this
     // is floor-then-subtract, NOT truncation (they differ by one for half of
     // all pixels). Replicated exactly; min() matches the CPU.

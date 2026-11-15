@@ -600,6 +600,18 @@ object VulkanPipeline {
         // the frame from its resident, so upload it once here (the
         // loop frames upload in the grey leg instead).
         val finest = pinnedInit.levels.last()
+        val motionField = if (config.kernelNet != null) {
+            val count = finest.nTx * finest.nTy * 4
+            val packed = FloatArray(count)
+            if (finest.hessRes != 0L) {
+                val buffer = SrpBridge.directFloats(count)
+                checkRc("motion confidence", SrpBridge.downloadResident(handle, finest.hessRes, buffer, count.toLong()))
+                buffer.asFloatBuffer().get(packed)
+            } else {
+                finest.hessPacked.copyInto(packed)
+            }
+            MotionField(finest.nTx, finest.nTy, packed)
+        } else null
         val zeroFlow = Array(finest.nTy) { Array(finest.nTx) { floatArrayOf(0f, 0f) } }
         if (config.bayer) {
             timed("refUpload") { checkRc("refUpload", SrpBridge.uploadResident(handle, frameRes,
@@ -697,6 +709,9 @@ object VulkanPipeline {
             }
             val ftx = flow[0].size
             val fty = flow.size
+            motionField?.let { field ->
+                timed("motionRegularize") { field.regularize(flow, config.robustnessParams.mt) }
+            }
             require(ftx == ftx0 && fty == fty0) { "flow grid changed mid-run" }
             // Robustness map straight into the merge staging (same
             // bytes as the old host round-trip through `robustR`).
@@ -726,7 +741,9 @@ object VulkanPipeline {
                         meansRes, varsRes,
                         packInto(mergeFlowFlat, mergeFlow), lutBuf.apply { rewind() }, sRes, mergeRDirect.apply { rewind() },
                         spirvs.robust, w, h, tile, lutN,
-                        if (config.robustnessParams.noiseCorrection) 1 else 0,
+                        // Bit 0: noise correction; bit 1: use the same continuous
+                        // motion field as KernelNet reconstruction (Wronski: off).
+                        (if (config.robustnessParams.noiseCorrection) 1 else 0) or (if (config.kernelNet != null) 2 else 0),
                         java.lang.Float.floatToIntBits(config.robustnessParams.t), ftx, fty,
                         hfRes, java.lang.Float.floatToIntBits(rp.s1))) }
                 }

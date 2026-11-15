@@ -14,7 +14,7 @@
 //   6 smap, 7 accum, 9 S.3 hf map) pad[1]=W pad[2]=H (op grid), pad[3]=nc,
 //   pad[4]=tileHalf, pad[5]=lutN, pad[6..9]=t,Mt,s1,s2 bits,
 //   pad[10]=noiseCorrection, pad[11]=nTilesX (warp/thresh),
-//   pad[12]=fullW (guide op).
+//   pad[12]=fullW (guide op), pad[13]=continuous KernelNet field (warp/thresh).
 // Buffers: A,B,C in; D,E out; S tile map (thresh); LUT sigma++d (dsigma).
 layout(local_size_x = 256) in;
 
@@ -41,6 +41,14 @@ float dogson_q(float x) {
   if (ax <= 0.5) return -2.0 * ax * ax + 1.0;
   else if (ax <= 1.5) return ax * ax - 2.5 * ax + 1.5;
   else return 0.0;
+}
+
+
+// Positive cubic B-spline basis: C2 motion field with no tile-edge slope jumps.
+vec4 flowWeights(float t) {
+  float u = 1.0-t;
+  return vec4(u*u*u, 4.0-6.0*t*t+3.0*t*t*t,
+              1.0+3.0*t+3.0*t*t-3.0*t*t*t, t*t*t) / 6.0;
 }
 
 void main() {
@@ -95,6 +103,20 @@ void main() {
     uint px = x / tileHalf;
     float fx = B_[(py * nTilesX + px) * 2u];
     float fy = B_[(py * nTilesX + px) * 2u + 1u];
+    if (p.pad[13] != 0u) {
+      vec2 g = (vec2(x,y)+0.5)/float(tileHalf)-0.5;
+      ivec2 base = ivec2(floor(g));
+      vec4 wx=flowWeights(fract(g.x)), wy=flowWeights(fract(g.y));
+      int ny=int((H+tileHalf-1u)/tileHalf);
+      vec2 flow=vec2(0);
+      for(int yy=0;yy<4;++yy) for(int xx=0;xx<4;++xx) {
+        uint tx=uint(clamp(base.x+xx-1,0,int(nTilesX)-1));
+        uint ty=uint(clamp(base.y+yy-1,0,ny-1));
+        uint k=(ty*nTilesX+tx)*2u;
+        flow+=wx[xx]*wy[yy]*vec2(B_[k],B_[k+1u]);
+      }
+      fx=flow.x;fy=flow.y;
+    }
     float ymov = float(y) + fy * 0.5;
     float xmov = float(x) + fx * 0.5;
     if (!(ymov >= 0.0 && ymov < float(H) && xmov >= 0.0 && xmov < float(W))) {
@@ -167,13 +189,34 @@ void main() {
     uint py = y / tileHalf;
     uint px = x / tileHalf;
     float Sv = S_[py * nTilesX + px];
+    float nearestS = Sv;
+    float motionFraction = 0.0;
+    if (p.pad[13] != 0u) {
+      vec2 g=(vec2(x,y)+0.5)/float(tileHalf)-0.5;
+      ivec2 base=ivec2(floor(g));
+      vec4 wx=flowWeights(fract(g.x)), wy=flowWeights(fract(g.y));
+      int ny=int((H+tileHalf-1u)/tileHalf);
+      Sv=0.0;
+      for(int yy=0;yy<4;++yy) for(int xx=0;xx<4;++xx) {
+        uint tx=uint(clamp(base.x+xx-1,0,int(nTilesX)-1));
+        uint ty=uint(clamp(base.y+yy-1,0,ny-1));
+        float strength = S_[ty*nTilesX+tx];
+        float weight = wx[xx]*wy[yy];
+        Sv += weight*strength;
+        motionFraction += weight*(strength == uintBitsToFloat(p.pad[8]) ? 1.0 : 0.0);
+      }
+    }
     float Rv = Sv * exp(-A_[i] / B_[i]) - t;
     D_[i] = isnan(Rv) ? 0.0 : clamp(Rv, 0.0, 1.0);
-    // Supplement S.3 (pad[7] = 1): high-frequency-only reference regions
-    // (C = op 9 map) under local alignment variation (S == s1, the
-    // M > Mt strength of op 6) are fully rejected; the 5x5 minimum (op 5)
-    // then grows the rejection like the paper's morphology.
-    if (p.pad[7] != 0u && C_[i] > 0.5 && Sv == uintBitsToFloat(p.pad[8])) D_[i] = 0.0;
+    // Supplement S.3 (pad[7] = 1): preserve the reference path's hard gate.
+    // KernelNet uses the same continuous motion membership as its warp;
+    // nearest-tile gating here would reintroduce rectangular patches on
+    // high-frequency details such as shoes. Full membership still rejects
+    // completely, and the following 5x5 minimum still grows the rejection.
+    if (p.pad[7] != 0u && C_[i] > 0.5) {
+      if (p.pad[13] != 0u) D_[i] *= clamp(1.0-motionFraction, 0.0, 1.0);
+      else if (nearestS == uintBitsToFloat(p.pad[8])) D_[i] = 0.0;
+    }
   } else if (op == 6u) {
     // --- cpu_compute_s: one invocation per flow tile ---
     // W=pad[1] is nTilesX, H=pad[2] is nTilesY here; A holds the flow

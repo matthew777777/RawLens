@@ -514,7 +514,9 @@ Status SrpKernelNetCovGpu(Context* ctx, uint32_t raw_w, uint32_t raw_h,
 // `s_buffer` holds the ftx*fty flow-spread map (op 6, SrpSmapGpu);
 // `out_buffer` receives the gh*gw locally-minimised robustness map.
 // `tile_size` is the raw-basis tile size (halved internally);
-// `noise_correction` toggles the LUT leg of op 3; `t_bits` carries the
+// `noise_correction` bit 0 toggles the LUT leg of op 3; bit 1 opts into
+// the continuous KernelNet flow/S field for warp and threshold. Existing
+// 0/1 callers retain reference sampling. `t_bits` carries the
 // threshold t by bit pattern. All intermediates (guide, comp stats,
 // warped, d, sigma, pre-min R) are allocated and freed inside the call.
 //
