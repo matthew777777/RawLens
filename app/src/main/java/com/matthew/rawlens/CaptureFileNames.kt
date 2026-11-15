@@ -45,14 +45,16 @@ object CaptureFileNames {
         "${PREFIX}_${requireNotNull(stemFormat.get()).format(captureTimeMillis)}"
 
     /**
-     * Full display name. [typeSuffix] must be null/blank or `[A-Za-z0-9]+`
+     * Full display name. [typeSuffix] must be null/blank, a known sharp-merge type, or `[A-Za-z0-9]+`
      * (e.g. `HDR`, `F00`); anything else is rejected so exposure metadata
      * (`-2EV`, `+`, spaces) can never leak back into file names.
      */
     fun fileName(captureTimeMillis: Long, typeSuffix: String?, extension: String): String {
         require(extension.matches(EXTENSION_REGEX)) { "Unsupported extension: $extension" }
         val suffix = typeSuffix?.takeIf { it.isNotBlank() }?.let {
-            require(it.matches(SUFFIX_REGEX)) { "File suffix must match [A-Za-z0-9]+: $it" }
+            require(it.matches(SUFFIX_REGEX) || it.uppercase(Locale.US) in SHARP_MERGE_SUFFIXES) {
+                "File suffix must be alphanumeric or a known sharp-merge type: $it"
+            }
             "_${it.uppercase(Locale.US)}"
         }.orEmpty()
         return "${stem(captureTimeMillis)}$suffix.$extension"
@@ -99,6 +101,7 @@ object CaptureFileNames {
     /** Offline-merge burst take: `IMG_<ts>_BURST.craw` (recordingType=BURST, never a video take). */
     fun burstCraw(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_BURST, "craw")
 
+    private val SHARP_MERGE_SUFFIXES = setOf(TYPE_MFSR, TYPE_LKR)
     private val SUFFIX_REGEX = Regex("[A-Za-z0-9]+")
     private val EXTENSION_REGEX = Regex("[A-Za-z0-9]{2,5}")
 }

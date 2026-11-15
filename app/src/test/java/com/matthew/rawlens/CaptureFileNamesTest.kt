@@ -71,6 +71,23 @@ class CaptureFileNamesTest {
         )
     }
 
+    @Test
+    fun sharpMergeDevelopedOutputsAcceptEngineSuffixes() {
+        val ts = 1_786_269_212_527L
+        val stem = CaptureFileNames.stem(ts)
+        for (suffix in listOf(CaptureFileNames.TYPE_LKR, CaptureFileNames.TYPE_MFSR)) {
+            for (extension in listOf("jpg", "jxl")) {
+                assertEquals("${stem}_${suffix}.$extension",
+                    CaptureFileNames.fileName(ts, suffix, extension))
+            }
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun arbitraryHyphenatedSuffixIsRejected() {
+        CaptureFileNames.fileName(1_786_269_212_527L, "HDR-2EV", "jpg")
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun exposureSuffixIsRejected() {
         CaptureFileNames.fileName(1_786_269_212_527L, "HDR_-2EV", "dng")

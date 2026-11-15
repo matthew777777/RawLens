@@ -2738,7 +2738,7 @@ class RawCameraController(
 
     fun setMfsrSettings(settings: MfsrSettings): Boolean {
         if (captureInProgress.get() || pendingSaveCount.get() > 0) {
-            onState("KB-SR LOCKED • SAVING")
+            onState("${activeMfsrSettings.label} LOCKED • SAVING")
             return false
         }
         mfsrSettings = settings
@@ -3041,7 +3041,7 @@ class RawCameraController(
         // + JPEG out). Mutual exclusivity with HDR+ is enforced at the
         // settings layer; this branch wins when both somehow engage.
         if (activeMfsrSettings.enabled) {
-            return takeFullRingForMerge(cutoff, selectedFrameCount, "KB-SR", ::saveMfsrMerge)
+            return takeFullRingForMerge(cutoff, selectedFrameCount, activeMfsrSettings.label, ::saveMfsrMerge)
         }
         // HDR+ merges to one artifact: same full-ring discipline as SR.
         if (activeHdrPlusSettings.enabled) {
@@ -3288,14 +3288,14 @@ class RawCameraController(
     )
 
     private fun saveMfsrMerge(selected: List<BufferedRawFrame>) {
+        val settings = activeMfsrSettings
         val c = characteristics ?: run {
             selected.forEach { RawImageOwnership.release(it.image) }
-            onState("KB-SR ERROR")
+            onState("${settings.label} ERROR")
             return
         }
         val orientation = activeOutputOrientation
         val cameraId = selectedCameraId ?: "unknown"
-        val settings = activeMfsrSettings
         val outputFormat = activeCaptureFormat
         val outputSettings = activeJpegOutputSettings
         val captureDenoiseSettings = activeDenoiseSettings
@@ -3329,11 +3329,11 @@ class RawCameraController(
                     captureTimeMillis, captureGps = captureGps, saveSettings = saveSettings
                 )
             } catch (failure: Exception) {
-                Log.e(LOG_TAG, "KB-SR save failed", failure)
-                onState("KB-SR ERROR")
+                Log.e(LOG_TAG, "${settings.label} save failed", failure)
+                onState("${settings.label} ERROR")
             } catch (oom: OutOfMemoryError) {
-                Log.e(LOG_TAG, "KB-SR save out of memory", oom)
-                onState("KB-SR ERROR")
+                Log.e(LOG_TAG, "${settings.label} save out of memory", oom)
+                onState("${settings.label} ERROR")
             } finally {
                 if (outputFormat.includesJpeg) endJpegProcessing()
                 endPendingSave()

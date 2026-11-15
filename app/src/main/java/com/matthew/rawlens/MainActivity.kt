@@ -3325,14 +3325,14 @@ class MainActivity : Activity() {
         // Controller may be saving (LOCKED): keep the tile honest by
         // only clearing on success.
         if (applyMfsrSettings(mfsrSettings.copy(enabled = false))) {
-            Log.i(LOG_TAG, "KB-SR enabled=false")
+            Log.i(LOG_TAG, "${mfsrSettings.label} enabled=false")
             updateQuickControls()
         }
     }
 
     internal fun applyMfsrSettings(settings: MfsrSettings): Boolean {
         if (!controller.setMfsrSettings(settings)) {
-            setStatus("KB-SR LOCKED • SAVING")
+            setStatus("${mfsrSettings.label} LOCKED • SAVING")
             return false
         }
         mfsrSettings = settings
