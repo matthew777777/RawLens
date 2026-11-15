@@ -148,10 +148,10 @@ data class MfsrSettings(
         /** LK-R at x1 follows the largest burst the app captures. */
         const val MAX_LKR_FRAMES = 59
         /**
-         * LK-R x2 modes (1.5x, 2x, full 2x): per-frame solver buffers are 4x larger, so one
-         * worker at 24 frames already needs ~600 MB of native memory next to the frames and output.
+         * LK-R Lite x2 modes (1.5x, 2x, full 2x): tiled solving and FP16 GPU frame
+         * storage use a 30-frame cap, lower than x1 for input and solver memory.
          */
-        const val MAX_LKR_FRAMES_X2 = 24
+        const val MAX_LKR_FRAMES_X2 = 30
 
         fun maxFrames(engine: MfsrEngine, zoom: LkrZoom = LkrZoom.X1): Int = when {
             engine != MfsrEngine.LKR -> MAX_MERGE_FRAMES

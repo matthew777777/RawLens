@@ -48,7 +48,7 @@ class MfsrSettingsTest {
         assertEquals(59, settings.activeFrameCount(80))
         assertEquals("LK-SR\n×40", settings.quickText(MfsrEngine.LKR, 40, 40, true, false))
         for (z in listOf(LkrZoom.X1_5, LkrZoom.X2, LkrZoom.FULL_2X))
-            assertEquals(24, settings.copy(lkrZoom = z).activeFrameCount(40))
+            assertEquals(30, settings.copy(lkrZoom = z).activeFrameCount(40))
     }
 
     @Test fun quickTextUsesConfiguredCountAndWaitsForFullSelection() {
