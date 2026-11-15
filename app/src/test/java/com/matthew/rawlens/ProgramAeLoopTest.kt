@@ -31,19 +31,33 @@ class ProgramAeLoopTest {
     }
 
     @Test fun startAppliesTheTargetAtOnce() {
-        val loop = ProgramAeLoop()
-        assertEquals(ProgramAeLoop.Step.START,
-            loop.onSample(sample(0.04f), profile, limits, 100, 10_000_000L, 0L))
-        val (changed, settled) = loop.tick(1)!!
-        assertTrue(changed)
-        assertTrue(settled)
-        // Startup: the applied exposure is the AGC target (current x gain).
-        val gain = ProgramAgc.computeGain(0.04f.toDouble(), ProgramAgc.Histogram(RawProgramMeter.frameGreenBins(sample(0.04f))),
-            1.0, ProgramAgc.ConstraintMode.NORMAL).gain
-        assertEquals(1e9 * gain, loop.targetTotal, 1.0)
-        assertEquals(loop.targetTotal, loop.filteredTotal, 1e-3)
-        val total = loop.iso!!.toDouble() * loop.shutterNanos!!
-        assertEquals(loop.targetTotal, total, 0.01 * loop.targetTotal)
+        // Natural is the default; FIXED alone uses the legacy 16% target.
+        // Cover all modes so the startup loop must honor both curve targets
+        // and the highlight constraint selection, including EV compensation.
+        for (mode in ProgramBrightnessTuning.entries) for (ev in listOf(0f, 0.5f)) {
+            val selected = profile.copy(brightnessTuning = mode, evBias = ev)
+            val frame = sample(0.04f)
+            val loop = ProgramAeLoop()
+            assertEquals(ProgramAeLoop.Step.START,
+                loop.onSample(frame, selected, limits, 100, 10_000_000L, 0L))
+            val (changed, settled) = loop.tick(1)!!
+            assertTrue(changed)
+            assertTrue(settled)
+            val mean = frame.centerWeightedGreen.toDouble()
+            val tuning = ProgramBrightnessCurve.evaluate(mode, mean, 100, 10_000_000L, selected)
+            assertEquals(if (mode == ProgramBrightnessTuning.FIXED) .16 else .13, tuning.target, 1e-8)
+            val gain = ProgramAgc.computeGain(
+                mean, ProgramAgc.Histogram(RawProgramMeter.frameGreenBins(frame)),
+                Math.pow(2.0, ev.toDouble()),
+                if (mode == ProgramBrightnessTuning.HIGHLIGHTS) ProgramAgc.ConstraintMode.HIGHLIGHT
+                    else ProgramAgc.ConstraintMode.NORMAL,
+                tuning.target, tuning.constraintScale
+            ).gain
+            assertEquals("$mode EV=$ev target", 1e9 * gain, loop.targetTotal, 1.0)
+            assertEquals(loop.targetTotal, loop.filteredTotal, 1e-3)
+            val total = loop.iso!!.toDouble() * loop.shutterNanos!!
+            assertEquals("$mode EV=$ev applied", loop.targetTotal, total, 0.01 * loop.targetTotal)
+        }
     }
 
     @Test fun laterSamplesGlideThroughTheFilter() {
