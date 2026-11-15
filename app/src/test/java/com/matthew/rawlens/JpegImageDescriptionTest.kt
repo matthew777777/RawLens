@@ -24,7 +24,7 @@ class JpegImageDescriptionTest {
         } finally { Locale.setDefault(old) }
     }
     @Test fun agxRecordsAllStoredAndEffectiveControls() {
-        val s = JpegOutputSettings(agxLook = AgxLook.PUNCHY, agxContrast = 1.2f,
+        val s = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxLook = AgxLook.PUNCHY, agxContrast = 1.2f,
             agxSaturation = .8f, agxPurityBoost = 1.1f, agxHuePreservation = .3f,
             agxShadowEv = 9f, agxHighlightEv = 6f, agxGamutCompression = .4f,
             activeDLighting = ActiveDLighting.NORMAL)
