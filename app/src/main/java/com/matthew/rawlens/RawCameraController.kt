@@ -286,6 +286,7 @@ class RawCameraController(
     private val activeFramesRemaining = AtomicInteger(0)
     private var activeHdrBracket = false
     private var activeDualRaw = false
+    private var activeDcgDualRaw = false
     private val pendingDualRawFrames = ArrayList<PendingHdrFrame>(2)
     private var activeHdrSaveEachBracket = false
     private var activeHdrSaveDebugFrames = false
@@ -2446,11 +2447,16 @@ class RawCameraController(
         }
     }
 
-    /** Test mode stays on the proven standalone route; never opens a second device. */
-    fun supportsDualRaw(): Boolean = selectedCameraId == "0" && activePhysicalCameraId == null &&
-        supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+    /** Uses the current lens and RAW session, including physical-camera outputs. */
+    fun supportsDualRaw(): Boolean =
+        lapisSessionSpec?.dcg == true ||
+            supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
 
     fun captureDualRaw() {
+        if (lapisSessionSpec?.dcg == true) {
+            captureDcgDualRaw()
+            return
+        }
         val orientation = deviceOrientationDegrees
         postShutter {
             val c = characteristics
@@ -2459,7 +2465,7 @@ class RawCameraController(
             val currentSession = session
             val reader = rawReader
             if (!supportsDualRaw() || c == null || device == null || currentSession == null || reader == null) {
-                onState("RAW HDR TEST NEEDS CAMERA 0"); return@postShutter
+                onState("RAW HDR TEST NEEDS MANUAL RAW CAPTURE"); return@postShutter
             }
             if (!hasPreviewMetadata || preview == null) { onState("RAW HDR TEST WAIT"); return@postShutter }
             val isoRange = c[CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE]!!
@@ -6468,7 +6474,7 @@ class RawCameraController(
             "iso=${selected.first().result.get(CaptureResult.SENSOR_SENSITIVITY)} " +
             "exposureNs=${selected.first().exposureNanos} " +
             "pairs=${selected.joinToString { "${it.result.get(CaptureResult.SENSOR_SENSITIVITY)}:${it.exposureNanos}" }}")
-        onState("${if (activeMfsrSettings.enabled) "KB-SR" else "HDR+"} ×${selected.size} • PREPARING")
+        onState("${if (activeMfsrSettings.enabled) activeMfsrSettings.label else "HDR+"} ×${selected.size} • PREPARING")
         if (activeMfsrSettings.enabled) saveMfsrMerge(selected) else saveHdrPlusMerge(selected)
         finishCapture()
         publishRawZslStatus()
@@ -6503,6 +6509,101 @@ class RawCameraController(
         }
         completeForwardCapture()
         if (!chainPairedAny) noteChainDeadAndMaybeRecover()
+    }
+
+    /** DCG14 must retain AE and the root scenario on every metering/capture request. */
+    private fun captureDcgDualRaw() {
+        val orientation = deviceOrientationDegrees
+        postShutter {
+            val spec = lapisSessionSpec?.takeIf { it.dcg } ?: return@postShutter
+            val c = characteristics ?: return@postShutter
+            val device = camera ?: return@postShutter
+            val currentSession = session ?: return@postShutter
+            val reader = rawReader ?: return@postShutter
+            val surface = previewSurface
+            val range = c[CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE]
+            val step = c[CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP]?.toDouble() ?: 0.0
+            if (range == null || step <= 0.0) {
+                onState("DCG14 HDR NEEDS AE COMPENSATION"); return@postShutter
+            }
+            val base = exposureCompensation.coerceIn(range.lower, range.upper)
+            val short = (base - kotlin.math.ceil(2.0 / step).toInt()).coerceAtLeast(range.lower)
+            if ((base - short) * step < 1.0) {
+                onState("DCG14 HDR EXPOSURE LIMIT"); return@postShutter
+            }
+            if (!beginCapture(CaptureFormat.DNG_ONLY, requiredSaveSlots=2, orientationSnapshot=orientation)) return@postShutter
+            activeDualRaw = true
+            activeDcgDualRaw = true
+            closeAllPendingPairs()
+            stopRepeatingRawBeforeForwardCapture(currentSession,reader)
+            activeFramesRemaining.set(2)
+            val generation = lifecycleGeneration
+            val id = captureSequence.incrementAndGet()
+            val callback = captureCallback(generation, id)
+            val seed = latestPreviewResult
+            val focus = selectedFocusDistanceDiopters ?: seed?.get(CaptureResult.LENS_FOCUS_DISTANCE)
+            fun request(index: Int, still: Boolean): CaptureRequest =
+                device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                    surface?.let { addTarget(it) }
+                    if (still || surface == null) addTarget(reader.surface)
+                    if (still) setTag(CaptureTag(id,index+1,2))
+                    applyCameraControls(this, applyDynamicCurve=false)
+                    focus?.let {
+                        set(CaptureRequest.CONTROL_AF_MODE,CaptureRequest.CONTROL_AF_MODE_OFF)
+                        set(CaptureRequest.LENS_FOCUS_DISTANCE,it)
+                    }
+                    if (c[CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE] == true)
+                        set(CaptureRequest.CONTROL_AWB_LOCK,true)
+                    spec.applyRequest(this)
+                    set(CaptureRequest.CONTROL_AE_LOCK,false)
+                    set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,if(index==0) short else base)
+                }.build()
+            fun active() = isCurrent(generation) && captureSequence.get() == id &&
+                activeDualRaw && captureInProgress.get()
+            fun meter(index: Int) {
+                if (!active()) return
+                try {
+                    var count = 0
+                    var submitted = false
+                    currentSession.setRepeatingRequest(request(index,false),object : CameraCaptureSession.CaptureCallback() {
+                        override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
+                            if (isCurrent(generation) && surface == null)
+                                result[CaptureResult.SENSOR_TIMESTAMP]?.let(pairing::dropPreviewRaw)
+                            if (!active() || submitted) return
+                            count++
+                            val state = result[CaptureResult.CONTROL_AE_STATE]
+                            if (count < 6 || state != CaptureResult.CONTROL_AE_STATE_CONVERGED) {
+                                if (count >= 90) { submitted=true; finishCapture("DCG14 HDR AE DID NOT SETTLE") }
+                                return
+                            }
+                            submitted = true
+                            try {
+                                s.capture(request(index,true),object : CameraCaptureSession.CaptureCallback() {
+                                    override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+                                        callback.onCaptureCompleted(session,request,result)
+                                        if (index==0) meter(1)
+                                    }
+                                    override fun onCaptureFailed(session: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) {
+                                        callback.onCaptureFailed(session,request,failure)
+                                        if (active()) finishCapture("DCG14 HDR CAPTURE ERROR")
+                                    }
+                                },cameraHandler)
+                            } catch (failure: Exception) {
+                                Log.e("RawLensDualRaw","DCG14 capture failed",failure)
+                                finishCapture("DCG14 HDR CAPTURE ERROR")
+                            }
+                        }
+                    },cameraHandler)
+                } catch (failure: Exception) {
+                    Log.e("RawLensDualRaw","DCG14 metering failed",failure)
+                    finishCapture("DCG14 HDR METERING ERROR")
+                }
+            }
+            cameraCaptureSequenceActive = true
+            scheduleCaptureTimeout(id)
+            onState("DCG14 AUTO AE HDR ×2")
+            meter(0)
+        }
     }
 
     private fun saveDualRaw(frames: List<PendingHdrFrame>) {
@@ -6849,6 +6950,8 @@ class RawCameraController(
     }
 
     private fun finishCapture(message: String? = null) {
+        val restoreDcgPreview = activeDcgDualRaw
+        activeDcgDualRaw = false
         flashPrecaptureTick?.let(cameraHandler::removeCallbacks)
         flashPrecaptureTick = null
         flashPrecapture = null
@@ -6883,6 +6986,7 @@ class RawCameraController(
         lostRawBufferFrames.clear()
         activeBurstPipelined = false
         captureInProgress.getAndSet(false)
+        if (restoreDcgPreview && running && session != null) updateRepeatingRequest()
         resumeRawZslIfIdle()
         refreshCaptureAvailability()
         if (message != null) onState(message)

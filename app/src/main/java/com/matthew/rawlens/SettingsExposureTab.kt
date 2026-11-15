@@ -350,7 +350,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             setOnCheckedChangeListener { button, enabled ->
                 if (enabled && !controller.supportsDualRaw()) {
                     button.isChecked = false
-                    setStatus("RAW HDR TEST NEEDS CAMERA 0")
+                    setStatus("RAW HDR TEST NEEDS MANUAL RAW CAPTURE")
                 } else {
                     dualRawEnabled = enabled
                     setStatus(if (enabled) "TWO-EXPOSURE RAW HDR ON" else "TWO-EXPOSURE RAW HDR OFF")
@@ -359,11 +359,13 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             }
         })
         content.addView(TextView(this).apply {
-            text = "Camera 0 only. Saves a 16-bit DNG from two sequential exposures, " +
+            text = "Available on any lens with manual RAW capture, or rooted Redmi DCG14 with AE always on. " +
+                "DCG14 meters each exposure separately using AE compensation; ISO may differ. " +
+                "Saves a 16-bit DNG from two sequential exposures, " +
                 "using the short exposure to recover clipped highlights. " +
                 "Does not reduce shadow noise. No alignment or motion correction; " +
                 "keep the phone and scene still. Overrides the release mode " +
-                "while enabled. Resets when the app restarts or you change cameras."
+                "while enabled. Resets when the app restarts or you select an unsupported camera."
             setTextColor(getColor(R.color.text_secondary))
             textSize = 11f
         })

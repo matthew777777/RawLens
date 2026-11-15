@@ -8,6 +8,14 @@ internal object DualRawExposure {
     data class Frame(val iso: Int, val nanos: Long)
     data class Plan(val high: Frame, val low: Frame)
 
+    /** AE may trade shutter for gain: use the delivered exposure product. */
+    fun deliveredScale(shortIso: Int, shortNanos: Long, longIso: Int, longNanos: Long): Float {
+        require(shortIso > 0 && longIso > 0 && shortNanos > 0 && longNanos > 0)
+        val scale = (longNanos.toDouble() * longIso / (shortNanos.toDouble() * shortIso)).toFloat()
+        require(scale.isFinite() && scale >= 1.5f) { "Camera did not apply the exposure bracket" }
+        return scale
+    }
+
     fun plan(meteredIso: Int, meteredNanos: Long, minIso: Int, maxIso: Int,
              minNanos: Long, maxNanos: Long): Plan {
         require(minIso > 0 && maxIso >= minIso && minNanos > 0 && maxNanos >= minNanos)

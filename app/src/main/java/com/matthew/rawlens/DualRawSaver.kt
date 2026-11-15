@@ -29,7 +29,9 @@ internal object DualRawSaver {
         }
         val highIso = requireNotNull(highResult[CaptureResult.SENSOR_SENSITIVITY])
         val lowIso = requireNotNull(lowResult[CaptureResult.SENSOR_SENSITIVITY])
-        check(highIso == lowIso) { "Camera did not apply the shared RAW gain" }
+        val dcg = LapisRootSession.spec(c)?.dcg == true
+        require(highIso > 0 && lowIso > 0)
+        check(dcg || highIso == lowIso) { "Camera did not apply the shared RAW gain" }
         val hp = high.planes[0]; val lp = low.planes[0]
         require(hp.pixelStride == 2 && lp.pixelStride == 2) { "RAW16 required" }
         val le = requireNotNull(lowResult[CaptureResult.SENSOR_EXPOSURE_TIME])
@@ -48,6 +50,8 @@ internal object DualRawSaver {
         // instead. The merged DNG's tags are forced by DualRawDngWriter, so
         // only the merge math needs these.
         fun repaired(image: Image, r: CaptureResult): Pair<FloatArray, Float>? {
+            if (dcg) return FloatArray(4) { LapisRootSession.storageBlack(c,it).toFloat() } to
+                requireNotNull(LapisRootSession.storageWhite(c)).toFloat()
             val b = reportedBlack(r)
             val w = reportedWhite(r)
             if (b != null && w != null && !DngLevelRepair.needsRepair(b, w)) return b to w
@@ -66,8 +70,7 @@ internal object DualRawSaver {
             "Dual RAW levels unusable and unsampleable (high)"
         }
         require(lb.size == 4 && hb.size == 4 && lb.all { it.isFinite() && it < lw } && hb.all { it.isFinite() && it < hw })
-        val scale = (le.toDouble()*lowIso/(he.toDouble()*highIso)).toFloat()
-        check(scale.isFinite() && scale >= 1.5f) { "Camera did not apply the exposure bracket" }
+        val scale = DualRawExposure.deliveredScale(highIso,he,lowIso,le)
         // Both streams use long-frame DN units. Dividing each by its own white
         // range would introduce a channel-dependent exposure mismatch.
         val headroom = maxOf(1f, (0..3).maxOf { scale * (hw-hb[it])/(lw-lb[it]) })
@@ -75,7 +78,10 @@ internal object DualRawSaver {
         // other TinyDNG writer. Built before the merge so a non-Bayer sensor
         // fails fast instead of after the Vulkan work. Exposure/ISO describe
         // the low (short) frame, as the old platform-writer files did.
-        val frameMetadata = RawFrameMetadataFactory.capture(cameraId, low, c, lowResult, orientation)
+        val levels = if (dcg) DngMetadataOverrides(
+            blackLevels = lb.map { it.toDouble() }, whiteLevel = lw.toDouble()
+        ) else DngMetadataOverrides()
+        val frameMetadata = RawFrameMetadataFactory.capture(cameraId, low, c, lowResult, orientation, levels)
         val params = lb + hb + floatArrayOf(lw,hw,scale,headroom)
         val output = ByteBuffer.allocateDirect(Math.multiplyExact(Math.multiplyExact(low.width,low.height),2))
             .order(ByteOrder.LITTLE_ENDIAN)

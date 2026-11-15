@@ -4316,7 +4316,7 @@ class MainActivity : Activity() {
         val sharp = mfsrQuick
         val hdrPlus = hdrPlusQuick
         val ettr = ettrQuick
-        if (dualRawEnabled && controller.activeCameraId() != "0") dualRawEnabled = false
+        if (dualRawEnabled && !controller.supportsDualRaw()) dualRawEnabled = false
         release.isEnabled = !dualRawEnabled
         release.alpha = if (dualRawEnabled) .4f else 1f
         grid.text = "GRID\n${if (gridEnabled) "THIRDS" else "OFF"}"

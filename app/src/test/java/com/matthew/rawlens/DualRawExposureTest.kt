@@ -4,6 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DualRawExposureTest {
+    @Test fun aeBracketAccountsForDifferentIso() {
+        assertEquals(4f,DualRawExposure.deliveredScale(100,5_000_000L,200,10_000_000L),0f)
+    }
+    @Test(expected=IllegalArgumentException::class)
+    fun aeGainCancellingShutterBracketIsRejected() {
+        DualRawExposure.deliveredScale(400,5_000_000L,100,20_000_000L)
+    }
     @Test fun meteredLongAndTwoStopShortHeadroom() {
         val p=DualRawExposure.plan(100,33_333_333L,50,12800,100_000L,400_000_000L)
         assertTrue(p.high.iso==p.low.iso)
