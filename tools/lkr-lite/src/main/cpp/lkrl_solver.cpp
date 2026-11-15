@@ -299,7 +299,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   Buffer& zstart = buf(cavg >= 2 ? nHR * 4 : 16);
   // GPU combine (mode 5, chroma from the average: the default); LKRL_HYB_CPU=1 / LKRL_CT keep the host path.
   const bool gpu_hyb = cavg == 5 && !std::getenv("LKRL_CT") && !std::getenv("LKRL_HYB_CPU");
-  Buffer &zavgB = buf(gpu_hyb ? nHR * 4 : 16), &hybD = buf(gpu_hyb ? size_t(2) * H * W * 4 : 16),
+  Buffer &zavgB = buf(gpu_hyb ? nHR * 4 : 16), &hybD = buf(gpu_hyb ? size_t(4) * H * W * 4 : 16),
          &hybO = buf(gpu_hyb ? nHR * 4 : 16, true);
   Buffer& y2 = buf(std::getenv("LKRL_FREQ") ? (nLR + 1) / 2 * 4 : 16, true);   // freq-robust samples (prototype)   // start image (hybrid modes >= 2)
   for (size_t i = 0; i < slot; ++i)
@@ -763,7 +763,9 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     const float rel = std::sqrt(std::max(0.18f * prm.noise_a + prm.noise_b, 0.0f)) / 0.18f;
     const float t_auto = std::min(std::max((rel - 0.03f) / 0.03f, 0.0f), 1.0f);
     const float t = std::getenv("LKRL_LT") ? float(std::atof(std::getenv("LKRL_LT"))) : t_auto;
-    HybPush hp{H, W, K, 0, prm.noise_a, prm.noise_b, t, prm.clip, prm.wb[0], prm.wb[1], prm.wb[2], 0.0f};
+    // Chroma: blurred fit chroma, r 1 at 1x / 2 at 2x (LKRL_CBLUR = radius; -1 = the average's chroma).
+    const float cr = std::getenv("LKRL_CBLUR") ? float(std::atoi(std::getenv("LKRL_CBLUR"))) : (s == 1 ? 1.0f : 2.0f);
+    HybPush hp{H, W, K, 0, prm.noise_a, prm.noise_b, t, prm.clip, prm.wb[0], prm.wb[1], prm.wb[2], cr};
     VkDescriptorSet sh = gpu_->set(hyb_, {&z, &zavgB, &hybD, &hybO});
     gpu_->dispatch(hyb_, sh, &hp, div_up(uint32_t(W), 16), div_up(uint32_t(H), 16));
     hp.mode = 1;

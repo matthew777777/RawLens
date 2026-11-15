@@ -44,7 +44,7 @@ internal fun sharpMergeProvenance(
         append("- Reference frame: ${ref.frameNumber}\n")
     }
     return MergeProvenance(
-        algorithmVersion = if (lkr) "RawLens-LK-SR/lkr-pipeline" else "RawLens-KB-SR/scale1-sr-pipeline",
+        algorithmVersion = if (lkr) "RawLens-LK-SR/lkr-lite" else "RawLens-KB-SR/scale1-sr-pipeline",
         selectedFrames = selectedCount, acceptedFrames = merged.keptCount,
         rejectedFrames = selectedCount - merged.keptCount,
         referenceTimestampNs = ref.timestampNanos, outputScale = 1,

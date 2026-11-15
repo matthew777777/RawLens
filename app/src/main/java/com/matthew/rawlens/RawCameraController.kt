@@ -2236,6 +2236,8 @@ class RawCameraController(
     }
 
     init {
+        // LK-SR selected from a previous session: build its pipelines now, not on the first shutter.
+        if (initialMfsrSettings.enabled && initialMfsrSettings.engine == MfsrEngine.LKR) LkrMerge.prewarm(context)
         rawViewfinder?.onStarvation = {
             cameraHandler.post {
                 // While stopped (a video take owns the camera) both
@@ -2702,6 +2704,7 @@ class RawCameraController(
             return false
         }
         mfsrSettings = settings
+        if (settings.enabled && settings.engine == MfsrEngine.LKR) LkrMerge.prewarm(context)
         if (!isOnCameraThread()) {
             cameraHandler.post { applyMfsrCameraState(settings) }
             return true

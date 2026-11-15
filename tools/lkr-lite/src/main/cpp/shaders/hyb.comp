@@ -8,12 +8,12 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(std430, binding = 0) readonly buffer Z { float z[]; };
 layout(std430, binding = 1) readonly buffer A { float za[]; };
-layout(std430, binding = 2) buffer D { float d[]; };     // [0, HW): D, [HW, 2 HW): hot flag
+layout(std430, binding = 2) buffer D { float d[]; };     // [0, HW): D, [HW, 2 HW): hot, [2 HW, 4 HW): fit chroma U, V
 layout(std430, binding = 3) writeonly buffer O { float o[]; };
 layout(push_constant) uniform P {
   int H, W, K, mode;
   float a, b, t, clip;
-  float wbr, wbg, wbb, pad;
+  float wbr, wbg, wbb, cr;   // cr >= 0: chroma = binomial(2 cr + 1) blur of the FIT's chroma; < 0: the average's
 } pc;
 void main() {
   int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
@@ -27,6 +27,7 @@ void main() {
     d[i] = yf - ya;
     float m = max(max(max(z[i], z[HW + i]), z[2 * HW + i]), max(max(za[i], za[HW + i]), za[2 * HW + i]));
     d[HW + i] = m >= 0.85 * pc.clip ? 1.0 : 0.0;
+    d[2 * HW + i] = f.r - yf; d[3 * HW + i] = f.b - yf;
     return;
   }
   float sumr = 0.0; int nr = 0; bool near = false;
@@ -48,7 +49,26 @@ void main() {
   float nv = wbl * wbl * max(pc.a * yc + pc.b, 1e-12) / float(pc.K);
   float w = E > 0.0 ? max(E - pc.t * nv, 0.0) / E : 0.0;
   float y = ya + w * d[i];
-  float u = near ? f.r - yf : av.r - ya, v = near ? f.b - yf : av.b - ya;
+  float u, v;
+  if (pc.cr >= 0.0) {
+    // Fit chroma, binomial blur (2026-11-14): the average's chroma aliased fine repeating patterns
+    // into colour bands (perforated panels, IMG_20210228 2x); the fit's has none, and the blur removes
+    // its edge zipper (car burst chroma-zipper 0.0138 -> 0.0013 at r 2).
+    int r = int(pc.cr);
+    float su = 0.0, sv = 0.0, sw = 0.0;
+    for (int dy = -r; dy <= r; ++dy)
+      for (int dx = -r; dx <= r; ++dx) {
+        int yy = clamp(Y + dy, 0, pc.H - 1), xx = clamp(X + dx, 0, pc.W - 1);
+        float wy = r == 1 ? (dy == 0 ? 2.0 : 1.0) : (dy == 0 ? 6.0 : (abs(dy) == 1 ? 4.0 : 1.0));
+        float wx = r == 1 ? (dx == 0 ? 2.0 : 1.0) : (dx == 0 ? 6.0 : (abs(dx) == 1 ? 4.0 : 1.0));
+        float wg = r == 0 ? 1.0 : wy * wx;
+        int t = yy * pc.W + xx;
+        su += wg * d[2 * HW + t]; sv += wg * d[3 * HW + t]; sw += wg;
+      }
+    u = su / sw; v = sv / sw;
+  } else {
+    u = near ? f.r - yf : av.r - ya; v = near ? f.b - yf : av.b - ya;
+  }
   float rr = y + u, bb = y + v, gg = (y - 0.25 * rr - 0.25 * bb) / 0.5;
   o[i] = rr / pc.wbr; o[HW + i] = gg / pc.wbg; o[2 * HW + i] = bb / pc.wbb;
 }

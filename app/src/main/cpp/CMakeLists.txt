@@ -408,10 +408,10 @@ endif()
 # identical DNG files.
 add_subdirectory("../../../../tools/sr-pipeline/src/main/cpp" srpipeline)
 
-# LK-Reloaded burst SR (tools/lkr-pipeline): links srpipeline for the shared
-# Vulkan context / DNG I/O;
-# exposed to Kotlin through LkrBridge.
-add_subdirectory("../../../../tools/lkr-pipeline/src/main/cpp" lkrpipeline)
+# LK-SR burst super-resolution = LK-R Lite (tools/lkr-lite, replaced tools/lkr-pipeline on
+# 2026-11-14): builds liblkrpipeline.so with the same JNI symbols, so LkrBridge is unchanged.
+# Links srpipeline for the shared Vulkan context / DNG I/O.
+add_subdirectory("../../../../tools/lkr-lite/src/main/cpp" lkrlite)
 
 # Cinematic RAW Studio (.CRAW) RAW video / burst container (vendored,
 # Apache-2.0; see third_party/craw/SOURCE.md, refresh with tools/sync_craw.sh).

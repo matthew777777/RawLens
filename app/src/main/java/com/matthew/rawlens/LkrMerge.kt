@@ -19,6 +19,27 @@ import java.nio.ByteOrder
  */
 internal object LkrMerge {
     private const val LOG_TAG = "RawLensCamera"
+    private val prewarmed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Compiles LK-SR's Vulkan pipelines into the persistent cache on a low-priority daemon thread,
+     * once per process, so the first merge does not pay pipeline creation (4.8 s cold on Mali for
+     * 3 workers, 27 ms warm). Background priority keeps it off the viewfinder's way.
+     */
+    fun prewarm(context: Context) {
+        if (!prewarmed.compareAndSet(false, true)) return
+        val dir = context.codeCacheDir.absolutePath
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            try {
+                val ms = LkrBridge.nativePrewarm(dir)
+                Log.i(LOG_TAG, "LK-SR prewarm: pipelines cached in $ms ms")
+            } catch (failure: Throwable) {
+                prewarmed.set(false)
+                Log.w(LOG_TAG, "LK-SR prewarm failed; the first merge builds its pipelines", failure)
+            }
+        }, "lkr-prewarm").apply { isDaemon = true; start() }
+    }
     /** Sensors deeper than this are staged as plain 16-bit: packing 14 bits saves only an eighth. */
     private const val MAX_PACKED_BITS = 12
 

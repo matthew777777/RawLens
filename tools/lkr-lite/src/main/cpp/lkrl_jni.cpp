@@ -1,0 +1,380 @@
+// SPDX-License-Identifier: Apache-2.0
+// JNI for LK-R Lite (app: com.matthew.rawlens.LkrBridge). Drop-in port of tools/lkr-pipeline
+// lkr_jni.cpp (2026-11-14): same symbols and stats layout; lkr:: -> lkrl::.
+//
+// nativeMerge takes the caller's direct uint16 RAW buffers as-is (no Java
+// heap copies; BurstMergeRunner allocates them with HdrPlusVulkan.allocBuffer)
+// and returns a malloc'd direct ByteBuffer of interleaved float RGB in sensor
+// coordinates, freed with SrpBridge.nativeFreeDirect (std::free), the same
+// contract as MfsrMerge.MfsrResult. One Gpu + prior per call: the Vulkan
+// device lives only for the merge.
+#include <jni.h>
+#include <chrono>
+#include <cstdarg>
+#include <cstdio>
+
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "lkrl_full.h"
+#include "lkrl_pack.h"
+#include "lkrl_tuning.h"
+#include "lkrl_resample.h"
+#include "lkrl_sharpness.h"
+#include "noise_model.h"   // app/src/main/cpp/wavelet: learned per-device noise model
+
+#include <cmath>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#include <sys/system_properties.h>
+#define LKR_PLATFORM_LOG(text) __android_log_write(ANDROID_LOG_INFO, "RawLensLkr", text)
+#else
+#include <cstdio>
+#define LKR_PLATFORM_LOG(text) std::fprintf(stderr, "%s\n", text)
+#endif
+
+namespace {
+
+// The app reads this on the same thread immediately after Merge. OEM logd may
+// omit native lines, so retain a bounded copy for Kotlin's in-process file tee.
+thread_local std::string g_last_profile;
+void LkrLog(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  va_list count_args;
+  va_copy(count_args, args);
+  const int size = std::vsnprintf(nullptr, 0, format, count_args);
+  va_end(count_args);
+  if (size >= 0) {
+    std::vector<char> line(size_t(size) + 1);
+    std::vsnprintf(line.data(), line.size(), format, args);
+    LKR_PLATFORM_LOG(line.data());
+    if (g_last_profile.size() + size_t(size) + 1 <= 64 * 1024) {
+      g_last_profile.append(line.data(), size_t(size));
+      g_last_profile += '\n';
+    }
+  }
+  va_end(args);
+}
+#define LKR_LOG(...) LkrLog(__VA_ARGS__)
+
+// Learned per-device noise model for the NEXT merge on this thread
+// (nativeSetNoiseModel, consumed by Merge): store path + ISO, empty = none.
+struct NoiseModelRef {
+  std::string path;
+  float iso = 0;
+};
+thread_local NoiseModelRef g_noise_model;
+
+// stats layout (float[16]): tiles, sigma, a, b, ms_noise, ms_coarse, ms_tiles,
+// ms_gpu, ms_prior, ms_total, prior_calls, out_w, out_h, backend (0 none,
+// 4 DCT x-step), reserved...
+jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_px, jintArray cfa_j,
+              jfloatArray black_j, jfloat white, jfloatArray wb_j, jint s, jint tile, jint overlap,
+              jintArray crop_j, jboolean dct, jfloatArray stats_j, jfloatArray tuning_j, jint out_w_req,
+              jint out_h_req, jint packed_bits = 0) {
+  g_last_profile.clear();
+  const jsize K = env->GetArrayLength(frames);
+  std::vector<lkrl::RawFrame> fr;
+  for (jsize k = 0; k < K; ++k) {
+    jobject b = env->GetObjectArrayElement(frames, k);
+    void* p = b ? env->GetDirectBufferAddress(b) : nullptr;
+    const jlong cap = b ? env->GetDirectBufferCapacity(b) : 0;
+    const jlong need = packed_bits > 0 ? jlong(lkrl::PackedBytes(row_stride_px, h, packed_bits))
+                                       : jlong(row_stride_px) * h * 2;
+    if (!p || cap < need || packed_bits < 0 || packed_bits > 15) {
+      LKR_LOG("frame %d: not a direct buffer or too small", int(k));
+      return nullptr;
+    }
+    fr.push_back({static_cast<const uint16_t*>(p), row_stride_px, packed_bits});
+    env->DeleteLocalRef(b);
+  }
+  int cfa[4], crop[4] = {-1, -1, 0, 0};
+  float black[4], wbv[3];
+  env->GetIntArrayRegion(cfa_j, 0, 4, cfa);
+  env->GetFloatArrayRegion(black_j, 0, 4, black);
+  env->GetFloatArrayRegion(wb_j, 0, 3, wbv);
+  if (crop_j && env->GetArrayLength(crop_j) >= 4) env->GetIntArrayRegion(crop_j, 0, 4, crop);
+  lkrl::Gpu gpu;
+  if (!gpu.ok()) {
+    LKR_LOG("no Vulkan device");
+    return nullptr;
+  }
+  lkrl::FullParams prm = lkrl::AppDefaults();
+  // x2 buffers are large and a third worker gains about 3 % on Mali (measured); debug.lkr.workers still overrides.
+  if (s >= 2) {
+    prm.workers = std::min(prm.workers, 2);
+    prm.min_workers = 2;
+  }
+  prm.solver_budget_mb = 768;   // fewer workers for long bursts; output and frames are on top of this
+#ifdef __ANDROID__
+  {
+    char v[PROP_VALUE_MAX] = {0};
+    if (__system_property_get("debug.lkr.workers", v) > 0) prm.workers = std::atoi(v);
+    if (__system_property_get("debug.lkr.tilelk", v) > 0 && v[0] == '0') prm.tile_lk = false;
+  }
+#endif
+  const NoiseModelRef noise_model = g_noise_model;
+  g_noise_model = {};
+  if (!noise_model.path.empty() && noise_model.iso > 0) {
+    // Same mix as HDR+ (WaveletVulkan.combineNoise): model prior, this burst's fit as evidence.
+    prm.noise_refine = [noise_model](float* a, float* b, int bins) {
+      const auto model = rawlens_noise::fit(rawlens_noise::loadSamples(noise_model.path));
+      if (!model.supports(noise_model.iso)) {
+        LKR_LOG("noise: learned model untrained at ISO %.0f, burst fit a=%.3g b=%.3g", noise_model.iso, *a, *b);
+        return false;
+      }
+      const bool ok = std::isfinite(*a) && std::isfinite(*b) && *a >= 0 && *b >= 0;
+      const auto c = rawlens_noise::combine(model, noise_model.iso, *a, *b, bins, ok);
+      if (!(std::isfinite(c.a) && std::isfinite(c.b) && c.a >= 0 && c.b >= 0)) return false;
+      LKR_LOG("noise: burst a=%.3g b=%.3g (%d bins) + learned (ISO %.0f, %d samples) -> a=%.3g b=%.3g w=%.2f",
+              *a, *b, bins, noise_model.iso, model.samples, c.a, c.b, c.w);
+      *a = c.a;
+      *b = c.b;
+      return true;
+    };
+  }
+  prm.s = s;
+  prm.solve.dct_prior = dct;
+  prm.tile = tile;
+  prm.overlap = overlap;
+  prm.crop_x = crop[0];
+  prm.crop_y = crop[1];
+  prm.crop_w = crop[2];
+  prm.crop_h = crop[3];
+  if (tuning_j) {   // LK-SR Lab (Settings -> Merge): finite entries override the defaults
+    std::vector<float> tv(size_t(env->GetArrayLength(tuning_j)));
+    if (!tv.empty()) env->GetFloatArrayRegion(tuning_j, 0, jsize(tv.size()), tv.data());
+    lkrl::ApplyTuning(tv.data(), int(tv.size()), &prm);
+    int n = 0;
+    for (float f : tv) n += std::isfinite(f) ? 1 : 0;
+    if (n) LKR_LOG("LK-SR Lab: %d overridden setting(s)", n);
+  }
+#ifdef __ANDROID__
+  {  // A/B switches for device benchmarks: adb shell setprop debug.lkr.gather 1
+    char v[PROP_VALUE_MAX] = {0};
+    if (__system_property_get("debug.lkr.gather", v) > 0 && v[0] == '1') prm.solve.gather = true;
+    if (__system_property_get("debug.lkr.tk", v) > 0) prm.solve.temporal_k = float(std::atof(v));
+    if (__system_property_get("debug.lkr.mp", v) > 0) prm.solve.mean_preserve = std::atoi(v);
+    if (__system_property_get("debug.lkr.rgather", v) > 0) prm.solve.robust_gather = v[0] != '0';
+    if (__system_property_get("debug.lkr.mev", v) > 0) prm.solve.motion_every = std::atoi(v);
+    if (__system_property_get("debug.lkr.pack", v) > 0) prm.solve.pack_taps = v[0] != '0';
+    if (__system_property_get("debug.lkr.half", v) > 0) prm.solve.half_taps = v[0] != '0';
+    if (__system_property_get("debug.lkr.quad", v) > 0) prm.solve.quad = v[0] != '0';
+    if (__system_property_get("debug.lkr.korder", v) > 0) prm.solve.frame_inner = std::atoi(v);
+    if (__system_property_get("debug.lkr.tdet", v) > 0) prm.solve.temporal_det_once = v[0] != '0';
+    if (__system_property_get("debug.lkr.wskip", v) > 0) prm.solve.weight_skip = v[0] != '0';
+    if (__system_property_get("debug.lkr.jfuse", v) > 0) prm.solve.jac_fuse = v[0] != '0';
+    if (__system_property_get("debug.lkr.rob", v) > 0 && v[0] == '0') prm.solve.robust = false;
+    if (__system_property_get("debug.lkr.guide", v) > 0) prm.solve.guide_confidence = float(std::atof(v));   // 0 = residual confidence
+    if (__system_property_get("debug.lkr.eq", v) > 0 && v[0] == '0') prm.solve.equalize_noise = false;
+    if (__system_property_get("debug.lkr.loc", v) > 0 && v[0] == '0') prm.solve.local_block = 0;
+  }
+#endif
+  LKR_LOG("adjoint: %s", prm.solve.gather ? "gather" : "scatter");
+#ifdef __ANDROID__
+  {
+    char v[PROP_VALUE_MAX] = {0};
+    // On by default so field logs (devices without adb) show where GPU time goes:
+    // two timestamps per dispatch, results unchanged. "0" switches it off.
+    if (!(__system_property_get("debug.lkr.profile", v) > 0 && v[0] == '0')) gpu.profile(true);
+  }
+#endif
+
+  const float backend = dct ? 4.f : 0.f;
+  float* direct = nullptr;
+  prm.out_alloc = [&](int oww, int ohh) -> float* {
+    if (out_w_req > 0 && out_h_req > 0 && (out_w_req != oww || out_h_req != ohh)) return nullptr;   // 1.5x resamples
+    return direct = static_cast<float*>(std::calloc(size_t(oww) * ohh * 3, sizeof(float)));
+  };
+  const lkrl::PriorFactory make;
+  std::vector<float> rgb;
+  int ow = 0, oh = 0;
+  lkrl::FullStats st;
+  std::string err;
+  if (!lkrl::MergeFull(&gpu, fr, w, h, cfa, black, white, {wbv[0], wbv[1], wbv[2]}, prm, make, &rgb, &ow, &oh,
+                      &st, &err)) {
+    LKR_LOG("merge failed: %s", err.c_str());
+    std::free(direct);
+    return nullptr;
+  }
+  // Zoom 1.5x: the x2 solve of the crop is larger than the requested output
+  // (sensor size): exact area-average down to it.
+  if (out_w_req > 0 && out_h_req > 0 && (out_w_req != ow || out_h_req != oh)) {
+    std::vector<float> small;
+    lkrl::AreaResampleRgb(rgb, ow, oh, out_w_req, out_h_req, &small);
+    LKR_LOG("resampled %dx%d -> %dx%d", ow, oh, int(out_w_req), int(out_h_req));
+    rgb.swap(small);
+    ow = out_w_req;
+    oh = out_h_req;
+  }
+  const size_t bytes = direct ? size_t(ow) * oh * 12 : rgb.size() * 4;
+  void* out = direct;
+  if (!out) {
+    out = std::malloc(bytes);
+    if (!out) return nullptr;
+    std::memcpy(out, rgb.data(), bytes);
+    std::vector<float>().swap(rgb);
+  }
+  if (stats_j && env->GetArrayLength(stats_j) >= 14) {
+    const float sv[14] = {float(st.tiles), st.sigma, st.a, st.b, float(st.ms_noise), float(st.ms_coarse),
+                          float(st.ms_tiles), float(st.ms_gpu), float(st.ms_prior), float(st.ms_total),
+                          float(st.prior_calls), float(ow), float(oh), backend};
+    env->SetFloatArrayRegion(stats_j, 0, 14, sv);
+  }
+  if (!st.gpu_profile.empty())
+    LKR_LOG("gpu profile (sum of %d workers, ms): %s", st.workers, st.gpu_profile.c_str());
+  LKR_LOG("mode: %s", dct ? "DCT x-step" : "no prior");
+  LKR_LOG("look: prior %.2f grain %.2f (sigma %.5f)", st.prior_gain, st.grain, st.sigma);
+  LKR_LOG("merge %dx%d s=%d K=%d tiles %d: noise %.0f coarse %.0f tiles %.0f (gpu %.0f prior %.0f) total %.0f ms",
+          ow, oh, s, int(K), st.tiles, st.ms_noise, st.ms_coarse, st.ms_tiles, st.ms_gpu, st.ms_prior, st.ms_total);
+  LKR_LOG("reference frame %d (sharpest)", st.ref_index);
+  LKR_LOG("workers %d, tile sums: solve %.0f (gpu %.0f prior %.0f init %.0f finish %.0f other %.0f) prep %.0f (load %.0f) blend %.0f | setup %.0f wait %.0f ms",
+          st.workers, st.ms_solve, st.ms_gpu, st.ms_prior, st.ms_init, st.ms_finish,
+          st.ms_solve - st.ms_gpu - st.ms_prior - st.ms_init - st.ms_finish, st.ms_prep, st.ms_load, st.ms_blend, st.ms_setup, st.ms_wait);
+  const auto& gs = st.gpu_stats;
+  LKR_LOG("GPU host totals: alloc %llu (%.1f MiB cumulative, %.1f MiB summed peaks) %.1f ms; pipelines %llu %.1f ms; sets %llu %.1f ms",
+          (unsigned long long)gs.allocations, gs.allocated_bytes / 1048576.0, gs.peak_bytes / 1048576.0, gs.alloc_ms,
+          (unsigned long long)gs.pipelines, gs.pipeline_ms, (unsigned long long)gs.sets, gs.sets_ms);
+  LKR_LOG("GPU work totals: submissions %llu dispatches %llu copies %llu; record %.1f queue %.1f fenceWait %.1f coherency %.1f query %.1f ms",
+          (unsigned long long)gs.submissions, (unsigned long long)gs.dispatches, (unsigned long long)gs.copies,
+          gs.record_ms, gs.queue_ms, gs.wait_ms, gs.coherency_ms, gs.query_ms);
+
+  jobject buf = env->NewDirectByteBuffer(out, jlong(bytes));
+  if (!buf) std::free(out);
+  return buf;
+}
+
+}  // namespace
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_matthew_rawlens_LkrBridge_nativeLastProfile(
+    JNIEnv* env, jclass) {
+  const std::string profile = std::move(g_last_profile);
+  g_last_profile.clear();
+  return env->NewStringUTF(profile.c_str());
+}
+
+extern "C" JNIEXPORT jdouble JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSharpness(
+    JNIEnv* env, jclass, jobject src, jint w, jint h, jint stride, jintArray cfa_j, jfloatArray black_j) {
+  const auto* raw = src ? static_cast<const uint16_t*>(env->GetDirectBufferAddress(src)) : nullptr;
+  if (!raw || w < 4 || h < 4 || stride < w ||
+      env->GetDirectBufferCapacity(src) < (jlong(stride) * (h - 1) + w) * 2 ||
+      !cfa_j || env->GetArrayLength(cfa_j) != 4 || !black_j || env->GetArrayLength(black_j) != 4)
+    return NAN;
+  int cfa[4]; float black[4];
+  env->GetIntArrayRegion(cfa_j, 0, 4, cfa);
+  env->GetFloatArrayRegion(black_j, 0, 4, black);
+  return lkrl::RawSharpness(raw, w, h, stride, cfa, black);
+}
+
+extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMerge(
+    JNIEnv* env, jclass, jobjectArray frames, jint w, jint h, jint row_stride_px, jintArray cfa, jfloatArray black,
+    jfloat white, jfloatArray wb, jint s, jint tile, jint overlap, jintArray crop, jboolean dct,
+    jfloatArray stats, jfloatArray tuning,
+    jint out_w, jint out_h) {
+  return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, dct, stats, tuning, out_w,
+               out_h);
+}
+
+// Learned noise model for the next merge on the calling thread (path null = none).
+extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetNoiseModel(JNIEnv* env, jclass,
+                                                                                       jstring path, jfloat iso) {
+  g_noise_model = {};
+  if (!path || !(iso > 0)) return;
+  const char* c = env->GetStringUTFChars(path, nullptr);
+  if (c) {
+    g_noise_model = {std::string(c), float(iso)};
+    env->ReleaseStringUTFChars(path, c);
+  }
+}
+
+// Native defaults of the LK-SR Lab table (lkr_tuning.h), shown by the app's sliders.
+extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetCacheDir(JNIEnv* env, jclass, jstring dir) {
+  if (!dir) return;
+  const char* c = env->GetStringUTFChars(dir, nullptr);
+  if (c) {
+    lkrl::Gpu::SetPipelineCacheFile(std::string(c) + "/lkrl_pipelines.bin");
+    env->ReleaseStringUTFChars(dir, c);
+  }
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL Java_com_matthew_rawlens_LkrBridge_nativeTuningDefaults(JNIEnv* env, jclass) {
+  const std::vector<float> v = lkrl::TuningDefaults();
+  jfloatArray a = env->NewFloatArray(jsize(v.size()));
+  if (a) env->SetFloatArrayRegion(a, 0, jsize(v.size()), v.data());
+  return a;
+}
+
+// Staged merge: frames come from nativeStage (rows of `w` samples, packed at packed_bits or plain when 0).
+extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMergeStaged(
+    JNIEnv* env, jclass, jobjectArray frames, jint w, jint h, jint packed_bits, jintArray cfa, jfloatArray black,
+    jfloat white, jfloatArray wb, jint s, jint tile, jint overlap, jintArray crop, jboolean dct,
+    jfloatArray stats, jfloatArray tuning,
+    jint out_w, jint out_h) {
+  return Merge(env, frames, w, h, w, cfa, black, white, wb, s, tile, overlap, crop, dct, stats, tuning, out_w, out_h,
+               packed_bits);
+}
+
+// Copies one RAW16 frame out of its camera buffer into malloc memory, rows tight (w samples).
+// bits 1..15: packed losslessly at that depth (lkr_pack.h); null when a sample needs more bits or
+// memory is short. bits >= 16: plain uint16. Freed with free() (SrpBridge.nativeFreeDirect).
+extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeStage(
+    JNIEnv* env, jclass, jobject src, jint w, jint h, jint row_stride_px, jint bits) {
+  const void* p = src ? env->GetDirectBufferAddress(src) : nullptr;
+  const jlong cap = src ? env->GetDirectBufferCapacity(src) : 0;
+  if (!p || w <= 0 || h <= 0 || row_stride_px < w || bits < 1 ||
+      cap < (jlong(row_stride_px) * (h - 1) + w) * 2)
+    return nullptr;
+  const uint16_t* s16 = static_cast<const uint16_t*>(p);
+  if (bits >= 16) {
+    const size_t bytes = size_t(w) * h * 2;
+    uint16_t* d = static_cast<uint16_t*>(std::malloc(bytes));
+    if (!d) return nullptr;
+    for (int y = 0; y < h; ++y) std::memcpy(d + size_t(y) * w, s16 + size_t(y) * row_stride_px, size_t(w) * 2);
+    return env->NewDirectByteBuffer(d, jlong(bytes));
+  }
+  const size_t bytes = lkrl::PackedBytes(w, h, bits);
+  uint8_t* d = static_cast<uint8_t*>(std::malloc(bytes));
+  if (!d) return nullptr;
+  if (!lkrl::PackRows(s16, w, h, row_stride_px, bits, d)) {
+    std::free(d);
+    return nullptr;
+  }
+  return env->NewDirectByteBuffer(d, jlong(bytes));
+}
+
+// Desktop Kotlin CLI (tools/lkr-pipeline, com.rawlens.lkrpipeline.LkrBridge): same entry.
+extern "C" JNIEXPORT jobject JNICALL Java_com_rawlens_lkrpipeline_LkrBridge_nativeMerge(
+    JNIEnv* env, jclass, jobjectArray frames, jint w, jint h, jint row_stride_px, jintArray cfa, jfloatArray black,
+    jfloat white, jfloatArray wb, jint s, jint tile, jint overlap, jintArray crop, jboolean dct,
+    jfloatArray stats) {
+  return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, dct, stats, nullptr, 0, 0);
+}
+
+
+// Camera-open prewarm (2026-11-14): compile every LK-R Lite pipeline into the persistent cache
+// (dir/lkrl_pipelines.bin) off the capture path, so the first merge's workers start warm. Returns
+// the wall ms, -1 when no Vulkan device. Call from a low-priority background thread.
+extern "C" JNIEXPORT jlong JNICALL Java_com_matthew_rawlens_LkrBridge_nativePrewarm(JNIEnv* env, jclass, jstring dir) {
+  if (dir) {
+    const char* c = env->GetStringUTFChars(dir, nullptr);
+    if (c) {
+      lkrl::Gpu::SetPipelineCacheFile(std::string(c) + "/lkrl_pipelines.bin");
+      env->ReleaseStringUTFChars(dir, c);
+    }
+  }
+  const auto t0 = std::chrono::steady_clock::now();
+  {
+    lkrl::Gpu gpu;   // the destructor writes the pipeline cache blob to the file
+    if (!gpu.ok()) return -1;
+    lkrl::Solver solver(&gpu);   // creates all pipelines
+    if (!solver.ok()) return -1;
+  }
+  return jlong(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+}

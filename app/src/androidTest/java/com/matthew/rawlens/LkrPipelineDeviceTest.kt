@@ -23,7 +23,7 @@ import org.junit.runner.RunWith
  * Merges screen uses ([LkrBridge.nativeMerge]).
  *
  * Push a burst first (raw uint16 frames f0..fN.u16 + meta.json, see
- * tools/lkr-pipeline/README.md), default /data/local/tmp/lkr/night:
+ * ~/RawLens-archive/lkr-pipeline/README.md, LK-R archived 2026-11-14), default /data/local/tmp/lkr/night:
  *   adb shell am instrument -w -e class com.matthew.rawlens.LkrPipelineDeviceTest \
  *     [-e lkrDir /data/local/tmp/lkr/night] [-e lkrCases crop1,crop2x,full] ...
  * Results: logcat tag RawLensLkrTest, DNGs in the app's external files dir.

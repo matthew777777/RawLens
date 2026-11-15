@@ -69,3 +69,17 @@ if(NOT ANDROID)
   add_executable(lkrl_full_run "${LKRL_DIR}/../../../host/lkrl_full_run.cpp")
   target_link_libraries(lkrl_full_run PRIVATE lkrl_core)
 endif()
+
+# ---- Android JNI (replaces tools/lkr-pipeline in the app, 2026-11-14) -----------------------
+# Same library name and JNI symbols as LK-R's lkr_jni.cpp, so com.matthew.rawlens.LkrBridge loads
+# LK-R Lite unchanged (System.loadLibrary("lkrpipeline")).
+if(ANDROID)
+  add_library(lkrpipeline SHARED lkrl_jni.cpp)
+  # Learned per-device noise model (header-only, shared with the wavelet stage and HDR+).
+  target_include_directories(lkrpipeline PRIVATE "${LKRL_DIR}/../../../../../app/src/main/cpp/wavelet")
+  target_compile_options(lkrpipeline PRIVATE -O3 -Wall -fno-rtti)
+  find_library(LKRL_LOG_LIB log REQUIRED)
+  target_link_libraries(lkrpipeline PRIVATE lkrl_core android ${LKRL_LOG_LIB})
+  target_link_options(lkrpipeline PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,--exclude-libs,ALL")
+  set_target_properties(lkrpipeline PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+endif()

@@ -9,7 +9,7 @@ and tags. It is intentionally not repeated in the README.
 - Camera2 RAW capture, PROGRAM / ETTR / manual exposure, DNG, JPEG, JPEG XL and
   Ultra HDR development remain supported, subject to camera capabilities.
 - **KB-SR** is the user-facing name of the MFSR engine (`MfsrMerge`);
-  **LK-SR** uses `LkrMerge` and `tools/lkr-pipeline`. HDR+ remains a separate option.
+  **LK-SR** uses `LkrMerge` and `tools/lkr-lite` (LK-R Lite; it replaced `tools/lkr-pipeline` on 2026-11-14). HDR+ remains a separate option.
   Internal MFSR/LKR identifiers and historical LK-R labels still occur in source.
 - The default ZSL buffer is 16 frames (`MainActivity.DEFAULT_RAW_ZSL_FRAME_COUNT`).
   Saved preferences, available reader capacity and mode-specific limits still apply.
@@ -37,9 +37,7 @@ and tags. It is intentionally not repeated in the README.
 | Component | Current role |
 |---|---|
 | [sr-pipeline](../tools/sr-pipeline/README.md) | JVM MFSR / KB-SR CLI, CPU and Vulkan; `run.sh` builds the required components. DNGs without NoiseProfile use a scene-noise estimate. |
-| [lkr-pipeline](../tools/lkr-pipeline/README.md) | Full LK-SR engine, host CLI and app native integration. |
-| [lkr-lite](../tools/lkr-lite/README.md) | Separate standalone Vulkan CLI, including a DNG-burst front end, hybrid merge and fp16 frames. Optional KernelNet denoise and other experiments are not app defaults. |
-| [lkr-standalone](../tools/lkr-standalone/README.md) | Export/package workflow and templates; generated-package docs describe the exported tree. |
+| [lkr-lite](../tools/lkr-lite/README.md) | LK-SR engine (LK-R Lite), host CLI and app native integration (liblkrpipeline.so). |
 | [Tools index](../tools/README.md) | Shader builders, format checks, numerical oracles and device validation utilities. |
 
 Mobile MFSR optimizations, guide-based LK-SR rejection and foliage experiments

@@ -198,7 +198,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
     }
 
     /**
-     * LK-Reloaded (tools/lkr-pipeline): native over the decoded uint16
+     * LK-Reloaded (tools/lkr-lite): native over the decoded uint16
      * buffers, full frame at scale 1; same linear-RGB DNG / developed tail
      * as MFSR (shared [MfsrMerge.MfsrResult]).
      */

@@ -63,10 +63,10 @@ struct SolveParams {
   // the running-HR residual confidence, which rejected aliased static detail the HR
   // estimate had not learned yet; temporal protection and spread remain. 0 = off
   // (residual confidence). Validation: docs/performance/lkr-rejection-validation-2026-11-13.md.
-  // Off by default while guide foliage artifacts are investigated. Both app
-  // and desktop use residual confidence; guide is an explicit research opt-in
-  // (--guide 2 / debug.lkr.guide 2).
-  float guide_confidence = 0.0f;
+  // LK-R Lite (app engine since 2026-11-14): guide ON by default, as the user requires ("guide must stay
+  // on"). Guide-off fell back to Lite's simplified residual chain: perforated-panel mesh 74 % of LK-R's
+  // finest-band energy (IMG_20210228 1x) vs 84 % / visually equal with the guide. debug.lkr.guide 0 = off.
+  float guide_confidence = 2.0f;
   // > 0: a frame must also pass the residual test: w = min(guide, residual^guide_residual).
   float guide_residual = 0.0f;
   // Diagnostic only: known-static rectangle in this tile's reference LR coordinates.

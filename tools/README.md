@@ -12,9 +12,7 @@ parity for MFSR is judged by the error envelopes in `sr-pipeline/PARITY.md`.
 | Path | What |
 |---|---|
 | `sr-pipeline/` | Desktop JVM CLI for the MFSR engine (DNG burst directory in, `merged.dng` out; CPU or Vulkan backend). Wired into the build as `:tools:sr-pipeline`; [README](sr-pipeline/README.md) has run flags and tests. |
-| `lkr-pipeline/` | LK-SR engine and full-frame Vulkan CLI; also backs the app’s `LkrMerge`. |
-| `lkr-lite/` | Standalone experimental mobile LK-SR Lite CLI with hybrid merge, fp16 frames and optional KernelNet denoise; separate from the app engine. |
-| `lkr-standalone/` | Packaging/export tooling for a standalone LK-SR source tree. |
+| `lkr-lite/` | LK-SR engine (LK-R Lite) and full-frame Vulkan CLI; backs the app’s `LkrMerge` (liblkrpipeline.so). Replaced `lkr-pipeline/` on 2026-11-14 (archived outside the repo, `~/RawLens-archive/`). |
 | `sr-vulkan/src/main/cpp` | MFSR Vulkan sources compiled into the app NDK build by path (not a standalone Gradle project). |
 | `jamy_parity_oracle.py` | Independent NumPy transcription of the Jamy-L SR core; writes golden files (`python3 tools/jamy_parity_oracle.py --out <dir>`). |
 

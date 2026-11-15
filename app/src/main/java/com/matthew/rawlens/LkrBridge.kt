@@ -6,7 +6,7 @@ package com.matthew.rawlens
 import java.nio.ByteBuffer
 
 /**
- * JNI surface of `liblkrpipeline.so` (tools/lkr-pipeline): LK-Reloaded burst
+ * JNI surface of `liblkrpipeline.so` (tools/lkr-lite, LK-R Lite since 2026-11-14): LK-Reloaded burst
  * super-resolution (Lecouat, Ponce, Mairal, ICCV 2021) on Vulkan.
  *
  * [nativeMerge] reads the caller's direct uint16 RAW buffers in place and
@@ -85,6 +85,9 @@ internal object LkrBridge {
     ): ByteBuffer?
 
     @JvmStatic external fun nativeSetCacheDir(dir: String)
+
+    /** Builds every LK-SR (LK-R Lite) pipeline into the persistent cache in [dir]; wall ms, -1 = no Vulkan. */
+    @JvmStatic external fun nativePrewarm(dir: String): Long
 
     /**
      * Learned per-device noise model (WaveletDenoiser store file, [iso]) for the next

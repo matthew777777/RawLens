@@ -5,7 +5,8 @@ O=${1:?out}; T=${2:-base}; mkdir -p $O
 R=${0:A:h}/../..; PY=/tmp/rawlens-isp-analysis/bin/python
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 F=(--guide 2 --msmooth 1 --msr 1 ${=XTRA})
-ALL=(lkr:$R/lkr-pipeline/build/host/lkr_full_run lkrp:$R/lkr-pipeline/build/host/lkr_full_run lite:$R/lkr-lite/build/host/lkrl_full_run litep:$R/lkr-lite/build/host/lkrl_full_run)
+KR=${LKR_FULL_RUN:-$HOME/RawLens-archive/lkr-pipeline/build/host/lkr_full_run}   # LK-R archived 2026-11-14
+ALL=(lkr:$KR lkrp:$KR lite:$R/lkr-lite/build/host/lkrl_full_run litep:$R/lkr-lite/build/host/lkrl_full_run)
 BIN=(); for bb in $ALL; do [[ -z $ONLY || " $ONLY " == *" ${bb%%:*} "* ]] && BIN+=$bb; done
 for d in $O/syn_n*(/); do
   for s in 1 2; do for bb in $BIN; do

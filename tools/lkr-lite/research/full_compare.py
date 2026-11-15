@@ -11,7 +11,9 @@ import numpy as np
 from PIL import Image
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-BINS = {'lkr': ROOT + '/tools/lkr-pipeline/build/host/lkr_full_run',
+# LK-R (lkr-pipeline) left the repository on 2026-11-14 (archived in ~/RawLens-archive/lkr-pipeline);
+# LKR_FULL_RUN points at its built CLI for comparisons.
+BINS = {'lkr': os.environ.get('LKR_FULL_RUN', os.path.expanduser('~/RawLens-archive/lkr-pipeline/build/host/lkr_full_run')),
         'lite': ROOT + '/tools/lkr-lite/build/host/lkrl_full_run'}
 
 
