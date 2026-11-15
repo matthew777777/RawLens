@@ -45,6 +45,21 @@ void main() {
   uint px = uint(lr_x / float(tileSize));
   uint py = uint(lr_y / float(tileSize));
   vec2 F = align_[py * nTilesX + px];
+  if (p.pad[3] == 1u) {
+    // KernelNet reconstruction: nearest-tile flow imprints hard tile edges
+    // (16 LR / 32 output px at 2x) even with a smooth reference kernel map.
+    // Interpolate at tile centres and extend the field constantly at borders.
+    // Keep Jamy-L/Wronski sampling unchanged when refKernels is disabled;
+    // alignment and conservative robustness rejection still use original tiles.
+    vec2 g = max(vec2(lr_x, lr_y) / float(tileSize) - 0.5, vec2(0.0));
+    uvec2 lo = uvec2(g);
+    uint nTilesY = (lrH + tileSize - 1u) / tileSize;
+    lo = min(lo, uvec2(nTilesX - 1u, nTilesY - 1u));
+    uvec2 hi = min(lo + 1u, uvec2(nTilesX - 1u, nTilesY - 1u));
+    vec2 f = fract(g);
+    F = mix(mix(align_[lo.y*nTilesX+lo.x], align_[lo.y*nTilesX+hi.x], f.x),
+            mix(align_[hi.y*nTilesX+lo.x], align_[hi.y*nTilesX+hi.x], f.x), f.y);
+  }
 
   // Robustness sampled on the guide grid (nearest), bayer vs grey paths.
   float local_r;
@@ -110,8 +125,14 @@ void main() {
   // at 2x) without touching green, which carries the luma detail.
   float cs = p.alpha > 0.0 ? p.alpha : 1.0;
   float chromaInv = 1.0 / (cs * cs);
-  for (int di = -1; di <= 1; di++) {
-    for (int dj = -1; dj <= 1; dj++) {
+  // A hard 3x3 cutoff removes a nonzero Gaussian weight whenever the
+  // centre crosses a sensor-pixel boundary. KernelNet widths (especially
+  // widened colour differences) need more support. Fade only the outer
+  // ring of a 7x7 gather, making entering/leaving weights continuously zero.
+  // The original Jamy-L/Wronski gather stays 3x3.
+  int radius = refKernels ? 3 : 1;
+  for (int di = -radius; di <= radius; di++) {
+    for (int dj = -radius; dj <= radius; dj++) {
       int j = center_j + dj;
       int i2 = center_i + di;
       if (!(j >= 0 && j < int(lrW) && i2 >= 0 && i2 < int(lrH))) continue;
@@ -123,6 +144,10 @@ void main() {
       z = max(z, 0.0);
       if (bayer && ch != 1u) z *= chromaInv;
       float w = exp(-0.5 * z);
+      if (refKernels) {
+        w *= (1.0 - smoothstep(2.5, 3.5, abs(dx))) *
+             (1.0 - smoothstep(2.5, 3.5, abs(dy)));
+      }
       val[ch] += w * local_r * c;
       acc[ch] += w * local_r;
     }
