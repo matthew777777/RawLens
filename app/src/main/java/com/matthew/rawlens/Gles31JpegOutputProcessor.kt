@@ -123,6 +123,7 @@ class Gles31JpegOutputProcessor(context: Context) {
                 ceilDiv(scene.width, GAINMAP_DOWNSCALE), ceilDiv(scene.height, GAINMAP_DOWNSCALE)
             )
             GLES31.glUniform1i(location(outputProgram, "u_display_p3"), if (resolved.displayP3) 1 else 0)
+            GLES31.glUniform1i(location(outputProgram, "u_basic"), if (resolved.toneMapper == PhotoToneMapper.BASIC) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_purity_boost"), resolved.agxPurityBoost)
             GLES31.glUniform1i(location(outputProgram, "u_agx_punchy"), if (resolved.agxLook == AgxLook.PUNCHY) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_contrast"), resolved.agxContrast)

@@ -57,7 +57,7 @@ class BguViewfinder @JvmOverloads constructor(
     @Volatile private var previewCenterWeight = 0f
     @Volatile private var previewFocusX: Float? = null
     @Volatile private var previewFocusY: Float? = null
-    @Volatile private var agx = floatArrayOf(1f, 1f, 1f, 0f, 10f, 6.5f, 0f, 1f, 0f)
+    @Volatile private var agx = floatArrayOf(1f, 1f, 1f, 0f, 10f, 6.5f, 0f, 1f, 0f, 0f)
     @Volatile private var frameIntervalNs = 1_000_000_000L / 30
     override var onStarvation: (() -> Unit)? = null
     /**
@@ -123,7 +123,8 @@ class BguViewfinder @JvmOverloads constructor(
         val r = settings.resolvedForPlatform()
         agx = floatArrayOf(
             r.agxContrast, r.agxSaturation, r.agxPurityBoost, r.agxHuePreservation,
-            r.effectiveAgxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder, if (r.agxLook == AgxLook.PUNCHY) 1f else 0f
+            r.effectiveAgxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder, if (r.agxLook == AgxLook.PUNCHY) 1f else 0f,
+            if (r.toneMapper == PhotoToneMapper.BASIC) 1f else 0f
         )
         // The VF meter runs the save's tuning, so VF EV == save EV: same
         // derived broad guard and shoulder as AdaptiveExposureTuning.
@@ -1244,7 +1245,7 @@ class BguViewfinder @JvmOverloads constructor(
             snapAgx[4], snapAgx[5], snapAgx[6], snapAgx[7]
         )
         val iparams = intArrayOf(
-            if (renderJpeg) (if (snapAgx[8] > 0.5f) 2 else 1) else 0, 0, if (lens != null) 1 else 0, greenRow,
+            if (renderJpeg) (if (snapAgx[9] > 0.5f) 3 else if (snapAgx[8] > 0.5f) 2 else 1) else 0, 0, if (lens != null) 1 else 0, greenRow,
             geo.left, geo.top, geo.step * BguGeometry.LOW_DF, aL, aT, aR, aB
         )
         return LookParams(

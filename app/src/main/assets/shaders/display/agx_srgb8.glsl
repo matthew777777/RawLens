@@ -7,6 +7,7 @@ layout(binding = 1, rgba8) writeonly uniform highp image2D img_encoded;
 layout(binding = 2, rgba8) writeonly uniform highp image2D img_gainmap;
 uniform highp ivec2 u_size;
 uniform highp ivec2 u_gainmap_size;
+uniform highp int u_basic;
 uniform highp int u_display_p3;
 // HDR PQ stills (JXL): 1 preserves scene highlights above SDR white and
 // encodes ST2084 instead of sRGB. 0 is the SDR path, bit-identical to
@@ -147,6 +148,16 @@ highp vec3 srgb_oetf(highp vec3 linear) {
     return mix(hi, lo, low);
 }
 
+// Basic RAW display curve, evaluated in output primaries. No AgX shoulder/look.
+highp vec3 basic_encoded(highp vec3 scene) {
+    highp vec3 x = pow(srgb_oetf(clamp(scene, 0.0, 1.0)), vec3(1.0 / 1.1));
+    return 0.25 * x + 0.75 * x * x * (3.0 - 2.0 * x);
+}
+highp vec3 basic_decode(highp vec3 encoded) {
+    return mix(pow((encoded + 0.055) / 1.055, vec3(2.4)),
+               encoded / 12.92, lessThanEqual(encoded, vec3(0.04045)));
+}
+
 // ST2084 (PQ) opto-electronic transfer, SMPTE ST 2084: absolute nits in
 // [0, 10000] map to codes in [0, 1]. HDR stills treat graded linear 1.0
 // (SDR white) as 100 nits; brighter scene highlights extend above it.
@@ -180,9 +191,18 @@ void main() {
         return;
     }
     highp vec3 sceneAcescg = imageLoad(img_scene, scenePixel).rgb;
-    highp vec3 rec2020DisplayLinear = agx_base(sceneAcescg);
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
-    highp vec3 outputLinear = compress_output_gamut(outputMatrix * rec2020DisplayLinear);
+    highp vec3 outputLinear;
+    highp vec3 basicEncoded = vec3(0.0);
+    if (u_basic != 0) {
+        highp vec3 sceneOutput = outputMatrix * (ACESCG_TO_REC2020_D65 * sceneAcescg);
+        basicEncoded = basic_encoded(sceneOutput);
+        outputLinear = vec3(0.0);
+        // Ordinary SDR goes straight to encoded output, skipping decode/re-encode.
+        if (u_hdr_pq != 0 || u_write_gainmap != 0) outputLinear = basic_decode(basicEncoded);
+        if (u_hdr_pq != 0) outputLinear += max(sceneOutput - 1.0, vec3(0.0));
+    }
+    else outputLinear = compress_output_gamut(outputMatrix * agx_base(sceneAcescg));
 
     // The sole deliberate final display-gamut mapping/clipping boundary.
     // SDR clamps to white and encodes sRGB; HDR keeps highlight energy and
@@ -190,7 +210,7 @@ void main() {
     highp vec3 baseLinear = (u_hdr_pq != 0) ? max(outputLinear, vec3(0.0))
                                            : clamp(outputLinear, 0.0, 1.0);
     highp vec3 encoded = (u_hdr_pq != 0) ? pq_oetf(baseLinear * vec3(100.0))
-                                         : srgb_oetf(baseLinear);
+                                         : ((u_basic != 0) ? basicEncoded : srgb_oetf(baseLinear));
     if (u_gainmap_only == 0 && u_grain_amount > 0.0) {
         // Neutral, zero-mean display grain replaces sensor residual retention. Combining an
         // independent sample with a 2x2 value field gives film-like clumps without color noise.

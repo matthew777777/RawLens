@@ -141,6 +141,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         var displayP3: Boolean
         var jpeg: Boolean
         var exposureEv: Float
+        var basicTone: Int
         var agxPunchy: Float
         var agxContrast: Float
         var agxSaturation: Float
@@ -202,6 +203,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var displayP3 = false
         override var jpeg = false
         override var exposureEv = 0f
+        override var basicTone = 0
         override var agxPunchy = 0f
         override var agxContrast = 1f
         override var agxSaturation = 1f
@@ -254,6 +256,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var displayP3 = false
         override var jpeg = false
         override var exposureEv = 0f
+        override var basicTone = 0
         override var agxPunchy = 0f
         override var agxContrast = 1f
         override var agxSaturation = 1f
@@ -379,6 +382,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      */
     @Volatile var engineMode: VfEngineMode = VfEngineMode.AUTO
         private set
+    @Volatile private var basicTone = 0
     @Volatile private var agxPunchy = 0f
     @Volatile private var agxContrast = 1f
     @Volatile private var agxSaturation = 1f
@@ -522,6 +526,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var gpuPositionLoc = -1
     private var gpuUvLoc = -1
     private var gpuJpegLoc = -1
+    private var gpuBasicToneLoc = -1
     private var gpuAgxPunchyLoc = -1
     private var gpuAgxContrastLoc = -1
     private var gpuAgxSaturationLoc = -1
@@ -553,6 +558,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var positionLoc = -1
     private var uvLoc = -1
     private var jpegLoc = -1
+    private var basicToneLoc = -1
     private var agxPunchyLoc = -1
     private var agxContrastLoc = -1
     private var agxSaturationLoc = -1
@@ -887,6 +893,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      */
     override fun setAgx(settings: JpegOutputSettings) {
         val resolved = settings.resolvedForPlatform()
+        basicTone = if (resolved.toneMapper == PhotoToneMapper.BASIC) 1 else 0
         agxPunchy = if (resolved.agxLook == AgxLook.PUNCHY) 1f else 0f
         agxContrast = resolved.agxContrast
         agxSaturation = resolved.agxSaturation
@@ -1575,6 +1582,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         out.displayP3 = previewP3
         out.lensGreenRow = VfGpuImport.lensGreenRow(channels)
         out.exposureEv = previewExposureEv
+        out.basicTone = basicTone
         out.agxPunchy = agxPunchy
         out.agxContrast = agxContrast
         out.agxSaturation = agxSaturation
@@ -1668,6 +1676,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         glUniform1i(displayP3Loc, if (state.displayP3) 1 else 0)
         glUniform1i(jpegLoc, if (state.jpeg) 1 else 0)
         glUniform1f(exposureEvLoc, state.exposureEv)
+        glUniform1i(basicToneLoc, state.basicTone)
         glUniform1f(agxPunchyLoc, state.agxPunchy)
         glUniform1f(agxContrastLoc, state.agxContrast)
         glUniform1f(agxSaturationLoc, state.agxSaturation)
@@ -2125,6 +2134,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glUniform3fv(gpuCameraWhiteLoc, 1, frame.camWhite, 0)
                     glUniform1i(gpuDisplayP3Loc, if (frame.displayP3) 1 else 0)
                     glUniform1i(gpuJpegLoc, if (frame.jpeg) 1 else 0)
+                    glUniform1i(gpuBasicToneLoc, frame.basicTone)
                     glUniform1f(gpuAgxPunchyLoc, frame.agxPunchy)
                     glUniform1f(gpuAgxContrastLoc, frame.agxContrast)
                     glUniform1f(gpuAgxSaturationLoc, frame.agxSaturation)
@@ -2676,6 +2686,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         positionLoc = glGetAttribLocation(program, "position")
         uvLoc = glGetAttribLocation(program, "uv")
         jpegLoc = glGetUniformLocation(program, "u_jpeg")
+        basicToneLoc = glGetUniformLocation(program, "u_basic")
         agxPunchyLoc = glGetUniformLocation(program, "u_agxPunchy")
         agxContrastLoc = glGetUniformLocation(program, "u_agxContrast")
         agxSaturationLoc = glGetUniformLocation(program, "u_agxSaturation")
@@ -2780,6 +2791,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             gpuPositionLoc = glGetAttribLocation(id, "position")
             gpuUvLoc = glGetAttribLocation(id, "uv")
             gpuJpegLoc = glGetUniformLocation(id, "u_jpeg")
+            gpuBasicToneLoc = glGetUniformLocation(id, "u_basic")
             gpuAgxPunchyLoc = glGetUniformLocation(id, "u_agxPunchy")
             gpuAgxContrastLoc = glGetUniformLocation(id, "u_agxContrast")
             gpuAgxSaturationLoc = glGetUniformLocation(id, "u_agxSaturation")
@@ -2863,7 +2875,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         surface = EGL14.EGL_NO_SURFACE; eglContext = EGL14.EGL_NO_CONTEXT; display = EGL14.EGL_NO_DISPLAY
         gainsLoc = -1; colorLoc = -1; camToAcesLoc = -1; cameraWhiteLoc = -1; displayP3Loc = -1
         positionLoc = -1; uvLoc = -1
-        jpegLoc = -1; agxPunchyLoc = -1; agxContrastLoc = -1; agxSaturationLoc = -1; agxPurityLoc = -1
+        jpegLoc = -1; basicToneLoc = -1; agxPunchyLoc = -1; agxContrastLoc = -1; agxSaturationLoc = -1; agxPurityLoc = -1
         agxHueLoc = -1; agxShadowEvLoc = -1; agxHighlightEvLoc = -1; agxGamutLoc = -1
         highlightShoulderLoc = -1
         exposureEvLoc = -1
@@ -2875,7 +2887,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         gpuProgram = 0; gpuBayerTexture = 0; vkTexture = 0
         gpuGainsLoc = -1; gpuColorLoc = -1; gpuCamToAcesLoc = -1; gpuCameraWhiteLoc = -1
         gpuDisplayP3Loc = -1; gpuPositionLoc = -1; gpuUvLoc = -1
-        gpuJpegLoc = -1; gpuAgxPunchyLoc = -1; gpuAgxContrastLoc = -1; gpuAgxSaturationLoc = -1; gpuAgxPurityLoc = -1
+        gpuJpegLoc = -1; gpuBasicToneLoc = -1; gpuAgxPunchyLoc = -1; gpuAgxContrastLoc = -1; gpuAgxSaturationLoc = -1; gpuAgxPurityLoc = -1
         gpuAgxHueLoc = -1; gpuAgxShadowEvLoc = -1; gpuAgxHighlightEvLoc = -1; gpuAgxGamutLoc = -1
         gpuHighlightShoulderLoc = -1
         gpuExposureEvLoc = -1

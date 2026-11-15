@@ -256,7 +256,7 @@ internal class PhotoSettingsTab(
         })
         }
         kit.content.addView(kit.sectionTitle("Photo output"))
-        kit.content.addView(kit.sectionDesc("Ultra HDR and Display P3 targets, JPEG quality and chroma, AgX look, adaptive exposure and highlight handling."))
+        kit.content.addView(kit.sectionDesc("Ultra HDR and Display P3 targets, JPEG quality and chroma, Basic / AgX tone mapping, adaptive exposure and highlight handling."))
         var currentJpegSettings = host.jpegOutputSettings()
         fun applyJpegOutputSettings(settings: JpegOutputSettings): Boolean {
             val resolved = settings.resolvedForPlatform()
@@ -275,6 +275,7 @@ internal class PhotoSettingsTab(
                 .putBoolean(ChromaCleanup.KEY_FALSE_COLOR, resolved.chromaCleanup.falseColorSuppression)
                 .putFloat(ChromaCleanup.KEY_DEFRINGE, resolved.chromaCleanup.defringeStrength)
                 .putFloat(MainActivity.KEY_JPEG_AGX_PURITY, resolved.agxPurityBoost)
+                .putString(PhotoToneMapper.PREFERENCE_KEY, resolved.toneMapper.name)
                 .putString(AgxLook.PREFERENCE_KEY, resolved.agxLook.name)
                 .putFloat(MainActivity.KEY_JPEG_AGX_CONTRAST, resolved.agxContrast)
                 .putFloat(MainActivity.KEY_JPEG_AGX_SATURATION, resolved.agxSaturation)
@@ -489,97 +490,125 @@ internal class PhotoSettingsTab(
                 })
             })
         }
-        kit.content.addView(SettingsSwitch(activity).apply {
-            text = "AgX look: " + if (currentJpegSettings.agxLook == AgxLook.BASE) "Base (default)" else "Punchy"
-            setTextColor(activity.getColor(R.color.text_primary))
-            isChecked = currentJpegSettings.agxLook == AgxLook.PUNCHY
-            setOnCheckedChangeListener { button, enabled ->
-                val look = if (enabled) AgxLook.PUNCHY else AgxLook.BASE
-                if (look != currentJpegSettings.agxLook &&
-                    !applyJpegOutputSettings(currentJpegSettings.copy(agxLook = look))) {
-                    button.isChecked = currentJpegSettings.agxLook == AgxLook.PUNCHY
-                }
-                text = "AgX look: " + if (currentJpegSettings.agxLook == AgxLook.BASE) "Base (default)" else "Punchy"
+        kit.content.addView(kit.sectionDesc("Tone Mapper"))
+        kit.content.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            for (mode in listOf(PhotoToneMapper.BASIC, PhotoToneMapper.AGX)) {
+                addView(Button(activity).apply {
+                    text = mode.label
+                    isAllCaps = false
+                    val selected = currentJpegSettings.toneMapper == mode
+                    isSelected = selected
+                    contentDescription = "${mode.label} tone mapper${if (selected) ", selected" else ""}"
+                    setTextColor(if (selected) android.graphics.Color.BLACK else activity.getColor(R.color.text_primary))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = kit.dp(10).toFloat()
+                        setColor(if (selected) android.graphics.Color.WHITE else activity.getColor(R.color.surface_container))
+                    }
+                    setOnClickListener {
+                        if (mode != currentJpegSettings.toneMapper &&
+                            applyJpegOutputSettings(currentJpegSettings.copy(toneMapper = mode))) {
+                            host.reshow()
+                        }
+                    }
+                }, LinearLayout.LayoutParams(0, kit.dp(48), 1f).apply {
+                    setMargins(kit.dp(4), 0, kit.dp(4), 0)
+                })
             }
         })
         val advancedLookStart = kit.content.childCount
-        var purityPercent = (currentJpegSettings.agxPurityBoost * 100f).toInt().coerceIn(0, 200)
-        val purityLabel = TextView(activity).apply {
-            text = "AgX purity boost: $purityPercent%"
-            setTextColor(activity.getColor(R.color.text_primary))
-            textSize = 14f
-            setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
-        }
-        kit.content.addView(purityLabel)
-        kit.content.addView(SettingsSlider(activity).apply {
-            max = 200
-            progress = purityPercent
-            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
-                override fun onProgressChanged(
-                    seekBar: SettingsSlider,
-                    progress: Int,
-                    fromUser: Boolean
-                ) {
-                    purityPercent = progress
-                    purityLabel.text = "AgX purity boost: $purityPercent%"
-                    if (fromUser) host.controller.previewAgxLive(
-                        currentJpegSettings.copy(agxPurityBoost = purityPercent / 100f)
-                    )
-                }
-
-                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
-
-                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
-                    if (applyJpegOutputSettings(
-                        currentJpegSettings.copy(agxPurityBoost = purityPercent / 100f)
-                    )) {
-                        host.setStatus("AGX PURITY • $purityPercent%")
-                    } else {
-                        // Commit refused (saves in flight): revert the label
-                        // and drop the live candidate from the VF.
-                        purityPercent = (currentJpegSettings.agxPurityBoost * 100f).toInt()
-                        seekBar.progress = purityPercent
-                        host.controller.previewAgxLive(currentJpegSettings)
+        if (currentJpegSettings.toneMapper == PhotoToneMapper.AGX) {
+            kit.content.addView(SettingsSwitch(activity).apply {
+                text = "AgX look: " + if (currentJpegSettings.agxLook == AgxLook.BASE) "Base (default)" else "Punchy"
+                setTextColor(activity.getColor(R.color.text_primary))
+                isChecked = currentJpegSettings.agxLook == AgxLook.PUNCHY
+                setOnCheckedChangeListener { button, enabled ->
+                    val look = if (enabled) AgxLook.PUNCHY else AgxLook.BASE
+                    if (look != currentJpegSettings.agxLook &&
+                        !applyJpegOutputSettings(currentJpegSettings.copy(agxLook = look))) {
+                        button.isChecked = currentJpegSettings.agxLook == AgxLook.PUNCHY
                     }
+                    text = "AgX look: " + if (currentJpegSettings.agxLook == AgxLook.BASE) "Base (default)" else "Punchy"
                 }
             })
-        })
-        addAgxSlider(
-            "AgX contrast", 100,
-            ((currentJpegSettings.agxContrast - 0.5f) * 100f).toInt(),
-            { "${it + 50}%" },
-            { settings, value -> settings.copy(agxContrast = 0.5f + value / 100f) }
-        )
-        addAgxSlider(
-            "AgX saturation", 200,
-            (currentJpegSettings.agxSaturation * 100f).toInt(),
-            { "$it%" },
-            { settings, value -> settings.copy(agxSaturation = value / 100f) }
-        )
-        addAgxSlider(
-            "Preserve hue", 100,
-            (currentJpegSettings.agxHuePreservation * 100f).toInt(),
-            { "$it%" },
-            { settings, value -> settings.copy(agxHuePreservation = value / 100f) }
-        )
-        addAgxSlider(
-            "Highlight range", 70,
-            ((currentJpegSettings.agxHighlightEv - 3f) * 10f).toInt(),
-            { String.format(Locale.US, "+%.1f EV", 3f + it / 10f) },
-            { settings, value -> settings.copy(agxHighlightEv = 3f + value / 10f) }
-        )
-        addAgxSlider(
-            "Shadow range", 100,
-            ((currentJpegSettings.agxShadowEv - 4f) * 10f).toInt(),
-            { String.format(Locale.US, "%.1f EV", 4f + it / 10f) },
-            { settings, value -> settings.copy(agxShadowEv = 4f + value / 10f) }
-        )
-        addAgxSlider(
-            "Gamut compression", 100,
-            (currentJpegSettings.agxGamutCompression * 100f).toInt(),
-            { "$it%" },
-            { settings, value -> settings.copy(agxGamutCompression = value / 100f) }
-        )
+            var purityPercent = (currentJpegSettings.agxPurityBoost * 100f).toInt().coerceIn(0, 200)
+            val purityLabel = TextView(activity).apply {
+                text = "AgX purity boost: $purityPercent%"
+                setTextColor(activity.getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
+            }
+            kit.content.addView(purityLabel)
+            kit.content.addView(SettingsSlider(activity).apply {
+                max = 200
+                progress = purityPercent
+                setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                    override fun onProgressChanged(
+                        seekBar: SettingsSlider,
+                        progress: Int,
+                        fromUser: Boolean
+                    ) {
+                        purityPercent = progress
+                        purityLabel.text = "AgX purity boost: $purityPercent%"
+                        if (fromUser) host.controller.previewAgxLive(
+                            currentJpegSettings.copy(agxPurityBoost = purityPercent / 100f)
+                        )
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+
+                    override fun onStopTrackingTouch(seekBar: SettingsSlider) {
+                        if (applyJpegOutputSettings(
+                            currentJpegSettings.copy(agxPurityBoost = purityPercent / 100f)
+                        )) {
+                            host.setStatus("AGX PURITY • $purityPercent%")
+                        } else {
+                            // Commit refused (saves in flight): revert the label
+                            // and drop the live candidate from the VF.
+                            purityPercent = (currentJpegSettings.agxPurityBoost * 100f).toInt()
+                            seekBar.progress = purityPercent
+                            host.controller.previewAgxLive(currentJpegSettings)
+                        }
+                    }
+                })
+            })
+            addAgxSlider(
+                "AgX contrast", 100,
+                ((currentJpegSettings.agxContrast - 0.5f) * 100f).toInt(),
+                { "${it + 50}%" },
+                { settings, value -> settings.copy(agxContrast = 0.5f + value / 100f) }
+            )
+            addAgxSlider(
+                "AgX saturation", 200,
+                (currentJpegSettings.agxSaturation * 100f).toInt(),
+                { "$it%" },
+                { settings, value -> settings.copy(agxSaturation = value / 100f) }
+            )
+            addAgxSlider(
+                "Preserve hue", 100,
+                (currentJpegSettings.agxHuePreservation * 100f).toInt(),
+                { "$it%" },
+                { settings, value -> settings.copy(agxHuePreservation = value / 100f) }
+            )
+            addAgxSlider(
+                "Highlight range", 70,
+                ((currentJpegSettings.agxHighlightEv - 3f) * 10f).toInt(),
+                { String.format(Locale.US, "+%.1f EV", 3f + it / 10f) },
+                { settings, value -> settings.copy(agxHighlightEv = 3f + value / 10f) }
+            )
+            addAgxSlider(
+                "Shadow range", 100,
+                ((currentJpegSettings.agxShadowEv - 4f) * 10f).toInt(),
+                { String.format(Locale.US, "%.1f EV", 4f + it / 10f) },
+                { settings, value -> settings.copy(agxShadowEv = 4f + value / 10f) }
+            )
+            addAgxSlider(
+                "Gamut compression", 100,
+                (currentJpegSettings.agxGamutCompression * 100f).toInt(),
+                { "$it%" },
+                { settings, value -> settings.copy(agxGamutCompression = value / 100f) }
+            )
+        }
         kit.content.addView(SettingsSwitch(activity).apply {
             text = "Adaptive development exposure (AUTO and ZSL)"
             setTextColor(activity.getColor(R.color.text_primary))
@@ -599,7 +628,7 @@ internal class PhotoSettingsTab(
         )
         kit.content.addView(TextView(activity).apply {
             tag = "settings-description"
-            text = "Highlights: headroom caps the p99.5 spike at white; sky protection caps broad p95 skies; shoulder rolls off near-white into AgX."
+            text = "Highlights: headroom protects the brightest pixels; sky protection protects broad bright areas."
             setTextColor(activity.getColor(R.color.text_secondary))
             textSize = 12f
             setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
@@ -616,7 +645,7 @@ internal class PhotoSettingsTab(
             { String.format(Locale.US, "%.2f", 0.6f + it / 100f) },
             { settings, value -> settings.copy(highlightSoftHeadroom = 0.6f + value / 100f) }
         )
-        addAgxSlider(
+        if (currentJpegSettings.toneMapper == PhotoToneMapper.AGX) addAgxSlider(
             "Highlight shoulder", 100,
             (currentJpegSettings.highlightShoulder * 100f).toInt(),
             { "$it%" },

@@ -108,12 +108,18 @@ void main() {
     highp float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
     cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
 
-    highp vec3 rec2020DisplayLinear = agx_base(u_camera_to_acescg * cameraRgb);
+    highp vec3 sceneAcescg = u_camera_to_acescg * cameraRgb;
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
-    highp vec3 baseLinear = clamp(
-        compress_output_gamut(outputMatrix * rec2020DisplayLinear), 0.0, 1.0
-    );
-    highp vec3 encoded = srgb_oetf(baseLinear);
+    highp vec3 outputLinear;
+    highp vec3 basicEncoded = vec3(0.0);
+    if (u_basic != 0) {
+        basicEncoded = basic_encoded(outputMatrix * (ACESCG_TO_REC2020_D65 * sceneAcescg));
+        outputLinear = vec3(0.0);
+        if (u_write_gainmap != 0) outputLinear = basic_decode(basicEncoded);
+    }
+    else outputLinear = compress_output_gamut(outputMatrix * agx_base(sceneAcescg));
+    highp vec3 baseLinear = clamp(outputLinear, 0.0, 1.0);
+    highp vec3 encoded = (u_basic != 0) ? basicEncoded : srgb_oetf(baseLinear);
     highp vec3 dither = vec3(
         hash01(outputPixel, 0u), hash01(outputPixel, 1u), hash01(outputPixel, 2u)
     ) - 0.5;

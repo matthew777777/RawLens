@@ -3795,6 +3795,7 @@ class MainActivity : Activity() {
             lensPreferences().getString(KEY_JPEG_DEMOSAIC, null)
         ),
         chromaCleanup = ChromaCleanup.read(lensPreferences()),
+        toneMapper = PhotoToneMapper.fromPreference(lensPreferences().getString(PhotoToneMapper.PREFERENCE_KEY, null)),
         agxPurityBoost = lensPreferences().getFloat(KEY_JPEG_AGX_PURITY, 1f),
         agxLook = AgxLook.fromPreference(lensPreferences().getString(AgxLook.PREFERENCE_KEY, null)),
         agxContrast = lensPreferences().getFloat(KEY_JPEG_AGX_CONTRAST, 1f),

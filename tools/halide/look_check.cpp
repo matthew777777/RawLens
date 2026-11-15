@@ -153,6 +153,15 @@ static void refLook(const float q[4], int x, int y, const Buffer<float> &lensMap
     double aces[3], rec[3], scene[3], sh[3];
     matVecD(p.aces, camW, aces);
     matVecD(A2R, aces, rec);
+    if (p.jpeg == 3) {
+        double display[3];
+        matVecD(p.p3 ? R2P : R2S, rec, display);
+        for (int i = 0; i < 3; ++i) {
+            double x = pow(oetfD(clampD(display[i], 0.0, 1.0)), 1.0 / 1.1);
+            out[i] = 0.25 * x + 0.75 * x * x * (3.0 - 2.0 * x);
+        }
+        return;
+    }
     for (int i = 0; i < 3; i++) {
         scene[i] = rec[i] < 0 ? 0 : rec[i];
         sh[i] = scene[i];
@@ -353,9 +362,11 @@ int main() {
 
     Params e = c; e.jpeg = 2;
     Params f = d; f.jpeg = 2;
-    const Params looks[6] = {a, b, c, d, e, f};
-    const char *names[6] = {"raw-identity", "raw-realistic", "jpeg-default", "jpeg-extreme", "punchy", "punchy-extreme"};
-    for (int li = 0; li < 6; li++) {
+    Params g = c; g.jpeg = 3;
+    Params h = d; h.jpeg = 3;
+    const Params looks[8] = {a, b, c, d, e, f, g, h};
+    const char *names[8] = {"raw-identity", "raw-realistic", "jpeg-default", "jpeg-extreme", "punchy", "punchy-extreme", "basic", "basic-p3-extreme"};
+    for (int li = 0; li < 8; li++) {
         for (int l = 0; l < 4; l++) wb(l) = (float)looks[li].wb[l];
         for (int col = 0; col < 3; col++)
             for (int row = 0; row < 3; row++) {
@@ -385,6 +396,6 @@ int main() {
         printf("FAILED: %d cases\n", failures);
         return 1;
     }
-    printf("look check OK: 12 cases match (guide 1e-6, developed 5e-4)\n");
+    printf("look check OK: 16 cases match (guide 1e-6, developed 5e-4)\n");
     return 0;
 }

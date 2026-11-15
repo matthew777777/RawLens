@@ -86,14 +86,14 @@ data class AdaptiveExposureTuning(
         ): AdaptiveExposureTuning {
             val resolved = settings.resolvedForPlatform()
             val encodedAnchor = AgxDisplayTransform.scopeCurve(
-                resolved.highlightSoftHeadroom, JpegOutputSettings()
+                resolved.highlightSoftHeadroom, JpegOutputSettings(toneMapper = resolved.toneMapper)
             )
             return AdaptiveExposureTuning(
                 highlightHeadroom = resolved.highlightHeadroom.toDouble(),
                 highlightSoftHeadroom = AgxDisplayTransform.invertScopeCurve(
                     encodedAnchor, resolved
                 ).toDouble(),
-                highlightShoulder = resolved.highlightShoulder,
+                highlightShoulder = if (resolved.toneMapper == PhotoToneMapper.BASIC) 0f else resolved.highlightShoulder,
                 centerWeight = resolved.centerWeight,
                 focusX = focus?.first,
                 focusY = focus?.second,

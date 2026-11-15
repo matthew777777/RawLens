@@ -156,6 +156,75 @@ class PreviewTonemapEfficiencyDeviceTest {
         }
     }
 
+    @Test fun basicPreviewMatchesOutputCurve() {
+        val display = eglGetDisplay(EGL_DEFAULT_DISPLAY)
+        assertTrue(eglInitialize(display, IntArray(2), 0, IntArray(2), 0))
+        val configs = arrayOfNulls<android.opengl.EGLConfig>(1)
+        assertTrue(eglChooseConfig(display, intArrayOf(EGL_RENDERABLE_TYPE, 0x40,
+            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
+            EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE), 0, configs, 0, 1, IntArray(1), 0))
+        val context = eglCreateContext(display, configs[0], EGL_NO_CONTEXT,
+            intArrayOf(EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE), 0)
+        val surface = eglCreatePbufferSurface(display, configs[0],
+            intArrayOf(EGL_WIDTH, 1080, EGL_HEIGHT, 1613, EGL_NONE), 0)
+        val cappedSize = VfPresentSize.forLayout(1080, 1613, 1080)
+        val cappedSurface = eglCreatePbufferSurface(display, configs[0],
+            intArrayOf(EGL_WIDTH, cappedSize.width, EGL_HEIGHT, cappedSize.height, EGL_NONE), 0)
+        assertTrue(eglMakeCurrent(display, surface, surface, context))
+
+        val vertex = "attribute vec2 position; varying highp vec2 tex;" +
+            "void main(){ tex=position*0.5+vec2(0.5); gl_Position=vec4(position,0.,1.); }"
+        val p = program(vertex, VfGpuImport.cpuFragmentShader())
+        val tex = IntArray(1)
+        try {
+            glGenTextures(1, tex, 0); glBindTexture(GL_TEXTURE_2D, tex[0])
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+            val values = ByteBuffer.allocateDirect(256 * 4)
+            repeat(256) { i -> repeat(4) { values.put(i.toByte()) } }; values.flip()
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, values)
+            val identity = floatArrayOf(1f,0f,0f,0f,1f,0f,0f,0f,1f)
+            glUseProgram(p)
+            fun i(n: String, v: Int) = glUniform1i(glGetUniformLocation(p, n), v)
+            fun f(n: String, v: Float) = glUniform1f(glGetUniformLocation(p, n), v)
+            i("raw", 0); i("u_jpeg", 1); i("u_basic", 1)
+            glUniformMatrix3fv(glGetUniformLocation(p, "u_camToAces"), 1, false, identity, 0)
+            glUniform3f(glGetUniformLocation(p, "u_cameraWhite"), 1f, 1f, 1f)
+            val vertices = ByteBuffer.allocateDirect(24).order(ByteOrder.nativeOrder()).asFloatBuffer()
+                .put(floatArrayOf(-1f,-1f,3f,-1f,-1f,3f)).apply { position(0) }
+            val attr = glGetAttribLocation(p, "position")
+            glEnableVertexAttribArray(attr); glVertexAttribPointer(attr,2,GL_FLOAT,false,0,vertices)
+            glViewport(0,0,256,1)
+            val pixels = ByteBuffer.allocateDirect(256 * 4)
+            var maximumError = 0
+            for (p3 in 0..1) for (ev in floatArrayOf(-2f,0f,2f)) {
+                i("u_displayP3",p3); f("u_exposureEv",ev)
+                glDrawArrays(GL_TRIANGLES,0,3); pixels.clear()
+                glReadPixels(0,0,256,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels)
+                repeat(256) { x ->
+                    val n = x / 255f
+                    val t = ((n - .70f) / .29f).coerceIn(0f,1f)
+                    val blend = t*t*(3f-2f*t)
+                    val scene = (n + (1f-n)*blend) * Math.pow(2.0,ev.toDouble()).toFloat()
+                    val settings = JpegOutputSettings(toneMapper = PhotoToneMapper.BASIC)
+                    val rgb = if (p3 == 1) AgxDisplayTransform.acescgToOutputLinearDisplayP3(floatArrayOf(scene,scene,scene), settings)
+                        else AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(scene,scene,scene), settings)
+                    repeat(3) { ch ->
+                        val expected = (AgxDisplayTransform.srgbOetf(rgb[ch]) * 255f).toInt()
+                        maximumError = maxOf(maximumError,kotlin.math.abs(expected-(pixels.get(x*4+ch).toInt() and 255)))
+                    }
+                }
+            }
+            assertTrue("Basic preview/output maximum code error $maximumError", maximumError <= 2)
+            assertEquals(GL_NO_ERROR,glGetError())
+        } finally {
+            glDeleteProgram(p); glDeleteTextures(1,tex,0)
+            eglMakeCurrent(display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT)
+            eglDestroySurface(display,surface); eglDestroySurface(display,cappedSurface)
+            eglDestroyContext(display,context); eglTerminate(display)
+        }
+    }
+
     private fun program(vertex: String, fragment: String): Int {
         fun shader(type: Int, source: String): Int {
             val id = glCreateShader(type)

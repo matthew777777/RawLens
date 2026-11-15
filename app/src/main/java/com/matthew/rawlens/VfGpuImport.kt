@@ -255,7 +255,7 @@ internal object VfGpuImport {
             " fract(dot(p + ch * 16.0 + 5.588238, vec2(0.06711056, 0.00583715)))); }"
 
     private const val AGX_UNIFORMS =
-        "uniform int u_jpeg;" +
+        "uniform int u_jpeg; uniform int u_basic;" +
             "uniform float u_agxPunchy; uniform float u_agxContrast; uniform float u_agxSaturation; uniform float u_agxPurity;" +
             "uniform float u_agxHue; uniform float u_agxShadowEv; uniform float u_agxHighlightEv;" +
             "uniform float u_agxGamut; uniform float u_exposureEv; uniform float u_highlightShoulder;" +
@@ -283,7 +283,14 @@ internal object VfGpuImport {
             " float whiteBlend = max(whiteB.r, max(whiteB.g, whiteB.b));" +
             " cam = mix(cam, u_cameraWhite, whiteBlend);" +
             " cam *= exp2(u_exposureEv);" +
-            " vec3 scene = max(acesCgToRec2020() * (u_camToAces * cam), vec3(0.0));" +
+            " vec3 scene2020 = acesCgToRec2020() * (u_camToAces * cam);" +
+            " if (u_basic != 0) {" +
+            "  mat3 basicMat = rec2020ToSrgb(); if (u_displayP3 != 0) basicMat = rec2020ToDisplayP3();" +
+            "  vec3 x = pow(srgbOetf(clamp(basicMat * scene2020, 0.0, 1.0)), vec3(1.0 / 1.1));" +
+            "  vec3 encBasic = 0.25 * x + 0.75 * x * x * (3.0 - 2.0 * x);" +
+            "  vec3 noiseBasic = vec3(ign(gl_FragCoord.xy, 0.0), ign(gl_FragCoord.xy, 1.0), ign(gl_FragCoord.xy, 2.0));" +
+            "  @OUT@ = vec4(encBasic + (noiseBasic - vec3(0.5)) / 255.0, 1.0); return; }" +
+            " vec3 scene = max(scene2020, vec3(0.0));" +
             " for (int c = 0; c < 3; ++c) { if (scene[c] > 0.9 && u_highlightShoulder > 0.0) {" +
             "  float t = (scene[c] - 0.9) / 0.8;" +
             "  float comp = 0.9 + 0.8 * (1.0 - exp(-t));" +

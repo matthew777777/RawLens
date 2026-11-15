@@ -99,6 +99,51 @@ class SceneLinearColorGpuInstrumentedTest {
     }
 
     @Test
+    fun basicFusedAmazeMatchesSeparateOutputInP3() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val input = UnpackedRawCfa(
+            IDENTITY_WIDTH,
+            IDENTITY_HEIGHT,
+            BayerPattern.RGGB,
+            FloatArray(IDENTITY_WIDTH * IDENTITY_HEIGHT) { index ->
+                0.02f + ((index * 37) % 900) / 700f
+            },
+            RawCrop(0, 0, IDENTITY_WIDTH, IDENTITY_HEIGHT)
+        )
+        val settings = JpegOutputSettings(
+            toneMapper = PhotoToneMapper.BASIC, displayP3 = true,
+            agxPurityBoost = 1.2f,
+            agxContrast = 1.08f,
+            agxSaturation = 0.9f,
+            agxHuePreservation = 0.2f,
+            agxGamutCompression = 0.35f
+        )
+        val amaze = Gles31AmazeProcessor(context)
+        val output = Gles31JpegOutputProcessor(context)
+        val reference = amaze.process(input) { output.process(it, settings).bitmap }
+        val fused = amaze.process(input, fusedOutputSettings = settings) {
+            output.processEncoded(it, settings).bitmap
+        }
+        try {
+            var maximumError = 0
+            for (y in 0 until IDENTITY_HEIGHT) for (x in 0 until IDENTITY_WIDTH) {
+                val a = reference.getPixel(x, y)
+                val b = fused.getPixel(x, y)
+                maximumError = maxOf(
+                    maximumError,
+                    kotlin.math.abs(Color.red(a) - Color.red(b)),
+                    kotlin.math.abs(Color.green(a) - Color.green(b)),
+                    kotlin.math.abs(Color.blue(a) - Color.blue(b))
+                )
+            }
+            assertTrue("fused output maximum 8-bit error $maximumError", maximumError <= 3)
+        } finally {
+            reference.recycle()
+            fused.recycle()
+        }
+    }
+
+    @Test
     fun directPackedRawPreprocessingMatchesCpuReference() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val width = 64
@@ -226,13 +271,15 @@ class SceneLinearColorGpuInstrumentedTest {
             assertTrue("highlight scene values were clipped", actual.any { it > 1f })
             assertTrue(actual.indices.filter { it % 4 == 3 }.all { actual[it] == 1f })
 
-            val bitmap = Gles31JpegOutputProcessor(context).process(output).bitmap
+            for (mode in PhotoToneMapper.entries) {
+            val settings = JpegOutputSettings(toneMapper = mode)
+            val bitmap = Gles31JpegOutputProcessor(context).process(output, settings).bitmap
             try {
                 for (y in 0 until HEIGHT) {
                     for (x in 0 until WIDTH) {
                         val offset = (y * WIDTH + x) * 4
                         val outputLinear = AgxDisplayTransform.acescgToOutputLinearSrgb(
-                            floatArrayOf(actual[offset], actual[offset + 1], actual[offset + 2])
+                            floatArrayOf(actual[offset], actual[offset + 1], actual[offset + 2]), settings
                         )
                         val expected8 = AgxDisplayTransform.quantizeSrgb8(outputLinear, x, y)
                         val pixel = bitmap.getPixel(x, y)
@@ -244,6 +291,7 @@ class SceneLinearColorGpuInstrumentedTest {
                 }
             } finally {
                 bitmap.recycle()
+            }
             }
         }
     }

@@ -73,7 +73,8 @@ internal fun vfOverlayEffectBits(
 ): List<String> = buildList {
     if (settings.ultraHdr) add("UHDR")
     if (wavelet) add("WAVELET")
-    if (jpegTonemap && (settings.agxLook == AgxLook.PUNCHY || settings.agxContrast != 1f ||
+    if (jpegTonemap && settings.toneMapper == PhotoToneMapper.BASIC) add("BASIC")
+    if (jpegTonemap && settings.toneMapper == PhotoToneMapper.AGX && (settings.agxLook == AgxLook.PUNCHY || settings.agxContrast != 1f ||
         settings.agxSaturation != 1f ||
         settings.agxPurityBoost != 1f ||
         settings.highlightShoulder != 1f)

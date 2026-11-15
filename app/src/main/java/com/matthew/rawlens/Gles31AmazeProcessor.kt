@@ -1227,6 +1227,7 @@ class Gles31AmazeProcessor(
                 val settings = requireNotNull(fusedSettings)
                 finalProgram.ivec2("u_output_size", input.width, input.height)
                 finalProgram.integer("u_display_p3", if (settings.displayP3) 1 else 0)
+                finalProgram.integer("u_basic", if (settings.toneMapper == PhotoToneMapper.BASIC) 1 else 0)
                 finalProgram.float("u_agx_purity_boost", settings.agxPurityBoost)
                 finalProgram.integer("u_agx_punchy", if (settings.agxLook == AgxLook.PUNCHY) 1 else 0)
                 finalProgram.float("u_agx_contrast", settings.agxContrast)
@@ -1373,7 +1374,7 @@ class Gles31AmazeProcessor(
         private val agxOutputCommon by lazy {
             val source = read("shaders/display/agx_srgb8.glsl")
             source.substring(
-                source.indexOf("uniform highp int u_display_p3;").also { check(it >= 0) },
+                source.indexOf("uniform highp int u_basic;").also { check(it >= 0) },
                 source.indexOf("void main()").also { check(it >= 0) }
             )
         }

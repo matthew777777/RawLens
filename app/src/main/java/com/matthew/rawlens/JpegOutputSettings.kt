@@ -7,6 +7,7 @@ import android.os.Build
 
 /** Output contract captured with each shutter press; it never changes while that RAW is queued. */
 data class JpegOutputSettings(
+    val toneMapper: PhotoToneMapper = PhotoToneMapper.AGX,
     val ultraHdr: Boolean = false,
     val activeDLighting: ActiveDLighting = ActiveDLighting.OFF,
     val displayP3: Boolean = false,

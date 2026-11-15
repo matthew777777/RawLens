@@ -292,6 +292,17 @@ public:
             srgbOetfCh(clamp(vg.b, 0.0f, 1.0f)),
         };
 
+        // JPEG mode 3: Basic, in output primaries before the transfer curve.
+        Vec3 basicSrgb = matVecConst(REC2020_TO_SRGB, rec);
+        Vec3 basicP3 = matVecConst(REC2020_TO_DISPLAY_P3, rec);
+        auto basicChannel = [&](Expr srgb, Expr p3) {
+            Expr linear = clamp(select(displayP3_ != 0, p3, srgb), 0.0f, 1.0f);
+            Expr x = pow(srgbOetfCh(linear), 1.0f / 1.1f);
+            return 0.25f * x + 0.75f * x * x * (3.0f - 2.0f * x);
+        };
+        enc = Vec3{select(jpeg_ == 3, basicChannel(basicSrgb.r, basicP3.r), enc.r),
+                   select(jpeg_ == 3, basicChannel(basicSrgb.g, basicP3.g), enc.g),
+                   select(jpeg_ == 3, basicChannel(basicSrgb.b, basicP3.b), enc.b)};
         Expr isJpeg = jpeg_ != 0;
         developed_(x, y, c) =
             select(c == 0, select(isJpeg, enc.r, rawOutR),

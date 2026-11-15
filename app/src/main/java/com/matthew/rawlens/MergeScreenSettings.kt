@@ -28,6 +28,7 @@ internal object MergeScreenSettings {
             prefs.getString(MainActivity.KEY_JPEG_DEMOSAIC, null)
         ),
         chromaCleanup = ChromaCleanup.read(prefs),
+        toneMapper = PhotoToneMapper.fromPreference(prefs.getString(PhotoToneMapper.PREFERENCE_KEY, null)),
         agxPurityBoost = prefs.getFloat(MainActivity.KEY_JPEG_AGX_PURITY, 1f),
         agxLook = AgxLook.fromPreference(prefs.getString(AgxLook.PREFERENCE_KEY, null)),
         agxContrast = prefs.getFloat(MainActivity.KEY_JPEG_AGX_CONTRAST, 1f),
