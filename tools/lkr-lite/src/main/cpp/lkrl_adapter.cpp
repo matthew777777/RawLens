@@ -97,6 +97,8 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   std::copy(pv.begin(), pv.end(), p);
   S.gpu_ms = ls.ms_total - ls.ms_host;
   S.submits = ls.submits;
+  S.prior_ms = ls.ms_prior;
+  S.prior_calls = ls.prior_calls;
   const int H = prm.s * h, W = prm.s * w;
   if (lp.dct) *x_out = std::move(xd); else *x_out = z;   // no prior: x = z (LK-R 'none')
   if (const char* dump = std::getenv("LKRL_DUMP_NS")) {   // diagnostics: noise map handed to FinishLook

@@ -40,7 +40,12 @@ int main(int argc, char** argv) {
     else if (k == "--pgain") { prm.solve.prior_gain = float(std::atof(argv[++i])); prm.auto_look = false; }
     else if (k == "--grain") { prm.solve.grain = float(std::atof(argv[++i])); prm.auto_look = false; }
     else if (k == "--repeat-reference") repeat_reference = nx() != 0;
-    else if (k == "--prior") dct_prior = nx() != 0;   // 0 none (default), 1 DCT x-step
+    else if (k == "--prior") {
+      if (i + 1 >= argc || (std::string(argv[i + 1]) != "0" && std::string(argv[i + 1]) != "1")) {
+        std::fprintf(stderr, "--prior requires 0 or 1\n"); return 2;
+      }
+      dct_prior = std::string(argv[++i]) == "1";
+    }
     else if (k == "--dluma") prm.solve.dct_luma = float(std::atof(argv[++i]));
     else if (k == "--aperture") prm.solve.dct_aperture = float(std::atof(argv[++i]));
     else if (k == "--model-error") model_error_path = argv[++i];

@@ -1068,7 +1068,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     if (mx <= 1.0f) { dct_skip = true; *x_out = *z_out; }
   }
   if (x_out && prm.dct && !dct_skip) {   // LK-R's DCT x-step on the final z (H, W % 4 == 0)
-    if ((H & 3) || (W & 3)) return fail("dct needs H, W % 4 == 0");
+    const double prior_start = now_ms();
+    if (H < 8 || W < 8 || (H & 3) || (W & 3)) return fail("dct needs H, W >= 8 and divisible by 4");
     std::memcpy(z.map, z_out->data(), nHR * 4);   // the final image (hybrid combine is host-side)
     const int ny = (H - 8) / 4 + 1, nx = (W - 8) / 4 + 1;
     Buffer &xb = buf(nHR * 4, true), &dns = buf(size_t(H) * W * 4), &diw = buf(size_t(H + W + 8) * 4),
@@ -1105,8 +1106,10 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         for (d.px = 0; d.px < 2; ++d.px)
           gpu_->dispatch(*c.first, c.second, &d, uint32_t((nx + 1) / 2 + 3) / 4, uint32_t((ny + 1) / 2 + 3) / 4);
     gpu_->dispatch(kdyuv_, sc, &d, uint32_t(W / 4 + 15) / 16, uint32_t(H + 15) / 16);
-    if (!gpu_->submit()) return fail("dct submit");
+    if (!submit()) return fail("dct submit");
     x_out->assign(xb.as<float>(), xb.as<float>() + nHR);
+    S.ms_prior += now_ms() - prior_start;
+    ++S.prior_calls;
   }
   std::memcpy(p.data(), pb.map, p.size() * 4);
   std::memcpy(dloc.data(), db.map, dloc.size() * 4);

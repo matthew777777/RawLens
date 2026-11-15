@@ -74,8 +74,8 @@ struct LiteParams {
 };
 
 struct LiteStats {
-  double ms_total = 0, ms_gpu = 0, ms_host = 0;
-  int submits = 0;
+  double ms_total = 0, ms_gpu = 0, ms_host = 0, ms_prior = 0;
+  int submits = 0, prior_calls = 0;
   std::string profile;
 };
 

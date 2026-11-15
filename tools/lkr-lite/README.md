@@ -211,3 +211,9 @@ ghosts worse -- occlusion is real difference at every frequency); temporal weigh
   luma detail unchanged, no reference fallback. Clipped samples weigh 1e-3 in the average (weight 1 put
   RGB blobs next to glints). Motion look is off in Lite (LKRL_MLOOK=1 to compare). Start image (fit from
   the average) tested: no effect on the zipper.
+
+The trace runner also accepts `--prior 0|1` (default `0`). `1` writes the final
+DCT-denoised image, using the fitted middle-grey noise and default prior gain
+0.35; `0` writes the merged image without that pass. Both runners reject missing
+or invalid prior values. Prior timing and call counts include DCT passes in the
+shared solver used by the app; fallback cleanup counts only when it runs.

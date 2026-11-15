@@ -5,6 +5,7 @@
 // --trace: inputs from an LK-R solver trace (LKR_TRACE_PREFIX=... lkr_full_run): normalised
 // frames, initial affine and local motion, noise fit and robust settings from _meta.txt, so
 // Lite and LK-R are compared on identical inputs. OUT.f32: z, 3 x H x W planar float32.
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -32,9 +33,16 @@ int main(int argc, char** argv) {
   float guide = 2.0f, damp = -1.0f;
   float mhc = -1.0f;
   int notch = 0, covr = -1;
+  bool dct_prior = false;
   for (int i = 1; i < argc; ++i) {
     std::string k = argv[i];
     if (k == "--trace" && i + 2 < argc) { trace = argv[++i]; out = argv[++i]; }
+    else if (k == "--prior") {
+      if (i + 1 >= argc || (std::string(argv[i + 1]) != "0" && std::string(argv[i + 1]) != "1")) {
+        std::fprintf(stderr, "--prior requires 0 or 1\n"); return 2;
+      }
+      dct_prior = std::string(argv[++i]) == "1";
+    }
     else if (k == "--schedule" && i + 1 < argc) schedule = argv[++i];
     else if (k == "--profile" && i + 1 < argc) profile = std::atoi(argv[++i]) != 0;
     else if (k == "--gnw" && i + 1 < argc) gnw = std::atoi(argv[++i]);
@@ -48,7 +56,7 @@ int main(int argc, char** argv) {
     else { std::fprintf(stderr, "unknown argument %s\n", k.c_str()); return 2; }
   }
   if (trace.empty()) {
-    std::fprintf(stderr, "usage: lkrl_run --trace PREFIX OUT.f32 [--schedule S] [--profile 1] [--repeat N]\n");
+    std::fprintf(stderr, "usage: lkrl_run --trace PREFIX OUT.f32 [--schedule S] [--prior 0|1] [--profile 1] [--repeat N]\n");
     return 2;
   }
   std::map<std::string, std::string> meta;
@@ -77,6 +85,10 @@ int main(int argc, char** argv) {
   prm.start_notch = notch;
   prm.cov_smooth = covr;
   prm.guide_mode = gmode;
+  prm.dct = dct_prior;
+  // Match the full-frame default: final sigma is the fitted noise at middle grey,
+  // with the default prior gain of 0.35.
+  prm.dct_sigma = 0.35f * std::sqrt(std::max(0.0f, 0.18f * prm.noise_a + prm.noise_b));
   std::vector<float> frames, p0, d0;
   if (!readF32(trace + "_frames.f32", &frames, size_t(K) * h * w) ||
       !readF32(trace + "_motion_initial.f32", &p0, size_t(K) * 6) ||
@@ -87,20 +99,22 @@ int main(int argc, char** argv) {
   lkrl::Gpu gpu;
   if (!gpu.ok()) { std::fprintf(stderr, "no Vulkan device\n"); return 1; }
   lkrl::LiteSolver solver(&gpu);
-  std::vector<float> z;
+  std::vector<float> z, x, noise_scale;
   lkrl::LiteStats st;
   std::string err;
   std::vector<float> p, d;
   for (int it = 0; it < repeat; ++it) {
     p = p0; d = d0;
-    if (!solver.solve(frames.data(), K, h, w, p, d, prm, &z, &st, &err)) {
+    if (!solver.solve(frames.data(), K, h, w, p, d, prm, &z, &st, &err, &noise_scale, nullptr, nullptr, dct_prior ? &x : nullptr)) {
       std::fprintf(stderr, "solve failed: %s\n", err.c_str());
       return 1;
     }
     std::printf("lite %dx K=%d %dx%d schedule %s: %.1f ms (host %.1f ms, %d submits)\n", prm.s, K, w, h,
                 schedule.c_str(), st.ms_total, st.ms_host, st.submits);
+    std::printf("prior %s: %d calls, %.1f ms\n", dct_prior ? "dct" : "none", st.prior_calls, st.ms_prior);
   }
   if (profile) std::printf("%s\n", st.profile.c_str());
+  if (dct_prior) z = std::move(x);
   FILE* f = std::fopen(out.c_str(), "wb");
   if (!f || std::fwrite(z.data(), 4, z.size(), f) != z.size()) return 1;
   std::fclose(f);
