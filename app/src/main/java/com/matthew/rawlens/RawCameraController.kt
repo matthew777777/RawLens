@@ -2374,7 +2374,8 @@ class RawCameraController(
     /**
      * 200→50 MP one-shot (camera thread): freeze the live 12.5 MP exposure, white balance
      * and focus, close the app camera, let the root worker capture the 200 MP readout and
-     * write the remosaiced 50 MP DNG, then reopen the normal preview.
+     * produce 50 MP linear RGB, then save the selected JPEG/DNG outputs. The
+     * normal preview reopens as soon as the worker restores the sensor.
      */
     private fun captureHexadeca200(orientationDegrees: Int) {
         if (!hexadecaBusy.compareAndSet(false, true)) return
