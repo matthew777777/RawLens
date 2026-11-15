@@ -948,7 +948,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     }
   }
   const float kndn_env = prm.kernelnet_denoise >= 0.0f ? prm.kernelnet_denoise :
-      (std::getenv("LKRL_KNDN") ? float(std::atof(std::getenv("LKRL_KNDN"))) : 0.0f);
+      (std::getenv("LKRL_KNDN") ? float(std::atof(std::getenv("LKRL_KNDN"))) : 1.0f);
   // Noise-gated (daylight keeps its fine grain and texture): x 0 at <= 4 % relative noise
   // at mid-grey, x 1 at >= 8 % (user 2026-11-14: "on" lost HF noise and detail on IMG_20210228, 3.7 %).
   const float kn_rel = std::sqrt(std::max(0.18f * prm.noise_a + prm.noise_b, 0.0f)) / 0.18f;

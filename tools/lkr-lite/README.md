@@ -106,15 +106,15 @@ Vulkan headers/loader and `glslc` are required; KernelNet weights are read from
 
 This tool is separate from the app's `LkrMerge` / `lkr-pipeline` integration.
 Hybrid chroma averaging, noise-gated luma refinement, lost-frame cleanup and fp16
-frame storage are implemented. KernelNet post-denoise (`LKRL_KNDN`), GPU LK
-(`LKRL_GPU_LK`), and motion look (`LKRL_MLOOK`) remain opt-in experiments.
+frame storage are implemented. KernelNet post-denoise is automatic by default (`LKRL_KNDN=0` disables it). GPU LK
+(`LKRL_GPU_LK`) and motion look (`LKRL_MLOOK`) remain opt-in experiments.
 The measured results below describe their named datasets and configurations.
 
 ### App KernelNet denoising switch (2026-11-15)
 
 The app's Merge settings and saved-burst LK-SR options expose **Automatic
-KernelNet denoise**, off by default. Its per-merge selection is passed explicitly
-through JNI to the tiled solver; the desktop `LKRL_KNDN` override remains separate.
+KernelNet denoise**, on by default. Its per-merge selection is passed explicitly
+through JNI to the tiled solver; both desktop runners default to automatic denoising, with `LKRL_KNDN=0` to disable it. Explicit saved app choices are preserved.
 When enabled, strength is zero at or below 4% estimated relative noise at mid-grey,
 ramps to full strength at 8%, and follows the existing per-pixel noise/coverage
 model. This uses estimated noise, not time of day or an ISO threshold. Low-noise

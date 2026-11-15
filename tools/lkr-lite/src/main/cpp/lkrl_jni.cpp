@@ -71,7 +71,7 @@ struct NoiseModelRef {
   float iso = 0;
 };
 thread_local NoiseModelRef g_noise_model;
-thread_local bool g_kernelnet_denoise = false;
+thread_local bool g_kernelnet_denoise = true;
 
 // stats layout (float[16]): tiles, sigma, a, b, ms_noise, ms_coarse, ms_tiles,
 // ms_gpu, ms_prior, ms_total, prior_calls, out_w, out_h, backend (0 none,
@@ -109,7 +109,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   }
   lkrl::FullParams prm = lkrl::AppDefaults();
   prm.solve.kernelnet_denoise = g_kernelnet_denoise ? 1.0f : 0.0f;
-  g_kernelnet_denoise = false;
+  g_kernelnet_denoise = true;
   LKR_LOG("KernelNet denoise: %s (noise-gated)", prm.solve.kernelnet_denoise > 0 ? "on" : "off");
   // x2 buffers are large and a third worker gains about 3 % on Mali (measured); debug.lkr.workers still overrides.
   if (s >= 2) {

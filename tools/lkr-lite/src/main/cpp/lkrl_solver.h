@@ -19,7 +19,7 @@ struct LiteParams {
   // steps at 2x). 3 motion steps match LK-R better than 5 (car 1x 59.93 -> 60.20 dB, worst block
   // 36.7 -> 38.4; IMG_20210228_133623 2x 52.31 -> 52.46) and save 2 jac / jacblk passes + round trips.
   std::string schedule;   // G = motion step + weight refresh, J = merge step; leading G align to the reference-only image
-  float kernelnet_denoise = -1.0f;   // explicit per-merge strength, negative = CLI environment
+  float kernelnet_denoise = -1.0f;   // explicit per-merge strength, negative = CLI environment (default on)
   float noise_a = 0, noise_b = 0;     // our own fit: var = a y + b (normalised raw units)
   float clip = 0.98f;
   float robust_k = 3.0f, robust_pow = 1.0f, robust_tau = 0.1f;

@@ -10,9 +10,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MfsrSettingsTest {
-    @Test fun lkrKernelNetDefaultsOffAndPreservesExplicitChoice() {
-        assertFalse(MfsrSettings().lkrKernelNetDenoise)
-        assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).lkrKernelNetDenoise)
+    @Test fun lkrKernelNetDefaultsOnAndPreservesExplicitChoice() {
+        assertTrue(MfsrSettings().lkrKernelNetDenoise)
+        assertTrue(MfsrSettings.fromPreferences(emptyMap<String, Any>()).lkrKernelNetDenoise)
         for (enabled in listOf(false, true)) {
             val settings = MfsrSettings(lkrKernelNetDenoise = enabled)
             assertEquals(settings, MfsrSettings.fromPreferences(settings.toPreferences()))

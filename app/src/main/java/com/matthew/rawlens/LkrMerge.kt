@@ -49,7 +49,7 @@ internal object LkrMerge {
         val overlap: Int = 32,
         /** Regularise with the Vulkan sliding-DCT x-step; false = no prior. */
         val dctPrior: Boolean = false,
-        val kernelNetDenoise: Boolean = false,
+        val kernelNetDenoise: Boolean = true,
         /** Sensor sub-rectangle `[x, y, w, h]`, or null for full frame. */
         val crop: IntArray? = null,
         /** LK-R Lab overrides (Settings -> Merge), NaN = code default; null = all defaults. */

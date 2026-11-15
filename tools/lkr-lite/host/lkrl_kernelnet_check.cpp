@@ -26,7 +26,8 @@ int main() {
       lkrl::LiteParams prm;
       prm.s = scale;
       prm.noise_b = sigma * sigma;
-      prm.kernelnet_denoise = float(enabled);
+      // Compare explicit off against automatic denoising with no CLI override.
+      if (!enabled) prm.kernelnet_denoise = 0.0f;
       std::vector<float> motion(K*6, 0.f), local, noise;
       for (int k = 0; k < K; ++k) { motion[k*6] = 1.f; motion[k*6+4] = 1.f; }
       std::string error;

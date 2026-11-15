@@ -132,7 +132,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc(
-            "Off by default. When enabled, PhotonCamera-based KernelNet denoising increases in noisy, " +
+            "On by default. PhotonCamera-based KernelNet denoising increases in noisy, " +
                 "low-light scenes. Low-noise scenes skip it."
         ))
         content.addView(settingsCheck("LK-SR denoise: sliding DCT", mfsrSettings.lkrDctPrior).apply {
