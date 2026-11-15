@@ -744,6 +744,9 @@ object VulkanPipeline {
                 java.io.File(dir, "r_%02d_%dx%d.f32".format(idx, if (config.bayer) w / 2 else w, if (config.bayer) h / 2 else h))
                     .writeBytes(java.nio.ByteBuffer.allocate(n * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
                         .also { b -> r.forEach { b.putFloat(it) } }.array())
+                java.io.File(dir, "flow_%02d_%dx%d.f32".format(idx, ftx, fty))
+                    .writeBytes(java.nio.ByteBuffer.allocate(ftx * fty * 2 * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        .also { b -> mergeFlowFlat.forEach { b.putFloat(it) } }.array())
                 System.err.println("SRP_R frame $idx mean ${"%.3f".format(r.average())} rejected(<0.1) ${"%.1f".format(100.0 * r.count { it < 0.1f } / n)}%")
             }
             mergeFrame(frame, flow, rBuf)
