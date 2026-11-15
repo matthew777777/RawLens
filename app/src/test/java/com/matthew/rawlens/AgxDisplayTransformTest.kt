@@ -10,20 +10,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgxDisplayTransformTest {
+    private fun agxSrgb(input: FloatArray, purityBoost: Float = 1f): FloatArray =
+        AgxDisplayTransform.acescgToOutputLinearSrgb(input,
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxPurityBoost = purityBoost))
+
+    private fun agxSrgb(input: FloatArray, settings: JpegOutputSettings): FloatArray =
+        AgxDisplayTransform.acescgToOutputLinearSrgb(input, settings)
+
     @Test fun punchyIsOptInAndTracksNeutralScopes() {
         assertEquals(AgxLook.BASE, JpegOutputSettings().agxLook)
         assertEquals(AgxLook.BASE, AgxLook.fromPreference(null))
         assertEquals(AgxLook.BASE, AgxLook.fromPreference("unknown"))
         assertEquals(AgxLook.PUNCHY, AgxLook.fromPreference("PUNCHY"))
-        val punchy = JpegOutputSettings(agxLook = AgxLook.PUNCHY)
+        val punchy = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxLook = AgxLook.PUNCHY)
         for (input in floatArrayOf(0f, 0.01f, 0.18f, 0.5f, 1f, 16f)) {
-            val output = AgxDisplayTransform.acescgToOutputLinearSrgb(FloatArray(3) { input }, punchy)
+            val output = agxSrgb(FloatArray(3) { input }, punchy)
             assertTrue(output.all(Float::isFinite))
             val encoded = AgxDisplayTransform.srgbOetf(output[0].coerceIn(0f, 1f))
             assertEquals(encoded, AgxDisplayTransform.scopeCurve(input, punchy), 0.0002f)
         }
         assertTrue(AgxDisplayTransform.scopeCurve(0.18f, punchy) <
-            AgxDisplayTransform.scopeCurve(0.18f))
+            AgxDisplayTransform.scopeCurve(0.18f, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX)))
     }
 
     @Test
@@ -40,7 +47,7 @@ class AgxDisplayTransformTest {
         val inputs = floatArrayOf(0f, 0.18f, 1f, 16f, 65_504f)
         var previous = Float.NEGATIVE_INFINITY
         inputs.forEach { input ->
-            val output = AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(input, input, input))
+            val output = agxSrgb(floatArrayOf(input, input, input))
             assertTrue(output.all(Float::isFinite))
             assertTrue("neutral channel split: ${output.contentToString()}",
                 output.max() - output.min() < 1e-4f)
@@ -49,13 +56,13 @@ class AgxDisplayTransformTest {
         }
         assertRgb(
             floatArrayOf(0.21487383f, 0.21484137f, 0.21480779f),
-            AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(0.18f, 0.18f, 0.18f))
+            agxSrgb(floatArrayOf(0.18f, 0.18f, 0.18f))
         )
         // Scene-linear soft shoulder (knee 0.9, scale 0.8) compresses 16->1.7 before AgX,
         // so extreme neutrals plateau at ~0.699 instead of the pinned 0.96 white.
         assertRgb(
             floatArrayOf(0.69943166f, 0.69943148f, 0.69943166f),
-            AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(16f, 16f, 16f))
+            agxSrgb(floatArrayOf(16f, 16f, 16f))
         )
     }
 
@@ -64,7 +71,7 @@ class AgxDisplayTransformTest {
         // Sample equal exposure steps through and beyond Filament AgX's +4.026069 EV ceiling.
         val inputs = floatArrayOf(0.18f, 0.36f, 0.72f, 1.44f, 2.88f, 5.76f, 11.52f, 23.04f, 46.08f)
         val outputs = inputs.map { input ->
-            AgxDisplayTransform.acescgToOutputLinearSrgb(
+            agxSrgb(
                 floatArrayOf(input, input, input),
                 purityBoost = 1f
             ).average().toFloat()
@@ -76,11 +83,11 @@ class AgxDisplayTransformTest {
             outputs[7] - outputs[6] < outputs[3] - outputs[2])
         assertTrue("AgX output exceeded its SDR display boundary: $outputs", outputs.all { it <= 1.001f })
 
-        val plateau = AgxDisplayTransform.acescgToOutputLinearSrgb(
+        val plateau = agxSrgb(
             floatArrayOf(65_504f, 65_504f, 65_504f),
             purityBoost = 1f
         )
-        val aboveCeiling = AgxDisplayTransform.acescgToOutputLinearSrgb(
+        val aboveCeiling = agxSrgb(
             floatArrayOf(46.08f, 46.08f, 46.08f),
             purityBoost = 1f
         )
@@ -93,27 +100,27 @@ class AgxDisplayTransformTest {
         // darker vs the pinned Filament reference; midtones stay bit-exact.
         assertRgb(
             floatArrayOf(0.93440771f, 0.08021203f, 0.09488785f),
-            AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(1f, 0f, 0f))
+            agxSrgb(floatArrayOf(1f, 0f, 0f))
         )
-        val green = AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(0f, 1f, 0f))
+        val green = agxSrgb(floatArrayOf(0f, 1f, 0f))
         assertRgb(floatArrayOf(-0.20412612f, 0.67982507f, 0.01576497f), green)
         assertTrue("pre-gamut negative was clipped", green[0] < 0f)
         assertRgb(
             floatArrayOf(-0.05184369f, 0.14744416f, 0.79181671f),
-            AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(0f, 0f, 1f))
+            agxSrgb(floatArrayOf(0f, 0f, 1f))
         )
     }
 
     @Test
     fun postToneMapPurityBoostPreservesNeutralsAndIncreasesChroma() {
         val neutral = floatArrayOf(0.18f, 0.18f, 0.18f)
-        val neutralBase = AgxDisplayTransform.acescgToOutputLinearSrgb(neutral, 1f)
-        val neutralBoosted = AgxDisplayTransform.acescgToOutputLinearSrgb(neutral, 2f)
+        val neutralBase = agxSrgb(neutral, 1f)
+        val neutralBoosted = agxSrgb(neutral, 2f)
         assertRgb(neutralBase, neutralBoosted, 1e-4f)
 
         val saturated = floatArrayOf(1f, 0.1f, 0.05f)
-        val base = AgxDisplayTransform.acescgToOutputLinearSrgb(saturated, 1f)
-        val boosted = AgxDisplayTransform.acescgToOutputLinearSrgb(saturated, 2f)
+        val base = agxSrgb(saturated, 1f)
+        val boosted = agxSrgb(saturated, 2f)
         assertTrue(boosted.max() - boosted.min() > base.max() - base.min())
         assertTrue(boosted.all(Float::isFinite))
     }
@@ -126,11 +133,11 @@ class AgxDisplayTransformTest {
             // Maximum finite value representable by the RGBA16F scene texture.
             floatArrayOf(65_504f, 65_504f, 65_504f)
         ).forEach { input ->
-            val output = AgxDisplayTransform.acescgToOutputLinearSrgb(input)
+            val output = agxSrgb(input)
             assertTrue("non-finite output for ${input.contentToString()}", output.all(Float::isFinite))
         }
         assertThrows(IllegalArgumentException::class.java) {
-            AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(Float.NaN, 0f, 0f))
+            agxSrgb(floatArrayOf(Float.NaN, 0f, 0f))
         }
     }
 
@@ -138,10 +145,10 @@ class AgxDisplayTransformTest {
     fun transformIsContinuousAroundLogAndSrgbBoundaries() {
         val center = floatArrayOf(0.0031308f, 0.18f, 1f)
         center.forEach { value ->
-            val low = AgxDisplayTransform.acescgToOutputLinearSrgb(
+            val low = agxSrgb(
                 floatArrayOf(value - 1e-6f, value - 1e-6f, value - 1e-6f)
             )
-            val high = AgxDisplayTransform.acescgToOutputLinearSrgb(
+            val high = agxSrgb(
                 floatArrayOf(value + 1e-6f, value + 1e-6f, value + 1e-6f)
             )
             assertTrue(high.indices.all { abs(high[it] - low[it]) < 1e-3f })

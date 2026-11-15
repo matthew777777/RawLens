@@ -28,8 +28,10 @@ class BasicToneMapperTest {
         assertArrayEquals(AgxDisplayTransform.acescgToOutputLinearSrgb(scene, basic),
             AgxDisplayTransform.acescgToOutputLinearSrgb(scene, tuned), 0f)
         assertEquals(AgxLook.PUNCHY, tuned.copy(toneMapper = PhotoToneMapper.AGX).agxLook)
-        assertEquals(PhotoToneMapper.AGX, PhotoToneMapper.fromPreference(null))
-        assertEquals(PhotoToneMapper.AGX, PhotoToneMapper.fromPreference("unknown"))
+        assertEquals(PhotoToneMapper.BASIC, JpegOutputSettings().toneMapper)
+        assertEquals(PhotoToneMapper.BASIC, PhotoToneMapper.fromPreference(null))
+        assertEquals(PhotoToneMapper.BASIC, PhotoToneMapper.fromPreference("unknown"))
+        assertEquals(PhotoToneMapper.AGX, PhotoToneMapper.fromPreference("AGX"))
         assertEquals(PhotoToneMapper.BASIC, PhotoToneMapper.fromPreference("BASIC"))
     }
 
@@ -69,7 +71,7 @@ class BasicToneMapperTest {
             for (channel in linear) assertEquals(code, AgxDisplayTransform.srgbOetf(channel), 2e-4f)
         }
         val cache = ScopeLutCache()
-        val agx = cache.get(JpegOutputSettings())
+        val agx = cache.get(JpegOutputSettings(toneMapper = PhotoToneMapper.AGX))
         val switched = cache.get(basic)
         assertNotSame(agx, switched)
         assertSame(switched, cache.get(basic))

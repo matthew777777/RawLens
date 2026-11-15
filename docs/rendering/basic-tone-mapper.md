@@ -1,7 +1,8 @@
 # Basic / AgX photo tone mapping
 
 Photo output offers a two-button **Basic | AgX** selector. The per-lens preference
-`jpeg_tone_mapper` defaults to AgX for existing installs and unknown values.
+`jpeg_tone_mapper` defaults to Basic when unset or unknown. Explicit saved Basic/AgX
+choices are preserved.
 The selected mode is part of the immutable shutter/development settings and is
 also loaded for offline merges. Switching preserves the stored AgX tuning.
 

@@ -8,6 +8,6 @@ enum class PhotoToneMapper(val label: String) {
     companion object {
         const val PREFERENCE_KEY = "jpeg_tone_mapper"
         fun fromPreference(value: String?): PhotoToneMapper =
-            entries.firstOrNull { it.name == value } ?: AGX
+            entries.firstOrNull { it.name == value } ?: BASIC
     }
 }
