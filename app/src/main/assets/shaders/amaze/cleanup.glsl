@@ -58,7 +58,10 @@ highp vec3 chroma_cleanup(highp vec3 c) {
             }
         }
         // ~3x step -> starts, ~7x step (twig against sky) -> full.
-        highp float edge = 1.0 - smoothstep(0.15, 0.35, lo / max(hi, 1e-6));
+        // Use relative range so a flat zero-green blue/purple patch has zero
+        // contrast. lo / max(hi, epsilon) incorrectly classified 0/0 as an edge
+        // and erased its blue/red chroma. Positive-green edge thresholds are unchanged.
+        highp float edge = smoothstep(0.65, 0.85, (hi - lo) / max(hi, 1e-6));
         // Violet/magenta hue: B above G, R not far below G.
         highp float violet = smoothstep(-0.6, -0.1, d.x / d.y);
         highp float k = clamp(u_defringe, 0.0, 1.0) * edge * violet;

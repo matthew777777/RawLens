@@ -89,6 +89,53 @@ class ChromaCleanupDeviceTest {
             }
         }
     }
+    @Test fun defringePreservesFlatBlueAndPurpleIncludingZeroGreen() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val processor = Gles31AmazeProcessor(context)
+        try {
+            processor.chromaCleanup = ChromaCleanup(false, 1f)
+            for (green in floatArrayOf(0f, 1e-8f, .05f)) for (red in floatArrayOf(0f, .4f)) {
+                val color = floatArrayOf(red, green, .6f)
+                val input = ByteBuffer.allocateDirect(width * width * 12).order(ByteOrder.nativeOrder())
+                repeat(width * width) { color.forEach(input::putFloat) }; input.flip()
+                val actual = processor.processMfsrRgb(input, width, width, identity,
+                    floatArrayOf(1f, 1f, 1f), true) { read(it.textureId) }
+                for (y in 2 until width - 2) for (x in 2 until width - 2) for (ch in 0..2) {
+                    assertEquals("flat RGB=${color.contentToString()} ($x,$y,$ch)",
+                        color[ch], actual[(y * width + x) * 4 + ch], .001f)
+                }
+            }
+        } finally { processor.close() }
+    }
+
+    @Test fun defringeStillRemovesPurpleAtRealGreenContrastEdges() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val processor = Gles31AmazeProcessor(context)
+        try {
+            val input = ByteBuffer.allocateDirect(width * width * 12).order(ByteOrder.nativeOrder())
+            for (y in 0 until width) for (x in 0 until width) {
+                val green = if (x < width / 2) .01f else .5f
+                val fringe = if (x == width / 2 - 1) .3f else 0f
+                input.putFloat(green + fringe).putFloat(green).putFloat(green + fringe)
+            }
+            fun render(strength: Float): FloatArray {
+                processor.chromaCleanup = ChromaCleanup(false, strength)
+                input.rewind()
+                return processor.processMfsrRgb(input, width, width, identity,
+                    floatArrayOf(1f, 1f, 1f), true) { read(it.textureId) }
+            }
+            val before = render(0f)
+            val after = render(1f)
+            val fringe = (width / 2 * width + width / 2 - 1) * 4
+            assertTrue(before[fringe + 2] - before[fringe + 1] > .29f)
+            assertEquals(after[fringe + 1], after[fringe], .001f)
+            assertEquals(after[fringe + 1], after[fringe + 2], .001f)
+            for (p in 0 until width * width) {
+                assertEquals("green detail $p", before[p * 4 + 1], after[p * 4 + 1], .001f)
+            }
+        } finally { processor.close() }
+    }
+
     @Test fun offlineQualitySettingsProduceActualJpegAndJxl() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = context.getSharedPreferences("offline-quality-regression", 0)
