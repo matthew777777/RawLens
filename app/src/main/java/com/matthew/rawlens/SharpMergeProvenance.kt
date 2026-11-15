@@ -16,12 +16,12 @@ internal fun sharpMergeProvenance(
     val details = buildString {
         append("- Output: ${merged.width}x${merged.height}\n")
         if (lkr) {
-            append("- Merge: LK-SR (Lucas-Kanade Super-Resolution)\n")
+            append("- Merge: LK-R (Lucas-Kanade Reloaded)\n")
             append("- Zoom: ${settings.lkrZoom.factor}x\n")
             append("- Reconstruction scale: ${if (settings.lkrZoom == LkrZoom.X1 && !settings.lkrFullRes) 1 else 2}x\n")
             append("- LK prior: ${if (settings.lkrDctPrior) "Sliding DCT" else "None"}\n")
         } else {
-            append("- Merge: KB-SR (Kernel-Based Super-Resolution)\n")
+            append("- Merge: MFSR (Multi-Frame Super-Resolution)\n")
             append("- Requested kernel: ${settings.kernel}\n")
             append("- High-frequency rejection: ${settings.s3}\n")
             append("- Learned noise requested: ${settings.learnedNoise}\n")
@@ -44,7 +44,7 @@ internal fun sharpMergeProvenance(
         append("- Reference frame: ${ref.frameNumber}\n")
     }
     return MergeProvenance(
-        algorithmVersion = if (lkr) "RawLens-LK-SR/lkr-lite" else "RawLens-KB-SR/scale1-sr-pipeline",
+        algorithmVersion = if (lkr) "RawLens-LK-R/lkr-lite" else "RawLens-MFSR/scale1-sr-pipeline",
         selectedFrames = selectedCount, acceptedFrames = merged.keptCount,
         rejectedFrames = selectedCount - merged.keptCount,
         referenceTimestampNs = ref.timestampNanos, outputScale = 1,

@@ -22,7 +22,7 @@ internal object LkrMerge {
     private val prewarmed = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
-     * Compiles LK-SR's Vulkan pipelines into the persistent cache on a low-priority daemon thread,
+     * Compiles LK-R's Vulkan pipelines into the persistent cache on a low-priority daemon thread,
      * once per process, so the first merge does not pay pipeline creation (4.8 s cold on Mali for
      * 3 workers, 27 ms warm). Background priority keeps it off the viewfinder's way.
      */
@@ -33,10 +33,10 @@ internal object LkrMerge {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             try {
                 val ms = LkrBridge.nativePrewarm(dir)
-                Log.i(LOG_TAG, "LK-SR prewarm: pipelines cached in $ms ms")
+                Log.i(LOG_TAG, "LK-R prewarm: pipelines cached in $ms ms")
             } catch (failure: Throwable) {
                 prewarmed.set(false)
-                Log.w(LOG_TAG, "LK-SR prewarm failed; the first merge builds its pipelines", failure)
+                Log.w(LOG_TAG, "LK-R prewarm failed; the first merge builds its pipelines", failure)
             }
         }, "lkr-prewarm").apply { isDaemon = true; start() }
     }
@@ -211,7 +211,7 @@ internal object LkrMerge {
         } finally {
             diagnostics.close()
             LkrBridge.nativeLastProfile().lineSequence().filter { it.isNotBlank() }.forEach {
-                Log.i(LOG_TAG, "LK-SR native: $it")
+                Log.i(LOG_TAG, "LK-R native: $it")
             }
         } ?: return null
         val mergeMs = SystemClock.elapsedRealtime() - t0

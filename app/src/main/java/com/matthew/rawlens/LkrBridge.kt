@@ -89,7 +89,7 @@ internal object LkrBridge {
 
     @JvmStatic external fun nativeSetCacheDir(dir: String)
 
-    /** Builds every LK-SR (LK-R Lite) pipeline into the persistent cache in [dir]; wall ms, -1 = no Vulkan. */
+    /** Builds every LK-R (LK-R Lite) pipeline into the persistent cache in [dir]; wall ms, -1 = no Vulkan. */
     @JvmStatic external fun nativePrewarm(dir: String): Long
 
     /**

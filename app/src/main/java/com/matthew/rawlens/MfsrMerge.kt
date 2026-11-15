@@ -164,7 +164,7 @@ internal object MfsrMerge {
     private fun logPlan(label: String, timestamps: List<Long>, sharpness: List<Double>, plan: BurstSharpness.Plan) {
         val newest = timestamps.maxOrNull() ?: 0L
         val ref = plan.order.first()
-        Log.i(LOG_TAG, "$label KB-SR plan: ref=F$ref merge=${plan.order.size}/${sharpness.size} " +
+        Log.i(LOG_TAG, "$label MFSR plan: ref=F$ref merge=${plan.order.size}/${sharpness.size} " +
             "rejected=${plan.rejected.map { "F$it" }} | " +
             sharpness.indices.joinToString(" ") { i ->
                 "F$i(${(newest - timestamps[i]) / 1_000_000}ms)=${"%.4f".format(sharpness[i])}" +
@@ -580,12 +580,12 @@ internal object MfsrMerge {
         verifiers: List<(Int, Int) -> Float> = emptyList()
     ): EngineOut? {
         val count = decoders.size
-        // KB-SR resolution (viewfinder round button, like LK-SR): 2x super-resolution
+        // MFSR resolution (viewfinder round button, like LK-R): 2x super-resolution
         // (12.5 -> 50 MP) instead of the sensor grid.
         val scale = if (settings.mfsrFullRes) 2 else 1
         val outW = w * scale
         val outH = h * scale
-        // KB-SR Lab (Settings -> Merge): code defaults + the user's overrides.
+        // MFSR Lab (Settings -> Merge): code defaults + the user's overrides.
         val tuning = MfsrTuning.resolve(context)
         if (!fitsMemory(context, w, h, scale)) return null
         try {
@@ -655,7 +655,7 @@ internal object MfsrMerge {
                 // known-truth flow error <= the IPOL FFT grey, ~8x cheaper on Mali.
                 greyMethod = "FIR7",
                 // SNR-tuned Wronski kernel params (update_snr_config) times the
-                // KB-SR Lab multipliers; kMin 0.64 default = the C26 checker fix.
+                // MFSR Lab multipliers; kMin 0.64 default = the C26 checker fix.
                 kernelParams = tuning.kernelParams(fin),
                 kernelPreprocessing = "gat",
                 kernelAlpha = FloatArray(4) { alpha[it].toFloat() },

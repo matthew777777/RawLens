@@ -35,7 +35,7 @@ class JpegImageDescriptionTest {
         assertFalse(text.contains("Basic response"))
     }
     @Test fun mergeProvenanceIsPreservedAndActualHdrFallbackIsTruthful() {
-        val provenance = "Captured with RawLens\nLK-SR merge\nPARAMETERS\n- Frames: 8\nTIMINGS\n- Merge: 123 ms"
+        val provenance = "Captured with RawLens\nLK-R merge\nPARAMETERS\n- Frames: 8\nTIMINGS\n- Merge: 123 ms"
         val s = JpegOutputSettings(toneMapper = PhotoToneMapper.BASIC, ultraHdr = true)
         val fallback = jpegImageDescription(s, CaptureFileNames.TYPE_LKR, provenance,
             ultraHdrEncoded = false, encodeMs = 42)

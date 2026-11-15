@@ -2220,7 +2220,7 @@ class RawCameraController(
     }
 
     init {
-        // LK-SR selected from a previous session: build its pipelines now, not on the first shutter.
+        // LK-R selected from a previous session: build its pipelines now, not on the first shutter.
         if (initialMfsrSettings.enabled && initialMfsrSettings.engine == MfsrEngine.LKR) LkrMerge.prewarm(context)
         rawViewfinder?.onStarvation = {
             cameraHandler.post {

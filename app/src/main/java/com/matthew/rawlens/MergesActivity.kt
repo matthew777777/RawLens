@@ -160,7 +160,7 @@ class MergesActivity : Activity() {
         controls.addView(selectionLine)
         controls.addView(title("Method"))
         val methodRow = LinearLayout(this)
-        methodMfsr = optionButton("KB-SR").also { button ->
+        methodMfsr = optionButton("MFSR").also { button ->
             button.setOnClickListener { setMethod(BurstMergeRunner.Method.MFSR) }
             methodRow.addView(button, rowParams())
         }
@@ -168,7 +168,7 @@ class MergesActivity : Activity() {
             button.setOnClickListener { setMethod(BurstMergeRunner.Method.HDRPLUS) }
             methodRow.addView(button, rowParams())
         }
-        methodLkr = optionButton("LK-SR").also { button ->
+        methodLkr = optionButton("LK-R").also { button ->
             button.setOnClickListener { setMethod(BurstMergeRunner.Method.LKR) }
             methodRow.addView(button, rowParams())
         }
@@ -732,9 +732,9 @@ class MergesActivity : Activity() {
     }
 
     private fun methodLabel() = when (method) {
-        BurstMergeRunner.Method.MFSR -> "KB-SR"
+        BurstMergeRunner.Method.MFSR -> "MFSR"
         BurstMergeRunner.Method.HDRPLUS -> "HDR+"
-        BurstMergeRunner.Method.LKR -> "LK-SR"
+        BurstMergeRunner.Method.LKR -> "LK-R"
     }
 
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -965,9 +965,9 @@ class MergesActivity : Activity() {
                     progressLine.text = "Done • ${result.outputs.size} output${if (result.outputs.size == 1) "" else "s"}"
                     statusLine.text =
                         "${when (method) {
-                            BurstMergeRunner.Method.MFSR -> "KB-SR"
+                            BurstMergeRunner.Method.MFSR -> "MFSR"
                             BurstMergeRunner.Method.HDRPLUS -> "HDR+"
-                            BurstMergeRunner.Method.LKR -> "LK-SR"
+                            BurstMergeRunner.Method.LKR -> "LK-R"
                         }} " +
                             "×${result.keptFrames}/${result.pooledFrames} • " +
                             "${result.width}×${result.height} • " +

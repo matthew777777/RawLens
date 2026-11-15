@@ -8,9 +8,9 @@ import android.content.SharedPreferences
 import com.rawlens.srpipeline.stages.SrTuning
 
 /**
- * "KB-SR Lab": the Wronski 2019 / IPOL tuning values of the KB-SR (MFSR)
+ * "MFSR Lab": the Wronski 2019 / IPOL tuning values of the MFSR
  * engine, in Settings -> Merge behind a hidden-by-default switch, like the
- * LK-SR Lab ([LkrTuning]). Defaults come from [SrTuning] (the code, single
+ * LK-R Lab ([LkrTuning]). Defaults come from [SrTuning] (the code, single
  * source of truth, shared with the desktop tuning sweeps); only values the
  * user changed are stored (prefs `mfsr_lab_<key>`). The SNR-tuned kernel
  * values are multipliers of the automatic per-burst value. The paper's kernel

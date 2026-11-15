@@ -4,6 +4,11 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
+## [Unreleased]
+
+- Restore MFSR / LK-R display names across capture, settings, offline merges and
+  saved-photo labels; retain KernelNet / Wronski as MFSR kernel choices.
+
 ## [2.3.43] - 2026-11-15
 
 Changes since the previous published release, **2.2.86**. See the
