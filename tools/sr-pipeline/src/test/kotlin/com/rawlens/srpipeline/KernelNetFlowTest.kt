@@ -91,7 +91,7 @@ class KernelNetFlowTest {
                                         t<2 -> -.5*t*t*t+2.5*t*t-4*t+2
                                         else -> 0.0 }
                                 }
-                                fun reconstruction(t: Double)=(1+.25*scale)*cubic(t)-.125*scale*(cubic(t-1)+cubic(t+1))
+                                fun reconstruction(t: Double)=cubic(t)
                                 val u=(mx+my-2)/2; val v=(mx-my-1)/2
                                 val bu=kotlin.math.floor(u).toInt(); val bv=kotlin.math.floor(v).toInt()
                                 var value=0.0; var lo=Double.POSITIVE_INFINITY; var hi=Double.NEGATIVE_INFINITY

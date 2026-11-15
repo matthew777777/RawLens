@@ -73,8 +73,9 @@ class KernelNetGreenEdgeTest {
                         }
                         val error=crossing(.5)-(.47*(y+.5)/scale+9.1)
                         squaredError+=error*error; rows++
-                        // A broad blur could also straighten an edge; reject that escape.
-                        assertTrue("edge remains resolved at $scale x",crossing(.82)-crossing(.18)<2.0)
+                        // Allow the natural interpolated transition after removing
+                        // inverse-filter sharpening, but reject broad blur.
+                        assertTrue("edge remains resolved at $scale x",crossing(.82)-crossing(.18)<2.5)
                     }
                     assertTrue("CFA phase must not corrugate a straight edge at $scale x: ${sqrt(squaredError/rows)}",
                         sqrt(squaredError/rows)<if(scale==1) .05 else .04)

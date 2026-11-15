@@ -46,11 +46,10 @@ float greenCubic(float x) {
 }
 
 float greenReconstruction(float x) {
-  // Compensate the interpolation's low-pass response with a symmetric
-  // lattice second difference. It has zero constant/linear response, so
-  // this detail recovery cannot move an edge with Bayer sample phase.
-  float a = 0.125*clamp(p.scale,1.0,2.0);
-  return (1.0+2.0*a)*greenCubic(x)-a*(greenCubic(x-1.0)+greenCubic(x+1.0));
+  // Interpolate without inverse-filter sharpening. The former separable
+  // second-difference boost had gain (1+4a)^2 at diagonal-lattice Nyquist
+  // (4x at scale 2), amplifying aliases into teeth on foliage and railings.
+  return greenCubic(x);
 }
 
 float interpolateGreen(vec2 position) {
