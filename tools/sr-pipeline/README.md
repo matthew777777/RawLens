@@ -49,6 +49,10 @@ that name is replaced). This is a demosaiced linear RGB DNG, with camera color
 metadata and orientation copied from the reference, rather than a CFA mosaic.
 `--scale 2` doubles both pixel dimensions. Paths with spaces must be quoted.
 Override defaults by appending flags, e.g. `--scale 1 --kernel wronski`.
+KernelNet's colour-difference path uses a narrower, area-normalized comparison
+detail footprint at both 1x and 2x. The wider reference fallback and chroma
+kernels remain active. This reduces reconstruction softness and exposes more
+grain; it does not add display sharpening.
 For a quick check, append `--crop 0,0,512,512 --limit 2` and use a separate
 output directory. Use `JAVA_OPTS='-Xmx8g' tools/sr-pipeline/run.sh ...` to
 change the heap limit.
@@ -96,6 +100,7 @@ CLI flags (see `Main.kt` usage text):
 | `--lib PATH` | no | JNI library to load (default: `System.loadLibrary`) |
 | `--lut PATH\|auto` | no | noise LUT `.npz`, or `auto` to simulate it in-process; enables noise correction |
 | `--kernel wronski\|kernelnet` | no | reconstruction kernel (`--kn-scale F`, `--kn-cap F` tune KernelNet) |
+| `--kn-floor F` | no | override the base KernelNet width floor (including reference support); positive and no greater than `--kn-cap` |
 | `--s3 on\|off` | no | supplement S.3 high-frequency artefact rejection |
 | `--s1 F --s2 F`, `--kernel-gat on\|off` | no | IPOL-vs-paper A/B parameters |
 | `--noise-ab a,b` | no | explicit normalized noise variance model `a*signal+b`, overriding tags/estimation |

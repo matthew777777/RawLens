@@ -602,6 +602,7 @@ object SrpBridge {
         rCount: Int,
         tileSize: Int,
         scale: Float,
+        /** Bits: 0 grey, 1 reference kernels, 2 reference frame, 3 detail reconstruction (colour-difference input). */
         mode: Int,
         ftx: Int,
         fty: Int,

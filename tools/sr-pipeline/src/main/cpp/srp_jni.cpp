@@ -2462,7 +2462,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeMergeSplatFra
   if (ctx == nullptr || flow_buffer == nullptr || r_buffer == nullptr ||
       spirv == nullptr || lr_w <= 0 || lr_h <= 0 || hr_w <= 0 || hr_h <= 0 ||
       cov_count <= 0 || r_count <= 0 || tile_size <= 0 || scale <= 0 ||
-      mode < 0 || mode > 3 || ftx <= 0 || fty <= 0) {
+      mode < 0 || mode > 15 || ftx <= 0 || fty <= 0) {
     return static_cast<jint>(srp::Status::kInitFailed);
   }
   const int64_t n_hr3 = static_cast<int64_t>(hr_w) * hr_h * 3;
@@ -2527,7 +2527,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeMergeSplatFra
         static_cast<uint32_t>(tile_size), scale,
         static_cast<uint32_t>(mode & 1), static_cast<uint32_t>(ftx),
         static_cast<uint32_t>(fty), module,
-        static_cast<uint32_t>((mode >> 1) & 1), chroma_scale > 0.0f ? chroma_scale : 1.0f);
+        static_cast<uint32_t>(mode >> 1), chroma_scale > 0.0f ? chroma_scale : 1.0f);
   }
   for (int i = 0; i < 2; ++i) {
     if (vks[i] != VK_NULL_HANDLE) vkDestroyBuffer(device, vks[i], nullptr);

@@ -38,6 +38,7 @@ internal data class Plan(
     val kernel: String = "wronski",
     val knScale: Float = KernelNet.DEFAULT_SIGMA_SCALE,
     val knCap: Float = KernelNet.DEFAULT_SIGMA_CAP,
+    val knFloor: Float? = null,
     /** Supplement S.3 high-frequency rejection (off = IPOL parity). */
     val s3: Boolean = true,
     /** Robustness strengths: [s1] where the flow varies (M > Mt), [s2] elsewhere (IPOL 2 / 12; paper S.2 12 / 2). */
@@ -66,6 +67,7 @@ private fun usage(): String = """
       --spv-dir DIR  directory with the compiled stage .spv modules (required for --backend vulkan)
       --lut PATH     noise LUT .npz (or "auto" to simulate it in-process); enables noise correction with its curves, validated
                      against the DNG noise profile (without it, noise correction is off)
+      --kn-floor F   reconstruction width floor override, > 0 and <= kn-cap
       --colour-diff auto|off|R,B
                      zipper correction (default: auto for Vulkan KernelNet with valid AsShotNeutral)
       --noise-ab a,b own noise model var = a*x + b (normalised raw) instead of the DNG/Camera2 NoiseProfile
@@ -105,6 +107,7 @@ internal fun parseArgs(args: Array<String>): Plan {
     var kernel = "wronski"
     var knScale = KernelNet.DEFAULT_SIGMA_SCALE
     var knCap = KernelNet.DEFAULT_SIGMA_CAP
+    var knFloor: Float? = null
     var s3 = true
     var s1 = 2f
     var s2 = 12f
@@ -175,6 +178,11 @@ internal fun parseArgs(args: Array<String>): Plan {
                 knCap = raw.toFloatOrNull()?.takeIf { it >= 0.25f } ?: fail("--kn-cap must be >= 0.25 (got \"$raw\")")
                 i++
             }
+            "--kn-floor" -> {
+                knFloor = args.getOrNull(++i)?.toFloatOrNull()?.takeIf { it.isFinite() && it > 0f }
+                    ?: fail("--kn-floor requires a positive finite value")
+                i++
+            }
             "--s3" -> {
                 s3 = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--s3 requires on|off") }
                 i++
@@ -234,6 +242,8 @@ internal fun parseArgs(args: Array<String>): Plan {
     if (b != "cpu" && b != "vulkan") fail("--backend must be cpu or vulkan (got \"$b\")")
     if (b == "vulkan" && spvDir.isNullOrBlank()) fail("--spv-dir DIR is required for --backend vulkan")
 
+    if (knFloor != null && knFloor > knCap) fail("--kn-floor must not exceed --kn-cap")
+
     return Plan(
         inputDir = Paths.get(inDir!!),
         outputDir = Paths.get(outDir!!),
@@ -249,6 +259,7 @@ internal fun parseArgs(args: Array<String>): Plan {
         kernel = kernel,
         knScale = knScale,
         knCap = knCap,
+        knFloor = knFloor,
         s3 = s3,
         s1 = s1,
         s2 = s2,
@@ -404,7 +415,7 @@ private fun merge(plan: Plan) {
                 sigmaScale = plan.knScale,
                 sigmaCap = plan.knCap,
                 // Same floor as the app: 0.90 at 1x, 0.70 at 2x (SrTuning).
-                sigmaFloor = com.rawlens.srpipeline.stages.SrTuning().knFloor(plan.scale),
+                sigmaFloor = plan.knFloor ?: minOf(plan.knCap, com.rawlens.srpipeline.stages.SrTuning().knFloor(plan.scale)),
                 fullReference = if (plan.crop == null) null else fullRef,
                 cropX = plan.crop?.x ?: 0,
                 cropY = plan.crop?.y ?: 0,

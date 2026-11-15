@@ -559,7 +559,7 @@ object VulkanPipeline {
         // 3b. Splat one frame's samples into the resident accumulators.
         // `rBuf` already holds the guide-grid robustness map (written
         // by robust-compute, or filled with ones): no host round-trip.
-        fun mergeFrame(frame: Array<FloatArray>, flow: Array<Array<FloatArray>>, rBuf: ByteBuffer) {
+        fun mergeFrame(frame: Array<FloatArray>, flow: Array<Array<FloatArray>>, rBuf: ByteBuffer, reference: Boolean = false) {
             val ftx = flow[0].size
             val fty = flow.size
             require(ftx == ftx0 && fty == fty0) { "flow grid changed mid-run" }
@@ -579,7 +579,13 @@ object VulkanPipeline {
                 // the ref merge) replaces the per-frame kernel chain; mode
                 // bit 1 makes the merge read it on the reference grid.
                 val covRes = if (knCovRes != 0L) knCovRes else frameKernelsGpuRes()
-                val mergeMode = if (knCovRes != 0L) 2 else 0
+                // Mode bits: 1 = grey, 2 = reference kernels, 4 = reference
+                // frame, 8 = detail reconstruction. Keep legacy Wronski mode.
+                // Separate green detail is safe when R/B are colour
+                // differences. Independent raw channels retain legacy widths.
+                val mergeMode = if (knCovRes != 0L)
+                    2 or (if (reference) 4 else 0) or (if (config.colourDiff != null) 8 else 0)
+                    else 0
                 // Z1: kernels and robustness above read the original frame;
                 // only the splat reads the colour-difference frame (ColourDiff).
                 config.colourDiff?.let { cd ->
@@ -651,7 +657,7 @@ object VulkanPipeline {
                 for (t in temps) SrpBridge.freeResident(handle, t)
             }
         }
-        mergeFrame(refBox!!, zeroFlow, packInto(onesR, mergeRDirect))
+        mergeFrame(refBox!!, zeroFlow, packInto(onesR, mergeRDirect), reference = true)
         refBox = null
         // Memory-tight: the ref phase's garbage (ref CFA, init pack
         // staging, pin upload scratch — ~200 MB at full-res) is dead

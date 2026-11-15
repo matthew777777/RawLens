@@ -12,6 +12,12 @@ class ColourDiffCliTest {
         assertArrayEquals(floatArrayOf(2.2f,1.6f),p.colourDiff,0f)
         assertEquals(2f,p.scale,0f)
     }
+    @Test fun `width floor override is consumed with its cap`() {
+        val p=plan("--kn-floor","0.55","--kn-cap","0.85","--scale","2")
+        assertEquals(.55f,p.knFloor!!,0f)
+        assertEquals(.85f,p.knCap,0f)
+        assertEquals(2f,p.scale,0f)
+    }
     @Test fun `automatic mode uses relative reference neutral and supports explicit opt out`() {
         val neutral=doubleArrayOf(.5,1.0,.625)
         assertArrayEquals(floatArrayOf(2f,1.6f),colourDiffGains(plan(),neutral),0f)

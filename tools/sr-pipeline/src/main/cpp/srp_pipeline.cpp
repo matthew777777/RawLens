@@ -867,7 +867,9 @@ Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
   push.mode = mode;
   push.pad[1] = ftx;
   push.pad[2] = hr_w;
-  push.pad[3] = ref_kernels;  // 1: covariances on the reference grid
+  push.pad[3] = ref_kernels & 1u;  // covariances on the reference grid
+  push.pad[4] = (ref_kernels >> 1u) & 1u;  // reference frame, retain fallback width
+  push.pad[5] = (ref_kernels >> 2u) & 1u;  // separate comparison-detail bandwidth
   push.alpha = chroma_scale;  // R/B kernel width factor (colour-difference merge)
   VkBuffer buffers[6] = {comp_buffer, flow_buffer, cov_buffer, r_buffer,
                          num_buffer, den_buffer};

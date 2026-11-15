@@ -8,7 +8,8 @@
 // HR pixel; accumulation into the resident float32 num/den pair uses one
 // invocation per HR pixel (atomic-free by construction, as on CPU where each
 // HR pixel is owned by exactly one prange task).
-// Push overlay: pad[1] = nTilesX, pad[2] = hrW, pad[3] = refKernels.
+// Push overlay: pad[1] = nTilesX, pad[2] = hrW, pad[3] = refKernels,
+// pad[4] = reference frame, pad[5] = detail reconstruction.
 // width/height = LR size; scale, tileSize, mode as usual.
 layout(local_size_x = 256) in;
 
@@ -155,7 +156,18 @@ void main() {
       float z = ixx * dx * dx + 2.0 * ixy * dx * dy + iyy * dy * dy;
       z = max(z, 0.0);
       if (bayer && ch != 1u) z *= chromaInv;
-      float w = exp(-0.5 * z);
+      // Detail reconstruction uses half the model bandwidth in OUTPUT
+      // pixels, at both 1x and SR. The unscaled raw-space bandwidth was
+      // an additional low-pass filter rather than a sampling footprint.
+      // The wider reference remains a stable fallback when comparisons are
+      // rejected; colour differences keep their established wider support.
+      bool detail = refKernels && p.pad[4] == 0u && p.pad[5] != 0u &&
+                    ch == 1u;
+      float area = detail ? 4.0*p.scale*p.scale : 1.0;
+      z *= area;
+      // Compensate the two-dimensional Gaussian area so narrowing does
+      // not silently reduce the comparison frame's total contribution.
+      float w = exp(-0.5 * z) * area;
       if (refKernels) {
         w *= (1.0 - smoothstep(2.5, 3.5, abs(dx))) *
              (1.0 - smoothstep(2.5, 3.5, abs(dy)));

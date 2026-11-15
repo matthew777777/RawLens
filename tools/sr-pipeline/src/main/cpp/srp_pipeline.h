@@ -460,6 +460,8 @@ Status SrpDivideGpu(Context* ctx, uint32_t count, VkBuffer num_buffer,
 // pad[1] = ntx, pad[2] = hr_w); fence-waited; context/buffers/module
 // stay caller-owned. Returns kOk / kInitFailed / kNoDevice /
 // kDispatchFailed.
+// ref_kernels bits: 0 reference-grid covariance, 1 reference frame,
+// 2 detail reconstruction (scale-aware comparison bandwidth). Legacy 0/1 unchanged.
 Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
                         uint32_t hr_w, uint32_t hr_h, VkBuffer comp_buffer,
                         VkBuffer flow_buffer, VkBuffer cov_buffer,
