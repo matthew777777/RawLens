@@ -4,11 +4,19 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
-## [2.3.42] - 2026-11-15
+## [2.3.43] - 2026-11-15
 
 Changes since the previous published release, **2.2.86**. See the
-[complete release notes and commit inventory](docs/releases/2.3.42.md).
+[complete release notes and commit inventory](docs/releases/2.3.43.md).
 
+- Default automatic LK-SR KernelNet denoising to on, retaining the off switch,
+  saved choices and low-noise bypass; raise 2× burst capacity to 30 frames.
+- Reduce KB-SR tile seams/boxy contours through shared continuous motion and
+  rejection; enable desktop colour-difference correction with valid white balance.
+- Recover silent autofocus and abandoned tap scans with bounded retries.
+- Expand sequential two-exposure RAW HDR to manual RAW lenses and rooted DCG14.
+- Preserve Basic highlights, describe saved tone mapping in JPEG metadata, fix
+  developed merge filenames/status labels, and rename Denoise settings to Details.
 - Rename merge engines to KB-SR / LK-SR; integrate LK-R Lite, keep reference-guide
   rejection enabled, prewarm Vulkan pipelines and refine hybrid chroma handling.
 - Add KB-SR Lab and 2× output controls; improve 2× detail/zipper handling and
@@ -25,9 +33,9 @@ Changes since the previous published release, **2.2.86**. See the
 - Refresh user/developer guides, GPU audits, parity evidence and research tools.
 - Correct PROGRAM AE startup regression expectations for adaptive profiles.
 
-Validation: 2,006 JVM tests (nine skipped; zero failures/errors) and native debug
-build passed. Earlier device evidence and experimental-mode limits are detailed
-in the release notes. APK signing/installation are separate release steps.
+Validation: 2,021 app JVM tests (9 skipped; zero failures/errors), native debug
+build, 266 SR tests (76 skipped) and six KernelNet Vulkan cases passed. Earlier
+device evidence and experimental-mode limits are detailed in the release notes. APK signing/installation are separate release steps.
 
 ## [2.2.46] - Historical development snapshot
 
