@@ -93,7 +93,13 @@ data class PipelineConfig(
      * without blurring luma: the zipper there is chroma aliasing.
      */
     val chromaScale: Float = 1f,
-)
+    /** Reduce luminance averaging uniformly to retain source grain; 0 disables (KernelNet colour differences). */
+    val grainRetention: Float = DEFAULT_GRAIN_RETENTION,
+) {
+    companion object {
+        const val DEFAULT_GRAIN_RETENTION = 1f
+    }
+}
 
 object EndToEnd {
 

@@ -231,6 +231,8 @@ object VulkanPipeline {
         scratch: SrpBridge.NativeFloats,
     ): ByteBuffer {
         require(handle != 0L) { "VulkanPipeline: null context handle" }
+        val greenFrameWeights = LumaFrameWeights.forBurst(comparisons.size+1, config.grainRetention)
+        var mergeFrameIndex = 0
         // Decode the reference first: its shape sizes all run scratch.
         // The box is nulled once the ref phase below is done, so the
         // 50 MB frame dies before the comparison loop on callers that
@@ -596,7 +598,8 @@ object VulkanPipeline {
                     packInto(mergeFlowFlat, mergeFlow), covRes, rBuf, numRes, denRes,
                     spirvs.mergeSplat, w, h, outW, outH, gw * gh * 4, gw * gh, tile,
                     config.scale, mergeMode, ftx, fty,
-                    if (config.colourDiff != null) config.chromaScale else 1f)) }
+                    if (config.colourDiff != null) config.chromaScale else 1f,
+                    if (knCovRes != 0L && config.colourDiff != null) greenFrameWeights[mergeFrameIndex++] else 1f)) }
             }
         }
 

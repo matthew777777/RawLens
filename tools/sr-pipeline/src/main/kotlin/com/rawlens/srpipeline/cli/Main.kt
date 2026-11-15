@@ -49,6 +49,7 @@ internal data class Plan(
     /** Explicit Z1 white-balance gains; null = automatic for Vulkan KernelNet. */
     val colourDiff: FloatArray? = null,
     val colourDiffDisabled: Boolean = false,
+    val grainRetention: Float = PipelineConfig.DEFAULT_GRAIN_RETENTION,
     /** Own noise model var = a x + b (normalised raw) replacing the DNG/Camera2 NoiseProfile; null = profile. */
     val noiseAb: DoubleArray? = null,
 )
@@ -70,6 +71,9 @@ private fun usage(): String = """
       --kn-floor F   reconstruction width floor override, > 0 and <= kn-cap
       --colour-diff auto|off|R,B
                      zipper correction (default: auto for Vulkan KernelNet with valid AsShotNeutral)
+      --grain-retention F
+                     uniform sensor-grain retention for Vulkan KernelNet colour differences, 0..1
+                     (default 1: six evenly spaced luma frames; 0: average all frames)
       --noise-ab a,b own noise model var = a*x + b (normalised raw) instead of the DNG/Camera2 NoiseProfile
       --heap-budget-mb N
                      peak JVM heap-pool gate in MB; fails the run when exceeded
@@ -114,6 +118,7 @@ internal fun parseArgs(args: Array<String>): Plan {
     var kernelGat = true
     var colourDiff: FloatArray? = null
     var colourDiffDisabled = false
+    var grainRetention = PipelineConfig.DEFAULT_GRAIN_RETENTION
     var noiseAb: DoubleArray? = null
 
     var i = 0
@@ -195,6 +200,11 @@ internal fun parseArgs(args: Array<String>): Plan {
                 s2 = args.getOrNull(++i)?.toFloatOrNull() ?: fail("--s2 requires a number")
                 i++
             }
+            "--grain-retention" -> {
+                grainRetention = args.getOrNull(++i)?.toFloatOrNull()?.takeIf { it.isFinite() && it in 0f..1f }
+                    ?: fail("--grain-retention requires a finite value in 0..1")
+                i++
+            }
             "--colour-diff" -> {
                 val value = args.getOrNull(++i) ?: fail("--colour-diff requires auto, off or wbR,wbB")
                 colourDiffDisabled = value == "off"
@@ -266,6 +276,7 @@ internal fun parseArgs(args: Array<String>): Plan {
         kernelGat = kernelGat,
         colourDiff = colourDiff,
         colourDiffDisabled = colourDiffDisabled,
+        grainRetention = grainRetention,
         noiseAb = noiseAb,
     )
 }
@@ -400,6 +411,7 @@ private fun merge(plan: Plan) {
         kernelPreprocessing = if (plan.kernelGat) "gat" else null,
         colourDiff = colourDiff,
         chromaScale = com.rawlens.srpipeline.stages.SrTuning().chromaScale(plan.scale),
+        grainRetention = plan.grainRetention,
         kernelAlpha = FloatArray(4) { alpha[it].toFloat() },
         kernelBeta = FloatArray(4) { beta[it].toFloat() },
         robustnessParams = RobustnessParams(noiseCorrection = noiseCorrection, s3 = plan.s3, s1 = plan.s1, s2 = plan.s2),

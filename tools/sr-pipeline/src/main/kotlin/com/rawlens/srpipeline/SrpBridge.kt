@@ -608,6 +608,8 @@ object SrpBridge {
         fty: Int,
         /** R/B kernel width factor (colour-difference merge); 1 = unchanged. */
         chromaScale: Float = 1f,
+        /** Uniform temporal luma weight; non-unit reference uses continuous green reconstruction. */
+        greenFrameWeight: Float = 1f,
     ): Int
 
     /**

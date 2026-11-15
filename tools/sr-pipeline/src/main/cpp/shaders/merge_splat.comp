@@ -186,7 +186,10 @@ void main() {
   // ring of a 7x7 gather, making entering/leaving weights continuously zero.
   // The original Jamy-L/Wronski gather stays 3x3.
   int radius = refKernels ? 3 : 1;
-  bool detailGreen = bayer && refKernels && p.pad[4] == 0u && p.pad[5] != 0u;
+  // A non-unit green weight opts the reference into the same continuous
+  // reconstruction as comparisons; this retains its original fine texture.
+  bool detailGreen = bayer && refKernels && p.pad[5] != 0u &&
+                     (p.pad[4] == 0u || p.beta != 1.0);
   for (int di = -radius; di <= radius; di++) {
     for (int dj = -radius; dj <= radius; dj++) {
       int j = center_j + dj;
@@ -209,12 +212,11 @@ void main() {
       acc[ch] += w * local_r;
     }
   }
-  if (detailGreen && local_r > 0.0) {
-    // The former 4*scale^2 narrowing undersampled the green checkerboard.
-    // Its mass and centroid oscillated with CFA phase, creating zipper
-    // edges even with perfect flow. Interpolate on that lattice and use
-    // the Gaussian's integrated green mass, independent of sample phase.
-    float weight = 3.14159265359*sqrt(max(det,0.0))*local_r;
+  if (detailGreen && local_r > 0.0 && p.beta > 0.0) {
+    // Identical frame weights at every image position: preserve source
+    // luminance grain in textured areas as well as flats. No spatial mask,
+    // narrower sampling kernel, or generated noise is involved.
+    float weight = 3.14159265359*sqrt(max(det,0.0))*local_r*p.beta;
     val.g = weight*interpolateGreen(vec2(mov_x,mov_y));
     acc.g = weight;
   }

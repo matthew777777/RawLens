@@ -7,6 +7,15 @@ class ColourDiffCliTest {
     private fun plan(vararg flags: String) = parseArgs(arrayOf("--in", "/tmp/burst", "--out", "/tmp/out",
         "--backend", "vulkan", "--spv-dir", "/tmp/spv", "--kernel", "kernelnet", *flags))
 
+    @Test fun `grain retention supports default and explicit opt out without consuming scale`() {
+        assertEquals(1f,plan().grainRetention,0f)
+        for(value in listOf(0f,.5f,1f)) {
+            val p=plan("--grain-retention",value.toString(),"--scale","2")
+            assertEquals(value,p.grainRetention,0f)
+            assertEquals(2f,p.scale,0f)
+        }
+    }
+
     @Test fun `actual parser consumes colour gains before the next argument`() {
         val p=plan("--colour-diff","2.2,1.6","--scale","2")
         assertArrayEquals(floatArrayOf(2.2f,1.6f),p.colourDiff,0f)

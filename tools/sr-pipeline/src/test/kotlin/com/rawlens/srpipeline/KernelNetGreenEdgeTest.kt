@@ -1,6 +1,7 @@
 package com.rawlens.srpipeline
 
 import org.junit.Assert.*
+import com.rawlens.srpipeline.stages.LumaFrameWeights
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
@@ -35,6 +36,7 @@ class KernelNetGreenEdgeTest {
                 }
                 return (sum/64).toFloat()
             }
+            val greenWeights=LumaFrameWeights.forBurst(12,1f)
             for(scale in listOf(1,2)) {
                 val ow=w*scale; val n=ow*height*scale*3
                 val num=SrpBridge.createResident(h,n.toLong())
@@ -50,7 +52,7 @@ class KernelNetGreenEdgeTest {
                             assertEquals(0,SrpBridge.nativeMergeSplatFrameRes(h,input,pack(flow),kernels,
                                 robustness.apply { rewind() },num,den,File(spv).readBytes(),w,height,
                                 ow,height*scale,covariance.size,w/2*(height/2),16,scale.toFloat(),
-                                if(frame==0) 14 else 10,nx,ny,1f))
+                                if(frame==0) 14 else 10,nx,ny,1f,greenWeights[frame]))
                         } finally { SrpBridge.freeResident(h,input) }
                     }
                     val nb=SrpBridge.directFloats(n); val db=SrpBridge.directFloats(n)
