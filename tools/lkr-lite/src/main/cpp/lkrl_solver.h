@@ -15,7 +15,7 @@ namespace lkrl {
 
 struct LiteParams {
   int s = 2;
-  // Empty = by scale: 1x GGJJGJJJ; 2x GGJJJGJJJJJJJ (10 merge steps: grain / detail of LK-R's 24 data
+  // Empty = by scale: 1x GGGJJJ; 2x GGGJJJJJJJJ (8 merge steps: grain / detail of LK-R's 24 data
   // steps at 2x). 3 motion steps match LK-R better than 5 (car 1x 59.93 -> 60.20 dB, worst block
   // 36.7 -> 38.4; IMG_20210228_133623 2x 52.31 -> 52.46) and save 2 jac / jacblk passes + round trips.
   std::string schedule;   // G = motion step + weight refresh, J = merge step; leading G align to the reference-only image
@@ -47,7 +47,7 @@ struct LiteParams {
   bool temporal_dark_wide = true;   // 0: guide replaces the residual weight (LK-R); 1: min(guide, residual)
   int local_block = 16;               // must be 16 (jacblk workgroup)
   float local_lambda = 0.1f;   // before the noise scaling (auto_local_lambda)
-  float local_floor = 0.02f;
+  float local_floor = 0.02f;   // upper bound; actual Hessian floor follows block noise energy
   bool auto_local_lambda = true;   // lambda * max(1, (sigma(0.18) / 0.0025)^2), cap 5 (LK-R)
   // Motion-step sample weights: 0 = robust weights (computed with the CURRENT, possibly wrong,
   // geometry: rejects exactly the samples that would fix it), 1 = validity only.

@@ -505,7 +505,9 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   if (guide) gpu_->dispatch(gstats_, sGStats, &q, gqx, gqy, uint32_t(K));
   weights_stale = true;
   // 2026-11-14 (hybrid merge): 1x 5 -> 3 merge steps (real detail 0.99-1.01), 2x 10 -> 8 (finest band 0.94).
-  std::string sched = !prm.schedule.empty() ? prm.schedule : (s == 1 ? "GGJJGJ" : "GGJJJJGJJJJ");
+  // Finish geometry against the reference-only start before the average or
+  // reconstruction can blur it. A late G fitted the intermediate merge instead.
+  std::string sched = !prm.schedule.empty() ? prm.schedule : (s == 1 ? "GGGJJJ" : "GGGJJJJJJJJ");
   // Hybrid chroma: the shift-and-add average after the first motion steps (its chroma, the fit's luma).
   if (cavg && sched.find('A') == std::string::npos) {
     const size_t at = sched.find('J');
@@ -733,7 +735,11 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       S.ms_host += now_ms() - th;
       gpu_->begin();
       gpu_->dispatch(jacblk_, sBlk, &qg, uint32_t(nbx), uint32_t(nby), uint32_t(K - 1));
-      Push m = q; m.robk = lam; m.tau = prm.local_floor;
+      // jacblk accumulates unnormalised squared camera-RGB gradients. Its
+      // Hessian floor must have the same signal-squared units: a fixed .02
+      // overwhelms dark wall texture and pins real subpixel misalignment.
+      const float noise_floor = float(LB * LB) * std::max(prm.noise_a * 0.18f + prm.noise_b, 1e-12f);
+      Push m = q; m.robk = lam; m.tau = std::min(prm.local_floor, noise_floor);
       gpu_->dispatch(solveblk_, sSolveBlk, &m, div_up(uint32_t(K * nb), 64));
       gpu_->copy(dtmp, db, size_t(K) * nb * 8);
       weights_stale = true;

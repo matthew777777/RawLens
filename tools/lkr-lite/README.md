@@ -2,6 +2,13 @@
 
 ### Foliage / wall correction (2026-11-15)
 
+Local motion's Hessian floor now follows block noise energy (capped by the
+configured floor), instead of applying a fixed .02 in raw-signal-squared
+units to dark texture. All three motion steps precede merging, so the final
+step cannot fit a blurred intermediate reconstruction. `lkrl_motion_check`
+tests known local motion at two brightness levels; the previous fixed floor
+fails its dark-texture case.
+
 Rejection weights now refresh after geometry changes. Temporal texture tolerance
 retains its curvature-based model-error allowance: a noise-only cap was rejected
 after it falsely rejected static 2x foliage and rocks. Hybrid fit-chroma smoothing uses the aligned
@@ -33,7 +40,7 @@ is shared, as LK-R and MFSR do.
 
 ## Algorithm
 
-Per tile, current default schedules are `GGJJGJ` at 1× and `GGJJJJGJJJJ` at 2×
+Per tile, current default schedules are `GGGJJJ` at 1× and `GGGJJJJJJJJ` at 2×
 (G = motion step, J = merge step). The following describes the original solver;
 the hybrid/SNR changes recorded below supersede its original defaults:
 

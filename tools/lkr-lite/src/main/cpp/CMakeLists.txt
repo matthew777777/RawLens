@@ -71,6 +71,8 @@ set_target_properties(lkrl_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(lkrl_core PUBLIC srpipeline ${LKRL_VULKAN_LIB})
 
 if(NOT ANDROID)
+  add_executable(lkrl_motion_check "${LKRL_DIR}/../../../host/lkrl_motion_check.cpp")
+  target_link_libraries(lkrl_motion_check PRIVATE lkrl_core)
   add_executable(lkrl_denoise_check "${LKRL_DIR}/../../../host/lkrl_denoise_check.cpp")
   target_link_libraries(lkrl_denoise_check PRIVATE lkrl_core)
   add_executable(lkrl_kernelnet_check "${LKRL_DIR}/../../../host/lkrl_kernelnet_check.cpp")
