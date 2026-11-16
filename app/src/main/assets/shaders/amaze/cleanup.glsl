@@ -50,9 +50,12 @@ highp vec3 chroma_cleanup(highp vec3 c) {
         // Local green contrast over a 5x5 footprint (9 taps, stride 2).
         highp float hi = 0.0;
         highp float lo = 1e30;
+        highp vec3 background = vec3(0.0);
         for (int y = -2; y <= 2; y += 2) {
             for (int x = -2; x <= 2; x += 2) {
-                highp float g = fetch_bal(ivec2(x, y)).g;
+                highp vec3 sampleRgb = fetch_bal(ivec2(x, y));
+                highp float g = sampleRgb.g;
+                if (g > hi) background = sampleRgb;
                 hi = max(hi, g);
                 lo = min(lo, g);
             }
@@ -64,7 +67,29 @@ highp vec3 chroma_cleanup(highp vec3 c) {
         highp float edge = smoothstep(0.65, 0.85, (hi - lo) / max(hi, 1e-6));
         // Violet/magenta hue: B above G, R not far below G.
         highp float violet = smoothstep(-0.6, -0.1, d.x / d.y);
-        highp float k = clamp(u_defringe, 0.0, 1.0) * edge * violet;
+        // Green contrast alone also selects real magenta petals against leaves.
+        // Fringes require a bright neutral/blue background, not green foliage,
+        // and belong to its dark side. Never strip blue from the sky itself.
+        highp float bgGreen = max(background.g, 1e-6);
+        highp float sky = smoothstep(0.65, 0.90, background.b / bgGreen)
+            * (1.0 - smoothstep(1.2, 1.8, background.r / bgGreen));
+        highp float darkSide = 1.0 - smoothstep(0.5, 0.85, c.g / max(hi, 1e-6));
+        // A fringe is a thin chroma ridge. A coherent purple surface (petal,
+        // fabric, paint) has neighboring pixels with the same chroma direction.
+        // Preserve those surfaces even when they are silhouetted against sky.
+        highp float support = 0.0;
+        if (edge * sky * darkSide > 0.0) {
+            highp float magnitude = max(length(d), 1e-6);
+            for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
+                highp vec3 neighbor = fetch_bal(ivec2(x, y));
+                highp vec2 diff = neighbor.rb - neighbor.g;
+                highp float size = length(diff);
+                if (size > magnitude * 0.4 && dot(diff, d) > 0.9 * size * magnitude)
+                    support += 1.0;
+            }
+        }
+        highp float narrow = 1.0 - smoothstep(3.0, 5.0, support);
+        highp float k = clamp(u_defringe, 0.0, 1.0) * edge * violet * sky * darkSide * narrow;
         d = mix(d, min(d, vec2(0.0)), k);
     }
     return max(vec3(c.g + d.x, c.g, c.g + d.y), vec3(0.0));

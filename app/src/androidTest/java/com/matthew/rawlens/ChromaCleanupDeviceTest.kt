@@ -136,6 +136,29 @@ class ChromaCleanupDeviceTest {
         } finally { processor.close() }
     }
 
+    @Test fun defringePreservesMagentaPetalsAgainstGreenFoliage() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val processor = Gles31AmazeProcessor(context)
+        try {
+            for (background in listOf(floatArrayOf(.08f,.5f,.04f), floatArrayOf(.3f,.5f,.8f),floatArrayOf(.5f,.5f,.5f))) {
+            val input = ByteBuffer.allocateDirect(width * width * 12).order(ByteOrder.nativeOrder())
+            for (y in 0 until width) for (x in 0 until width) {
+                val color = if (x < width / 2) floatArrayOf(.45f,.01f,.35f) else background
+                color.forEach(input::putFloat)
+            }
+            fun render(strength: Float): FloatArray {
+                processor.chromaCleanup = ChromaCleanup(false, strength)
+                input.rewind()
+                return processor.processMfsrRgb(input, width, width, identity,
+                    floatArrayOf(1f, 1f, 1f), true) { read(it.textureId) }
+            }
+            val before = render(0f); val after = render(1f)
+            for (p in 0 until width * width) for (c in 0..2)
+                assertEquals("Petal/leaf pixel $p channel $c",before[p*4+c],after[p*4+c],.001f)
+            }
+        } finally { processor.close() }
+    }
+
     @Test fun offlineQualitySettingsProduceActualJpegAndJxl() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = context.getSharedPreferences("offline-quality-regression", 0)
