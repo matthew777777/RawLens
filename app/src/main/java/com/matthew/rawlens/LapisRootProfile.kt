@@ -17,10 +17,12 @@ internal object LapisRootProfile {
     const val SMH_SHA256 = "ec0224cf5054e8ed100d024cbbb6150cd64944a0e26b9377586f0e5971e639a1"
     const val SMH_CUSTOM_SHA256 = "c1eecbf9ff25c137b59eb48a62cef8bef15c22b9006e910fc1d118fdaa654fd2"
     const val SENSOR_ZOOM_4X = "sensor_zoom_4x"
+    const val DSG_2X = "2xdsg14"
     const val DCG_ENABLED = "dcg14"
     const val HEXADECA_200 = "hexadeca200"
 
     enum class Mode(val argument: String, val label: String) {
+        CROP_2X_DSG("2xdsg14", "2× DSG · Auto AE"),
         NORMAL("normal", "12.5 MP"), FULL("50mp", "50 MP RAW"), CROP_2X("2x", "2× sensor RAW"), CROP_4X("4x", "4× sensor RAW"), DCG14("dcg14", "DCG14 · Auto AE"),
         /** One-shot: 200 MP block-CFA readout, remosaiced to 50 MP Bayer by the root worker. */
         HEXADECA_200("200mp", "200→50 MP RAW")
@@ -37,6 +39,7 @@ internal object LapisRootProfile {
         if (!enabled(context)) return Mode.NORMAL
         val p = preferences(context)
         return if (p.getBoolean(HEXADECA_200, false)) Mode.HEXADECA_200
+        else if (p.getBoolean(DSG_2X, false)) Mode.CROP_2X_DSG
         else if (p.getBoolean(DCG_ENABLED, false)) Mode.DCG14
         else if (p.getBoolean(SENSOR_ZOOM_4X, false)) Mode.CROP_4X
         else if (p.getBoolean(SENSOR_ZOOM, false)) Mode.CROP_2X
@@ -45,7 +48,7 @@ internal object LapisRootProfile {
 
     fun select(context:Context,mode:Mode) {
         preferences(context).edit().putBoolean(FULL_RESOLUTION,mode==Mode.FULL)
-            .putBoolean(SENSOR_ZOOM_4X,mode==Mode.CROP_4X).putBoolean(SENSOR_ZOOM,mode==Mode.CROP_2X).putBoolean(DCG_ENABLED,mode==Mode.DCG14).putBoolean(HEXADECA_200,mode==Mode.HEXADECA_200).apply()
+            .putBoolean(DSG_2X,mode==Mode.CROP_2X_DSG).putBoolean(SENSOR_ZOOM_4X,mode==Mode.CROP_4X).putBoolean(SENSOR_ZOOM,mode==Mode.CROP_2X).putBoolean(DCG_ENABLED,mode==Mode.DCG14).putBoolean(HEXADECA_200,mode==Mode.HEXADECA_200).apply()
     }
 
     fun fromArgument(value:String):Mode? = Mode.entries.firstOrNull { it.argument==value }

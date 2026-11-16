@@ -1,3 +1,10 @@
+#ifdef VIDEO_DSG
+#define RAW_WIDTH 4080
+#define RAW_HEIGHT 2304
+#else
+#define RAW_WIDTH 8160
+#define RAW_HEIGHT 6120
+#endif
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Firmware-specific wrapper; contains no vendor library payload.
 .text
@@ -37,13 +44,13 @@ str x8,[sp,#112]
 add x0,sp,#48
 add x1,sp,#112
 bl push_int
-mov w8,#8160
+mov w8,#RAW_WIDTH
 movk w8,#0,lsl #16
 str x8,[sp,#112]
 add x0,sp,#48
 add x1,sp,#112
 bl push_int
-mov w8,#6120
+mov w8,#RAW_HEIGHT
 movk w8,#0,lsl #16
 str x8,[sp,#112]
 add x0,sp,#48
@@ -74,13 +81,13 @@ str x8,[sp,#112]
 add x0,sp,#48
 add x1,sp,#112
 bl push_long
-mov w8,#8160
+mov w8,#RAW_WIDTH
 movk w8,#0,lsl #16
 str x8,[sp,#112]
 add x0,sp,#48
 add x1,sp,#112
 bl push_long
-mov w8,#6120
+mov w8,#RAW_HEIGHT
 movk w8,#0,lsl #16
 str x8,[sp,#112]
 add x0,sp,#48
@@ -111,13 +118,13 @@ str x8,[sp,#112]
 add x0,sp,#48
 add x1,sp,#112
 bl push_long
-mov w8,#8160
+mov w8,#RAW_WIDTH
 movk w8,#0,lsl #16
 str x8,[sp,#112]
 add x0,sp,#48
 add x1,sp,#112
 bl push_long
-mov w8,#6120
+mov w8,#RAW_HEIGHT
 movk w8,#0,lsl #16
 str x8,[sp,#112]
 add x0,sp,#48

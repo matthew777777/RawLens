@@ -26,8 +26,8 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
     private val process: Process, private val job: File) : AutoCloseable {
     class Spec(val mode: LapisRootProfile.Mode) {
         val width = if (mode == LapisRootProfile.Mode.FULL) 8160 else 4080
-        val height = if (mode == LapisRootProfile.Mode.FULL) 6120 else 3060
-        val dcg: Boolean get() = mode == LapisRootProfile.Mode.DCG14
+        val height = if (mode == LapisRootProfile.Mode.FULL) 6120 else if(mode == LapisRootProfile.Mode.CROP_2X_DSG) 2304 else 3060
+        val dcg: Boolean get() = mode == LapisRootProfile.Mode.DCG14 || mode == LapisRootProfile.Mode.CROP_2X_DSG
         val fps: Int get() = if(dcg) 30 else 10
         fun applyRequest(builder: CaptureRequest.Builder) {
             builder.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
@@ -48,7 +48,7 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
             builder.set(CaptureRequest.Key("com.mediatek.hdrfeature.hdrMode",Int::class.javaObjectType),3)
             builder.set(CaptureRequest.Key("com.mediatek.hdrfeature.SessionParamhdrMode",Int::class.javaObjectType),3)
             builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.configSensorScenarios",IntArray::class.java),intArrayOf(0,1,12))
-            builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.forceSensorMode",IntArray::class.java),intArrayOf(0,9))
+            builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.forceSensorMode",IntArray::class.java),intArrayOf(0,if(mode == LapisRootProfile.Mode.CROP_2X_DSG) 13 else 9))
             builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.sensorScenario",IntArray::class.java),intArrayOf(0,12))
         }
         @Volatile var hardwareVerified = false

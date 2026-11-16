@@ -26,6 +26,7 @@ class LapisNativeSessionInstrumentedTest {
     @Test fun fiftyMpNativePipeline() = run(LapisRootProfile.Mode.FULL)
     @Test fun sensor4xNativePipeline() = run(LapisRootProfile.Mode.CROP_4X)
     @Test fun sensor2xNativePipeline() = run(LapisRootProfile.Mode.CROP_2X)
+    @Test fun twoXDsgNativePipeline() = run(LapisRootProfile.Mode.CROP_2X_DSG)
     @Test fun dcg14NativePipeline() = run(LapisRootProfile.Mode.DCG14)
 
     @Test fun killedWorkerRestoresSensor() {
@@ -43,18 +44,21 @@ class LapisNativeSessionInstrumentedTest {
         File(context.filesDir,"lapis-killed-worker-recovered.txt").writeText("Verified watchdog restoration after SIGKILL")
     }
 
-    @Test fun dcg14RawVideoContainer() {
+    @Test fun dcg14RawVideoContainer() = rawVideoContainer(LapisRootProfile.Mode.DCG14)
+    @Test fun twoXDsgRawVideoContainer() = rawVideoContainer(LapisRootProfile.Mode.CROP_2X_DSG)
+
+    private fun rawVideoContainer(mode: LapisRootProfile.Mode) {
         assumeTrue(InstrumentationRegistry.getArguments().getString("lapisNativeSession")=="true")
         val context=InstrumentationRegistry.getInstrumentation().targetContext
         val key=java.util.UUID.randomUUID().toString()
         val prepared=CompletableFuture<LapisRootSession.Spec?>()
-        LapisRootSessionControl.prepare(context,key,LapisRootProfile.Mode.DCG14) { result ->
+        LapisRootSessionControl.prepare(context,key,mode) { result ->
             result.fold({prepared.complete(it)},{prepared.completeExceptionally(it)})
         }
         val spec=requireNotNull(prepared.get(60,TimeUnit.SECONDS))
         val lease=LapisRecordingLease(key,spec)
-        val output=File(context.cacheDir,"lapis-dcg14-acceptance.craw")
-        val recorder=RawVideoRecorder(context.getSystemService(CameraManager::class.java),"0",android.util.Size(4080,3060),context,lease)
+        val output=File(context.cacheDir,"lapis-${mode.argument}-acceptance.craw")
+        val recorder=RawVideoRecorder(context.getSystemService(CameraManager::class.java),"0",android.util.Size(spec.width,spec.height),context,lease)
         recorder.audioEnabled=false
         recorder.compressionCodec=CrawWriter.CODEC_FAST
         var stopped=false
@@ -68,10 +72,10 @@ class LapisNativeSessionInstrumentedTest {
             assertEquals(16383,JSONObject(info.containerJson).getInt("whiteLevel"))
             val handle=CrawReader.open(output.path)
             try {
-                val data=java.nio.ByteBuffer.allocateDirect(4080*3060*2).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                assertEquals(4080 to 3060,CrawReader.decodeFrame(handle,info.timestamps[info.timestamps.size/2],data))
+                val data=java.nio.ByteBuffer.allocateDirect(spec.width*spec.height*2).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                assertEquals(spec.width to spec.height,CrawReader.decodeFrame(handle,info.timestamps[info.timestamps.size/2],data))
                 var maximum=0
-                for(i in 0 until 4080*3060 step 127)maximum=maxOf(maximum,data.getShort(i*2).toInt() and 65535)
+                for(i in 0 until spec.width*spec.height step 127)maximum=maxOf(maximum,data.getShort(i*2).toInt() and 65535)
                 assertTrue("CRAW truncated DCG to ten bits: $maximum",maximum>1023)
                 assertTrue(maximum<=16383)
             }finally { CrawReader.closeReader(handle) }
@@ -139,7 +143,7 @@ class LapisNativeSessionInstrumentedTest {
         var device:CameraDevice?=null;var session:CameraCaptureSession?=null;var reader:ImageReader?=null
         val ring=RawZslBuffer(3)
         val images=HashMap<Long,Image>();val results=HashMap<Long,TotalCaptureResult>()
-        val warm=CountDownLatch(if(mode==LapisRootProfile.Mode.DCG14)90 else 8);val burst=CountDownLatch(6)
+        val warm=CountDownLatch(if(lease.spec.dcg)90 else 8);val burst=CountDownLatch(6)
         val errors=CompletableFuture<Throwable>()
         val burstFrames=mutableListOf<BufferedRawFrame>()
         val timestamps=mutableListOf<Long>()

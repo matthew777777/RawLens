@@ -8,7 +8,7 @@ import android.view.View
 import android.widget.TextView
 
 internal fun MainActivity.redmiRootMode(): LapisRootProfile.Mode =
-    if (controllerIfReady?.activeCameraId() == "0" && (!isVideoMode || LapisRootProfile.mode(this)==LapisRootProfile.Mode.DCG14)) LapisRootProfile.mode(this)
+    if (controllerIfReady?.activeCameraId() == "0" && (!isVideoMode || LapisRootProfile.mode(this) in setOf(LapisRootProfile.Mode.DCG14,LapisRootProfile.Mode.CROP_2X_DSG))) LapisRootProfile.mode(this)
     else LapisRootProfile.Mode.NORMAL
 
 /**

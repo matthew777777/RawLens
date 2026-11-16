@@ -671,7 +671,7 @@ class RawCameraController(
             val requested = LapisRootProfile.mode(context)
             // 200→50 MP is captured one-shot by the root worker; the preview uses the stock mode.
             val desired = if (intended == "0" && requested != LapisRootProfile.Mode.HEXADECA_200 &&
-                (photoControlsBeforeVideo == null || requested==LapisRootProfile.Mode.DCG14))
+                (photoControlsBeforeVideo == null || requested==LapisRootProfile.Mode.DCG14 || requested==LapisRootProfile.Mode.CROP_2X_DSG))
                 requested else LapisRootProfile.Mode.NORMAL
             if (lapisPreparedMode != desired) {
                 opening = true
@@ -4847,6 +4847,8 @@ class RawCameraController(
             options.add(at+3,LensOption("0","${mainLabel(4f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_4X,
                 "4x","Main camera, 4× in-sensor crop RAW"))
         }
+        if(extended) options.add(LensOption("0","${mainLabel(2f)} · DSG",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X_DSG,
+            "2xdsg14","2× sensor crop, DSG RAW14, 4080 × 2304, automatic exposure, 30 fps"))
         if(extended) options.add(LensOption("0","${mainLabel()} · DCG14",selectedCameraId=="0" && mode==LapisRootProfile.Mode.DCG14,
             "dcg14","DCG/DSG 14-bit RAW, automatic exposure, 30 fps sensor mode"))
         if(photoControlsBeforeVideo!=null) options.removeAll { it.readout=="50mp" || it.readout=="200mp" || it.readout=="2x" || it.readout=="4x" }
