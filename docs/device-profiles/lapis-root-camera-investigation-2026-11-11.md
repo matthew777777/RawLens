@@ -548,3 +548,21 @@ Added headless MP4 capture tests for2×DSG at720p,1080p,4K; tests inspect video 
 User DNG IMG_20261116_131028_304.dng metadata checked:4080x2304,GBRG,16-bit storage,white15424,black1024,four GainMap opcodes. User v7.1 report finds all four CFA planes on a strict4DN lattice, not8DN: about11.913 bits across the nominal stored range. Therefore this sample demonstrates roughly12-bit stored-code granularity in a14-bit nominal range, NOT full14-bit code precision. It does not establish physicalADC depth, noise-limited precision or dynamic range. Heuristic11.2931 score is not measured sensor bit depth. Do not call this sample true14-bit precision merely because its format isRAW14.
 
 Follow-up validation: Github release and isolated device-test APK builds succeeded; EncodedVideoLadderTest and VideoCameraRouteTest passed. MP4 device tests and installation pending USB reconnection.
+
+### 2026-11-16: 60 fps mode4 investigated; delivery gaps remain
+
+User requested60fps investigation. Phone reconnected; ADB UID0/KernelSU, Enforcing, no production root lease. Matching source mode4/slim declares4080×2304,full-width16:9,binned from16320×12288,max_framerate600,CSI datatype0x2b RAW10. Clock1760000000/(7296*4020)=60.00698fps. This is ordinary single-exposure RAW10, not DCG/DSG or RAW14.
+
+Added bounded research/test-raw60-recover.sh, preserving sensor/HDR/startup/raw-policy props, original core+metadata hashguards, EXIT rollback, and actual DCG9 capture before and after each trial. Exposes4080×2304 using the previously tested owned video metadata wrapper; no helper assertion bypass or permanent vendor write. RootRawProbe gains configurable reader queue and pixel format, packedRAW10 sample inspection, optional640×480YUVpreview, configurable bounded image timeout, frame-duration and interval/steady-cadence diagnostics. Defaults remain the earlier probe behavior.
+
+Measured actual driver0x1004300e,4080×2304 in every successful trial:
+- RAW16 container,one reader buffer,240frames:46.1146fps.
+- RAW16,eight buffers,240frames:53.1171fps; median16.665ms,max33.330ms.
+- Eight buffers,explicitpureRAW controls/NR0/edge0,600frames:46.3197fps. No improvement; property requests alone are not fresh kernel routing proof.
+- Eight buffers plus640×480YUVpreview,600RAWframes:58.9247fps; median16.665ms,max49.994ms.
+- Same streaming shape,1200frames:55.9902fps overall,55.8390fps after60-frame warmup; max66.660ms. This disproves startup-only loss explanation. Initial long attempt hit old15s diagnostic timeout; DCG recovered; corrected to bounded30s image wait and35s outer timeout for rerun.
+- PackedRAW10 pluspreview,eight buffers,600frames:58.1619fps overall,58.0676fps afterwarmup. Payload11796480bytes,rowStride5120,pixelStride0,versus18800640bytes RAW16. Owned metadata wrapper variant advertisesformat37 at4080×2304, applied to exact-hash original metastore copy; no core-format patch duringmode4. RAW10 inspection decodes each4pixels/5bytes group. Resultwhite1023/black64. Packed transfer works, but alone does not remove delivery gaps.
+
+Mode4 result frameDuration16675000ns and median timestamp interval16.665ms establish nominal60fps sensor cadence. Sensor60fps is NOT equivalent to continuous60 delivered or encoded frames. No app60fps option added; no CRAW/HEVC60fps acceptance claimed. Next bottleneck investigation should examine capture/streaming scheduling and request/buffer stalls; both buffers and presence ofpreview materially changed delivery, but this does not uniquely identify the cause. Optical quality remains untested.
+
+All completed experiments, including failed diagnostic timeout, restored original libraries/properties and passed a freshDCG9 stream afterward. Final packed trial status0/recovery0, metastore95eded2e…97dc/core28741847…8cc,no production lease, sensor override blank,Enforcing; no reboot. Evidence .local/lapis-raw60-2026-11-16 contains RAW samples,HAL logs and recovery reports; packed wrapper source/bin/build provenance saved there. User-facing camera mode remains unchanged.

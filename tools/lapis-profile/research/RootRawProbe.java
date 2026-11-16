@@ -104,7 +104,7 @@ public class RootRawProbe {
     CameraManager.class.getMethod("openCameraImpl",String.class,CameraDevice.StateCallback.class,java.util.concurrent.Executor.class,int.class,int.class,boolean.class).invoke(manager,id,callback,(java.util.concurrent.Executor)(r->handler.post(r)),0,0,false);
     CameraDevice device=waitFor(opened);
     int width=integer("width",4080),height=integer("height",3060);
-    ImageReader reader=ImageReader.newInstance(width,height,ImageFormat.RAW_SENSOR,1);
+    ImageReader reader=ImageReader.newInstance(width,height,integer("format",ImageFormat.RAW_SENSOR),integer("buffers",1));
     CompletableFuture<String> imageReady=new CompletableFuture<>();
     reader.setOnImageAvailableListener(r->{try(Image image=r.acquireNextImage()){
       if(image==null || imageReady.isDone())return;
@@ -145,23 +145,33 @@ public class RootRawProbe {
         }
       }
       int min=65535,max=0,bitOr=0;long sum=0,n=0;
-      for(int y=height/4;y<height*3/4;y+=16)for(int x=width/4;x<width*3/4;x+=16){int v=data.getShort(y*plane.getRowStride()+x*plane.getPixelStride())&65535;min=Math.min(min,v);max=Math.max(max,v);bitOr|=v;sum+=v;n++;}
+      for(int y=height/4;y<height*3/4;y+=16)for(int x=width/4;x<width*3/4;x+=16){int v;
+        if(image.getFormat()==ImageFormat.RAW10) {
+          int at=y*plane.getRowStride()+(x/4)*5;
+          v=((data.get(at+x%4)&255)<<2)|((data.get(at+4)>>>((x%4)*2))&3);
+        } else v=data.getShort(y*plane.getRowStride()+x*plane.getPixelStride())&65535;min=Math.min(min,v);max=Math.max(max,v);bitOr|=v;sum+=v;n++;}
       imageReady.complete("IMAGE "+image.getWidth()+"x"+image.getHeight()+" stride="+plane.getRowStride()+" pixelStride="+plane.getPixelStride()+" bytes="+data.remaining()+" min="+min+" max="+max+" bitOr=0x"+Integer.toHexString(bitOr)+" mean="+(sum/(double)n)+" file="+output);
     }catch(Exception e){imageReady.completeExceptionally(e);}},handler);
     CompletableFuture<CameraCaptureSession> configured=new CompletableFuture<>();
     List<OutputConfiguration> outputs=new ArrayList<>();outputs.add(new OutputConfiguration(reader.getSurface()));
     ImageReader jpeg=opt.containsKey("jpeg")?ImageReader.newInstance(width,height,ImageFormat.JPEG,1):null;
     if(jpeg!=null)outputs.add(new OutputConfiguration(jpeg.getSurface()));
+    ImageReader preview=opt.containsKey("preview")?ImageReader.newInstance(640,480,ImageFormat.YUV_420_888,2):null;
+    if(preview!=null) {
+      preview.setOnImageAvailableListener(r->{try(Image image=r.acquireNextImage()){}},handler);
+      outputs.add(new OutputConfiguration(preview.getSurface()));
+    }
     SessionConfiguration config=new SessionConfiguration(integer("sessionMode",0),outputs,r->handler.post(r),new CameraCaptureSession.StateCallback(){public void onConfigured(CameraCaptureSession s){configured.complete(s);}public void onConfigureFailed(CameraCaptureSession s){configured.completeExceptionally(new Exception("configure failed"));}});
     CaptureRequest.Builder params=device.createCaptureRequest(integer("template",CameraDevice.TEMPLATE_STILL_CAPTURE));settings(params);config.setSessionParameters(params.build());
     device.createCaptureSession(config);CameraCaptureSession session=waitFor(configured);log("CONFIGURED");
     CaptureRequest.Builder request=device.createCaptureRequest(integer("template",CameraDevice.TEMPLATE_STILL_CAPTURE));settings(request);request.addTarget(reader.getSurface());
+    if(preview!=null)request.addTarget(preview.getSurface());
     CompletableFuture<TotalCaptureResult> result=new CompletableFuture<>();
     java.lang.reflect.Method submit=CameraCaptureSession.class.getMethod(opt.containsKey("repeat")?"setRepeatingRequest":"capture",CaptureRequest.class,CameraCaptureSession.CaptureCallback.class,Handler.class);
     liveSession=session;liveRequest=request;
     liveCallback=new CameraCaptureSession.CaptureCallback(){public void onCaptureCompleted(CameraCaptureSession s,CaptureRequest q,TotalCaptureResult r){Long ts=r.get(CaptureResult.SENSOR_TIMESTAMP);if(ts!=null)frameResults.put(ts,r);result.complete(r);}public void onCaptureFailed(CameraCaptureSession s,CaptureRequest q,CaptureFailure f){result.completeExceptionally(new Exception("capture failed "+f.getReason()));}};
     submit.invoke(session,request.build(),liveCallback,handler);
-    log(waitFor(imageReady));
+    log(imageReady.get(integer("imageTimeout",15),TimeUnit.SECONDS));
     long deadline=SystemClock.elapsedRealtime()+5000;
     while(!frameResults.containsKey(selectedTimestamp) && SystemClock.elapsedRealtime()<deadline)Thread.sleep(10);
     TotalCaptureResult metadata=frameResults.get(selectedTimestamp);
@@ -197,7 +207,15 @@ public class RootRawProbe {
     if(frameTimes.size()>1) {
       long first=frameTimes.get(0),last=frameTimes.get(frameTimes.size()-1);
       log("CADENCE frames="+frameTimes.size()+" first="+first+" last="+last+" fps="+((frameTimes.size()-1)*1e9/(last-first)));
+      int warmup=integer("warmup",0);
+      if(warmup>0 && frameTimes.size()>warmup+1)
+        log("CADENCE_STEADY warmup="+warmup+" frames="+(frameTimes.size()-warmup)+" fps="+((frameTimes.size()-warmup-1)*1e9/(last-frameTimes.get(warmup))));
+      long[] gaps=new long[frameTimes.size()-1];
+      for(int i=1;i<frameTimes.size();i++)gaps[i-1]=frameTimes.get(i)-frameTimes.get(i-1);
+      Arrays.sort(gaps);
+      log("CADENCE_GAPS min="+gaps[0]+" median="+gaps[gaps.length/2]+" max="+gaps[gaps.length-1]);
     }
+    log("FRAME_DURATION ns="+metadata.get(CaptureResult.SENSOR_FRAME_DURATION));
     log("RESULT aeMode="+metadata.get(CaptureResult.CONTROL_AE_MODE)+" aeLock="+metadata.get(CaptureResult.CONTROL_AE_LOCK)+" timestamp="+metadata.get(CaptureResult.SENSOR_TIMESTAMP)+" iso="+metadata.get(CaptureResult.SENSOR_SENSITIVITY)+" exposure="+metadata.get(CaptureResult.SENSOR_EXPOSURE_TIME)+" white="+metadata.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)+" black="+Arrays.toString(metadata.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)));
     if(opt.containsKey("keys"))for(CaptureResult.Key<?> key:metadata.getKeys())if(key.getName().toLowerCase().matches(".*(stagger|exposure|gainlist|isolist).*")) {
       Object value=metadata.get(key);
@@ -220,6 +238,6 @@ public class RootRawProbe {
       try(BufferedReader lines=new BufferedReader(new InputStreamReader(maps.getInputStream()))){String line;while((line=lines.readLine())!=null)if(line.contains("remosaic")||line.contains("tuning")||line.contains("featurepipe.capture"))log("HAL_MAP "+line);}
       maps.waitFor();
     }
-    session.close();reader.close();if(jpeg!=null)jpeg.close();device.close();thread.quitSafely();System.exit(0);
+    session.close();reader.close();if(preview!=null)preview.close();if(jpeg!=null)jpeg.close();device.close();thread.quitSafely();System.exit(0);
   }
 }
