@@ -1,0 +1,9 @@
+1 0.001 residual 0.0011773197 status 0
+1 0.003 residual 0.0012289959 status 0
+1 0.01 residual 0.0013000122 status 0
+2 0.001 residual 0.0012000537 status 0
+2 0.003 residual 0.0012531372 status 0
+2 0.01 residual 0.0013263987 status 0
+4 0.001 residual 0.0013240422 status 0
+4 0.003 residual 0.001377384 status 0
+4 0.01 residual 0.001450532 status 0

@@ -1,0 +1,522 @@
+[
+  {
+    "sensor_prior": null,
+    "steps": 8,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.8862238356683332
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.8850747414832983
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7430255196434045
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7384459671833259
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.38117019224496584
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.41283760307667966
+      }
+    ],
+    "luma_noise_rms": 0.001444471708608952
+  },
+  {
+    "sensor_prior": null,
+    "steps": 12,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9020372359743669
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9029681249288644
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7928954923753595
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7928568432082791
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.4540214340060362
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.4976387693835711
+      }
+    ],
+    "luma_noise_rms": 0.0016930563932918443
+  },
+  {
+    "sensor_prior": null,
+    "steps": 16,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9112565603197366
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9124767652438146
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.8186039803602867
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.8206539129171986
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.5037680392620495
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.5552821326299513
+      }
+    ],
+    "luma_noise_rms": 0.00188830038946548
+  },
+  {
+    "sensor_prior": null,
+    "steps": 24,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9218053157845755
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.922740903717675
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.8449007117616153
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.8492470061598204
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.5670495939832986
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.62819499158774
+      }
+    ],
+    "luma_noise_rms": 0.0021958920423610496
+  },
+  {
+    "sensor_prior": 2,
+    "steps": 8,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.8282940945876152
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.8812343983497144
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7307256958555369
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7214519961579979
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.3571147939581313
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.41106254006015214
+      }
+    ],
+    "luma_noise_rms": 0.0012409254924078926,
+    "noise_ratio_to_baseline8": 0.8590860485616035,
+    "min_transfer_delta_to_baseline8": -0.05792974108071802
+  },
+  {
+    "sensor_prior": 2,
+    "steps": 12,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.8678869000267238
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.8987848978600314
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7858741442245344
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7785194125917809
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.4310945679302734
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.4945637492657959
+      }
+    ],
+    "luma_noise_rms": 0.0014644377530178667,
+    "noise_ratio_to_baseline8": 1.01382238522909,
+    "min_transfer_delta_to_baseline8": -0.01833693564160943
+  },
+  {
+    "sensor_prior": 2,
+    "steps": 16,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.8890272771619365
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9086556346158693
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.8140515065299733
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.8083131793045987
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.48254293685082594
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.5512349958362259
+      }
+    ],
+    "luma_noise_rms": 0.0016394776992207944,
+    "noise_ratio_to_baseline8": 1.1350015991657159,
+    "min_transfer_delta_to_baseline8": 0.0028034414936033425
+  },
+  {
+    "sensor_prior": 2,
+    "steps": 24,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.909729745304683
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9194346127816115
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.8423603410497752
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.8393749528588772
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.54937998637024
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.6236171679753474
+      }
+    ],
+    "luma_noise_rms": 0.0019133319719191744,
+    "noise_ratio_to_baseline8": 1.324589440219457,
+    "min_transfer_delta_to_baseline8": 0.023505909636349798
+  },
+  {
+    "sensor_prior": 4,
+    "steps": 8,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.858929687709009
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.8827151164178862
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7347022479536898
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7279547113763769
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.3649415271350349
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.4119731764341299
+      }
+    ],
+    "luma_noise_rms": 0.0012787228766011714,
+    "noise_ratio_to_baseline8": 0.8852529744819999,
+    "min_transfer_delta_to_baseline8": -0.027294147959324166
+  },
+  {
+    "sensor_prior": 4,
+    "steps": 12,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.8877710932497018
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9003387039207777
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7882321352296109
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.784304892461997
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.43909828738480394
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.49559206559831576
+      }
+    ],
+    "luma_noise_rms": 0.0015099526867716978,
+    "noise_ratio_to_baseline8": 1.0453321292293118,
+    "min_transfer_delta_to_baseline8": 0.001547257581368644
+  },
+  {
+    "sensor_prior": 4,
+    "steps": 16,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9022113835618318
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9101611479893872
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.815646122578128
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.8134723857104867
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.4902410611463637
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.5527025672635317
+      }
+    ],
+    "luma_noise_rms": 0.0016917120407681405,
+    "noise_ratio_to_baseline8": 1.1711631530653408,
+    "min_transfer_delta_to_baseline8": 0.015987547893498655
+  },
+  {
+    "sensor_prior": 4,
+    "steps": 24,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9165664304234732
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9208191864934749
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.8433241994617631
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.8436130828507311
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.556067549133188
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.6255010634611696
+      }
+    ],
+    "luma_noise_rms": 0.001977280354660431,
+    "noise_ratio_to_baseline8": 1.3688605618759966,
+    "min_transfer_delta_to_baseline8": 0.030342594755140007
+  },
+  {
+    "sensor_prior": 8,
+    "steps": 8,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.8749298232880256
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.8836973142768507
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.737786544453917
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7324753751477355
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.3712703889898282
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.4122480808240869
+      }
+    ],
+    "luma_noise_rms": 0.001325604082203254,
+    "noise_ratio_to_baseline8": 0.9177085811392115,
+    "min_transfer_delta_to_baseline8": -0.011294012380307583
+  },
+  {
+    "sensor_prior": 8,
+    "steps": 12,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.8961090004108941
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9014466040036261
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.790076339047238
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7881091325098244
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.44512667057202193
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.4963716826561248
+      }
+    ],
+    "luma_noise_rms": 0.001564196672494104,
+    "noise_ratio_to_baseline8": 1.0828849489897237,
+    "min_transfer_delta_to_baseline8": 0.009885164742560959
+  },
+  {
+    "sensor_prior": 8,
+    "steps": 16,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9073193135333262
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9111948441787221
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.8168969740937781
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.8167313888221951
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.4958017534458548
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.5537909577541508
+      }
+    ],
+    "luma_noise_rms": 0.001751875603907197,
+    "noise_ratio_to_baseline8": 1.212814064454249,
+    "min_transfer_delta_to_baseline8": 0.021095477864992995
+  },
+  {
+    "sensor_prior": 8,
+    "steps": 24,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9193587916656243
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9217178872394541
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.8440427209275284
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.8461938612873376
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.5606920403208786
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.6267130578277919
+      }
+    ],
+    "luma_noise_rms": 0.002047045840700025,
+    "noise_ratio_to_baseline8": 1.4171588328797116,
+    "min_transfer_delta_to_baseline8": 0.033134955997291105
+  }
+]

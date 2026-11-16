@@ -1,0 +1,122 @@
+[
+  {
+    "method": "current",
+    "noise_luma_rms": 0.0013711461415318277,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.8330562553062474
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.8378819633236665
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7014028641001384
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.6914476081095305
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.31092906388283886
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.3913316009788095
+      }
+    ]
+  },
+  {
+    "method": "(0.01, 0.1)",
+    "noise_luma_rms": 0.001397350593852091,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9908207445389439
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9906028443156547
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.8100751871753376
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7946305802777379
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.3450279024555213
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.3272617963153204
+      }
+    ]
+  },
+  {
+    "method": "(0.015, 0.1)",
+    "noise_luma_rms": 0.0012327562363774755,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.986752038770759
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9863028666737679
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7537339625154488
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7336423982831882
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.26815320583327906
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.260722764201491
+      }
+    ]
+  },
+  {
+    "method": "(0.02, 0.1)",
+    "noise_luma_rms": 0.0011308649226150222,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9827541691862746
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.982066674457319
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7070141826482613
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.6825699450464571
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.22018183198068444
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.21758684221244634
+      }
+    ]
+  }
+]

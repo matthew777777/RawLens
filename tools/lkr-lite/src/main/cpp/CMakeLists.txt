@@ -71,6 +71,12 @@ set_target_properties(lkrl_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(lkrl_core PUBLIC srpipeline ${LKRL_VULKAN_LIB})
 
 if(NOT ANDROID)
+  # CPU-only numerical audit: can run even when Vulkan has no usable device.
+  add_executable(lkrl_update_stability_check "${LKRL_DIR}/../../../research/update_stability.cpp"
+                 lkrl_image.cpp lkrl_mhc.cpp)
+  target_include_directories(lkrl_update_stability_check PRIVATE "${LKRL_DIR}")
+  target_compile_features(lkrl_update_stability_check PRIVATE cxx_std_17)
+  target_compile_options(lkrl_update_stability_check PRIVATE -O3 -ffp-contract=off -fno-fast-math)
   add_executable(lkrl_motion_check "${LKRL_DIR}/../../../host/lkrl_motion_check.cpp")
   target_link_libraries(lkrl_motion_check PRIVATE lkrl_core)
   add_executable(lkrl_denoise_check "${LKRL_DIR}/../../../host/lkrl_denoise_check.cpp")

@@ -1,0 +1,20 @@
+[
+  {
+    "noise_scale": 0,
+    "camera_rgb_error_rms": 0.0,
+    "luma_error_rms": 0.0,
+    "fraction_error_power_02_04": 0.0
+  },
+  {
+    "noise_scale": 1,
+    "camera_rgb_error_rms": 0.0018537649884819984,
+    "luma_error_rms": 0.0014643635281571072,
+    "fraction_error_power_02_04": 0.6797727261215798
+  },
+  {
+    "noise_scale": 2,
+    "camera_rgb_error_rms": 0.003707529976963997,
+    "luma_error_rms": 0.0029287271077807816,
+    "fraction_error_power_02_04": 0.6797727177340394
+  }
+]

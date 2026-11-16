@@ -1,0 +1,260 @@
+[
+  {
+    "strength": 0.015,
+    "probes": [
+      {
+        "amplitude": 0.005,
+        "probe": "horizontal .125",
+        "gain": 0.9898744821548462,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "diagonal .125",
+        "gain": 0.9889149069786072,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "horizontal .25",
+        "gain": 0.8200691938400269,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "diagonal .25",
+        "gain": 0.8062295913696289,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "horizontal .35",
+        "gain": 0.3721562325954437,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "diagonal .35",
+        "gain": 0.3832414746284485,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "horizontal .125",
+        "gain": 0.9968532919883728,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "diagonal .125",
+        "gain": 0.9965658187866211,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "horizontal .25",
+        "gain": 0.9832002520561218,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "diagonal .25",
+        "gain": 0.9801251292228699,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "horizontal .35",
+        "gain": 0.835578978061676,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "diagonal .35",
+        "gain": 0.8309732675552368,
+        "cg_status": 0
+      }
+    ],
+    "noise_luma_rms": 0.0012722827959805727,
+    "scene_cg": 160,
+    "scene_lambda_percentiles": [
+      1.0840677759915707e-06,
+      4.8745591811893973e-05,
+      0.0012082187458872795,
+      0.003978364053182304,
+      0.015000000596046448
+    ]
+  },
+  {
+    "strength": 0.03,
+    "probes": [
+      {
+        "amplitude": 0.005,
+        "probe": "horizontal .125",
+        "gain": 0.9802550673484802,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "diagonal .125",
+        "gain": 0.9783365726470947,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "horizontal .25",
+        "gain": 0.7169046998023987,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "diagonal .25",
+        "gain": 0.699963390827179,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "horizontal .35",
+        "gain": 0.23574669659137726,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "diagonal .35",
+        "gain": 0.26398199796676636,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "horizontal .125",
+        "gain": 0.9935339093208313,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "diagonal .125",
+        "gain": 0.9933918714523315,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "horizontal .25",
+        "gain": 0.9688218832015991,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "diagonal .25",
+        "gain": 0.9653593301773071,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "horizontal .35",
+        "gain": 0.7437377572059631,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "diagonal .35",
+        "gain": 0.7548784017562866,
+        "cg_status": 0
+      }
+    ],
+    "noise_luma_rms": 0.0010239621624350548,
+    "scene_cg": 160,
+    "scene_lambda_percentiles": [
+      2.1681355519831413e-06,
+      9.749118362378795e-05,
+      0.002416437491774559,
+      0.007956728106364608,
+      0.030000001192092896
+    ]
+  },
+  {
+    "strength": 0.06,
+    "probes": [
+      {
+        "amplitude": 0.005,
+        "probe": "horizontal .125",
+        "gain": 0.961764931678772,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "diagonal .125",
+        "gain": 0.958073616027832,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "horizontal .25",
+        "gain": 0.5828238725662231,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "diagonal .25",
+        "gain": 0.5633293390274048,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "horizontal .35",
+        "gain": 0.13701263070106506,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.005,
+        "probe": "diagonal .35",
+        "gain": 0.1665395051240921,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "horizontal .125",
+        "gain": 0.9868670105934143,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "diagonal .125",
+        "gain": 0.9872255921363831,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "horizontal .25",
+        "gain": 0.9442821741104126,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "diagonal .25",
+        "gain": 0.9404277801513672,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "horizontal .35",
+        "gain": 0.6228461265563965,
+        "cg_status": 0
+      },
+      {
+        "amplitude": 0.02,
+        "probe": "diagonal .35",
+        "gain": 0.6584999561309814,
+        "cg_status": 0
+      }
+    ],
+    "noise_luma_rms": 0.0008289149263873696,
+    "scene_cg": 160,
+    "scene_lambda_percentiles": [
+      4.336271103966283e-06,
+      0.0001949823672475759,
+      0.004832874983549118,
+      0.015913456212729216,
+      0.06000000238418579
+    ]
+  }
+]

@@ -1,0 +1,9 @@
+device: name=Apple M1 subgroupSize=32 computeFamily=0
+8 frames 4080x3060 -> 1024x1024 s=2 tiles 1  sigma 0.00380 a 8.21e-06 b 1.61e-06  prior none
+reference frame 0 (sharpest)
+DCT luma: off; lost-frame colour cleanup: on; KernelNet: independent noise-gated switch (LKRL_KNDN)
+look: prior 0.35 grain 0.00 (auto from noise)  local lambda 0.10
+ms: load 139 noise 3 coarseLK 16 tiles 399 (gpu 260 prior 11, 1 calls) TOTAL(merge) 415
+workers 1, tile sums ms: solve 280 (gpu 260 prior 11 init 0 finish 20 other -10) prep 64 (load 3) blend 3 | setup 47 wait 0
+GPU host totals: alloc 45 (366.2 MiB cumulative, 366.2 MiB summed peaks) 7.9 ms; pipelines 33 47.2 ms; sets 30 0.2 ms
+GPU work totals: submissions 17 dispatches 86 copies 5; record 0.8 queue 4.4 fenceWait 175.8 coherency 0.0 query 0.0 ms

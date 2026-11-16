@@ -262,6 +262,24 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   // (The daylight skip is gone: the average start also removes the edge zipper, which every scene needs.)
   const int nbx = (w + LB - 1) / LB, nby = (h + LB - 1) / LB, nb = nbx * nby;
   const size_t nLR = size_t(K) * h * w, nHR = size_t(3) * H * W;
+  // Opt-in stage audit. No extra submission or readback on the normal path.
+  const std::string& trace_prefix = prm.debug_prefix;
+  auto trace = [&](const std::string& tag, const void* data, size_t bytes) {
+    if (trace_prefix.empty()) return;
+    const std::string path = trace_prefix + "-" + tag;
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) { std::fprintf(stderr,"cannot write stage trace %s\n",path.c_str()); return; }
+    const bool ok = std::fwrite(data,1,bytes,f)==bytes;
+    if (std::fclose(f)!=0 || !ok) std::fprintf(stderr,"short stage trace %s\n",path.c_str());
+  };
+  if (!trace_prefix.empty()) {
+    char meta[512];
+    const int length=std::snprintf(meta,sizeof(meta),
+      "{\"h\":%d,\"w\":%d,\"s\":%d,\"K\":%d,\"wb\":[%.9g,%.9g,%.9g],\"a\":%.9g,\"b\":%.9g}\n",
+      h,w,s,K,prm.wb[0],prm.wb[1],prm.wb[2],prm.noise_a,prm.noise_b);
+    trace("meta.json",meta,size_t(length));
+    trace("raw.f32",frames,nLR*4);
+  }
   if (p.size() != size_t(K) * 6) return fail("p size");
   if (dloc.empty()) dloc.assign(size_t(K) * nb * 2, 0.0f);
   if (dloc.size() != size_t(K) * nb * 2) return fail("dloc size");
@@ -365,6 +383,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     std::memcpy(z.map, up.data(), nHR * 4);
     if (cavg >= 2) std::memcpy(zstart.map, up.data(), nHR * 4);
     if (!(z0_mhc && mhc_mix < 1.0f)) std::memcpy(z0.map, up.data(), nHR * 4);
+    trace("seed.f32",up.data(),nHR*4);
+    trace("reference.f32",z0.map,nHR*4);
   }
   Push q{};
   q.h = h; q.w = w; q.s = s; q.K = K; q.H = H; q.W = W; q.LB = LB; q.mode = 0;
@@ -518,6 +538,9 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   // pixels: a Bayer colour maze on moving subjects and grass at 2x, 1.9x LK-R's.)
   const int n_merge = std::max(1, int(std::count(sched.begin(), sched.end(), 'J')));
   const float steps_per_merge = prm.lkr_steps / float(n_merge);
+  int trace_j = 0;
+  trace("affine-initial.f32",pb.map,size_t(K)*24);
+  trace("local-initial.f32",db.map,size_t(K)*nb*8);
   for (size_t si = 0; si < sched.size(); ++si) {
     const char c = sched[si];
     if (c == 'J' || c == 'A') {
@@ -613,6 +636,18 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         if (!avg && fitK < K) mk.K = fitK;   // experiment: the fit on the first fitK frames only
         gpu_->dispatch(adj_, sAdj, &mk, uint32_t(mk.K) * div_up(uint32_t(w), 16), gy);
       }
+      if (!avg) ++trace_j;
+      if (!trace_prefix.empty() && !avg && trace_j==1) {
+        if (!submit()) return fail("trace adjoint submit");
+        trace("pre-J1.f32",z.map,nHR*4);
+        trace("gradient-J1.i32",acc.map,nHR*4);
+        trace("coverage-J1.i32",cov.map,nHR*4);
+        trace("weights.f32",wt.map,nLR*4);
+        trace("affine.f32",pb.map,size_t(K)*24);
+        trace("local.f32",db.map,size_t(K)*nb*8);
+        trace("adjoint-push.bin",&m,sizeof(m));
+        gpu_->begin();
+      }
       const int Kf = avg ? K : fitK;
       Push u = q; u.tau = jacobi_damp * float(Kf) / float(s * s); u.LB = prm.cov_smooth >= 0 ? prm.cov_smooth : (s == 1 ? 0 : 1); u.a = steps_per_merge; u.b = (prm.lkr_l > 0.0f ? prm.lkr_l : (s == 1 ? 1.45f : 1.8f)) * float(Kf) * 0.5f / float(s * s);
       u.mode = need_cov || std::getenv("LKRL_NO_DVCACHE") ? 1 : 0;   // 1: (re)compute the divisor, 0: cached
@@ -626,6 +661,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       u.rpow = omega;
       static const int avg_r = std::getenv("LKRL_AVGR") ? std::atoi(std::getenv("LKRL_AVGR")) : -1;
       if (avg) { u.a = 0.0f; u.rpow = -1.0f; u.robk = 0.0f; u.LB = avg_r >= 0 ? avg_r : (s == 1 ? 0 : 1); }
+      if (!avg && trace_j==1) trace("update-push.bin",&u,sizeof(u));
       gpu_->dispatch(zupd_, sUpd, &u, div_up(uint32_t(nHR), 256));
       if (u.robk > 0.0f || avg) gpu_->fill(acc, 0);
       need_cov = avg;   // the next J recomputes its (gain) divisor
@@ -697,6 +733,13 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         // LKRL_FROMAVG=1: mode 5 fits from the average (tested 2026-11-14: no effect on the zipper; off).
         static const bool from_avg = std::getenv("LKRL_FROMAVG") && std::atoi(std::getenv("LKRL_FROMAVG")) != 0;
         if (cavg >= 2 && !(cavg == 5 && from_avg)) gpu_->copy(zstart, z, nHR * 4);
+      }
+      if (!trace_prefix.empty()) {
+        if (!submit()) return fail("trace merge submit");
+        if (avg && gpu_hyb) trace("average.f32",zavgB.map,nHR*4);
+        else trace("J"+std::to_string(trace_j)+".f32",z.map,nHR*4);
+        if (!avg && trace_j==1) trace("divisor-J1.f32",dvb.map,nHR*4);
+        gpu_->begin();
       }
     } else if (c == 'G') {
       if (K < 2) continue;
@@ -776,6 +819,11 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     gpu_->dispatch(hyb_, sh, &hp, div_up(uint32_t(W), 16), div_up(uint32_t(H), 16));
     hp.mode = 1;
     gpu_->dispatch(hyb_, sh, &hp, div_up(uint32_t(W), 16), div_up(uint32_t(H), 16));
+    if (!trace_prefix.empty()) {
+      if (!submit()) return fail("trace hybrid submit");
+      trace("hybrid.f32",hybO.map,nHR*4);
+      gpu_->begin();
+    }
     hyb_done = true;
   }
   if (!submit()) return fail("final submit");

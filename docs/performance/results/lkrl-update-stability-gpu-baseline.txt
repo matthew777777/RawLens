@@ -1,0 +1,5 @@
+chroma radius 1 edge max error 7.4505806e-09
+chroma radius 2 edge max error 7.4505806e-09
+brightness edge radius 1 checker residual 7.4505806e-09
+brightness edge radius 2 checker residual 2.98023224e-08
+identical-frame update loss 0.204799609 -> 2.68095112 (unstable)

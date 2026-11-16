@@ -66,7 +66,11 @@ void main() {
         // Use the aligned average as a colour-edge guide. An unconditional
         // binomial filter mixes grey wall into green leaves, even at zero noise.
         vec3 ag = vec3(za[t], za[HW+t], za[2*HW+t]) * wb;
-        vec3 delta = ag - av;
+        // Compare chromaticity: a brightness edge on a coloured surface has
+        // a chroma difference too, but must not switch off reconstruction.
+        float yg = dot(ag, vec3(0.25, 0.5, 0.25));
+        float level = max(max(ya, yg), 1e-4);
+        vec3 delta = ag * (ya / level) - av * (yg / level);
         float guideNoise = 16.0 * dot(wb * wb, vec3(0.25, 0.5, 0.25)) *
             max(pc.a * max(yc, 0.0) + pc.b, 1e-12) / float(pc.K);
         wg *= exp(-dot(delta, delta) / max(guideNoise, 1e-8));

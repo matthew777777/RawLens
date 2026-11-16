@@ -1,0 +1,22 @@
+[
+  {
+    "sensor_prior": null,
+    "luma_noise_rms": 0.0014444716934724918
+  },
+  {
+    "sensor_prior": 2,
+    "luma_noise_rms": 0.0012409255066727926
+  },
+  {
+    "sensor_prior": 4,
+    "luma_noise_rms": 0.0012787228812650745
+  },
+  {
+    "sensor_prior": 8,
+    "luma_noise_rms": 0.001325604078649991
+  },
+  {
+    "sensor_prior": 16,
+    "luma_noise_rms": 0.0013692396353019306
+  }
+]

@@ -1,0 +1,210 @@
+[
+  {
+    "method": "current",
+    "luma_operator": "axes",
+    "noise_luma_rms": 0.0013711461415318277,
+    "transfer": [
+      {
+        "probe": "0.125 at 0 degrees",
+        "gain": 0.8330562553062474
+      },
+      {
+        "probe": "0.125 at 15 degrees",
+        "gain": 0.83369639297845
+      },
+      {
+        "probe": "0.125 at 30 degrees",
+        "gain": 0.835929360210335
+      },
+      {
+        "probe": "0.125 at 45 degrees",
+        "gain": 0.8378819651105787
+      },
+      {
+        "probe": "0.125 at 60 degrees",
+        "gain": 0.8392959525839019
+      },
+      {
+        "probe": "0.125 at 75 degrees",
+        "gain": 0.8394461403764427
+      },
+      {
+        "probe": "0.125 at 90 degrees",
+        "gain": 0.8413454673804658
+      },
+      {
+        "probe": "0.25 at 0 degrees",
+        "gain": 0.7014028641001384
+      },
+      {
+        "probe": "0.25 at 15 degrees",
+        "gain": 0.6583734365699043
+      },
+      {
+        "probe": "0.25 at 30 degrees",
+        "gain": 0.6769947585873672
+      },
+      {
+        "probe": "0.25 at 45 degrees",
+        "gain": 0.6914474811467745
+      },
+      {
+        "probe": "0.25 at 60 degrees",
+        "gain": 0.6920413924564038
+      },
+      {
+        "probe": "0.25 at 75 degrees",
+        "gain": 0.6845145720092775
+      },
+      {
+        "probe": "0.25 at 90 degrees",
+        "gain": 0.6750879055642519
+      },
+      {
+        "probe": "0.35 at 0 degrees",
+        "gain": 0.31092906388283886
+      },
+      {
+        "probe": "0.35 at 15 degrees",
+        "gain": 0.33336738500177504
+      },
+      {
+        "probe": "0.35 at 30 degrees",
+        "gain": 0.3727167340842878
+      },
+      {
+        "probe": "0.35 at 45 degrees",
+        "gain": 0.39133150960024554
+      },
+      {
+        "probe": "0.35 at 60 degrees",
+        "gain": 0.3928825702877248
+      },
+      {
+        "probe": "0.35 at 75 degrees",
+        "gain": 0.3637739792477393
+      },
+      {
+        "probe": "0.35 at 90 degrees",
+        "gain": 0.347047027953926
+      }
+    ],
+    "cg_statuses": []
+  },
+  {
+    "method": "(0.014, 0.1)",
+    "luma_operator": "axes",
+    "noise_luma_rms": 0.0013945941605842981,
+    "transfer": [
+      {
+        "probe": "0.125 at 0 degrees",
+        "gain": 0.987477733406693
+      },
+      {
+        "probe": "0.125 at 15 degrees",
+        "gain": 0.98903160071565
+      },
+      {
+        "probe": "0.125 at 30 degrees",
+        "gain": 0.9920614646144084
+      },
+      {
+        "probe": "0.125 at 45 degrees",
+        "gain": 0.9934411914430574
+      },
+      {
+        "probe": "0.125 at 60 degrees",
+        "gain": 0.9919379310746186
+      },
+      {
+        "probe": "0.125 at 75 degrees",
+        "gain": 0.9887771057556621
+      },
+      {
+        "probe": "0.125 at 90 degrees",
+        "gain": 0.9871023478965609
+      },
+      {
+        "probe": "0.25 at 0 degrees",
+        "gain": 0.7635388530137631
+      },
+      {
+        "probe": "0.25 at 15 degrees",
+        "gain": 0.7577149728162162
+      },
+      {
+        "probe": "0.25 at 30 degrees",
+        "gain": 0.8128479981769072
+      },
+      {
+        "probe": "0.25 at 45 degrees",
+        "gain": 0.8418464011976116
+      },
+      {
+        "probe": "0.25 at 60 degrees",
+        "gain": 0.8209970592083159
+      },
+      {
+        "probe": "0.25 at 75 degrees",
+        "gain": 0.7729909864460631
+      },
+      {
+        "probe": "0.25 at 90 degrees",
+        "gain": 0.7451026654086691
+      },
+      {
+        "probe": "0.35 at 0 degrees",
+        "gain": 0.27870531886226835
+      },
+      {
+        "probe": "0.35 at 15 degrees",
+        "gain": 0.3055408153146852
+      },
+      {
+        "probe": "0.35 at 30 degrees",
+        "gain": 0.3544025279463885
+      },
+      {
+        "probe": "0.35 at 45 degrees",
+        "gain": 0.3899985144488746
+      },
+      {
+        "probe": "0.35 at 60 degrees",
+        "gain": 0.3861235337370855
+      },
+      {
+        "probe": "0.35 at 75 degrees",
+        "gain": 0.3435624877590426
+      },
+      {
+        "probe": "0.35 at 90 degrees",
+        "gain": 0.3175230494030532
+      }
+    ],
+    "cg_statuses": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  }
+]

@@ -1,0 +1,153 @@
+[
+  {
+    "method": "current",
+    "noise_luma_rms": 0.0014449626930383825,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.8862238356127565
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.885074741554109
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7430255197947856
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7384459673780199
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.38117019234013105
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.41283760296541744
+      }
+    ],
+    "cg_statuses": []
+  },
+  {
+    "method": "(0.01, 0.1)",
+    "noise_luma_rms": 0.0014142394397670022,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9931530728334652
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9925181480691195
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.8417411878674053
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.8091529465208647
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.4607635902686279
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.35671118167944776
+      }
+    ],
+    "cg_statuses": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "method": "(0.015, 0.1)",
+    "noise_luma_rms": 0.001243188084036207,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9898745017397564
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9889148431373713
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7879899768564522
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.7479921623868753
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.36946228092858574
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.2802081206815503
+      }
+    ],
+    "cg_statuses": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "method": "(0.02, 0.1)",
+    "noise_luma_rms": 0.0011356824018533098,
+    "transfer": [
+      {
+        "probe": "horizontal .125",
+        "gain": 0.9866356332556142
+      },
+      {
+        "probe": "diagonal .125",
+        "gain": 0.9853521829635
+      },
+      {
+        "probe": "horizontal .25",
+        "gain": 0.7424807374630279
+      },
+      {
+        "probe": "diagonal .25",
+        "gain": 0.6970481339827775
+      },
+      {
+        "probe": "horizontal .35",
+        "gain": 0.30898745393030735
+      },
+      {
+        "probe": "diagonal .35",
+        "gain": 0.2313321401997634
+      }
+    ],
+    "cg_statuses": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  }
+]

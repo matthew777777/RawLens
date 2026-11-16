@@ -1,0 +1,18 @@
+[
+  {
+    "initializer": "MHC",
+    "sensor_rms_ideal": 0.00011136398825328797,
+    "sensor_rms_fp16": 0.00010819171438924968
+  },
+  {
+    "initializer": "bilinear",
+    "sensor_rms_ideal": 9.434349340153858e-05,
+    "sensor_rms_fp16": 9.047969069797546e-05
+  },
+  {
+    "initializer_difference_rgb_rms": 0.0008276570588350296,
+    "initializer_difference_sensor_rms": 5.0095284677809104e-05,
+    "rows": 131072,
+    "columns": 196608
+  }
+]

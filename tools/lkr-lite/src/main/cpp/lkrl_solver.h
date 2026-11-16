@@ -18,6 +18,7 @@ struct LiteParams {
   // Empty = by scale: 1x GGGJJJ; 2x GGGJJJJJJJJ (8 merge steps: grain / detail of LK-R's 24 data
   // steps at 2x). 3 motion steps match LK-R better than 5 (car 1x 59.93 -> 60.20 dB, worst block
   // 36.7 -> 38.4; IMG_20210228_133623 2x 52.31 -> 52.46) and save 2 jac / jacblk passes + round trips.
+  std::string debug_prefix; // optional per-tile stage audit, supplied by MergeFull
   std::string schedule;   // G = motion step + weight refresh, J = merge step; leading G align to the reference-only image
   float kernelnet_denoise = -1.0f;   // explicit per-merge strength, negative = CLI environment (default on)
   float noise_a = 0, noise_b = 0;     // our own fit: var = a y + b (normalised raw units)

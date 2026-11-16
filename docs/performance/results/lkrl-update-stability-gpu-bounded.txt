@@ -1,0 +1,7 @@
+chroma radius 1 edge max error 7.4505806e-09
+chroma radius 2 edge max error 7.4505806e-09
+brightness edge radius 1 checker residual 7.4505806e-09
+brightness edge radius 2 checker residual 2.98023224e-08
+identical-frame update loss 0.204799609 -> 0.00432930841 (stable)
+1x fallback luma max 4.65661287e-08, colour MAE 0.000936764623, enabled prior luma MAE 0.00218072859
+2x fallback luma max 5.40167093e-08, colour MAE 0.000495783146, enabled prior luma MAE 0.00162493367

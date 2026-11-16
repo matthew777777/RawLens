@@ -84,6 +84,16 @@ void main() {
     float gain = 1.0 - pow(abs(1.0 - 1.8 * cv / pc.b), pc.a);
     d = cv > 0.0 ? max(d / max(gain, 1e-4), 1e-6) : d;
   }
+  // The smoothed coverage is not a bound on the normal operator. At integer
+  // alignment its 3x3 box dilutes a measured 2x2 Bayer footprint into holes;
+  // dividing the unsmoothed gradient by that mean can give an eigenvalue > 2,
+  // so repeated noiseless frames amplify an alternating error instead of fitting it.
+  // For nonnegative U with unit row sums, U^T W U <= diag(U^T W 1).
+  // Bound the effective step om/d by 1.8 / own coverage, keeping eigenvalues
+  // below 2 without filtering the image or changing any sample/rejection weight.
+  // The opt-in filtered-gradient experiment has a different operator.
+  if (pc.robk <= 0.0)
+    d = max(d, om * (float(cov[i]) / pc.dscale) / 1.8);
   dv[i] = d;
   z[i] -= om * g / d;
 }

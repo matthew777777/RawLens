@@ -1,0 +1,65 @@
+-- Configuring done (0.1s)
+-- Generating done (0.1s)
+-- Build files have been written to: /Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/sr-pipeline/build/host
+[ 62%] Built target srp_tinydng_host
+[100%] Built target srpipeline_jni
+[100%] Built target srp_merge_accumulate_spv
+[100%] Built target srp_gat_spv
+[100%] Built target srp_align_spv
+[100%] Built target srp_corr_spv
+[100%] Built target srp_fft_spv
+[100%] Built target srp_ica_spv
+[100%] Built target srp_demosaic_spv
+[100%] Built target srp_grad_spv
+[100%] Built target srp_kernels_spv
+[100%] Built target srp_divide_spv
+[100%] Built target srp_robustness_spv
+[100%] Built target srp_merge_splat_spv
+[100%] Built target srp_kernelnet_spv
+[100%] Built target srp_grey_fft_spv
+[100%] Built target srp_corr_direct_spv
+[100%] Built target srp_ica_wg_spv
+> Task :tools:sr-pipeline:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :tools:sr-pipeline:compileKotlin UP-TO-DATE
+> Task :tools:sr-pipeline:compileJava NO-SOURCE
+> Task :tools:sr-pipeline:processResources UP-TO-DATE
+> Task :tools:sr-pipeline:classes UP-TO-DATE
+> Task :tools:sr-pipeline:jar UP-TO-DATE
+> Task :tools:sr-pipeline:startScripts
+> Task :tools:sr-pipeline:installDist
+
+[Incubating] Problems report is available at: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.8.2/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 1s
+5 actionable tasks: 2 executed, 3 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html
+sr-pipeline plan:
+  in:      /Users/monikamalinowska/Downloads/My/Bursts/IMG_20260919_184641_979
+  out:     /tmp/lkrl-source-audit/srp-ridge-matched
+  ref:     0
+  crop:    1280,1014,512,512
+  limit:   8
+  backend: vulkan
+  scale:   2.0
+  lut:     auto
+sr-pipeline: reading 8/8 frames (ref IMG_20260919_184641_979_F00.dng)
+sr-pipeline: 0 static hot/dead pixels corrected
+sr-pipeline: noise model from --noise-ab a=8.21E-6 b=1.61E-6 (not the DNG profile)
+noise LUT generated in 549 ms
+sr-pipeline: colour-difference reconstruction [1.8417969, 1.5722656]
+sr-pipeline: 512x512 snr=37.85 tile=16 backend=vulkan noiseCorrection=true kernel=kernelnet knScale=0.25 knCap=1.2
+sr-pipeline: wrote /tmp/lkrl-source-audit/srp-ridge-matched/merged.dng (1024x1024) in 1.9s
+kernelnet prep 4.5 ms
+kernelnet layer 0 5.6 ms
+kernelnet layer 1 16.7 ms
+kernelnet layer 2 9.2 ms
+kernelnet layer 3 9.3 ms
+kernelnet layer 4 9.3 ms
+kernelnet layer 5 2.0 ms
+kernelnet cov 0.3 ms

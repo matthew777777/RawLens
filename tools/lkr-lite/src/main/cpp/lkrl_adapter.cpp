@@ -35,6 +35,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   if (K < 1) return false;
   LiteParams lp;
   lp.s = prm.s;
+  lp.debug_prefix = prm.debug_prefix;
   lp.kernelnet_denoise = prm.kernelnet_denoise;
   lp.noise_a = prm.noise_a;
   lp.noise_b = prm.noise_b;

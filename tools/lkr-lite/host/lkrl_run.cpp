@@ -2,6 +2,7 @@
 // LK-R Lite desktop runner.
 //   lkrl_run --trace PREFIX OUT.f32 [--schedule GGGJGGJ] [--guide 2] [--gmode 1] [--damp D] [--mhc M]
 //            [--notch R] [--gnw 1] [--profile 1] [--repeat N]   (negative --damp / --mhc: by scale)
+//            [--audit-prefix PATH] [--data-steps N] (diagnostics; default data-step budget 24)
 // --trace: inputs from an LK-R solver trace (LKR_TRACE_PREFIX=... lkr_full_run): normalised
 // frames, initial affine and local motion, noise fit and robust settings from _meta.txt, so
 // Lite and LK-R are compared on identical inputs. OUT.f32: z, 3 x H x W planar float32.
@@ -27,16 +28,18 @@ static bool readF32(const std::string& path, std::vector<float>* v, size_t count
 }
 
 int main(int argc, char** argv) {
-  std::string trace, out, schedule;
+  std::string trace, out, schedule, audit_prefix;
   bool profile = false;
   int repeat = 1, gnw = 1, gmode = 1;
   float guide = 2.0f, damp = -1.0f;
   float mhc = -1.0f;
+  float data_steps = 24.0f;
   int notch = 0, covr = -1;
   bool dct_prior = false;
   for (int i = 1; i < argc; ++i) {
     std::string k = argv[i];
     if (k == "--trace" && i + 2 < argc) { trace = argv[++i]; out = argv[++i]; }
+    else if (k == "--audit-prefix" && i + 1 < argc) audit_prefix = argv[++i];
     else if (k == "--prior") {
       if (i + 1 >= argc || (std::string(argv[i + 1]) != "0" && std::string(argv[i + 1]) != "1")) {
         std::fprintf(stderr, "--prior requires 0 or 1\n"); return 2;
@@ -50,13 +53,17 @@ int main(int argc, char** argv) {
     else if (k == "--gmode" && i + 1 < argc) gmode = std::atoi(argv[++i]);
     else if (k == "--damp" && i + 1 < argc) damp = float(std::atof(argv[++i]));
     else if (k == "--mhc" && i + 1 < argc) mhc = float(std::atof(argv[++i]));
+    else if (k == "--data-steps" && i + 1 < argc) {
+      data_steps = float(std::atof(argv[++i]));
+      if (!std::isfinite(data_steps) || data_steps < 0.0f) return 2;
+    }
     else if (k == "--notch" && i + 1 < argc) notch = std::atoi(argv[++i]);
     else if (k == "--covr" && i + 1 < argc) covr = std::atoi(argv[++i]);
     else if (k == "--repeat" && i + 1 < argc) repeat = std::atoi(argv[++i]);
     else { std::fprintf(stderr, "unknown argument %s\n", k.c_str()); return 2; }
   }
   if (trace.empty()) {
-    std::fprintf(stderr, "usage: lkrl_run --trace PREFIX OUT.f32 [--schedule S] [--prior 0|1] [--profile 1] [--repeat N]\n");
+    std::fprintf(stderr, "usage: lkrl_run --trace PREFIX OUT.f32 [--schedule S] [--prior 0|1] [--profile 1] [--repeat N] [--audit-prefix PATH] [--data-steps N]\n");
     return 2;
   }
   std::map<std::string, std::string> meta;
@@ -75,6 +82,7 @@ int main(int argc, char** argv) {
   lkrl::LiteParams prm;
   prm.s = H / h;
   prm.schedule = schedule;
+  prm.debug_prefix = audit_prefix;
   prm.noise_a = float(num("a")); prm.noise_b = float(num("b"));
   prm.clip = float(num("clip")); prm.robust_k = float(num("robust_k")); prm.robust_tau = float(num("robust_tau"));
   prm.profile = profile;
@@ -82,6 +90,7 @@ int main(int argc, char** argv) {
   prm.guide = guide;
   prm.jacobi_damp = damp;
   prm.mhc_mix = mhc;
+  prm.lkr_steps = data_steps;
   prm.start_notch = notch;
   prm.cov_smooth = covr;
   prm.guide_mode = gmode;
