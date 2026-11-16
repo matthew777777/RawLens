@@ -67,7 +67,8 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
             text = "RawLens $versionName\n\n" +
                 "Copyright © 2026 RawLens contributors\n\n" +
                 "RawLens is free software licensed under GNU GPL version 3 or later. " +
-                "You may copy, modify, and redistribute it under that license. " +
+                "Its RapidRAW JPEG preprocessing is AGPLv3; the combined work is also subject to AGPLv3 section 13. " +
+                "You may copy, modify, and redistribute it under the applicable licenses. " +
                 "It comes with absolutely no warranty.\n\n" +
                 "Exposure-policy design acknowledges PhotonCamera and contributor matthew777777. " +
                 "Source code and notices accompany official releases."
@@ -78,7 +79,7 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
             text = "Open-source notices (RAW assist, ETTR, PROGRAM, ACES)"
             setOnClickListener {
                 val notices = listOf("raw-exposure-NOTICE.txt", "GPL-2.0.txt", "Apache-2.0.txt",
-                    "BSD-2-Clause-libcamera.txt", "bakinglab-aces.txt")
+                    "BSD-2-Clause-libcamera.txt", "bakinglab-aces.txt", "AGPL-3.0-RapidRAW.txt")
                     .joinToString("\n\n") { name -> assets.open("licenses/$name").bufferedReader().use { it.readText() } }
                 RawLensDialogBuilder(this@showAboutSettings).setTitle("Open-source licences").asPage()
                     .setMessage(notices).setPositiveButton("Close", null).show()

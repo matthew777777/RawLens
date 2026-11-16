@@ -34,6 +34,14 @@ class JpegImageDescriptionTest {
             "gamut compression: 0.400", "exponential shoulder")) assertTrue(field, text.contains(field))
         assertFalse(text.contains("Basic response"))
     }
+    @Test fun rapidRawMetadataFollowsTheCapturedSwitch() {
+        val on = JpegOutputSettings()
+        val off = on.copy(chromaCleanup = on.chromaCleanup.copy(rapidRawPreprocessing = false))
+        assertTrue(jpegImageDescription(on, null, null).contains("RapidRAW ON; chroma 0.500"))
+        val text = jpegImageDescription(off, null, null)
+        assertTrue(text.contains("RapidRAW OFF"))
+        assertFalse(text.contains("gentle detail 0.350"))
+    }
     @Test fun mergeProvenanceIsPreservedAndActualHdrFallbackIsTruthful() {
         val provenance = "Captured with RawLens\nLK-R merge\nPARAMETERS\n- Frames: 8\nTIMINGS\n- Merge: 123 ms"
         val s = JpegOutputSettings(toneMapper = PhotoToneMapper.BASIC, ultraHdr = true)

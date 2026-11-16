@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 RawLens contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#ifndef RAPIDRAW_OUTPUT_FUSED
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+#endif
 layout(binding = 0, rgba16f) readonly uniform highp image2D img_scene;
 layout(binding = 1, rgba8) writeonly uniform highp image2D img_encoded;
 layout(binding = 2, rgba8) writeonly uniform highp image2D img_gainmap;
@@ -38,6 +40,23 @@ uniform highp int u_multi_channel;
 uniform highp float u_grain_amount;
 uniform highp float u_grain_size;
 uniform highp uint u_grain_seed;
+#ifdef RAPIDRAW_BASIC
+#define EFFECTIVE_BASIC RAPIDRAW_BASIC
+#else
+#define EFFECTIVE_BASIC u_basic
+#endif
+
+#ifdef RAPIDRAW_OUTPUT_FUSED
+#define EFFECTIVE_HDR_PQ 0
+#define EFFECTIVE_GRAIN_AMOUNT 0.0
+#define EFFECTIVE_GAINMAP_ONLY 0
+#define EFFECTIVE_WRITE_GAINMAP RAPIDRAW_GAINMAP
+#else
+#define EFFECTIVE_HDR_PQ u_hdr_pq
+#define EFFECTIVE_GRAIN_AMOUNT u_grain_amount
+#define EFFECTIVE_GAINMAP_ONLY u_gainmap_only
+#define EFFECTIVE_WRITE_GAINMAP u_write_gainmap
+#endif
 
 // Google Filament AgX Base and Punchy looks.
 // Filament's matrices are Rec.2020. RawLens explicitly converts ACEScg D60 to Rec.2020 D65.
@@ -85,7 +104,7 @@ highp vec3 agx_base(highp vec3 acescg) {
     // C1 at knee 0.9, asymptote 1.7: 1.0->0.994, 1.95->1.49, 16->1.7 at full strength.
     // Strength 0 = pinned Filament AgX only. HDR keeps raw scene highlights
     // (the shoulder asymptote would cap them near SDR white), so it skips this.
-    if (u_highlight_shoulder > 0.0 && u_hdr_pq == 0) {
+    if (u_highlight_shoulder > 0.0 && EFFECTIVE_HDR_PQ == 0) {
         for (int c = 0; c < 3; ++c) {
             if (scene[c] > 0.9) {
                 highp float t = (scene[c] - 0.9) / 0.8;
@@ -101,10 +120,10 @@ highp vec3 agx_base(highp vec3 acescg) {
     highp vec3 normV = (v - vec3(minimumEv)) / evRange;
     // SDR clamps highlights to white; HDR lets the graded curve run past 1
     // (linear tail below) so scene highlights survive as code values > 1.
-    v = (u_hdr_pq != 0) ? max(normV, vec3(0.0)) : clamp(normV, 0.0, 1.0);
+    v = (EFFECTIVE_HDR_PQ != 0) ? max(normV, vec3(0.0)) : clamp(normV, 0.0, 1.0);
     highp float pivot = u_agx_shadow_ev / evRange;
     highp vec3 contrastV = vec3(pivot) + (v - vec3(pivot)) * u_agx_contrast;
-    v = (u_hdr_pq != 0) ? max(contrastV, vec3(0.0)) : clamp(contrastV, 0.0, 1.0);
+    v = (EFFECTIVE_HDR_PQ != 0) ? max(contrastV, vec3(0.0)) : clamp(contrastV, 0.0, 1.0);
     // The fit polynomial is only valid on [0,1]: evaluate it clamped and
     // extend highlights with its white-point slope (monotonic, continuous).
     highp vec3 over = max(v - vec3(1.0), vec3(0.0));
@@ -187,37 +206,54 @@ highp float grain_hash(ivec2 p, uint channel) {
 }
 
 void main() {
+    #ifdef RAPIDRAW_OUTPUT_FUSED
+    prepareCleanupTile();
+    #endif
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    #ifdef RAPIDRAW_OUTPUT_FUSED
+    pixel += u_dispatch_offset;
+    #endif
     highp ivec2 scenePixel = pixel;
-    if (u_gainmap_only != 0) {
+    if (EFFECTIVE_GAINMAP_ONLY != 0) {
         if (any(greaterThanEqual(pixel, u_gainmap_size))) return;
         // The platform permits smaller gainmaps. Center-sample each 4x4 source region.
         scenePixel = min(pixel * 4 + ivec2(2), u_size - ivec2(1));
     } else if (any(greaterThanEqual(pixel, u_size))) {
         return;
     }
+    #ifdef RAPIDRAW_OUTPUT_FUSED
+    highp vec3 sceneAcescg = cleanupPixel(scenePixel);
+    // Preserve the existing RGBA16F intermediate's rounding without storing it.
+    sceneAcescg = vec3(unpackHalf2x16(packHalf2x16(sceneAcescg.rg)),
+        unpackHalf2x16(packHalf2x16(vec2(sceneAcescg.b, 0.0))).r);
+    ivec2 gainPixel = pixel / 4;
+    bool writeGain = EFFECTIVE_WRITE_GAINMAP != 0 && all(equal(pixel, min(gainPixel * 4 + ivec2(2), u_size - 1)));
+    #else
     highp vec3 sceneAcescg = imageLoad(img_scene, scenePixel).rgb;
+    ivec2 gainPixel = pixel;
+    bool writeGain = EFFECTIVE_WRITE_GAINMAP != 0 && EFFECTIVE_GAINMAP_ONLY != 0;
+    #endif
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
     highp vec3 outputLinear;
     highp vec3 basicEncoded = vec3(0.0);
-    if (u_basic != 0) {
+    if (EFFECTIVE_BASIC != 0) {
         highp vec3 sceneOutput = outputMatrix * (ACESCG_TO_REC2020_D65 * sceneAcescg);
         basicEncoded = basic_encoded(sceneOutput);
         outputLinear = vec3(0.0);
         // Ordinary SDR goes straight to encoded output, skipping decode/re-encode.
-        if (u_hdr_pq != 0 || u_write_gainmap != 0) outputLinear = basic_decode(basicEncoded);
-        if (u_hdr_pq != 0) outputLinear += max(sceneOutput - 1.0, vec3(0.0));
+        if (EFFECTIVE_HDR_PQ != 0 || writeGain) outputLinear = basic_decode(basicEncoded);
+        if (EFFECTIVE_HDR_PQ != 0) outputLinear += max(sceneOutput - 1.0, vec3(0.0));
     }
     else outputLinear = compress_output_gamut(outputMatrix * agx_base(sceneAcescg));
 
     // The sole deliberate final display-gamut mapping/clipping boundary.
     // SDR clamps to white and encodes sRGB; HDR keeps highlight energy and
     // encodes ST2084 (graded linear 1.0 = 100 nits, see pq_oetf).
-    highp vec3 baseLinear = (u_hdr_pq != 0) ? max(outputLinear, vec3(0.0))
+    highp vec3 baseLinear = (EFFECTIVE_HDR_PQ != 0) ? max(outputLinear, vec3(0.0))
                                            : clamp(outputLinear, 0.0, 1.0);
-    highp vec3 encoded = (u_hdr_pq != 0) ? pq_oetf(baseLinear * vec3(100.0))
-                                         : ((u_basic != 0) ? basicEncoded : srgb_oetf(baseLinear));
-    if (u_gainmap_only == 0 && u_grain_amount > 0.0) {
+    highp vec3 encoded = (EFFECTIVE_HDR_PQ != 0) ? pq_oetf(baseLinear * vec3(100.0))
+                                         : ((EFFECTIVE_BASIC != 0) ? basicEncoded : srgb_oetf(baseLinear));
+    if (EFFECTIVE_GAINMAP_ONLY == 0 && EFFECTIVE_GRAIN_AMOUNT > 0.0) {
         // Neutral, zero-mean display grain replaces sensor residual retention. Combining an
         // independent sample with a 2x2 value field gives film-like clumps without color noise.
         highp ivec2 cell = pixel / 2;
@@ -227,21 +263,21 @@ void main() {
         highp float grain = mix(fine, coarse, u_grain_size);
         highp float luma = dot(encoded, vec3(.2126,.7152,.0722));
         highp float exposureMask = smoothstep(.015,.12,luma) * (1.0-smoothstep(.78,.99,luma));
-        encoded += vec3(grain * exposureMask * u_grain_amount * (3.0/255.0));
+        encoded += vec3(grain * exposureMask * EFFECTIVE_GRAIN_AMOUNT * (3.0/255.0));
     }
     highp vec3 dither = vec3(
         hash01(pixel, 0u), hash01(pixel, 1u), hash01(pixel, 2u)
     ) - 0.5;
     encoded += dither / 255.0;
     // RGBA8 conversion performs the final bounded 8-bit quantization.
-    if (u_gainmap_only == 0) imageStore(img_encoded, pixel, vec4(encoded, 1.0));
+    if (EFFECTIVE_GAINMAP_ONLY == 0) imageStore(img_encoded, pixel, vec4(encoded, 1.0));
 
     // RAWR-parity Ultra HDR gain map: scene-linear HDR to SDR-base ratio.
     // The HDR tap is the pre-tonemap scene in display-linear space (the same
     // ACEScg -> Rec.2020 -> display conversion as the base, without AgX);
     // the SDR tap is the clamped display-linear base. Quotients in deep
     // shadows fade to identity (they encode the tone-curve toe, not headroom).
-    if (u_write_gainmap != 0 && u_gainmap_only != 0) {
+    if (writeGain) {
         highp vec3 hdrScene = outputMatrix * (ACESCG_TO_REC2020_D65 * sceneAcescg);
         highp vec3 hdrLin = max(hdrScene * max(u_hdr_exposure, 1e-6), vec3(0.0));
         highp vec3 sdrLin = max(baseLinear, vec3(0.0));
@@ -268,8 +304,9 @@ void main() {
         highp vec3 norm3 = clamp(
             (logFinal - vec3(u_gainmap_min_log2)) / max(u_gainmap_max_log2 - u_gainmap_min_log2, 1e-6), 0.0, 1.0);
         highp vec3 recovery3 = pow(norm3, vec3(u_gainmap_gamma));
-        highp vec3 dithered3 = recovery3 + (dither / 255.0);
+        highp vec3 gainDither = vec3(hash01(gainPixel, 0u), hash01(gainPixel, 1u), hash01(gainPixel, 2u)) - 0.5;
+        highp vec3 dithered3 = recovery3 + (gainDither / 255.0);
         highp vec3 stored3 = clamp(floor(dithered3 * 255.0 + 0.5) / 255.0, 0.0, 1.0);
-        imageStore(img_gainmap, pixel, vec4(stored3, 1.0));
+        imageStore(img_gainmap, gainPixel, vec4(stored3, 1.0));
     }
 }

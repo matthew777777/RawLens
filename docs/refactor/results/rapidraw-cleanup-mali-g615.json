@@ -1,0 +1,2745 @@
+{
+  "producer": {
+    "build": "922df8",
+    "documentation": "https://developer.arm.com/tools-and-software/graphics-and-gaming/arm-mobile-studio/learn/mali-offline-compiler-documentation",
+    "name": "Mali Offline Compiler",
+    "version": [
+      2026,
+      5,
+      0
+    ]
+  },
+  "core": "Mali-G615",
+  "shaders": [
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=0 (half)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.6953125,
+                0.453125,
+                0.390625,
+                0.375,
+                2.0,
+                0.5
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.09375,
+                0.0,
+                0.09375,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.6953125,
+                0.453125,
+                0.390625,
+                0.375,
+                2.0,
+                0.5
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 28
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 20
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=1 (quarter)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.40625,
+                0.09375,
+                0.40625,
+                0.0,
+                2.0,
+                0.5
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.09375,
+                0.0,
+                0.09375,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.40625,
+                0.09375,
+                0.40625,
+                0.0,
+                2.0,
+                0.5
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 22
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 8
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=2 (gradient)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.578125,
+                0.0625,
+                0.546875,
+                0.125,
+                2.0,
+                0.625
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.09375,
+                0.0,
+                0.09375,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.578125,
+                0.0625,
+                0.546875,
+                0.125,
+                2.0,
+                0.625
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 12
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 12
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=3 (quarter-filter)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total"
+              ],
+              "cycle_count": [
+                6.0078125,
+                4.90625,
+                1.84375,
+                1.4375,
+                2.0,
+                4.25
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.09375,
+                0.0,
+                0.09375,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "arith_total"
+              ],
+              "cycle_count": [
+                2.0703125,
+                1.59375,
+                0.84375,
+                0.4375,
+                2.0,
+                1.75
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 62
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 50
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 14
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=4 (upsample)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.6484375,
+                0.328125,
+                0.625,
+                0.0625,
+                2.0,
+                1.125
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.09375,
+                0.0,
+                0.09375,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.765625,
+                0.328125,
+                0.75,
+                0.0625,
+                2.0,
+                1.125
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 31
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 16
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=5 (core)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.828125,
+                0.0703125,
+                0.78125,
+                0.1875,
+                2.0,
+                1.375
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.09375,
+                0.0,
+                0.09375,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.828125,
+                0.0703125,
+                0.78125,
+                0.1875,
+                2.0,
+                1.375
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 24
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 16
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=7 (noise-samples)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                4.171875,
+                2.9000000953674316,
+                1.6375000476837158,
+                3.625,
+                6.0,
+                3.25
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.09375,
+                0.0,
+                0.09375,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "arith_total"
+              ],
+              "cycle_count": [
+                3.9859375953674316,
+                2.1812500953674316,
+                2.625,
+                3.9375,
+                3.190000057220459,
+                2.5
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 31
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 40
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 32
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 20
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=8 (full-output)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                null
+              ],
+              "cycle_count": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.15625,
+                0.0,
+                0.15625,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                2.9124999046325684,
+                1.625,
+                2.137500047683716,
+                1.75,
+                8.0,
+                1.75
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 32
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 56
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 1536
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=9 (core-samples)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.609375,
+                0.046875,
+                0.484375,
+                0.5,
+                1.0,
+                0.25
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.09375,
+                0.0,
+                0.09375,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                0.625,
+                0.0546875,
+                0.5,
+                0.5,
+                1.0,
+                0.25
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 11
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 16
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=10 (half-filter)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total"
+              ],
+              "cycle_count": [
+                5.290624618530273,
+                4.25,
+                1.7374999523162842,
+                1.375,
+                2.0,
+                3.375
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.09375,
+                0.0,
+                0.09375,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                1.3531250953674316,
+                0.9375,
+                0.737500011920929,
+                0.375,
+                2.0,
+                0.875
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 64
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 50
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 14
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=11 (fused-basic-sdr)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                null
+              ],
+              "cycle_count": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.15625,
+                0.0,
+                0.15625,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                3.9484376907348633,
+                2.1812500953674316,
+                2.799999952316284,
+                2.9375,
+                8.0,
+                1.75
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 32
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 92
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 1536
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=12 (fused-basic-hdr)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                null
+              ],
+              "cycle_count": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.15625,
+                0.0,
+                0.15625,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                5.759375095367432,
+                3.09375,
+                4.175000190734863,
+                4.625,
+                10.0,
+                1.75
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 32
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 120
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 1536
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=13 (fused-agx-sdr)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                null
+              ],
+              "cycle_count": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.15625,
+                0.0,
+                0.15625,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                5.65625,
+                3.25,
+                3.8125,
+                4.0,
+                8.0,
+                1.75
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 32
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 128
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 1536
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "driver": "r56p1-00rel0",
+      "filename": "rapidraw_cleanup.glsl MODE=14 (fused-agx-hdr)",
+      "hardware": {
+        "architecture": "Valhall",
+        "core": "Mali-G615",
+        "pipelines": [
+          {
+            "description": "Arithmetic total (aggregate).",
+            "display_name": "Arithmetic",
+            "name": "arith_total"
+          },
+          {
+            "description": "Arithmetic Convert pipeline.",
+            "display_name": "Arith CVT",
+            "name": "arith_cvt"
+          },
+          {
+            "description": "Arithmetic Fused Multiply-Add pipeline.",
+            "display_name": "Arith FMA",
+            "name": "arith_fma"
+          },
+          {
+            "description": "Load/Store pipeline.",
+            "display_name": "Load/Store",
+            "name": "load_store"
+          },
+          {
+            "description": "Arithmetic Special Function Unit pipeline.",
+            "display_name": "Arith SFU",
+            "name": "arith_sfu"
+          },
+          {
+            "description": "Texture pipeline.",
+            "display_name": "Texture",
+            "name": "texture"
+          },
+          {
+            "description": "Varying pipeline.",
+            "display_name": "Varying",
+            "name": "varying"
+          }
+        ],
+        "revision": "r0p0"
+      },
+      "notes": [],
+      "properties": [
+        {
+          "description": "If true the shader contains computation which produces the same value for every invocation in a draw call or compute dispatch.",
+          "display_name": "Has uniform computation",
+          "name": "has_uniform_computation",
+          "value": true
+        }
+      ],
+      "shader": {
+        "api": "OpenGL ES",
+        "type": "Compute"
+      },
+      "variants": [
+        {
+          "name": "Main",
+          "performance": {
+            "longest_path_cycles": {
+              "bound_pipelines": [
+                null
+              ],
+              "cycle_count": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            "pipelines": [
+              "arith_total",
+              "arith_fma",
+              "arith_cvt",
+              "arith_sfu",
+              "load_store",
+              "texture"
+            ],
+            "shortest_path_cycles": {
+              "bound_pipelines": [
+                "arith_total",
+                "arith_cvt"
+              ],
+              "cycle_count": [
+                0.15625,
+                0.0,
+                0.15625,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "total_cycles": {
+              "bound_pipelines": [
+                "load_store"
+              ],
+              "cycle_count": [
+                7.3984375,
+                4.09375,
+                5.28125,
+                5.3125,
+                10.0,
+                1.75
+              ]
+            }
+          },
+          "properties": [
+            {
+              "description": "Number of read-write work registers used.",
+              "display_name": "Work Registers Used",
+              "name": "work_registers_used",
+              "value": 32
+            },
+            {
+              "description": "Shader core thread occupancy percentage.",
+              "display_name": "Thread Occupancy",
+              "name": "thread_occupancy",
+              "value": 100
+            },
+            {
+              "description": "Number of read-only uniform registers used.",
+              "display_name": "Uniform Registers Used",
+              "name": "uniform_registers_used",
+              "value": 128
+            },
+            {
+              "description": "Number of bytes of workgroup shared storage allocated.",
+              "display_name": "Shared Storage Size",
+              "name": "shared_storage_size",
+              "value": 1536
+            },
+            {
+              "description": "Number of bytes of stack memory allocated.",
+              "display_name": "Stack Size",
+              "name": "stack_size",
+              "value": 0
+            },
+            {
+              "description": "True if one or more registers were spilled to the stack.",
+              "display_name": "Has Stack Spilling",
+              "name": "has_stack_spilling",
+              "value": false
+            },
+            {
+              "description": "Number of bytes allocated to stack spilling.",
+              "display_name": "Stack Spill Size (bytes)",
+              "name": "stack_spill_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes allocated to stack alloca.",
+              "display_name": "Stack Alloca Size (bytes)",
+              "name": "stack_alloca_bytes",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack memory.",
+              "display_name": "Stack Usage (bytes)",
+              "name": "stack_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack alloca memory.",
+              "display_name": "Stack Alloca Usage (bytes)",
+              "name": "stack_alloca_usage",
+              "value": 0
+            },
+            {
+              "description": "Number of bytes transferred to and from stack spill memory.",
+              "display_name": "Stack Spill Usage (bytes)",
+              "name": "stack_spill_usage",
+              "value": 0
+            },
+            {
+              "description": "Percentage of narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic",
+              "name": "fp16_arithmetic",
+              "value": 0
+            },
+            {
+              "description": "Percentage of SIMD lanes idle in narrow arithmetic ops.",
+              "display_name": "16-bit Arithmetic Idle Lanes",
+              "name": "fp16_idle_lanes",
+              "value": -1
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    }
+  ]
+}

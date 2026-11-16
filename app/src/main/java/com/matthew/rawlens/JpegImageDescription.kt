@@ -41,6 +41,9 @@ internal fun jpegImageDescription(
         append("- Highlight compression: exponential shoulder; knee 0.900, strength ${number(settings.highlightShoulder)}\n")
     }
     append("- Working space: scene-linear ACEScg (AP1, D60)\n")
+    append(if (settings.chromaCleanup.rapidRawPreprocessing)
+        "- JPEG preprocessing: RapidRAW ON; chroma 0.500, gentle detail 0.350 (linear sRGB)\n"
+    else "- JPEG preprocessing: RapidRAW OFF\n")
     append("- Output: $gamut, 8-bit SDR base, sRGB transfer\n")
     if (outputWidth != null && outputHeight != null) append("- Dimensions: ${outputWidth}x${outputHeight}\n")
     if (rgbMerge) append("- Input: reconstructed camera RGB; no additional demosaic\n")

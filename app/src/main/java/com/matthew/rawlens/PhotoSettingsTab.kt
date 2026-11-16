@@ -274,6 +274,7 @@ internal class PhotoSettingsTab(
                 .putString(MainActivity.KEY_JPEG_DEMOSAIC, resolved.demosaic.name)
                 .putBoolean(ChromaCleanup.KEY_FALSE_COLOR, resolved.chromaCleanup.falseColorSuppression)
                 .putFloat(ChromaCleanup.KEY_DEFRINGE, resolved.chromaCleanup.defringeStrength)
+                .putBoolean(ChromaCleanup.KEY_RAPIDRAW, resolved.chromaCleanup.rapidRawPreprocessing)
                 .putFloat(MainActivity.KEY_JPEG_AGX_PURITY, resolved.agxPurityBoost)
                 .putString(PhotoToneMapper.PREFERENCE_KEY, resolved.toneMapper.name)
                 .putString(AgxLook.PREFERENCE_KEY, resolved.agxLook.name)

@@ -1,5 +1,20 @@
 # Third-party notices
 
+## RapidRAW RAW preprocessing
+
+The JPEG chroma cleanup and gentle detail enhancement in
+`shaders/display/rapidraw_cleanup.glsl`, its Android/native bridge, and the
+`rapidraw_cleanup.{cpp,h}` CPU reference are ports of `src-tauri/src/image_processing.rs` from
+https://github.com/CyberTimon/RapidRAW at commit
+`1a39ae4e76d825c5abf0d4bafee798f99e0a0b63` (Timon Käch and contributors).
+The port and its bridge carry AGPL-3.0-only; the license is bundled in
+`app/src/main/assets/licenses/AGPL-3.0-RapidRAW.txt`.
+The remaining RawLens code retains its existing licenses. Distribution of the
+combined GPLv3/AGPLv3 work is subject to AGPLv3 section 13, including its network
+interaction requirements where applicable. Corresponding source includes this port.
+RawLens supplies ACEScg/sRGB conversion, Android buffer ownership and EGL integration.
+The chroma/detail defaults are 0.5/0.35; this does not claim full RAW renderer parity.
+
 ## PhotonCamera
 
 RawLens's PROGRAM shutter-first exposure policy and ZSL lifecycle acknowledge work from PhotonCamera:

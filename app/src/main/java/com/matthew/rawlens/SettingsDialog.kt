@@ -124,7 +124,7 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
         "Exposure" to "PROGRAM auto exposure, HDR brackets, face priority",
         "Burst" to "Zero shutter lag, gyro sidecars, offline merges",
         "Merge" to "HDR+, MFSR and LK-R burst merges",
-        "Details" to "AI RAW denoise, wavelet denoise, capture sharpening",
+        "Details" to "JPEG cleanup, AI RAW denoise, wavelet denoise, capture sharpening",
         "Lenses" to "",
         "Debug" to "App log, camera diagnostics, debug frames",
         "About" to "Version, licences, updates",

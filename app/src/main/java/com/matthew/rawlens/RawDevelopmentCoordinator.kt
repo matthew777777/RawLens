@@ -620,7 +620,9 @@ class RawDevelopmentCoordinator(context: Context) {
             rawPlane,
             metadata,
             settings,
-            fusedOutputSettings = outputSettings
+            fusedOutputSettings = outputSettings,
+            // RapidRAW chroma/detail preprocessing needs the linear frame before encoding.
+            allowOutputFusion = !outputSettings.chromaCleanup.rapidRawPreprocessing
         ) { frame ->
             if (frame.texture.internalFormat == AmazeTextureFormat.RGBA8) {
                 jpegOutput.processEncoded(frame.texture, outputSettings)
@@ -787,7 +789,7 @@ class RawDevelopmentCoordinator(context: Context) {
                 clipPoint = reconstructedCfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = if (cameraLinearPlan) null else outputSettings,
+                fusedOutputSettings = if (cameraLinearPlan || outputSettings.chromaCleanup.rapidRawPreprocessing) null else outputSettings,
                 whiteWindow = tapWhiteWindow,
                 cameraLinear = cameraLinearPlan
             ) { output ->
@@ -896,7 +898,8 @@ class RawDevelopmentCoordinator(context: Context) {
                 clipPoint = reconstructed.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = if (settings.denoise.captureSharpening.enabled && !metadata.quadBayer) null else developOutput,
+                fusedOutputSettings = if (developOutput.chromaCleanup.rapidRawPreprocessing ||
+                    (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)) null else developOutput,
                 whiteWindow = whiteWindow,
                 cameraLinear = settings.denoise.captureSharpening.enabled && !metadata.quadBayer
             ) { output ->

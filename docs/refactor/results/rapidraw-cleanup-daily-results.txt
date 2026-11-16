@@ -1,0 +1,2 @@
+Details switch: visible; ON/OFF saved; reopening preserves state; original state restored.
+Viewfinder baseline: RawVfStats(fps=0.0, frameMs=0.0, vfWidth=0, vfHeight=0, rawWidth=0, rawHeight=0, glActive=false, starved=true, busySkips=0, gpu=false, jpeg=false, exposureEv=0.0, engine=AUTO)

@@ -65,6 +65,23 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         var settings = denoiseSettings()
         val aiSubordinate = ArrayList<View>()
 
+        content.addView(sectionTitle("JPEG cleanup"))
+        content.addView(SettingsSwitch(this).apply {
+            text = "RapidRAW cleanup\nReduces color noise and gently enhances detail in JPEG photos, including merged photos."
+            isChecked = jpegOutputSettings().chromaCleanup.rapidRawPreprocessing
+            setOnCheckedChangeListener { button, enabled ->
+                val current = jpegOutputSettings()
+                if (enabled == current.chromaCleanup.rapidRawPreprocessing) return@setOnCheckedChangeListener
+                val next = current.copy(chromaCleanup = current.chromaCleanup.copy(rapidRawPreprocessing = enabled))
+                if (controller.setJpegOutputSettings(next)) {
+                    lensPreferences().edit().putBoolean(ChromaCleanup.KEY_RAPIDRAW, enabled).apply()
+                } else {
+                    setStatus("SETTINGS AFTER SAVES")
+                    button.isChecked = current.chromaCleanup.rapidRawPreprocessing
+                }
+            }
+        })
+
         content.addView(sectionTitle("Capture sharpening"))
         val sharpToggle = SettingsSwitch(this).apply {
             text = "Capture sharpening\nRestores detail lost to the lens and demosaic. Developed photos only."

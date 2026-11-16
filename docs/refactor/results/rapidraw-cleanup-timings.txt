@@ -1,0 +1,29 @@
+--------- beginning of main
+11-16 01:19:46.899  6406  6431 I RapidRawCleanup: GPU 129x97 stats=80ms submit=191ms sparseReadback=5500B peakScratch=154744B
+11-16 01:19:46.938  6406  6431 I RapidRawCleanup: GPU 32x32 stats=4ms submit=6ms sparseReadback=488B peakScratch=12628B
+11-16 01:19:49.238  6406  6431 I RapidRawCleanup: 4080x3060 chroma=0.5 detail=0.35 1239ms
+11-16 01:19:49.703  6406  6431 I RapidRawCleanup: GPU 4080x3060 stats=85ms submit=346ms sparseReadback=5039256B peakScratch=153073312B
+11-16 01:19:50.155  6406  6431 I RapidRawCleanup: GPU 4080x3060 stats=91ms submit=303ms sparseReadback=5039256B peakScratch=153073312B
+11-16 01:19:50.575  6406  6431 I RapidRawCleanup: GPU 4080x3060 stats=47ms submit=315ms sparseReadback=5039256B peakScratch=153073312B
+11-16 01:19:50.625  6406  6431 I RapidRawCleanupTest: 4080x3060 completed CPU=1271ms GPU=[488, 449, 411]ms speedup=2.8307349665924275
+11-16 01:19:52.020  6406  6431 I RapidRawCleanup: GPU 4080x3060 stats=54ms submit=307ms sparseReadback=5039256B peakScratch=153073312B
+11-16 01:19:52.694  6406  6431 I RapidRawCleanup: GPU 4080x3060 stats=67ms submit=327ms sparseReadback=5039256B peakScratch=153073312B
+11-16 01:19:52.969  6406  6431 I RapidRawCleanup: GPU 17x13 stats=28ms submit=12ms sparseReadback=144B peakScratch=2884B
+11-16 01:19:52.977  6406  6431 I RapidRawCleanup: GPU 17x13 stats=2ms submit=3ms sparseReadback=144B peakScratch=2884B
+11-16 01:19:52.984  6406  6431 I RapidRawCleanup: GPU 17x13 stats=2ms submit=3ms sparseReadback=144B peakScratch=2884B
+11-16 01:19:53.048  6406  6431 I RapidRawCleanup: 129x97 chroma=0.5 detail=0.35 6ms
+11-16 01:19:53.061  6406  6431 I RapidRawCleanup: GPU 129x97 stats=4ms submit=7ms sparseReadback=5500B peakScratch=154744B
+11-16 01:19:53.063  6406  6431 I RapidRawCleanupTest: GPU/reference max=5.950928E-4 mean=7.687927407059159E-6
+11-16 01:19:53.132  6406  6431 I RapidRawCleanup: GPU 16x16 stats=1ms submit=4ms sparseReadback=148B peakScratch=3180B
+11-16 01:19:53.252  6406  6431 I RapidRawCleanup: GPU 16x16 stats=1ms submit=3ms sparseReadback=148B peakScratch=3180B
+11-16 01:19:53.371  6406  6431 I RapidRawCleanup: GPU 16x16 stats=2ms submit=3ms sparseReadback=148B peakScratch=3180B
+11-16 01:19:54.218  6406  6431 I RapidRawCleanup: GPU 8x8 stats=6ms submit=5ms sparseReadback=52B peakScratch=1032B
+11-16 01:19:54.322  6406  6431 I RapidRawCleanup: GPU 8x8 stats=3ms submit=2ms sparseReadback=52B peakScratch=1032B
+11-16 01:19:54.429  6406  6431 I RapidRawCleanup: GPU 8x8 stats=3ms submit=2ms sparseReadback=52B peakScratch=1032B
+11-16 01:19:54.576  6406  6431 I RapidRawCleanup: GPU 8x8 stats=4ms submit=2ms sparseReadback=52B peakScratch=1032B
+11-16 01:19:54.779  6406  6431 I RapidRawCleanup: GPU 8x8 stats=5ms submit=3ms sparseReadback=52B peakScratch=1032B
+11-16 01:19:54.840  6406  6431 I RapidRawCleanup: GPU 8x8 stats=3ms submit=2ms sparseReadback=52B peakScratch=1032B
+11-16 01:19:55.104  6406  6431 I RapidRawCleanup: GPU 8x8 stats=4ms submit=2ms sparseReadback=52B peakScratch=1032B
+11-16 01:19:55.172  6406  6431 I RapidRawCleanup: GPU 8x8 stats=4ms submit=2ms sparseReadback=52B peakScratch=1032B
+11-16 01:19:55.363  6406  6431 I RapidRawCleanup: GPU 8x8 stats=3ms submit=2ms sparseReadback=52B peakScratch=1032B
+11-16 01:19:55.427  6406  6431 I RapidRawCleanup: GPU 8x8 stats=3ms submit=1ms sparseReadback=52B peakScratch=1032B
