@@ -101,7 +101,7 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
         })
         content.addView(TextView(this).apply {
             tag = "settings-description"
-            text = "Android DngCreator is the default. AUTO falls back to patched TinyDNG only if the platform writer fails."
+            text = "Android DngCreator is the default. AUTO falls back to TinyDNG. Compatibility applies lens shading to single-frame Bayer pixels for editors such as RapidRAW: permanent correction, larger uncompressed 32-bit files, no JXL. It requires a shading map or shading already applied by the camera. It does not straighten distortion or change merged/AI DNG saves."
             setTextColor(getColor(R.color.text_secondary))
             textSize = 11f
         })

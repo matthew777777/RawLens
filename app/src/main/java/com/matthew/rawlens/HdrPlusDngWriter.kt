@@ -191,6 +191,10 @@ object HdrPlusDngWriter {
             fields.undefined(51009, TinyDngMetadata.gainMap(it, cfa.pattern,
                 RawCrop(0, 0, cfa.width, cfa.height), originY))
         }
+        (metadata.bufferGeometry as? RawBufferGeometry.Supported)?.processingCrop
+            ?.takeIf { it.width == cfa.width && it.height == cfa.height }
+            ?.let { DngLensCorrection.opcodeList(metadata, it) }
+            ?.let { fields.undefined(51022, it) }
         val exif = DngExifDirectory.fields(metadata, captureTimeMillis)
             ?: if (provenance != null) TiffFields() else null
         if (provenance != null && provenance.selectedFrames <= 65535 &&

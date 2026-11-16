@@ -112,6 +112,11 @@ object FloatCfaDngWriter {
             matrixTag(50965, metadata.forwardMatrix2)
             fields.shorts(50779, metadata.referenceIlluminant2)
         }
+        if (cfa.width == metadata.imageWidth && cfa.height == metadata.imageHeight) {
+            (metadata.bufferGeometry as? RawBufferGeometry.Supported)?.processingCrop
+                ?.let { DngLensCorrection.opcodeList(metadata, it) }
+                ?.let { fields.undefined(51022, it) }
+        }
         TinyDngImageWriter.write(output, cfa.width, cfa.height,
             samplesPerPixel = 1, bitsPerSample = 32, sampleFormat = 3,
             photometric = 32803, rowsPerStrip = cfa.height,

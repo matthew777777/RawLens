@@ -131,7 +131,11 @@ data class RawFrameMetadata(
     /** Sensor limit used to distinguish analog from digital noise gain. */
     val maxAnalogSensitivityIso: Int? = null,
     /** Verified session-specific geometry; independent of the vendor's stale mode/result tags. */
-    val sensorReadoutProfile: String? = null
+    val sensorReadoutProfile: String? = null,
+    /** Paired physical capture calibration, in pre-correction active-array coordinates. */
+    val lensIntrinsics: ImmutableFloatValues? = null,
+    /** Camera2 LENS_DISTORTION (k1,k2,k3,p1,p2), never the deprecated radialDistortion. */
+    val lensDistortion: ImmutableFloatValues? = null
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null
@@ -412,6 +416,10 @@ object RawFrameMetadataFactory {
                 result.get(CaptureResult.CONTROL_ZOOM_RATIO) else null)
                 ?.takeIf { it.isFinite() && it >= 1f &&
                     capabilities?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) != true },
+            lensIntrinsics = (physical ?: result).get(CaptureResult.LENS_INTRINSIC_CALIBRATION)
+                ?.let(::ImmutableFloatValues),
+            lensDistortion = (physical ?: result).get(CaptureResult.LENS_DISTORTION)
+                ?.let(::ImmutableFloatValues),
             lensMake = LensExifIdentity.make(Build.MANUFACTURER),
             lensModel = LensExifIdentity.model(
                 Build.MODEL,

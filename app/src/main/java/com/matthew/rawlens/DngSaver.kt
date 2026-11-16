@@ -181,7 +181,9 @@ class DngSaver(private val context: Context) {
         val platformGeometryMatches = PlatformDngCompatibility.matches(
             image.width, image.height, preCorrection?.width(), preCorrection?.height(),
             pixelArray?.width, pixelArray?.height)
-        val effectiveBackend = if (metadata.sensorReadoutProfile != null) {
+        val effectiveBackend = if (backend == DngWriterBackend.SHADED_FLOAT) {
+            backend
+        } else if (metadata.sensorReadoutProfile != null) {
             // The source frame carries verified mode geometry; Camera2's maximum-resolution
             // declaration still describes the unrelated 200MP sensor coordinate space.
             DngWriterBackend.TINY_DNG
@@ -211,13 +213,24 @@ class DngSaver(private val context: Context) {
             Log.w(LOG_TAG, "JXL DNG compression needs the single-frame path; " +
                 "packed frame $displayName stays uncompressed")
         }
-        val useJxl = dngCompression == DngCompression.JXL && packedFormat == null
+        val useJxl = dngCompression == DngCompression.JXL && packedFormat == null &&
+            effectiveBackend != DngWriterBackend.SHADED_FLOAT
         val compressionBackend = if (useJxl && effectiveBackend != DngWriterBackend.TINY_DNG) {
             Log.i(LOG_TAG, "JXL DNG compression forces TinyDNG backend for $displayName")
             DngWriterBackend.TINY_DNG
         } else effectiveBackend
         try {
-            val actualBackend = if (packedFormat != null) {
+            val actualBackend = if (effectiveBackend == DngWriterBackend.SHADED_FLOAT) {
+                if (dngCompression == DngCompression.JXL) {
+                    Log.i(LOG_TAG, "Shading compatibility DNG uses uncompressed float samples")
+                }
+                val plane = image.planes.single()
+                resolver.openOutputStream(uri, "w")?.use { output ->
+                    ShadedFloatDngWriter.write(output,plane.buffer,plane.rowStride,plane.pixelStride,
+                        image.format,metadata,overrides,gps,captureId)
+                } ?: throw IOException("Could not open DNG output stream")
+                DngWriterBackend.SHADED_FLOAT
+            } else if (packedFormat != null) {
                 savePackedCfa(uri, image, metadata, gps, overrides, displayName)
                 DngWriterBackend.TINY_DNG
             } else when (compressionBackend) {
@@ -245,6 +258,7 @@ class DngSaver(private val context: Context) {
                     metadata = metadata,
                     gps = gps
                 )
+                DngWriterBackend.SHADED_FLOAT -> error("Compatibility writer handled above")
             }
             DngCaptureMetadata.apply(context, uri, metadata, captureId, gps)
 

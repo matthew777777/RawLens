@@ -43,7 +43,8 @@ internal class TinyDngMetadata {
          */
         fun create(metadata: RawFrameMetadata, overrides: DngMetadataOverrides,
                    pattern: BayerPattern, black: DoubleArray, white: Int,
-                   active: RawCrop, dng17: Boolean = false): TinyDngMetadata = TinyDngMetadata().apply {
+                   active: RawCrop, dng17: Boolean = false,
+                   shadingBaked: Boolean = false): TinyDngMetadata = TinyDngMetadata().apply {
             longs(254, 0)
             shorts(274, metadata.exifOrientation)
             ascii(271, Build.MANUFACTURER ?: "Unknown")
@@ -90,13 +91,14 @@ internal class TinyDngMetadata {
                 matrix(50965, overrides.forwardMatrix2, metadata.forwardMatrix2)
                 shorts(50779, metadata.referenceIlluminant2)
             }
-            DngNoiseProfile.toRgb(overrides.noiseProfile?.toDoubleArray()
+            if (!shadingBaked) DngNoiseProfile.toRgb(overrides.noiseProfile?.toDoubleArray()
                 ?: metadata.noiseProfile?.toDoubleArray(), requireNotNull(metadata.cfaPattern),
                 metadata.blackLevels?.toFloatArray(), metadata.whiteLevel)
                 ?.let { reals(51041, it, 12) }
             metadata.sensitivityIso?.let { shorts(34855, it.coerceIn(0, 65535)) }
             metadata.exposureTimeNanos?.let { reals(33434, doubleArrayOf(it / 1e9), 5) }
-            metadata.lensShadingMap?.takeUnless { metadata.lensShadingAlreadyApplied }?.let {
+            DngLensCorrection.opcodeList(metadata, active)?.let { tag(51022, 7, it) }
+            metadata.lensShadingMap?.takeUnless { shadingBaked || metadata.lensShadingAlreadyApplied }?.let {
                 tag(51009, 7, gainMap(it, pattern, active,
                     (metadata.bufferGeometry as? RawBufferGeometry.Supported)?.sensorOriginY ?: 0))
             }

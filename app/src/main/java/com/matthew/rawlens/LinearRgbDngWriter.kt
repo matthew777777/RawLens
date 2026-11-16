@@ -107,9 +107,10 @@ data class MergeProvenance(
  *
  * Metadata policy: only reference-frame facts are copied (capture, exposure,
  * ISO, camera identity, white point, calibration, colour transforms,
- * orientation, sensor noise model). There is no lens-geometry source in
- * [RawFrameMetadata], so no lens tags are written; lens-shading state travels
- * in the provenance block instead of a fabricated tag. The NoiseProfile tag
+ * orientation, sensor noise model). Lens shading is already in the RGB pixels
+ * and its state travels in provenance. A geometric warp is not copied without
+ * an explicit output-to-sensor mapping (merge output may be cropped/rescaled).
+ * The NoiseProfile tag
  * carries the same DNG RGB S/O pairs as the source-Bayer path (via
  * [DngNoiseProfile]) so converters can apply profiled chroma denoise; it is
  * omitted — never fabricated — when the reference metadata carries no model.
