@@ -6,7 +6,7 @@ stages run independently of optional AI/wavelet denoise, on single-frame, CFA
 merge, AI RGB and merged RGB JPEG paths. DNG and JXL output are unaffected.
 
 Settings → Details → JPEG cleanup → **RapidRAW cleanup** switches both stages
-on/off together (default on). The saved preference is carried by `ChromaCleanup`
+on/off together (default off). The saved preference is carried by `ChromaCleanup`
 inside the capture-frozen JPEG settings, which also supplies offline merges.
 Off skips all cleanup GPU work and restores fused JPEG output where otherwise
 eligible. JPEG metadata records the actual on/off setting.

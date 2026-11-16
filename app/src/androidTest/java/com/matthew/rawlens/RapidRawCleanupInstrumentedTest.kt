@@ -44,7 +44,7 @@ class RapidRawCleanupInstrumentedTest {
                     floatArrayOf(l+n,l*.8f,l*.7f-n)
                 },65,49){scene ->
                     for(tone in PhotoToneMapper.entries)for(p3 in listOf(false,true))for(hdr in listOf(false,true)){
-                        val on=JpegOutputSettings(toneMapper=tone,displayP3=p3,ultraHdr=hdr)
+                        val on=JpegOutputSettings(chromaCleanup=ChromaCleanup(rapidRawPreprocessing=true),toneMapper=tone,displayP3=p3,ultraHdr=hdr)
                         val off=on.copy(chromaCleanup=on.chromaCleanup.copy(rapidRawPreprocessing=false))
                         val separate=cleanup.withCleaned(scene){processor.process(it,off)}
                         val fused=processor.process(scene,on)
@@ -81,7 +81,7 @@ class RapidRawCleanupInstrumentedTest {
                 floatArrayOf(.1f+n,.1f,.1f-n)
             },65,49){scene ->
                 val processor=Gles31JpegOutputProcessor(context)
-                val on=JpegOutputSettings()
+                val on=JpegOutputSettings(chromaCleanup=ChromaCleanup(rapidRawPreprocessing=true))
                 val off=on.copy(chromaCleanup=on.chromaCleanup.copy(rapidRawPreprocessing=false))
                 fun pixels(settings:JpegOutputSettings):IntArray {
                     val jpeg=processor.process(scene,settings)
@@ -120,7 +120,7 @@ class RapidRawCleanupInstrumentedTest {
                     val gpu=List(3){timed{cleanup.withCleaned(scene){GLES30.glFinish()}}}
                     report("4080x3060 completed CPU=${cpu}ms GPU=${gpu}ms speedup=${cpu.toDouble()/gpu.sorted()[1]}")
                     val processor=Gles31JpegOutputProcessor(context)
-                    val on=JpegOutputSettings(ultraHdr=true)
+                    val on=JpegOutputSettings(chromaCleanup=ChromaCleanup(rapidRawPreprocessing=true),ultraHdr=true)
                     val off=on.copy(chromaCleanup=on.chromaCleanup.copy(rapidRawPreprocessing=false))
                     fun dispose(jpeg:DevelopedJpeg){jpeg.bitmap.recycle();jpeg.gainmap?.recycle()}
                     try {

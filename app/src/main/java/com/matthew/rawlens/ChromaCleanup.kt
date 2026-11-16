@@ -15,7 +15,7 @@ data class ChromaCleanup(
     val falseColorSuppression: Boolean = true,
     val defringeStrength: Float = DEFAULT_DEFRINGE,
     /** Separate GPU chroma/detail stage before JPEG tone mapping. Frozen at capture. */
-    val rapidRawPreprocessing: Boolean = true
+    val rapidRawPreprocessing: Boolean = false
 ) {
     init {
         require(defringeStrength.isFinite() && defringeStrength in 0f..1f) {
@@ -32,7 +32,7 @@ data class ChromaCleanup(
         fun read(prefs: android.content.SharedPreferences) = ChromaCleanup(
             falseColorSuppression = prefs.getBoolean(KEY_FALSE_COLOR, true),
             defringeStrength = prefs.getFloat(KEY_DEFRINGE, DEFAULT_DEFRINGE).coerceIn(0f, 1f),
-            rapidRawPreprocessing = prefs.getBoolean(KEY_RAPIDRAW, true)
+            rapidRawPreprocessing = prefs.getBoolean(KEY_RAPIDRAW, false)
         )
     }
 }

@@ -35,8 +35,9 @@ class JpegImageDescriptionTest {
         assertFalse(text.contains("Basic response"))
     }
     @Test fun rapidRawMetadataFollowsTheCapturedSwitch() {
-        val on = JpegOutputSettings()
-        val off = on.copy(chromaCleanup = on.chromaCleanup.copy(rapidRawPreprocessing = false))
+        val off = JpegOutputSettings()
+        assertFalse(off.chromaCleanup.rapidRawPreprocessing)
+        val on = off.copy(chromaCleanup = off.chromaCleanup.copy(rapidRawPreprocessing = true))
         assertTrue(jpegImageDescription(on, null, null).contains("RapidRAW ON; chroma 0.500"))
         val text = jpegImageDescription(off, null, null)
         assertTrue(text.contains("RapidRAW OFF"))
