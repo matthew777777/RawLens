@@ -44,6 +44,11 @@ object AgxDisplayTransform {
         return acescgToOutputLinear(acescg, REC2020_TO_DISPLAY_P3, settings.resolvedForPlatform())
     }
 
+    /** Calibrated output primaries before any tone curve or highlight compression. */
+    internal fun sceneOutput(acescg: FloatArray, displayP3: Boolean = false): FloatArray =
+        map(if (displayP3) REC2020_TO_DISPLAY_P3 else REC2020_TO_SRGB,
+            map(ACESCG_TO_REC2020_D65, acescg))
+
     private fun acescgToOutputLinear(
         acescg: FloatArray,
         outputMatrix: FloatArray,

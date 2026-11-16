@@ -131,13 +131,21 @@ class RawDevelopmentCoordinator(context: Context) {
     private val adaptiveWorkspace = AdaptiveDevelopmentExposure.workspace()
 
     private fun resolveMfsrExposure(
-        rgb: ByteBuffer, width: Int, height: Int, settings: RawDevelopmentSettings
+        rgb: ByteBuffer, width: Int, height: Int, settings: RawDevelopmentSettings,
+        metadata: RawFrameMetadata, output: JpegOutputSettings
     ): Double {
         if (settings.adaptiveExposureStrength <= 0f) return settings.exposureEv
         val result = AdaptiveDevelopmentExposure.analyzeRgb(
             rgb, width, height, adaptiveWorkspace, settings.adaptiveExposureTuning
         )
-        return settings.exposureEv + result.correctionEv *
+        val correction = if (output.toneMapper == PhotoToneMapper.BASIC) {
+            val transform = SceneLinearColorProcessor.resolve(SceneLinearColorMetadata.from(metadata))
+            minOf(result.correctionEv, BasicRgbExposureGuard.limitEv(rgb, width, height,
+                transform.cameraToAcescg.toDoubleArray(), output.highlightSoftHeadroom.toDouble(),
+                output.highlightHeadroom.toDouble(), output.displayP3))
+        } else result.correctionEv
+        android.util.Log.i("BasicRgbExposure", "sensorEV=${result.correctionEv} guardedEV=$correction")
+        return settings.exposureEv + correction *
             settings.adaptiveExposureStrength.coerceIn(0f, 1f)
     }
     private val aiDenoiser by lazy { RawNindDenoiser(appContext) }
@@ -938,7 +946,7 @@ class RawDevelopmentCoordinator(context: Context) {
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         val transform = SceneLinearColorProcessor.resolve(
-            SceneLinearColorMetadata.from(metadata), resolveMfsrExposure(rgb, width, height, settings)
+            SceneLinearColorMetadata.from(metadata), resolveMfsrExposure(rgb, width, height, settings, metadata, outputSettings)
         )
         return amaze.processMfsrRgb(
             rgb, width, height,
@@ -1312,7 +1320,7 @@ class RawDevelopmentCoordinator(context: Context) {
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         val transform = SceneLinearColorProcessor.resolve(
-            SceneLinearColorMetadata.from(metadata), resolveMfsrExposure(rgb, width, height, settings)
+            SceneLinearColorMetadata.from(metadata), resolveMfsrExposure(rgb, width, height, settings, metadata, look)
         )
         return amaze.processMfsrRgb(
             rgb, width, height,

@@ -503,21 +503,21 @@ class AdaptiveDevelopmentExposureTest {
         // settings: defaults reproduce 0.85 exactly (no behavior change for
         // existing saves), a narrowed highlight window tightens the guard so
         // broad skies keep gradation, and a widened window loosens it.
-        val base = AdaptiveExposureTuning.fromOutputSettings(JpegOutputSettings())
+        val base = AdaptiveExposureTuning.fromOutputSettings(JpegOutputSettings(toneMapper = PhotoToneMapper.AGX))
         assertEquals(0.85, base.highlightSoftHeadroom, 1e-4)
         assertEquals(1f, base.highlightShoulder, 0f)
         val narrow = AdaptiveExposureTuning.fromOutputSettings(
-            JpegOutputSettings(agxShadowEv = 4f, agxHighlightEv = 3f)
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxShadowEv = 4f, agxHighlightEv = 3f)
         )
         assertTrue("narrow window did not tighten: $narrow", narrow.highlightSoftHeadroom < 0.85)
         assertTrue("narrow guard out of range: $narrow", narrow.highlightSoftHeadroom in 0.6..0.85)
         val wide = AdaptiveExposureTuning.fromOutputSettings(
-            JpegOutputSettings(agxShadowEv = 14f, agxHighlightEv = 10f)
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxShadowEv = 14f, agxHighlightEv = 10f)
         )
         assertTrue("wide window did not loosen: $wide", wide.highlightSoftHeadroom > 0.85)
         assertTrue("wide guard out of range: $wide", wide.highlightSoftHeadroom in 0.85..1.0)
         val flatShoulder = AdaptiveExposureTuning.fromOutputSettings(
-            JpegOutputSettings(highlightShoulder = 0f)
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, highlightShoulder = 0f)
         )
         assertEquals(0f, flatShoulder.highlightShoulder, 0f)
     }

@@ -150,3 +150,34 @@ Cloud/metadata validation (2026-11-15):
   metadata to reproduce all original capture settings exactly.
 - The test JPEGs and metrics were pulled for visual/numeric verification. Personal
   source pixels and rendered photos are not added to the repository.
+
+## Linear RGB fine branches: calibrated exposure guards (2026-11-16)
+
+Controlled phone renders of `IMG_20261116_155041_871_LINEAR.dng` found that
+turning off either or both chroma-cleanup stages did not remove the pale branch
+appearance. Basic at zero automatic correction retained branch color/contrast;
+the automatic correction was +1.223 EV. The sensor-domain RGB meter counts
+R:G:B 1:2:1 before white balance and calibration. Its highlight percentiles
+therefore do not bound the maximum output-primary channel that Basic displays.
+The calibrated sRGB p99 was about 0.71 before exposure, allowing only +0.495 EV
+under the existing 1% highlight budget. The previous lift pushed that tail well
+above scene white and compressed sunlit twigs into pale lines against blue sky.
+
+Basic RGB development now retains the original brightness meter and adds
+calibrated output-primary peak guards: p95 uses the configured broad headroom,
+p99 uses configured spike headroom. Both are measured before any display
+shoulder; the shoulder cannot buy more exposure. The lower correction wins,
+then the capture's adaptive strength and explicit exposure compensation apply.
+The output primaries follow sRGB/P3. This covers the common linear RGB JPEG/JXL
+route used by LK-R and other RGB merges. AgX and adaptive-off/manual exposure
+are unchanged. No local tone filter, sharpening, or DNG-pixel change is added.
+The earlier experimental cleanup edit was discarded.
+
+Phone validation measured +1.223 -> +0.495 EV. In a fixed 400x550 branch crop,
+pixels with all three JPEG channels >=230 fell from 723 to 294 (>=240: 58 to 13).
+This measures the pale-highlight reduction, not removal of real sunlit branches.
+The external sample and all eight 2026-11-16 linear DNGs rendered successfully
+at 4080x3060. The RGB input-preservation/automatic-versus-explicit device
+regression also passed. Focused JVM validation: 41 tests passed. An existing
+AgX-window test was corrected to select AgX explicitly instead of relying on
+the former default. Personal source and rendered pixels remain outside the repo.
