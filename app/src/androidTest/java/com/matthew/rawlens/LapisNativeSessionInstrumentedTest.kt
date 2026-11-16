@@ -29,6 +29,46 @@ class LapisNativeSessionInstrumentedTest {
     @Test fun twoXDsgNativePipeline() = run(LapisRootProfile.Mode.CROP_2X_DSG)
     @Test fun dcg14NativePipeline() = run(LapisRootProfile.Mode.DCG14)
 
+    @Test fun twoXDsgEncodedVideo() = encodedVideo(1920,1080)
+    @Test fun twoXDsgEncodedVideo720p() = encodedVideo(1280,720)
+    @Test fun twoXDsgEncodedVideo4k() = encodedVideo(3840,2160)
+
+    private fun encodedVideo(outputWidth:Int,outputHeight:Int) {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("lapisNativeSession")=="true")
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val key=java.util.UUID.randomUUID().toString()
+        val ready=CompletableFuture<LapisRootSession.Spec?>()
+        // Prime stock characteristics before setup, reproducing the preview-to-record cache.
+        val manager=context.getSystemService(CameraManager::class.java)
+        manager.getCameraCharacteristics("0")
+        LapisRootSessionControl.prepare(context,key,LapisRootProfile.Mode.CROP_2X_DSG) {
+            it.fold({ready.complete(it)},{ready.completeExceptionally(it)})
+        }
+        val lease=LapisRecordingLease(key,requireNotNull(ready.get(60,TimeUnit.SECONDS)))
+        val file=File(context.cacheDir,"lapis-2xdsg14-encoded.mp4")
+        val recorder=EncodedVideoRecorder(manager,"0",context,lease)
+        recorder.audioEnabled=false
+        recorder.width=outputWidth;recorder.height=outputHeight
+        var started=false
+        try {
+            recorder.start(file);started=true
+            Thread.sleep(4000)
+            recorder.stop();started=false
+            val extractor=android.media.MediaExtractor()
+            try {
+                extractor.setDataSource(file.path)
+                val track=(0 until extractor.trackCount).first { extractor.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/")==true }
+                val format=extractor.getTrackFormat(track)
+                assertEquals(outputWidth,format.getInteger(android.media.MediaFormat.KEY_WIDTH))
+                assertEquals(outputHeight,format.getInteger(android.media.MediaFormat.KEY_HEIGHT))
+                extractor.selectTrack(track)
+                var frames=0
+                while(extractor.sampleTime>=0) { frames++;if(!extractor.advance())break }
+                assertTrue("Encoded DSG recording contains no video: $frames",frames>=20)
+            } finally { extractor.release() }
+        } finally { if(started)runCatching { recorder.stop() };lease.close() }
+    }
+
     @Test fun killedWorkerRestoresSensor() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("lapisKillWorker")=="true")
         val context=InstrumentationRegistry.getInstrumentation().targetContext

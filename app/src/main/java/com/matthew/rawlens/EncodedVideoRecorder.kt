@@ -735,7 +735,10 @@ class EncodedVideoRecorder internal constructor(
             else -> "live HAL map (first frame arms it)"
         })
         startStabMotion(c)
-        val rawSizes = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        // CameraManager may retain stock stream tables across the root HAL restart.
+        // The owned lease supplies exact dimensions; the worker still verifies the live driver.
+        val rawSizes = lapisLease?.spec?.let { listOf(Size(it.width, it.height)) }
+            ?: c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?.getOutputSizes(ImageFormat.RAW_SENSOR)
             ?.toList()
             ?: error("No RAW_SENSOR sizes")
