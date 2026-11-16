@@ -80,12 +80,13 @@ public final class LapisRootCameraWorker {
         boolean live = args[0].startsWith("session-");
         String mode = live ? args[0].substring(8) : args[0];
         boolean full = mode.equals("50mp");
-        boolean dsg2=mode.equals("2xdsg14");
+        boolean dsg2=mode.equals("2xdsg14"), raw60=mode.equals("video60"), video=dsg2||raw60;
+        if(raw60&&!live)throw new IOException("60 fps readout requires an app session");
         boolean dcg=mode.equals("dcg14")||dsg2, crop4=mode.equals("4x"), hexa=mode.equals("200mp");
         if(hexa && live)throw new IOException("200 MP readout is a one-shot capture only");
         if(crop4 && !live)throw new IOException("4x requires a regular app camera session");
         if(dcg && !live)throw new IOException("DCG14 requires a regular app AE session");
-        if (!full && !dcg && !crop4 && !hexa && !mode.equals("2x")) throw new IOException("Unsupported sensor mode");
+        if (!full && !dcg && !raw60 && !crop4 && !hexa && !mode.equals("2x")) throw new IOException("Unsupported sensor mode");
         job = new File(args[1]).getCanonicalFile();
         String apk = new File(args[2]).getCanonicalPath();
         String nativeDirectory = args[3];
@@ -133,7 +134,7 @@ public final class LapisRootCameraWorker {
             String token = UUID.randomUUID().toString();
             File patched = new File(job,"vendor-patch.so");
             File videoMetadata=new File(job,"video-metastore.so");
-            if(dsg2)patch(apk,videoMetadata,"lapis-dsg-video-hook.bin");
+            if(video)patch(apk,videoMetadata,"lapis-dsg-video-hook.bin");
             if (full) patch(apk,patched,"lapis-50mp-hook.bin");
             if(dcg)patchCore(patched);
             File cropHelper=new File(job,"crop-helper.so"),cropCustom=new File(job,"crop-custom.so");
@@ -167,10 +168,10 @@ public final class LapisRootCameraWorker {
             String script = "#!/system/bin/sh\n" +
                 "test \"$(cat '"+lease+"' 2>/dev/null)\" = '"+token+"' || exit 0\n" +
                 cropRestore + hexaRestore +
-                (dsg2?"umount -l '"+LIB+"' 2>/dev/null || true\nrm -f "+shellQuote(videoMetadata.getPath())+"\n":"") +
+                (video?"umount -l '"+LIB+"' 2>/dev/null || true\nrm -f "+shellQuote(videoMetadata.getPath())+"\n":"") +
                 ((full||dcg) ? "umount -l '"+selectedLib+"' 2>/dev/null || true\n" : "") +
                 "setprop '"+PROP+"' '"+old+"' || exit 1\n" +
-                (dcg?"setprop '"+HDR_CONFIG+"' '"+oldConfig+"' || exit 1\nsetprop '"+HDR_RUNTIME+"' '"+oldRuntime+"' || exit 1\n":"")+
+                ((dcg||raw60)?"setprop '"+HDR_CONFIG+"' '"+oldConfig+"' || exit 1\nsetprop '"+HDR_RUNTIME+"' '"+oldRuntime+"' || exit 1\n":"")+
                 "test \"$(sha256sum '"+CORE_LIB+"' | cut -d ' ' -f 1)\" = '"+LapisRootProfile.CORE_SHA256+"' || exit 1\n" +
                 "test \"$(sha256sum '"+LIB+"' | cut -d ' ' -f 1)\" = '"+LapisRootProfile.VENDOR_SHA256+"' || exit 1\n" +
                 "test \"$(sha256sum '"+SMH_LIB+"' | cut -d ' ' -f 1)\" = '"+LapisRootProfile.SMH_SHA256+"' || exit 1\n" +
@@ -180,7 +181,7 @@ public final class LapisRootCameraWorker {
                 (crop4?"rm -f "+shellQuote(cropHelper.getPath())+" "+shellQuote(cropCustom.getPath())+"\n":"") +
                 ((full||dcg) ? "rm -f "+shellQuote(patched.getPath())+"\n" : "") +
                 // "handoff": the next mode's worker restarts the HAL once for both sessions.
-                ((full||hexa||dsg2) ? "touch '"+CAMERASERVER_PENDING+"' || exit 1\n" : "") +
+                ((full||hexa||video) ? "touch '"+CAMERASERVER_PENDING+"' || exit 1\n" : "") +
                 "if [ \"$1\" != handoff ]; then\n" +
                 "setprop ctl.restart camerahalserver || exit 1\n" +
                 "if [ -e '"+CAMERASERVER_PENDING+"' ]; then rm -f '"+CAMERASERVER_PENDING+"'; setprop ctl.restart cameraserver || exit 1; fi\n" +
@@ -199,7 +200,7 @@ public final class LapisRootCameraWorker {
                 "sh '"+watchdogRestore+"'; fi; rm -f '"+watchdogRestore+"'";
             new ProcessBuilder("sh","-c",watchdog).redirectOutput(new File(job,"watchdog.log")).redirectErrorStream(true).start();
             try {
-                if(dsg2)command("mount","-o","bind",videoMetadata.getPath(),LIB);
+                if(video)command("mount","-o","bind",videoMetadata.getPath(),LIB);
                 if (full||dcg) command("mount","-o","bind",patched.getPath(),selectedLib);
                 if(crop4) {
                     command("mount","-o","bind",cropHelper.getPath(),SMH_LIB);
@@ -213,9 +214,10 @@ public final class LapisRootCameraWorker {
                     command("sh","-c","echo "+(Long.parseLong(oldIspDebug)|514L)+" > '"+ISP_DEBUG+"'");
                 }
                 if(dcg) { command("setprop",HDR_CONFIG,"2");command("setprop",HDR_RUNTIME,"64"); }
-                command("setprop",PROP,full?"12":dsg2?"13":dcg?"9":crop4?"8":hexa?"11":"7");
+                if(raw60) { command("setprop",HDR_CONFIG,"");command("setprop",HDR_RUNTIME,""); }
+                command("setprop",PROP,full?"12":raw60?"4":dsg2?"13":dcg?"9":crop4?"8":hexa?"11":"7");
                 // A handed-off 50 MP session left stale stream tables in cameraserver.
-                boolean cameraserver=full||hexa||dsg2||CAMERASERVER_PENDING.exists();
+                boolean cameraserver=full||hexa||video||CAMERASERVER_PENDING.exists();
                 if (live) restartAndAwait(cameraserver);
                 else {
                     command("setprop","ctl.restart","camerahalserver");
@@ -225,7 +227,7 @@ public final class LapisRootCameraWorker {
                 Files.deleteIfExists(CAMERASERVER_PENDING.toPath());
                 float focus=Float.parseFloat(args[10]);
                 if(!Float.isFinite(focus)||focus<0||focus>20)throw new IOException("Invalid focus distance");
-                if (live) liveSession(full,dcg,crop4,dsg2);
+                if (live) liveSession(full,dcg,crop4,dsg2,raw60);
                 else if(hexa) captureHexadeca(iso,exposure,orientation,gains,focus);
                 else capture(full,iso,exposure,orientation,gains,focus);
             } finally {
@@ -249,7 +251,7 @@ public final class LapisRootCameraWorker {
                     && hash(new File(SMH_CUSTOM_LIB)).equals(LapisRootProfile.SMH_CUSTOM_SHA256)
                     && hash(new File("/vendor/lib64/libcam.sensor_mode_helper.so")).equals(LapisRootProfile.SMH_SHA256)
                     && hash(new File("/vendor/lib64/libcam.sensor_mode_helper_custom.so")).equals(LapisRootProfile.SMH_CUSTOM_SHA256)
-                    && (!dcg || (command("getprop",HDR_CONFIG).trim().equals(oldConfig) && command("getprop",HDR_RUNTIME).trim().equals(oldRuntime)))
+                    && (!(dcg||raw60) || (command("getprop",HDR_CONFIG).trim().equals(oldConfig) && command("getprop",HDR_RUNTIME).trim().equals(oldRuntime)))
                     && hexaRestored
                     && command("getenforce").trim().equals("Enforcing");
                 report.put("restored",restored);
@@ -338,11 +340,11 @@ public final class LapisRootCameraWorker {
     }
     private static int branch(int from,int to){return 0x14000000|(((to-from)/4)&0x3ffffff);}
 
-    private static void liveSession(boolean full,boolean dcg,boolean crop4,boolean dsg2)throws Exception {
-        JSONObject ready=new JSONObject().put("mode",full?"50mp":dsg2?"2xdsg14":dcg?"dcg14":crop4?"4x":"2x").put("state","ready");
+    private static void liveSession(boolean full,boolean dcg,boolean crop4,boolean dsg2,boolean raw60)throws Exception {
+        JSONObject ready=new JSONObject().put("mode",full?"50mp":raw60?"video60":dsg2?"2xdsg14":dcg?"dcg14":crop4?"4x":"2x").put("state","ready");
         ownedJson(new File(job,"ready.json"),ready);
         long lastHeartbeat=SystemClock.elapsedRealtime()/1000;
-        int expected=full?0x100c300e:dsg2?0x100d301a:dcg?0x1009301a:crop4?0x1008301a:0x1007301a,width=full?8160:4080,height=full?6120:dsg2?2304:3060;
+        int expected=full?0x100c300e:raw60?0x1004300e:dsg2?0x100d301a:dcg?0x1009301a:crop4?0x1008301a:0x1007301a,width=full?8160:4080,height=full?6120:(dsg2||raw60)?2304:3060;
         boolean verified=false;
         while(!new File(job,"release").exists()) {
             try { lastHeartbeat=Long.parseLong(new String(Files.readAllBytes(new File(job,"heartbeat").toPath()),java.nio.charset.StandardCharsets.UTF_8).trim()); }
@@ -351,13 +353,13 @@ public final class LapisRootCameraWorker {
             int[] active=LapisRootCameraNative.activeSensorFormat();
             boolean match=active!=null&&active[0]==width&&active[1]==height&&active[2]==expected;
             if(match!=verified) {
-                ownedJson(new File(job,"verified.json"),new JSONObject().put("verified",match).put("mode",full?"50mp":dsg2?"2xdsg14":dcg?"dcg14":crop4?"4x":"2x")
+                ownedJson(new File(job,"verified.json"),new JSONObject().put("verified",match).put("mode",full?"50mp":raw60?"video60":dsg2?"2xdsg14":dcg?"dcg14":crop4?"4x":"2x")
                     .put("width",width).put("height",height).put("driverCode",active==null?0:active[2]));
                 verified=match;
             }
             Thread.sleep(200);
         }
-        report.put("mode",full?"50mp":dsg2?"2xdsg14":dcg?"dcg14":crop4?"4x":"2x").put("session",true);
+        report.put("mode",full?"50mp":raw60?"video60":dsg2?"2xdsg14":dcg?"dcg14":crop4?"4x":"2x").put("session",true);
     }
 
     private static void ownedJson(File file,JSONObject value)throws Exception {

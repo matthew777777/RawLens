@@ -27,7 +27,7 @@ internal object LapisRootSessionControl {
             pendingRelease?.cancel(false);pendingRelease=null
             complete(runCatching {
                 val current=session
-                if(current!=null && current.mode==mode && current.alive) {
+                if(current!=null && current.mode==mode && current.alive && (mode!=LapisRootProfile.Mode.VIDEO60 || current.spec.fps==LapisRootProfile.videoFps(context))) {
                     owner=key
                     return@runCatching current.spec
                 }

@@ -287,6 +287,7 @@ class EncodedVideoRecorder internal constructor(
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
+    private var sensorPreview: ImageReader? = null
     private var rawSize: Size? = null
     private var exportSize: Size? = null
     private var cropRect: EncodedVideoLadder.Crop? = null
@@ -602,8 +603,8 @@ class EncodedVideoRecorder internal constructor(
 
     private fun startTake(output: File?) {
         // DCG14 is a fixed 30 fps sensor scenario; other rates would break the root mode.
-        lapisLease?.spec?.let { fps = it.fps }
-        require(fps == 24 || fps == 30) { "take fps must be 24 or 30 (got $fps)" }
+        lapisLease?.spec?.let { fps = it.recordingFps(fps) }
+        require(fps in listOf(24,30,60)) { "take fps must be 24, 30 or 60 (got $fps)" }
         require(VfEglImport.available) { "rawLensVfEgl native library unavailable" }
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
         synchronized(retainedWriterJobs) {
@@ -1212,6 +1213,7 @@ class EncodedVideoRecorder internal constructor(
         camHandler = handler
         val r = ImageReader.newInstance(size.width, size.height, ImageFormat.RAW_SENSOR, 8)
         reader = r
+        sensorPreview = LapisVideoPreview.create(lapisLease?.spec,handler)
         accepting = true
         r.setOnImageAvailableListener({ rd -> onFrame(rd) }, handler)
         try {
@@ -1219,6 +1221,7 @@ class EncodedVideoRecorder internal constructor(
             session = createSession(handler)
             val req = device!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(r.surface)
+                sensorPreview?.surface?.let { addTarget(it) }
                 // Sensor exposure/WB/focus tiles + lock-on-record switches;
                 // shading map is applied inside the helper.
                 applyVideoManualToRequest(this, c)
@@ -1398,6 +1401,7 @@ class EncodedVideoRecorder internal constructor(
             try {
                 val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                     addTarget(surf)
+                    sensorPreview?.surface?.let { addTarget(it) }
                     applyVideoManualToRequest(this, c)
                 }.build()
                 sess.setRepeatingRequest(req, repeatingCallback, handler)
@@ -1418,7 +1422,7 @@ class EncodedVideoRecorder internal constructor(
         val availableRanges =
             c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                 ?.map { it.lower to it.upper } ?: emptyList()
-        val picked = EncodedVideoProbe.fixedFpsRange(frameFps, availableRanges)
+        val picked = if(lapisLease?.spec?.video==true) frameFps to frameFps else EncodedVideoProbe.fixedFpsRange(frameFps, availableRanges)
             ?: error(
                 "no AE fps range covers ${frameFps}fps " +
                     "(available ${availableRanges.joinToString { "${it.first}-${it.second}" }})"
@@ -1426,7 +1430,7 @@ class EncodedVideoRecorder internal constructor(
         VideoManualControls.applyToRequest(
             builder, c, frameFps, picked, videoManual, videoLocks,
             videoMeteredIso, videoMeteredShutterNanos, videoMeteredFocus,
-            streamMinFrameDurationNanos = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            streamMinFrameDurationNanos = if(lapisLease?.spec?.video==true) 1_000_000_000L/frameFps else c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?.getOutputMinFrameDuration(android.graphics.ImageFormat.RAW_SENSOR, requireNotNull(rawSize)) ?: 0L,
         )
         // Lens-shading map (LOG needs it; mirrors the stills path).
@@ -1444,7 +1448,7 @@ class EncodedVideoRecorder internal constructor(
             Log.w(TAG, "lens-shading map request rejected; take runs unshaded")
         }
         // Last: DCG14 owns AE/fps/HDR keys and overrides manual exposure.
-        lapisLease?.spec?.applyRequest(builder)
+        lapisLease?.spec?.applyRequest(builder,fps)
     }
 
     private fun startAudio() {
@@ -3421,7 +3425,7 @@ class EncodedVideoRecorder internal constructor(
         val config = if (Build.VERSION.SDK_INT >= 28) {
             SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
-                listOf(videoRoute.bind(OutputConfiguration(r.surface))),
+                listOf(videoRoute.bind(OutputConfiguration(r.surface))) + listOfNotNull(sensorPreview?.surface?.let { videoRoute.bind(OutputConfiguration(it)) }),
                 java.util.concurrent.Executor { handler.post(it) },
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(s: CameraCaptureSession) {
@@ -3456,7 +3460,7 @@ class EncodedVideoRecorder internal constructor(
         }
         if (config != null) {
             lapisLease?.let { lease -> config.setSessionParameters(device!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                lease.spec.applyRequest(this)
+                lease.spec.applyRequest(this,fps)
             }.build()) }
             device!!.createCaptureSession(config)
         }
@@ -3489,6 +3493,7 @@ class EncodedVideoRecorder internal constructor(
         session = null
         try { device?.close() } catch (_: Exception) {}
         device = null
+        runCatching { sensorPreview?.close() };sensorPreview=null
         lapisLease?.close()
         try { reader?.close() } catch (_: Exception) {}
         reader = null

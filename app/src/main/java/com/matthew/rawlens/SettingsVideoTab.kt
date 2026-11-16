@@ -119,7 +119,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             }
             refresh()
             setOnClickListener {
-                p.kit.pickByStepping("Frame rate", listOf("24FPS", "30FPS"),
+                p.kit.pickByStepping("Frame rate", listOf("24FPS", "30FPS", "60FPS"),
                     { "${encodedVideoFpsPref()}FPS" }, { cycleEncodedVideoFps() }) { refresh() }
             }
         })

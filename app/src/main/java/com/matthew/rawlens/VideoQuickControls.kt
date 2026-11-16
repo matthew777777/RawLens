@@ -97,6 +97,11 @@ internal fun MainActivity.updateVideoQuickControls() {
     releaseQuick.alpha = if (releaseQuick.isEnabled) 1f else .4f
 }
 
+internal fun MainActivity.rawVideoFpsPref(): Int {
+    val id=controller.activeSettingsKey() ?: return 30
+    return vendorKeyStore.get(id).rawPreviewFps.takeIf { it > 0 } ?: 30
+}
+
 /** Shares the per-lens sensor AE range with the vendor-key editor. */
 internal fun MainActivity.rawVideoFrameRateLabel(): String {
     val cameraId = controller.activeSettingsKey() ?: return "Default"
@@ -108,12 +113,14 @@ internal fun MainActivity.chooseRawVideoFrameRate(onChanged: () -> Unit = {}) {
     if (videoRecording || videoRecorder != null || encodedVideoRecorder != null) return
     val cameraId = controller.activeSettingsKey() ?: return
     val profile = vendorKeyStore.get(cameraId)
-    val rates = listOf(0) + controller.vendorRawPreviewFpsOptions()
+    val rates = if(redmiRootMode()==LapisRootProfile.Mode.VIDEO60) listOf(0,24,30,60)
+        else (listOf(0,24,30,60) + controller.vendorRawPreviewFpsOptions()).distinct()
     val labels = rates.map { fps ->
         if (fps == 0) "Default" else {
-            val range = profile.copy(rawPreviewFps = fps).rawPreviewRange(
-                controller.vendorRawPreviewFpsRanges())
-            "$fps FPS (AE ${range?.first},${range?.last})"
+            val ranges=controller.vendorRawPreviewFpsRanges().map { it.first to it.last }
+            val range=EncodedVideoProbe.fixedFpsRange(fps,ranges)
+            if (redmiRootMode()==LapisRootProfile.Mode.VIDEO60) "$fps FPS (AE $fps,$fps)"
+            else range?.let { "$fps FPS (AE ${it.first},${it.second})" } ?: "$fps FPS (not advertised)"
         }
     }.toTypedArray()
     showRawFrameRateDialog(labels, rates.indexOf(profile.rawPreviewFps)) { dialog, which ->
@@ -129,6 +136,7 @@ internal fun MainActivity.chooseRawVideoFrameRate(onChanged: () -> Unit = {}) {
             }
             try {
                 vendorKeyStore.update(cameraId) { it.copy(rawPreviewFps = fps) }
+                if(redmiRootMode()==LapisRootProfile.Mode.VIDEO60) LapisRootProfile.preferences(this).edit().putInt("video_fps",fps.takeIf { it>0 } ?: 60).apply()
             } catch (failure: Exception) {
                 setStatus("FRAME RATE NOT SAVED: ${failure.message.orEmpty()}")
                 return@showRawFrameRateDialog

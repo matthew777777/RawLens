@@ -2261,6 +2261,7 @@ class MainActivity : Activity() {
             return
         }
         val recorder = RawVideoRecorder(manager, cameraId, size, this, lapisRecordingLease).apply {
+            fps = rawVideoFpsPref()
             crop = videoCrop
             compressionCodec = CrawWriter.normalizeCodec(lensPreferences().getInt(KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE))
             binning = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
@@ -2938,15 +2939,16 @@ class MainActivity : Activity() {
     internal fun encodedVideoVibrancePref(): Float =
         lensPreferences().getFloat(KEY_ENCODED_VIDEO_VIBRANCE, 0f).coerceIn(-1f, 1f)
 
-    /** Persisted Encoded Video frame rate: 24 or 30, 30 out of the box. Any
+    /** Persisted Encoded Video frame rate: 24, 30 or 60, 30 out of the box. Any
      * other stored value heals to 30. Applies to the next take (encoder
      * format + AE range are fixed at take start). */
     internal fun encodedVideoFpsPref(): Int =
-        if (lensPreferences().getInt(KEY_ENCODED_VIDEO_FPS, EncodedVideoProbe.FPS) == 24) 24 else 30
+        lensPreferences().getInt(KEY_ENCODED_VIDEO_FPS, EncodedVideoProbe.FPS).takeIf { it in listOf(24,30,60) } ?: 30
 
     internal fun cycleEncodedVideoFps() {
         if (videoRecording) return
-        val next = if (encodedVideoFpsPref() == 24) 30 else 24
+        val rates=listOf(24,30,60)
+        val next = rates[(rates.indexOf(encodedVideoFpsPref())+1)%rates.size]
         lensPreferences().edit().putInt(KEY_ENCODED_VIDEO_FPS, next).apply()
         refreshVideoAudioDescription()
         refreshVideoSensorInfo()
@@ -3025,7 +3027,7 @@ class MainActivity : Activity() {
 
     /** Blackmagic-style timecode HH:MM:SS:FF at the record rate. */
     private fun videoTimecode(elapsedMs: Long): String {
-        val fps = if (encodedVideoEnabled) encodedVideoFpsPref() else RawVideoRecorder.FPS
+        val fps = if (encodedVideoEnabled) encodedVideoFpsPref() else rawVideoFpsPref()
         val frames = elapsedMs * fps / 1000
         val ff = (frames % fps).toInt()
         val totalSeconds = frames / fps
@@ -3133,7 +3135,7 @@ class MainActivity : Activity() {
             else -> "FULL SENSOR"
         }
         val binTag = if (binned) " • BIN" else ""
-        findViewById<TextView>(R.id.sensorInfo)?.text = "$dims • ${RawVideoRecorder.FPS}FPS"
+        findViewById<TextView>(R.id.sensorInfo)?.text = "$dims • ${rawVideoFpsPref()}FPS"
         findViewById<TextView>(R.id.dngInfo)?.text =
             "CRAW • ${videoCrop.label.uppercase(Locale.US)}$binTag"
     }
@@ -3168,6 +3170,11 @@ class MainActivity : Activity() {
             .getOrDefault(emptyList())).distinct()
         for (id in ids) {
             val chars = resolveVideoCameraRoute(manager, id)?.characteristics ?: continue
+            val rootMode=LapisRootProfile.mode(this)
+            if(id=="0" && LapisRootSession.Spec(rootMode).video) {
+                val spec=LapisRootSession.Spec(rootMode)
+                return id to android.util.Size(spec.width,spec.height)
+            }
             val size = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?.getOutputSizes(android.graphics.ImageFormat.RAW_SENSOR)
                 ?.maxByOrNull { it.width * it.height }
@@ -3194,7 +3201,7 @@ class MainActivity : Activity() {
         )
         return "{\"UniqueCameraModel\":\"${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\"," +
             "\"width\":${size.width},\"height\":${size.height}," +
-            "\"crop\":\"${videoCrop.name}\",\"fps\":${RawVideoRecorder.FPS}," +
+            "\"crop\":\"${videoCrop.name}\",\"fps\":${rawVideoFpsPref()}," +
             (if (bin) "\"binning\":\"" +
                 (if (lensPreferences().getString(KEY_VIDEO_BINNING_MODE, BINNING_RGB) == BINNING_CFA) "remosaic2x2" else "rgb2x2") +
                 "\"," else "") +
@@ -3461,6 +3468,7 @@ class MainActivity : Activity() {
             LapisRootProfile.Mode.DCG14 -> "DCG14 • AUTO AE • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.CROP_4X -> "4× • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.CROP_2X -> "2× • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
+            LapisRootProfile.Mode.VIDEO60 -> "9.4 MP • RAW10 • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.CROP_2X_DSG -> "2× DSG • AUTO AE • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.NORMAL -> if (captureFormat.includesJpeg)
                 developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"

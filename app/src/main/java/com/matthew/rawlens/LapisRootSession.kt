@@ -23,20 +23,31 @@ import java.util.concurrent.TimeUnit
 
 /** Session-scoped root selection; the regular app Camera2 pipeline owns preview/ZSL/bursts. */
 internal class LapisRootSession private constructor(val mode: LapisRootProfile.Mode,
-    private val process: Process, private val job: File) : AutoCloseable {
-    class Spec(val mode: LapisRootProfile.Mode) {
+    private val process: Process, private val job: File, videoFps: Int) : AutoCloseable {
+    class Spec(val mode: LapisRootProfile.Mode, private val videoFps: Int = 60) {
         val width = if (mode == LapisRootProfile.Mode.FULL) 8160 else 4080
-        val height = if (mode == LapisRootProfile.Mode.FULL) 6120 else if(mode == LapisRootProfile.Mode.CROP_2X_DSG) 2304 else 3060
+        val height = if (mode == LapisRootProfile.Mode.FULL) 6120 else if(mode == LapisRootProfile.Mode.CROP_2X_DSG || mode == LapisRootProfile.Mode.VIDEO60) 2304 else 3060
         val dcg: Boolean get() = mode == LapisRootProfile.Mode.DCG14 || mode == LapisRootProfile.Mode.CROP_2X_DSG
-        val fps: Int get() = if(dcg) 30 else 10
-        fun applyRequest(builder: CaptureRequest.Builder) {
+        val video: Boolean get() = dcg || mode == LapisRootProfile.Mode.VIDEO60
+        val fps: Int get() = if(mode == LapisRootProfile.Mode.VIDEO60) videoFps else if(dcg) 30 else 10
+        fun recordingFps(requested: Int): Int = if(mode == LapisRootProfile.Mode.VIDEO60) requested.also { require(it in listOf(24,30,60)) } else fps
+        fun applyRequest(builder: CaptureRequest.Builder, requestedFps: Int = fps) {
+            val target = recordingFps(requestedFps)
             builder.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
-            builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,Range(fps,fps))
+            builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,Range(target,target))
             if(mode==LapisRootProfile.Mode.CROP_4X) {
                 builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.configSensorScenarios",IntArray::class.java),intArrayOf(0,1,4))
                 builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.configCellCropSensorIds",IntArray::class.java),intArrayOf(0))
                 builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.forceSensorMode",IntArray::class.java),intArrayOf(0,8))
                 builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.sensorScenario",IntArray::class.java),intArrayOf(0,5))
+            }
+            if(mode == LapisRootProfile.Mode.VIDEO60) {
+                builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT,CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                builder.set(CaptureRequest.SENSOR_FRAME_DURATION,1_000_000_000L/target)
+                builder.set(CaptureRequest.Key("com.mediatek.seamlessfeature.forceSensorMode",IntArray::class.java),intArrayOf(0,4))
+                builder.set(CaptureRequest.Key("com.mediatek.hdrfeature.hdrMode",Int::class.javaObjectType),0)
+                builder.set(CaptureRequest.Key("com.mediatek.hdrfeature.SessionParamhdrMode",Int::class.javaObjectType),0)
+                return
             }
             if(!dcg)return
             builder.set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_ON)
@@ -77,7 +88,7 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
             return true
         }
     }
-    val spec = Spec(mode)
+    val spec = Spec(mode,videoFps)
     private val heartbeat = Executors.newSingleThreadScheduledExecutor()
 
     init {
@@ -199,7 +210,7 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
             fun q(s:String)="'"+s.replace("'","'\\''")+"'"
             val command="CLASSPATH=${q(app.sourceDir)} exec app_process /system/bin com.matthew.rawlens.LapisRootCameraWorker "+args.joinToString(" ",transform=::q)
             val process=ProcessBuilder("su","-M","-c",command).redirectErrorStream(true).redirectOutput(File(job,"worker.log")).start()
-            val session=LapisRootSession(mode,process,job)
+            val session=LapisRootSession(mode,process,job,LapisRootProfile.videoFps(context))
             try {
                 val deadline=SystemClock.elapsedRealtime()+40000
                 while(!File(job,"ready.json").exists()) {

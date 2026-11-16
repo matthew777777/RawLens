@@ -129,6 +129,9 @@ internal class RawVideoRecorder(
         val cropLabel: String,
     )
 
+    /** Requested capture rate, selected before recording starts. */
+    var fps: Int = FPS
+
     /** Frame-level parallelism; three workers limit retained RAW/payload memory. */
     var encodeWorkers: Int = DEFAULT_WORKERS
 
@@ -265,6 +268,7 @@ internal class RawVideoRecorder(
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
+    private var sensorPreview: ImageReader? = null
     private var encodeThreads: Array<Thread?> = emptyArray()
     private var commitThread: Thread? = null
     // Java monitors expose wait/notifyAll used by the recording workers.
@@ -413,6 +417,8 @@ internal class RawVideoRecorder(
     private fun startInternal(output: File?, containerMetadataJson: String) {
         MemoryLeakDiagnostics.sampleAsync("rawvideo-start")
         check(device == null) { "Already started" }
+        lapisLease?.spec?.let { fps=it.recordingFps(fps) }
+        require(fps in listOf(24,30,48,50,60)) { "Unsupported recording frame rate: $fps" }
         require(CrawWriter.available) { "craw native library unavailable" }
         val reserve = storageReserveBytes
         val free = directOutput?.freeBytes() ?: freeBytes(requireNotNull(output))
@@ -569,6 +575,7 @@ internal class RawVideoRecorder(
             android.graphics.ImageFormat.RAW_SENSOR, READER_MAX_IMAGES
         )
         reader = r
+        sensorPreview = LapisVideoPreview.create(lapisLease?.spec,handler)
         // Pooled payload buffers: workers plus two spare so one wedged
         // worker can never starve the others into a pool deadlock (checkout
         // below is non-blocking regardless). Sized for the worst case
@@ -746,6 +753,7 @@ internal class RawVideoRecorder(
             val charsAtStart = chars
             val req = device!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(r.surface)
+                sensorPreview?.surface?.let { addTarget(it) }
                 applyVideoManualToRequest(this, charsAtStart)
             }.build()
             val afTrace = AfTrace(TAG, "RAW Video")
@@ -908,7 +916,7 @@ internal class RawVideoRecorder(
             return null
         }
         return VideoManualControls.controlRange(
-            control, chars, FPS, videoManual, videoLocks,
+            control, chars, fps, videoManual, videoLocks,
             videoMeteredIso, videoMeteredShutterNanos, videoMeteredFocus,
         )
     }
@@ -958,6 +966,7 @@ internal class RawVideoRecorder(
             try {
                 val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                     addTarget(surf)
+                    sensorPreview?.surface?.let { addTarget(it) }
                     applyVideoManualToRequest(this, chars)
                 }.build()
                 sess.setRepeatingRequest(req, repeatingCallback, handler)
@@ -979,17 +988,17 @@ internal class RawVideoRecorder(
         // before gets the identical request; otherwise the narrowest range
         // containing FPS instead of an unadvertised fixed range.
         val picked = EncodedVideoProbe.fixedFpsRange(
-            FPS,
+            fps,
             chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                 ?.map { it.lower to it.upper } ?: emptyList()
-        ) ?: (FPS to FPS)
+        ) ?: (fps to fps)
         VideoManualControls.applyToRequest(
-            builder, chars, FPS, picked, videoManual, videoLocks,
+            builder, chars, fps, picked, videoManual, videoLocks,
             videoMeteredIso, videoMeteredShutterNanos, videoMeteredFocus,
-            streamMinFrameDurationNanos = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            streamMinFrameDurationNanos = if(lapisLease?.spec?.video==true) 1_000_000_000L/fps else chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?.getOutputMinFrameDuration(android.graphics.ImageFormat.RAW_SENSOR, frameSize) ?: 0L,
         )
-        lapisLease?.spec?.applyRequest(builder)
+        lapisLease?.spec?.applyRequest(builder,fps)
     }
 
     fun snapshot(): VideoStats = VideoStats(
@@ -1529,7 +1538,7 @@ internal class RawVideoRecorder(
         val config = if (Build.VERSION.SDK_INT >= 28) {
             SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
-                listOf(videoRoute.bind(OutputConfiguration(reader!!.surface))),
+                listOf(videoRoute.bind(OutputConfiguration(reader!!.surface))) + listOfNotNull(sensorPreview?.surface?.let { videoRoute.bind(OutputConfiguration(it)) }),
                 // Use the camera handler executor for session callbacks.
                 java.util.concurrent.Executor { handler.post(it) },
                 object : CameraCaptureSession.StateCallback() {
@@ -1565,7 +1574,7 @@ internal class RawVideoRecorder(
         }
         if (config != null) {
             lapisLease?.let { lease -> config.setSessionParameters(device!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                lease.spec.applyRequest(this)
+                lease.spec.applyRequest(this,fps)
             }.build()) }
             device!!.createCaptureSession(config)
         }
@@ -1588,6 +1597,7 @@ internal class RawVideoRecorder(
         } catch (_: Exception) {
         }
         device = null
+        runCatching { sensorPreview?.close() };sensorPreview=null
         lapisLease?.close()
         try {
             reader?.close()

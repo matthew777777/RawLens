@@ -5,6 +5,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LapisRootProfileTest {
+    @Test fun videoReadoutKeepsRequestedCadencesAndDcgKeepsItsFixedRate() {
+        val video=LapisRootSession.Spec(LapisRootProfile.Mode.VIDEO60)
+        assertEquals(4080,video.width);assertEquals(2304,video.height)
+        for(rate in listOf(24,30,60))assertEquals(rate,video.recordingFps(rate))
+        assertEquals(30,LapisRootSession.Spec(LapisRootProfile.Mode.DCG14).recordingFps(60))
+        assertEquals(24,LapisRootSession.Spec(LapisRootProfile.Mode.VIDEO60,24).fps)
+    }
+
     @Test fun limitsRootPatchesToTheVerifiedPhoneAndFirmware() {
         val firmware = "Redmi/lapis_eea/lapis:16/ABCD/${LapisRootProfile.FIRMWARE}:user/release-keys"
         assertTrue(LapisRootProfile.matches("lapis","25080RABDG",firmware,""))

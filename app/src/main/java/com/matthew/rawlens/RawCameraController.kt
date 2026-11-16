@@ -671,7 +671,7 @@ class RawCameraController(
             val requested = LapisRootProfile.mode(context)
             // 200→50 MP is captured one-shot by the root worker; the preview uses the stock mode.
             val desired = if (intended == "0" && requested != LapisRootProfile.Mode.HEXADECA_200 &&
-                (photoControlsBeforeVideo == null || requested==LapisRootProfile.Mode.DCG14 || requested==LapisRootProfile.Mode.CROP_2X_DSG))
+                (photoControlsBeforeVideo == null || requested==LapisRootProfile.Mode.DCG14 || requested==LapisRootProfile.Mode.CROP_2X_DSG || requested==LapisRootProfile.Mode.VIDEO60))
                 requested else LapisRootProfile.Mode.NORMAL
             if (lapisPreparedMode != desired) {
                 opening = true
@@ -687,7 +687,7 @@ class RawCameraController(
                     opening = false
                     result.fold(onSuccess = { spec ->
                         lapisPreparedMode = desired; lapisSessionSpec = spec
-                        if(spec?.dcg==true) { flashStillMode=FlashStillMode.OFF;torchEnabled=false }
+                        if(spec?.video==true) { flashStillMode=FlashStillMode.OFF;torchEnabled=false }
                         cameraRouteCache.clear()
                         open()
                     }, onFailure = { failure ->
@@ -1643,7 +1643,7 @@ class RawCameraController(
      * caught here; asynchronous session-configuration failures use normal recovery.
      */
     private fun attachVendorSessionParams(device: CameraDevice, config: SessionConfiguration) {
-        lapisSessionSpec?.takeIf { (it.dcg || it.mode==LapisRootProfile.Mode.CROP_4X) && selectedCameraId=="0" }?.let { spec ->
+        lapisSessionSpec?.takeIf { (it.video || it.mode==LapisRootProfile.Mode.CROP_4X) && selectedCameraId=="0" }?.let { spec ->
             val parameters=device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
             spec.applyRequest(parameters)
             config.setSessionParameters(parameters.build())
@@ -4847,6 +4847,8 @@ class RawCameraController(
             options.add(at+3,LensOption("0","${mainLabel(4f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_4X,
                 "4x","Main camera, 4× in-sensor crop RAW"))
         }
+        if(extended) options.add(LensOption("0","${mainLabel()} · 60 FPS",selectedCameraId=="0" && mode==LapisRootProfile.Mode.VIDEO60,
+            "video60","4080 × 2304 RAW10, up to 60 fps; occasional frame drops measured. Select recording frame rate separately."))
         if(extended) options.add(LensOption("0","${mainLabel(2f)} · DSG",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X_DSG,
             "2xdsg14","2× sensor crop, DSG RAW14, 4080 × 2304, automatic exposure, 30 fps"))
         if(extended) options.add(LensOption("0","${mainLabel()} · DCG14",selectedCameraId=="0" && mode==LapisRootProfile.Mode.DCG14,
@@ -7403,7 +7405,7 @@ class RawCameraController(
         val transfer=synchronized(cameraStateLock) {
             val key=lapisLeaseKey
             val spec=lapisSessionSpec
-            if(key!=null && spec?.dcg==true) {
+            if(key!=null && spec?.video==true) {
                 lapisLeaseKey=null
                 LapisRecordingLease(key,spec)
             } else null
