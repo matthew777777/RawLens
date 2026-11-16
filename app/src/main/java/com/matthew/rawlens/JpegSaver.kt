@@ -25,7 +25,9 @@ class JpegSaver(private val context: Context) {
              gps: GpsLocation? = null,
              // Burst folder grouping, mirrors DngSaver.save: null keeps flat.
              subfolder: String? = null,
-             description: String? = null): String {
+             description: String? = null,
+             sourceCamera: Pair<String?, String?>? = null,
+             onPublished: ((android.net.Uri) -> Unit)? = null): String {
         val startedAt = SystemClock.elapsedRealtime()
         val bitmap = developed.bitmap
         val displayName = CaptureFileNames.fileName(captureTimeMillis, typeSuffix, "jpg")
@@ -78,8 +80,8 @@ class JpegSaver(private val context: Context) {
 
             resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
                 ExifInterface(descriptor.fileDescriptor).apply {
-                    setAttribute(ExifInterface.TAG_MAKE, Build.MANUFACTURER)
-                    setAttribute(ExifInterface.TAG_MODEL, Build.MODEL)
+                    setAttribute(ExifInterface.TAG_MAKE, if (sourceCamera == null) Build.MANUFACTURER else sourceCamera.first)
+                    setAttribute(ExifInterface.TAG_MODEL, if (sourceCamera == null) Build.MODEL else sourceCamera.second)
                     setAttribute(ExifInterface.TAG_SOFTWARE, "RawLens scene-referred developer")
                     setAttribute(ExifInterface.TAG_ORIENTATION, metadata.exifOrientation.toString())
                     // EXIF's ColorSpace tag has no Display-P3 code; Android's JPEG encoder writes
@@ -128,6 +130,7 @@ class JpegSaver(private val context: Context) {
                     "insert=${insertedAt - startedAt}ms encode=${encodedAt - insertedAt}ms exif=${exifAt - encodedAt}ms " +
                     "publish=${publishedAt - exifAt}ms total=${publishedAt - startedAt}ms"
             )
+            onPublished?.invoke(uri)
             return displayName
         } catch (failure: Exception) {
             resolver.delete(uri, null, null)

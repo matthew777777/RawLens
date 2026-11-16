@@ -84,6 +84,13 @@
             android:exported="true"
             android:screenOrientation="portrait">
         </activity>
+        <service android:name=".DevelopQueueService" android:exported="false"
+            android:foregroundServiceType="mediaProcessing|specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Importing and developing queued linear DNG photos" />
+        </service>
+        <activity android:name=".DevelopQueueActivity" android:exported="false"
+            android:screenOrientation="portrait" />
         <!-- Offline burst merge: staged _BURST.craw takes only, never RAW video. -->
         <activity
             android:name=".MergesActivity"

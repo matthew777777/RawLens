@@ -142,6 +142,9 @@ class MergesActivity : Activity() {
             addView(body)
         }
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        body.addView(optionButton("Develop DNGs · Import / export queue").apply {
+            setOnClickListener { startActivity(android.content.Intent(this@MergesActivity, DevelopQueueActivity::class.java)) }
+        })
         body.addView(title("Your bursts"))
         detailLine = desc("Loading burst takes…")
         body.addView(detailLine)

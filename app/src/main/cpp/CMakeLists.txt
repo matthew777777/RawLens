@@ -395,14 +395,17 @@ add_library(tinydng_v3 STATIC
     ${TINYDNG_DIR}/tiny_dng_ljpeg92_v2.c)
 target_include_directories(tinydng_v3 PUBLIC ${TINYDNG_DIR})
 target_compile_features(tinydng_v3 PUBLIC c_std_11)
-target_compile_definitions(tinydng_v3 PRIVATE TINYDNG_NO_ZIP
+target_include_directories(tinydng_v3 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/dng_import")
+target_link_libraries(tinydng_v3 PUBLIC z)
+target_compile_definitions(tinydng_v3 PRIVATE
     TINYDNG_NO_BASELINE_JPEG TINYDNG_NO_PSD TINYDNG_DISABLE_THREADS)
-add_library(rawLensDng SHARED tinydng_jni.cpp)
+add_library(rawLensDng SHARED tinydng_jni.cpp dng_import/dng_import_jni.cpp)
 target_link_libraries(rawLensDng PRIVATE tinydng_v3)
 target_link_options(rawLensDng PRIVATE "-Wl,-z,max-page-size=16384")
 # JXL-compressed DNG strips reuse the libjxl wired above for the still
 # encoder; without it the JXL DNG path reports "needs a libjxl build".
 if(TARGET jxl)
+    target_compile_definitions(rawLensDng PRIVATE RAWLENS_IMPORT_JXL)
     target_compile_definitions(tinydng_v3 PRIVATE TINYDNG_HAVE_JXL)
     target_link_libraries(tinydng_v3 PUBLIC jxl jxl_threads)
 endif()
