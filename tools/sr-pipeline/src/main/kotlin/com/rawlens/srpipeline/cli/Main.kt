@@ -356,18 +356,14 @@ private fun merge(plan: Plan) {
     HotPixels.correct(refImg, defects)
     val compImgs = comps.map { p -> { readFrame(p, plan.crop).also { HotPixels.correct(it, defects) } } }
 
-    // Noise profile from the reference tags; LUT validated against it like
-    // `load_noise_lut`, otherwise noise correction stays off (zero curves).
+    // Noise model: never the vendor NoiseProfile tag. Our own estimate from
+    // the full reference frame (SceneNoise), or --noise-ab for all planes.
     val refMeta = DngRead.readMeta(refPath.toString())
-    // --noise-ab: our own estimate (e.g. tools/lkr-pipeline NoiseAB on the
-    // reference) for all four planes, instead of the vendor NoiseProfile.
     val fullRef = if (plan.crop == null) refImg else readFrame(refPath, null)
     val (alpha, beta) = plan.noiseAb?.let { DoubleArray(4) { _ -> it[0] } to DoubleArray(4) { _ -> it[1] } }
-        ?: if (refMeta.noiseCount == 0) {
-            SceneNoise.estimate(fullRef).also { (a, b) ->
-                println("sr-pipeline: NoiseProfile absent; estimated reference noise alpha=${a.contentToString()} beta=${b.contentToString()}")
-            }
-        } else DngRead.noiseAlphaBeta(refMeta.noise, refMeta.noiseCount)
+        ?: SceneNoise.estimate(fullRef).also { (a, b) ->
+            println("sr-pipeline: estimated reference noise alpha=${a.contentToString()} beta=${b.contentToString()}")
+        }
     if (plan.noiseAb != null) println("sr-pipeline: noise model from --noise-ab a=${plan.noiseAb[0]} b=${plan.noiseAb[1]} (not the DNG profile)")
     // `--lut auto`: simulate in-process (NoiseLutGen, same model as the
     // Python monte_carlo; SRP_LUT_TRIALS overrides the trial count).

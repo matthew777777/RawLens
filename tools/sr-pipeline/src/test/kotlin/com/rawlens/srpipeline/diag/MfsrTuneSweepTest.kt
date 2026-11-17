@@ -96,9 +96,8 @@ class MfsrTuneSweepTest {
         if (files.size < 4) return null
         val meta = DngRead.readMeta(files[0].absolutePath)
         val full = DngRead.readNormalized(files[0].absolutePath, meta)
-        // No NoiseProfile tag: blind estimate from the reference, as the CLI does.
-        val (alpha, beta) = if (meta.noiseCount == 0) com.rawlens.srpipeline.stages.SceneNoise.estimate(full)
-            else DngRead.noiseAlphaBeta(meta.noise, meta.noiseCount)
+        // Our own estimate from the reference, as the CLI (never the DNG NoiseProfile).
+        val (alpha, beta) = com.rawlens.srpipeline.stages.SceneNoise.estimate(full)
         val h = full.size; val w = full[0].size
         // Most textured n x n window (coarse search), even origin (RGGB phase).
         var best = -1.0; var bx = 0; var by = 0

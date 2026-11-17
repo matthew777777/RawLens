@@ -114,8 +114,8 @@ class ZipperRootCauseTest {
         val files = dir.listFiles { f -> f.name.endsWith(".dng") }!!.sortedBy { it.name }.take(8)
         val meta = DngRead.readMeta(files[0].absolutePath)
         val full = DngRead.readNormalized(files[0].absolutePath, meta)
-        val (alpha, beta) = if (meta.noiseCount == 0) com.rawlens.srpipeline.stages.SceneNoise.estimate(full)
-            else DngRead.noiseAlphaBeta(meta.noise, meta.noiseCount)
+        // Our own estimate, never the DNG NoiseProfile (as the CLI).
+        val (alpha, beta) = com.rawlens.srpipeline.stages.SceneNoise.estimate(full)
         val ox = (System.getenv("SRP_ZIP_X")?.toInt() ?: 3200) and -2
         val oy = (System.getenv("SRP_ZIP_Y")?.toInt() ?: 896) and -2
         fun crop(f: Array<FloatArray>) = Array(n) { y -> f[oy + y].copyOfRange(ox, ox + n) }

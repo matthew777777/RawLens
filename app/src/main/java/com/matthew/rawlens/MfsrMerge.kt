@@ -16,6 +16,7 @@ import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
+import com.rawlens.srpipeline.stages.SceneNoise
 import com.rawlens.srpipeline.stages.RobustnessParams
 import com.rawlens.srpipeline.stages.VulkanPipeline
 import java.io.File
@@ -36,9 +37,10 @@ import java.nio.ByteBuffer
  * .keepSourceBurst, run the same frames through the desktop CLI, and
  * census the pair (same envelope class as the crop gate).
  *
- * Noise model (engineNoiseAlphaBeta / withLearnedGreen): the learned
- * per-device model (switch: MfsrSettings.learnedNoise) or the Camera2
- * profile mapped from CFA order; it drives GAT, SNR -> tile/kernel params,
+ * Noise model (SceneNoise / withLearnedGreen): our own estimate from the
+ * reference frame, with green from the learned per-device model when trained
+ * (switch: MfsrSettings.learnedNoise); never the vendor NoiseProfile. It
+ * drives GAT, SNR -> tile/kernel params,
  * the in-app NoiseLutGen robustness LUT and the KernelNet sigma.
  * Before the merge: static hot/dead pixels (HotPixels, C18). In the merge:
  * colour-difference accumulation (Z1, MfsrSettings.zipperFix). After it:
@@ -601,22 +603,6 @@ internal object MfsrMerge {
         }
         var nativeOut: ByteBuffer? = null
         try {
-            val profile = engineNoiseAlphaBeta(noise, pattern)
-            val learned = if (!settings.learnedNoise || noiseSource == null) null else
-                WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), noiseSource)
-                    ?.let { WaveletVulkan.predictNoise(it, noiseSource.iso.toFloat()) }
-            val (alpha, beta) = withLearnedGreen(profile, learned)
-                ?: profile
-                ?: (DoubleArray(4) { 1e-4 } to DoubleArray(4) { 1e-6 }).also {
-                    Log.w(LOG_TAG, "sharp merge: no usable noise profile (size ${noise?.size}), using constant fallback")
-                }
-            Log.i(LOG_TAG, "sharp merge noise: source=%s alpha=%s beta=%s".format(
-                when {
-                    learned != null -> "learned(samples=${learned[2].toInt()} isos=${learned[3].toInt()})"
-                    profile != null -> if (settings.learnedNoise) "profile (model untrained)" else "profile (learned off)"
-                    else -> "fallback"
-                },
-                alpha.joinToString(",") { "%.3g".format(it) }, beta.joinToString(",") { "%.3g".format(it) }))
             // Same recipe as the desktop CLI / crop gate (BurstConfig SNR
             // scan sizes the tiles); scale 1 keeps the source grid.
             // First thunk decodes now (reference rows); the rest decode
@@ -632,15 +618,44 @@ internal object MfsrMerge {
                 }
             }
             HotPixels.correct(first, defects)
+            // RawTherapee capture sharpening: auto radius from the reference
+            // CFA, measured now so the frame need not stay alive (RT measures
+            // it on the raw too). Output pixels at 2x are half as large.
+            val captureRadius = runCatching { RtCaptureSharpen.autoRadiusBayer(first) * scale }
+                .getOrDefault(Float.NaN)
+            // Noise model: never the vendor NoiseProfile (owner rule). Our own
+            // estimate from the reference frame (SceneNoise: same-CFA Haar
+            // MADs per brightness bin, Poisson-Gaussian fit, all four planes);
+            // the learned per-device model replaces green when trained, with
+            // R/B scaled by the estimate's own ratios.
+            val estimated = try { SceneNoise.estimate(first) } catch (e: IllegalArgumentException) {
+                Log.w(LOG_TAG, "sharp merge: scene noise estimate failed: ${e.message}"); null
+            }
+            val learned = if (!settings.learnedNoise || noiseSource == null) null else
+                WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), noiseSource)
+                    ?.let { WaveletVulkan.predictNoise(it, noiseSource.iso.toFloat()) }
+            val (alpha, beta) = withLearnedGreen(estimated, learned)
+                ?: estimated
+                ?: (DoubleArray(4) { 1e-4 } to DoubleArray(4) { 1e-6 }).also {
+                    Log.w(LOG_TAG, "sharp merge: no noise estimate, using constant fallback")
+                }
+            Log.i(LOG_TAG, "sharp merge noise: source=%s alpha=%s beta=%s".format(
+                when {
+                    learned != null && estimated != null -> "learned green(samples=${learned[2].toInt()} isos=${learned[3].toInt()}) + estimated R/B ratios"
+                    learned != null -> "learned(samples=${learned[2].toInt()} isos=${learned[3].toInt()})"
+                    estimated != null -> if (settings.learnedNoise) "estimated (model untrained)" else "estimated (learned off)"
+                    else -> "fallback"
+                },
+                alpha.joinToString(",") { "%.3g".format(it) }, beta.joinToString(",") { "%.3g".format(it) }))
             val snr = BurstConfig.estimateSnr(first, alpha, beta)
             val fin = BurstConfig.finalize(snr)
             val factors = listOf(1, 2, 4, 4)
             BurstConfig.sanitize(scale.toFloat(), fin.tileSize, factors, fin.tileSizes, h, w)
             // Robustness noise correction (Wronski 2019 Sec. 5.2.1): the
-            // Monte Carlo noise LUT for this profile, simulated once per
-            // sensor/ISO and cached (NoiseLutGen). Only with a real tag
-            // profile; failure falls back to uncorrected robustness.
-            val curves = if (noise == null || noise.size != 8) null else try {
+            // Monte Carlo noise LUT for our noise model, simulated and cached
+            // per (alpha, beta) (NoiseLutGen); failure falls back to
+            // uncorrected robustness.
+            val curves = try {
                 val t0 = SystemClock.elapsedRealtime()
                 NoiseLutGen.cached(File(context.cacheDir, "noise_lut"), alpha, beta).also {
                     Log.i(LOG_TAG, "sharp merge: noise LUT ready in ${SystemClock.elapsedRealtime() - t0} ms")
@@ -735,6 +750,19 @@ internal object MfsrMerge {
                 rgb.rewind()
                 Log.i(LOG_TAG, "sharp merge lens shading after merge in ${SystemClock.elapsedRealtime() - t0} ms")
             }
+            // RawTherapee capture sharpening (defaults: auto radius and
+            // contrast, 20 iterations) on the GPU; skipped on any failure.
+            try {
+                val wb = zipperWb(neutral)
+                VulkanHub.open().use { vk ->
+                    val st = RtCaptureSharpenVulkan.apply(vk, { name -> context.assets.open("spirv/$name").use { it.readBytes() } },
+                        rgb.asFloatBuffer(), outW, outH, captureRadius, wb[0], wb[1])
+                    Log.i(LOG_TAG, "sharp merge capture sharpening: $st")
+                }
+            } catch (failure: Throwable) {
+                Log.w(LOG_TAG, "sharp merge capture sharpening skipped", failure)
+            }
+            rgb.rewind()
             Log.i(LOG_TAG, "sharp merge done ${outW}x$outH (x$scale) N=$count in ${mergeMs}ms tuning=$tuning")
             return EngineOut(rgb, outW, outH, mergeMs)
         } catch (failure: Exception) {

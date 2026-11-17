@@ -114,7 +114,8 @@ class SrpPipelineFullresDeviceTest {
             }
             val h = refBox!!.size
             val w = refBox!![0].size
-            val (alpha, beta) = DngRead.noiseAlphaBeta(refMeta.noise, refMeta.noiseCount)
+            // Our own noise estimate, never the DNG NoiseProfile (as MfsrMerge).
+            val (alpha, beta) = com.rawlens.srpipeline.stages.SceneNoise.estimate(refBox!!)
             // -e rawlensSrpLut gen: the in-app generator (cached per
             // profile, as MfsrMerge) instead of the pushed Python LUT.
             val curves = if (args.getString("rawlensSrpLut") == "gen") {
