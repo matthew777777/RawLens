@@ -38,7 +38,8 @@ def parse(summary):
                 if s['name'] == 'performance_projection_stats':
                     for k in ('latency_hiding_stats', 'performance_stats'):
                         st.update({x['name']: x['value'] for x in s.get(k, [])})
-            rows.setdefault(name, {})['A750'] = dict(
+            arch = next((c.split('=')[1].upper() for c in cmd if c.startswith('-arch=')), 'A750')
+            rows.setdefault(name, {})[arch] = dict(
                 ins=st.get('Total instruction count'), regs=st.get('Overall register footprint per shader instance'),
                 scratch=st.get('Scratch memory usage per shader instance'), occ=st.get('ALU fiber occupancy percentage'),
                 exposed=st.get('Cycles with exposed long latency sync instructions'))
@@ -49,9 +50,10 @@ def fmt(r):
     def m(c):
         x = r.get(c)
         return f"{x['reg']:>3}r {x['occ']:>3}% sp{x['spill']:<3} {x['bound'][:10]:10s} {x['tot']:6.1f}cy" if x else '-'
-    a = r.get('A750')
-    aa = f"{a['ins']:>5}i {a['regs']:>3}r sc{a['scratch']:>3} occ{a['occ']:>4} expLL {a['exposed']}" if a else '-'
-    return m('G615'), m('G720'), aa
+    def ad(c):
+        a = r.get(c)
+        return f"{a['ins']:>5}i {a['regs']:>3}r occ{a['occ']:>4}" if a else '-'
+    return m('G615'), m('G720'), ad('A750') + ' | A740 ' + ad('A740')
 
 
 def main():
