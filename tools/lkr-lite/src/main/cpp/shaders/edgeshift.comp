@@ -1,0 +1,87 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Edge position correction after the fit (prototype 2026-11-17). A zipper is a right value at a
+// slightly wrong position ACROSS an edge, alternating along it. Per pixel on a clear straight edge:
+// delta = across-edge position offset of the pixel's luma vs its edge-direction neighbours'
+// profile, (L(x) - L_along) / |grad L|. The edge's real position varies smoothly, so the error is
+// delta - mean(delta along the edge); the pixel is RESAMPLED at x - err * n (all planes, own
+// across-edge profile: no averaging along the edge, nothing on texture without a straight edge).
+// mode 0: dl = (delta, gate). mode 1: zt = corrected z. pc.clip = strength, pc.tau = contrast (sigmas), pc.a/b noise.
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) writeonly buffer ZT { float zt[]; };
+layout(std430, binding = 2) buffer DL { vec4 dl[]; };   // (delta R, G, B, gate)
+float L(int y, int x) {
+  x = clamp(x, 0, pc.W - 1); y = clamp(y, 0, pc.H - 1);
+  int o = y * pc.W + x, HW = pc.H * pc.W;
+  return z[o] + z[HW + o] + z[2 * HW + o];
+}
+float Lb(vec2 p) {
+  p = clamp(p, vec2(0.0), vec2(float(pc.W - 1), float(pc.H - 1)) - 1e-3);
+  ivec2 i0 = ivec2(floor(p)); vec2 f = p - vec2(i0);
+  return mix(mix(L(i0.y, i0.x), L(i0.y, i0.x + 1), f.x), mix(L(i0.y + 1, i0.x), L(i0.y + 1, i0.x + 1), f.x), f.y);
+}
+float Zb(int b, vec2 p) {
+  p = clamp(p, vec2(0.0), vec2(float(pc.W - 1), float(pc.H - 1)) - 1e-3);
+  ivec2 i0 = ivec2(floor(p)); vec2 f = p - vec2(i0);
+  int o = b + i0.y * pc.W + i0.x;
+  return mix(mix(z[o], z[o + 1], f.x), mix(z[o + pc.W], z[o + pc.W + 1], f.x), f.y);
+}
+vec2 grad(int y, int x) {   // Sobel over a 3x3 box-smoothed luma (zipper-insensitive direction)
+  float gx = 0.0, gy = 0.0;
+  for (int d = -1; d <= 1; ++d) {
+    float w = d == 0 ? 2.0 : 1.0;
+    gx += w * (L(y + d, x + 2) + L(y + d, x + 1) - L(y + d, x - 1) - L(y + d, x - 2));
+    gy += w * (L(y + 2, x + d) + L(y + 1, x + d) - L(y - 1, x + d) - L(y - 2, x + d));
+  }
+  return vec2(gx, gy) / 24.0;
+}
+vec4 dlb(vec2 p) {
+  ivec2 q = clamp(ivec2(round(p)), ivec2(0), ivec2(pc.W - 1, pc.H - 1));
+  return dl[q.y * pc.W + q.x];
+}
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  if (X >= pc.W || Y >= pc.H) return;
+  int i = Y * pc.W + X, HW = pc.H * pc.W;
+  vec2 g = grad(Y, X);
+  float m = length(g);
+  vec2 n = m > 0.0 ? g / m : vec2(1.0, 0.0), e = vec2(-n.y, n.x);
+  vec2 p = vec2(float(X), float(Y));
+  if (pc.mode == 0) {
+    float l = max(L(Y, X), 0.0);
+    float sig = sqrt(max(3.0 * (pc.a * l / 3.0 + pc.b), 1e-12));
+    float c = clamp((m / sig - pc.tau) / max(pc.tau, 1e-3), 0.0, 1.0);
+    vec2 g1 = grad(Y + int(round(2.0 * e.y)), X + int(round(2.0 * e.x))), g2 = grad(Y - int(round(2.0 * e.y)), X - int(round(2.0 * e.x)));
+    float a1 = abs(dot(n, g1)) / max(length(g1), 1e-20), a2 = abs(dot(n, g2)) / max(length(g2), 1e-20);
+    float st = pc.robk > 0.0 ? pc.robk : 0.9;   // straightness threshold (cos of direction change)
+    c *= clamp((min(a1, a2) - st) / max(0.98 - st, 1e-3), 0.0, 1.0);   // straight edge only
+    // Per colour plane (R and B edges can sit off green's): own offset vs its neighbours half the
+    // period-4 zipper away along the edge (opposite phase), over its own across-edge slope.
+    vec4 o = vec4(0.0, 0.0, 0.0, c);
+    if (c > 0.0)
+      for (int pl = 0; pl < 3; ++pl) {
+        int b = pl * HW;
+        float za = 0.5 * (Zb(b, p + 2.0 * e) + Zb(b, p - 2.0 * e));
+        float sl = 0.5 * (Zb(b, p + n) - Zb(b, p - n));   // across-edge slope of this plane
+        float ref = abs(sl) > 1e-12 ? sl : 1e-12;
+        float d = (z[b + i] - za) / ref;
+        // a plane without its own edge here (flat colour): no estimate
+        o[pl] = abs(sl) * 3.0 > m / 3.0 * 0.25 ? clamp(d, -0.75, 0.75) : 0.0;
+      }
+    dl[i] = o;
+    return;
+  }
+  vec4 dc = dl[i];
+  if (dc.w <= 0.0 || pc.clip <= 0.0) { for (int c = 0; c < 3; ++c) zt[c * HW + i] = z[c * HW + i]; return; }
+  vec4 sd = vec4(0.0); float sw = 0.0;
+  for (int k = -3; k <= 3; ++k) {
+    if (k == 0) continue;
+    vec4 q = dlb(p + float(k) * e);
+    sd += q.w * q; sw += q.w;
+  }
+  vec3 err = sw > 0.0 ? dc.xyz - sd.xyz / sw : vec3(0.0);
+  for (int c = 0; c < 3; ++c) zt[c * HW + i] = Zb(c * HW, p - pc.clip * dc.w * err[c] * n);
+}

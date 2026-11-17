@@ -21,7 +21,7 @@ else()
 endif()
 set(LKRL_GEN "${CMAKE_CURRENT_BINARY_DIR}/lkrl_gen")
 file(MAKE_DIRECTORY "${LKRL_GEN}")
-set(LKRL_SHADERS resid werr wavg wminh wminv adj zupd jac jacblk solveblk gstats wguide wvalid lkfit kn_conv kn_dn hyb adj_wg fin)
+set(LKRL_SHADERS resid werr wavg wminh wminv adj zupd jac jacblk solveblk gstats wguide wvalid lkfit kn_conv kn_dn hyb adj_wg fin edgeshift cdupd)
 set(LKRL_INCS "")
 foreach(sh ${LKRL_SHADERS})
   add_custom_command(

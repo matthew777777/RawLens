@@ -1,0 +1,51 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Colour-difference Jacobi step (prototype 2026-11-17; AMaZE / RCD / Farsiu 2006 idea): unknowns
+// G and D_R = R - G, D_B = B - G instead of R, G, B. A red or blue sample is G + D at its position,
+// so its residual moves G (every sample carries the edge position, as in a demosaicer) and D;
+// D's step is the coverage-normalised gradient smoothed over (2 LB + 1)^2, stopped at G edges
+// (each side keeps its colour; no pixel-to-pixel colour alternation). R, B = G + D: one edge
+// position for all planes. Writes zt (z is read by neighbours); the caller copies zt -> z, clears acc.
+// pc.tau = damping (coverage units), pc.LB = D radius, pc.robk = edge stop (noise sigmas, 0 = off),
+// pc.rpow = beta: share of the R/B residuals moving G, pc.clip = clip level, pc.a/b = noise.
+#include "lite_common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer ACC { int acc[]; };
+layout(std430, binding = 2) readonly buffer COV { int cov[]; };
+layout(std430, binding = 3) writeonly buffer ZT { float zt[]; };
+
+void main() {
+  int HW = pc.H * pc.W;
+  int i = int(gl_GlobalInvocationID.x);
+  if (i >= HW) return;
+  int Y = i / pc.W, X = i - Y * pc.W;
+  float R = z[i], G = z[HW + i], B = z[2 * HW + i];
+  float gR = float(acc[i]) / pc.scale, gG = float(acc[HW + i]) / pc.scale, gB = float(acc[2 * HW + i]) / pc.scale;
+  float cR = float(cov[i]) / pc.dscale, cG = float(cov[HW + i]) / pc.dscale, cB = float(cov[2 * HW + i]) / pc.dscale;
+  // Near clipping the planes are independent (clipped green samples are not in the data, so R/B
+  // must not move G there: dark / coloured pixels in highlights).
+  if (max(R, max(G, B)) > float(pc.K) * 0.01 * pc.clip) {   // pc.K = fallback level in % of clip
+    zt[i] = R - gR / max(cR + pc.tau, 1e-6); zt[HW + i] = G - gG / max(cG + pc.tau, 1e-6); zt[2 * HW + i] = B - gB / max(cB + pc.tau, 1e-6);
+    return;
+  }
+  float be = pc.rpow;
+  float Gn = G - (gG + be * (gR + gB)) / max(cG + be * (cR + cB) + pc.tau, 1e-6);
+  float sig2 = max(pc.a * max(G, 0.0) + pc.b, 1e-12);
+  float nR = 0.0, dR = 0.0, nB = 0.0, dB = 0.0, sw = 0.0;
+  for (int dy = -pc.LB; dy <= pc.LB; ++dy)
+    for (int dx = -pc.LB; dx <= pc.LB; ++dx) {
+      int yy = Y + dy, xx = X + dx;
+      if (yy < 0 || xx < 0 || yy >= pc.H || xx >= pc.W) continue;
+      int j = yy * pc.W + xx;
+      float w = float((pc.LB + 1 - abs(dx)) * (pc.LB + 1 - abs(dy)));
+      if (pc.robk > 0.0) { float dg = z[HW + j] - G; w *= exp(-dg * dg / (pc.robk * pc.robk * sig2)); }
+      nR += w * float(acc[j]); dR += w * float(cov[j]);
+      nB += w * float(acc[2 * HW + j]); dB += w * float(cov[2 * HW + j]);
+      sw += w;
+    }
+  float DR = (R - G) - (nR / pc.scale) / max(dR / pc.dscale + pc.tau * sw, 1e-6);
+  float DB = (B - G) - (nB / pc.scale) / max(dB / pc.dscale + pc.tau * sw, 1e-6);
+  zt[i] = Gn + DR; zt[HW + i] = Gn; zt[2 * HW + i] = Gn + DB;
+}

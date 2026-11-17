@@ -36,6 +36,12 @@ static const uint32_t adj[] = {
 static const uint32_t zupd[] = {
 #include "zupd.inc"
 };
+static const uint32_t edgeshift[] = {
+#include "edgeshift.inc"
+};
+static const uint32_t cdupd[] = {
+#include "cdupd.inc"
+};
 static const uint32_t jac[] = {
 #include "jac.inc"
 };
@@ -202,7 +208,7 @@ bool solve6(double A[6][6], double b[6], double x[6]) {   // Gaussian eliminatio
 LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   if (!gpu_ || !gpu_->ok()) return;
   LKRL_PIPE(resid, 6); LKRL_PIPE(werr, 3); LKRL_PIPE(wavg, 2); LKRL_PIPE(wminh, 3); LKRL_PIPE(wminv, 3);
-  LKRL_PIPE(adj, 7); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 3);
+  LKRL_PIPE(adj, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 4); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 3);
 #define LKRL_KPIPE(name, nb) name##_ = gpu_->pipeline(spv::name, sizeof(spv::name), nb, sizeof(KPush))
   LKRL_KPIPE(kresid, 5); LKRL_KPIPE(ktdet, 3); LKRL_KPIPE(kth, 5); LKRL_KPIPE(kt, 6); LKRL_KPIPE(ktv, 8);
   LKRL_KPIPE(ktd, 8); LKRL_KPIPE(kguide, 6); LKRL_KPIPE(kminh, 3); LKRL_KPIPE(kmin, 5);
@@ -216,7 +222,7 @@ LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   adjwg_ = gpu_->pipeline(spv::adj_wg, sizeof(spv::adj_wg), 7, sizeof(Push));
   fin_ = gpu_->pipeline(spv::fin, sizeof(spv::fin), 7, 64);
   ok_ = true;
-  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_})
+  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_})
     ok_ = ok_ && q->pipe != VK_NULL_HANDLE;
 }
 
@@ -230,7 +236,7 @@ std::string LiteSolver::profileNames() const {
       {&ktdet_, "lkr_weight_tdet"}, {&kth_, "lkr_weight_th"}, {&kt_, "lkr_weight_t"}, {&ktv_, "lkr_weight_tv"},
       {&ktd_, "lkr_weight_td"}, {&kguide_, "lkr_weight_guide"}, {&kminh_, "lkr_weight_minh"}, {&kmin_, "lkr_weight_min"},
       {&kdy_, "dct_y"}, {&kdu_, "dct_u"}, {&kdv_, "dct_v"}, {&kdyuv_, "dct_yuv"}, {&knconv_, "kn_conv"},
-      {&kndn_, "kn_dn"}, {&hyb_, "hyb"}, {&adjwg_, "adj_wg"}, {&fin_, "fin"}};
+      {&kndn_, "kn_dn"}, {&hyb_, "hyb"}, {&adjwg_, "adj_wg"}, {&fin_, "fin"}, {&edgeshift_, "edgeshift"}, {&cdupd_, "cdupd"}};
   for (const auto& n : names) {
     std::snprintf(b, sizeof(b), "%s%s=%p", out.empty() ? "" : " ", n.second, static_cast<const void*>(n.first));
     out += b;
@@ -242,7 +248,7 @@ LiteSolver::~LiteSolver() {
   if (!gpu_ || !gpu_->ok()) return;
   for (Entry& e : cache_) gpu_->free(e.buf);
   for (Entry& e : fcache_) gpu_->free(e.buf);
-  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_}) gpu_->destroy(*q);
+  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_}) gpu_->destroy(*q);
 }
 
 bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<float>& p, std::vector<float>& dloc,
@@ -301,6 +307,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   Buffer &y = buf((nLR + 1) / 2 * 4), &pb = buf(size_t(K) * 24, true), &db = buf(size_t(K) * nb * 8, true);
   Buffer &z = buf(nHR * 4, true), &z0 = buf(nHR * 4);
   Buffer &acc = buf(nHR * 4), &cov = buf(nHR * 4, true);
+  // Edge position correction / colour-difference fit scratch.
+  Buffer &dlb = buf(size_t(H) * W * 16), &ztb = buf(nHR * 4);
   Buffer& cov1 = buf(noise_scale ? nHR * 4 : 16, true);   // plain coverage U^T 1 (noise_scale only)
   Buffer &r = buf(nLR * 4), &vm = buf(nLR * 4), &e = buf(nLR * 4, resid_out != nullptr),
          &wt = buf(nLR * 4, weights_out != nullptr);
@@ -673,6 +681,26 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       static const int avg_r = std::getenv("LKRL_AVGR") ? std::atoi(std::getenv("LKRL_AVGR")) : -1;
       if (avg) { u.a = 0.0f; u.rpow = -1.0f; u.robk = 0.0f; u.LB = avg_r >= 0 ? avg_r : (s == 1 ? 0 : 1); }
       if (!avg && trace_j==1) trace("update-push.bin",&u,sizeof(u));
+      // Colour-difference fit (default since 2026-11-17; cdupd.comp): solve G, R-G, B-G instead of
+      // R, G, B. Synthetic ground truth (tilted / straight bars, perfect motion): the independent fit
+      // invented period-4 colour (band error 1.05-1.09 vs 1.0 = empty; step 8 alone 2.4), this is at the
+      // ~1.0 floor; real 2x burst 184641 colour zipper car 0.025 -> 0.0095, rocks 0.030 -> 0.0097, detail
+      // unchanged. LKRL_CDFIT = D radius (-1 = old independent fit), LKRL_CDK = edge stop (0 = off).
+      // Also at 1x (user 2026-11-17): the ~9 % lower fine-detail number on the car 1x crop counts
+      // zipper / false colour as detail.
+      static const int cd_r = std::getenv("LKRL_CDFIT") ? std::atoi(std::getenv("LKRL_CDFIT")) : 2;
+      static const float cd_k = std::getenv("LKRL_CDK") ? float(std::atof(std::getenv("LKRL_CDK"))) : 0.0f;
+      if (!avg && cd_r >= 0 && u.robk <= 0.0f) {
+        static const float cd_b = std::getenv("LKRL_CDB") ? float(std::atof(std::getenv("LKRL_CDB"))) : 1.0f;
+        Push pc2 = q; pc2.tau = u.tau; pc2.LB = cd_r; pc2.robk = cd_k; pc2.rpow = cd_b;
+        static const int cd_cl = std::getenv("LKRL_CDCL") ? std::atoi(std::getenv("LKRL_CDCL")) : 97;
+        pc2.K = cd_cl;
+        gpu_->dispatch(cdupd_, gpu_->set(cdupd_, {&z, &acc, &cov, &ztb}), &pc2, div_up(uint32_t(H * W), 256));
+        gpu_->copy(ztb, z, nHR * 4);
+        gpu_->fill(acc, 0);
+        need_cov = false;
+        continue;
+      }
       gpu_->dispatch(zupd_, sUpd, &u, div_up(uint32_t(nHR), 256));
       if (u.robk > 0.0f || avg) gpu_->fill(acc, 0);
       need_cov = avg;   // the next J recomputes its (gain) divisor
@@ -800,6 +828,19 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     } else {
       return fail("schedule: only J, A and G");
     }
+  }
+  // Edge position correction after the fit (LKRL_ESHIFT = strength, LKRL_ESHT = contrast in
+  // sigmas; prototype 2026-11-17): edgeshift.comp.
+  static const float es_s = std::getenv("LKRL_ESHIFT") ? float(std::atof(std::getenv("LKRL_ESHIFT"))) : 0.0f;
+  static const float es_t = std::getenv("LKRL_ESHT") ? float(std::atof(std::getenv("LKRL_ESHT"))) : 8.0f;
+  if (es_s > 0.0f) {
+    VkDescriptorSet se = gpu_->set(edgeshift_, {&z, &ztb, &dlb});
+    static const float es_st = std::getenv("LKRL_ESHST") ? float(std::atof(std::getenv("LKRL_ESHST"))) : 0.9f;
+    Push pe = q; pe.clip = es_s; pe.tau = es_t; pe.mode = 0; pe.robk = es_st;
+    gpu_->dispatch(edgeshift_, se, &pe, div_up(uint32_t(W), 16), div_up(uint32_t(H), 16));
+    pe.mode = 1;
+    gpu_->dispatch(edgeshift_, se, &pe, div_up(uint32_t(W), 16), div_up(uint32_t(H), 16));
+    gpu_->copy(ztb, z, nHR * 4);
   }
   if (noise_scale) {   // coverage of the final geometry: weighted (cov, up to date) vs plain
     if (weights_stale) weights();

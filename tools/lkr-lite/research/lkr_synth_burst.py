@@ -74,6 +74,9 @@ def main():
     ap.add_argument('--person-chroma', action='store_true', help='person at the background brightness, colour only')
     ap.add_argument('--no-rail', action='store_true', help='no railing (noise / SNR scenes)')
     ap.add_argument('--rail-level', type=float, default=0.08, help='bar brightness (background median 0.35)')
+    ap.add_argument('--rail-tilt', type=float, default=0.0, help='bar tilt from vertical, degrees (0 = the old axis-aligned bars)')
+    ap.add_argument('--rail-width', type=float, default=2.0, help='bar width, HR px')
+    ap.add_argument('--rail-period', type=float, default=9.0, help='bar period, HR px')
     ap.add_argument('--noise-a', type=float, default=2.05e-5)
     ap.add_argument('--noise-b', type=float, default=1.4e-6)
     a = ap.parse_args()
@@ -104,7 +107,14 @@ def main():
     # railing: vertical bars, 2 HR px wide, period 9 HR px, over the person's band, plus a top rail
     rail = np.zeros((HR, HR), 'f4')
     band = (xx > 0.15 * HR) & (xx < 0.75 * HR) & (yy > 0.25 * HR) & (yy < 0.85 * HR)
-    rail[band & ((xx.astype(int) % 9) < 2)] = 1.0
+    if a.rail_tilt == 0.0 and a.rail_width == 2.0 and a.rail_period == 9.0:
+        rail[band & ((xx.astype(int) % 9) < 2)] = 1.0   # the original bars, bit-identical
+    else:   # tilted bars with antialiased edges (coverage of each HR pixel), e.g. slightly leaning poles
+        t = np.deg2rad(a.rail_tilt)
+        u = xx * np.cos(t) + yy * np.sin(t)
+        d = np.abs(((u + 0.5 * a.rail_period) % a.rail_period) - 0.5 * a.rail_period)   # distance to bar centre
+        cov = np.clip(0.5 * a.rail_width + 0.5 - d, 0.0, 1.0)
+        rail[band] = np.maximum(rail[band], cov[band])
     rail[(np.abs(yy - 0.25 * HR) < 2) & (xx > 0.15 * HR) & (xx < 0.75 * HR)] = 1.0
     if a.no_rail: rail[:] = 0.0
     rail_col = np.array([a.rail_level] * 3, 'f4')
