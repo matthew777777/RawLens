@@ -172,6 +172,45 @@ vec3 mhcRgb(ivec2 s) {
     return clamp(vec3(r,g,b),vec3(0.0),vec3(OUTPUT_CLAMP_HI));
 }
 
+// Downscaled linear RGB for output texel ij at ratio r (1.5 or 2 per axis).
+// Luma-carrying green: area filter of the coherent full-res green over the
+// texel footprint [ij*r, (ij+1)*r) (two taps per axis; weights exact).
+// Chroma: R-G / B-G colour differences bilinear at the footprint centre from
+// the four surrounding same-colour CFA sites. Output chroma is 4:2:0, so the
+// per-pixel edge-directed MHC chroma was mostly discarded anyway; this is
+// ~20 loads per texel instead of four full MHC evaluations (~52).
+// s returns the footprint origin (lens-shading lookup).
+int phaseOf(int col) {
+    int p = 0;
+    [[unroll]] for (int k = 1; k < 4; ++k)
+        if (colorAt(ivec2(k & 1, k >> 1)) == col) p = k;
+    return p;
+}
+vec3 scaledRgb(ivec2 ij, vec2 r, out ivec2 s) {
+    vec2 lo = vec2(ij) * r;
+    s = ivec2(floor(lo));
+    vec2 w0 = (min(vec2(s + 1), lo + r) - lo) / r;
+    float g = mix(mix(greenAt(s + ivec2(1, 0)), greenAt(s), w0.x),
+                  mix(greenAt(s + ivec2(1, 1)), greenAt(s + ivec2(0, 1)), w0.x), 1.0 - w0.y);
+    // Footprint centre in pixel-centre coordinates.
+    vec2 c = lo + 0.5 * r - 0.5;
+    float d[2];
+    [[dont_unroll]] for (int i = 0; i < 2; ++i) {
+        int k = phaseOf(i * 2);
+        vec2 ph = vec2(k & 1, k >> 1);
+        vec2 q = (c - ph) * 0.5;
+        vec2 fq = floor(q);
+        vec2 f = q - fq;
+        ivec2 b = ivec2(fq) * 2 + ivec2(ph);
+        float d00 = normEdge(b) - greenAt(b);
+        float d10 = normEdge(b + ivec2(2, 0)) - greenAt(b + ivec2(2, 0));
+        float d01 = normEdge(b + ivec2(0, 2)) - greenAt(b + ivec2(0, 2));
+        float d11 = normEdge(b + ivec2(2, 2)) - greenAt(b + ivec2(2, 2));
+        d[i] = mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
+    }
+    return clamp(vec3(g + d[0], g, g + d[1]), vec3(0.0), vec3(OUTPUT_CLAMP_HI));
+}
+
 // ---- direct-encode record grade: no warp, no saturation ----
 // Identical to the grade-YUV stage: the two record paths agree by
 // construction. CPU goldens are VfVideoGrade.encodePixel*.
@@ -311,9 +350,19 @@ f16vec3 pixelLog(ivec2 ij) {
     // floor((2*ij + 1) * cDims / (2*oDims)) — exact, where fp16 would
     // round 4K coordinates to even and mis-cover edge texels.
     ivec2 s;
-    if (all(equal(u.cDims, u.oDims))) s = ij;
-    else s = ivec2((vec2(ij) + 0.5) * vec2(u.gCcmR.w,u.gCcmG.w));
-    f16vec3 rgb = desatWhite(f16vec3(mhcRgb(s)));
+    f16vec3 rgb;
+    // 2:1 (4K window -> 1080p) or 3:2 (-> 1440p), within 1% (2.39:1
+    // even-rounded crops): prefiltered downscale, see scaledRgb.
+    vec2 r = vec2(u.cDims) / vec2(u.oDims);
+    bvec2 near2 = lessThan(abs(r - 2.0), vec2(0.02));
+    bvec2 near32 = lessThan(abs(r - 1.5), vec2(0.015));
+    if (all(bvec2(near2.x || near32.x, near2.y || near32.y))) {
+        rgb = desatWhite(f16vec3(scaledRgb(ij, r, s)));
+    } else {
+        if (all(equal(u.cDims, u.oDims))) s = ij;
+        else s = ivec2((vec2(ij) + 0.5) * vec2(u.gCcmR.w,u.gCcmG.w));
+        rgb = desatWhite(f16vec3(mhcRgb(s)));
+    }
     if (u.sDims.z != 0) {
         // Vignetting, pre-WB like the viewfinder: the map is ~17x17 over
         // the sensor, so one gain per output texel (not per MHC tap) is
