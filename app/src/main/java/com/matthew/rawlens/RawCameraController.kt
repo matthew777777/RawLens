@@ -3389,6 +3389,19 @@ class RawCameraController(
             }
     }
 
+    /** Returns one frame slot early (RAW consumed, encode still running) and reopens the shutter. */
+    private fun releaseFrameSlot() {
+        cameraHandler.post {
+            pendingFrameSaveCount.addAndGet(-1)
+            closeRetiredRawReaders()
+            if (running && !destroyed) {
+                refreshCaptureAvailability()
+                resumeRawZslIfIdle()
+                publishRawZslStatus()
+            }
+        }
+    }
+
     /** Runs only after an accepted save/sidecar has released everything it owns. */
     private fun postSaveCompletion(frameSlots: Int = 0) {
         endPendingSave()
@@ -6694,7 +6707,7 @@ class RawCameraController(
             saveEachBracket = saveEachBracket, saveDebugFrames = saveDebugFrames
         )
         val job = OwnedCaptureJob(releasedOwnership) {
-            HdrBracketSaveJob(context, pending, input, saveJobHost(::reportSaveState)).run()
+            HdrBracketSaveJob(context, pending, input, saveJobHost(report = ::reportSaveState)).run()
         }
         try { writer.execute(job) } catch (_: RejectedExecutionException) {
             job.cancelBeforeRun()
@@ -6772,9 +6785,17 @@ class RawCameraController(
         fun reportSaveState(message: String) {
             cameraHandler.post { if (isCurrent(saveGeneration)) onState(message) }
         }
+        // The RAW Image + frame slot can be returned once development has read
+        // it (before the encode); the save itself stays pending until written.
+        val rawReleased = java.util.concurrent.atomic.AtomicBoolean(false)
+        val releaseRawFrame = {
+            if (rawReleased.compareAndSet(false, true)) {
+                try { ownership.close() } finally { releaseFrameSlot() }
+            }
+        }
         val releasedOwnership = AutoCloseable {
-            try { ownership.close() } finally {
-                postSaveCompletion(1)
+            try { releaseRawFrame() } finally {
+                postSaveCompletion(0)
             }
         }
         val job = OwnedCaptureJob(releasedOwnership) {
@@ -6793,7 +6814,7 @@ class RawCameraController(
                     captureTimeMillis = captureTimeMillis, fileNameSuffix = fileNameSuffix,
                     subfolder = subfolder, captureLabel = captureLabel
                 ),
-                saveJobHost(::reportSaveState)
+                saveJobHost(releaseRawFrame, ::reportSaveState)
             ).run()
         }
         // Plain DNG-only saves (no JPEG develop, no AI inference) run on the
@@ -6852,7 +6873,9 @@ class RawCameraController(
     }
 
     /** Controller side of [RawFrameSaveJob]; [report] is the save's generation-gated status poster. */
-    private fun saveJobHost(report: (String) -> Unit) = object : RawFrameSaveJob.Host {
+    private fun saveJobHost(releaseRaw: () -> Unit = {}, report: (String) -> Unit) =
+        object : RawFrameSaveJob.Host {
+        override fun releaseRawFrame() = releaseRaw()
         override fun developer(): RawDevelopmentCoordinator =
             rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
         override fun pendingSaves(): Int = pendingSaveCount.get()

@@ -61,6 +61,13 @@ internal class RawFrameSaveJob(
         fun publishDevelopedScope(bitmap: Bitmap)
         fun publishDevelopedJxlScope(developed: DevelopedJxl)
         fun endJpegProcessing()
+        /**
+         * The RAW Image is no longer read: hand it and its reader/frame slot
+         * back before the slow encode (JXL takes ~24 s on Moto G75), so the
+         * ZSL shutter gate does not stay closed for the whole encode.
+         * Idempotent; the enclosing job still closes ownership in finally.
+         */
+        fun releaseRawFrame() {}
     }
 
     fun run() {
@@ -158,6 +165,7 @@ internal class RawFrameSaveJob(
                                     jxl = input.jxl
                                 )
                             }
+                            host.releaseRawFrame()
                             jpegName = JxlSaver(context).save(
                                 developed, input.frameMetadata, result,
                                 captureTimeMillis = input.captureTimeMillis,
@@ -187,6 +195,7 @@ internal class RawFrameSaveJob(
                                     outputSettings = input.outputSettings
                                 )
                             }
+                            host.releaseRawFrame()
                             try {
                                 jpegName = JpegSaver(context).save(
                                     developed, input.frameMetadata, result,
