@@ -128,6 +128,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.dctold", v) > 0 && v[0]) setenv("LKRL_DCT_OLD", v, 0);
     // A/B of the per-scale adjoint: debug.lkr.adjgen = 1 runs the generic (pc.s) adj build.
     if (__system_property_get("debug.lkr.adjgen", v) > 0 && v[0]) setenv("LKRL_ADJ_GENERIC", v, 0);
+    // A/B of the tile-preparation prefetch: debug.lkr.noprefetch = 1 restores prepare-then-solve.
+    if (__system_property_get("debug.lkr.noprefetch", v) > 0 && v[0] == '1') setenv("LKRL_NO_PREFETCH", "1", 0);
   }
 #endif
   const NoiseModelRef noise_model = g_noise_model;

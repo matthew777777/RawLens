@@ -490,11 +490,22 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       return;
     }
     wg->profile(gpu->profiling());
-    std::vector<float> tf(size_t(K) * n * n), x, field, model_tile;
+    std::vector<float> x, field, model_tile;
     BlockSearch bsearch(wg);
-    for (;;) {
-      const size_t ji = next.fetch_add(1);
-      if (ji >= jobs.size()) break;
+    // CPU tile preparation (load, tile LK, sub-tile LK) runs one tile ahead on its own thread while
+    // the GPU solves the current tile (2026-11-17). Before, each worker prepared and then solved, so
+    // the GPU idled during the LK: Mali-G615 1x full merge 18.2-18.6 s, 14.1 s with tile LK off.
+    // Same computation per tile: output identical. LKRL_NO_PREFETCH = the old sequential order.
+    struct Prepared {
+      size_t ji = SIZE_MAX;
+      std::vector<float> tf, p, sub_field;
+      bool use_sub = false, fail = false;
+      double prep_ms = 0.0, load_ms = 0.0;
+    };
+    auto prepare = [&](size_t ji, Prepared& o) {
+      o.ji = ji; o.fail = false; o.use_sub = false;
+      std::vector<float>& tf = o.tf;
+      tf.resize(size_t(K) * n * n);
       const TileJob& jb = jobs[ji];
       const double tprep = now_ms();
       const int gx = jb.gx, gy = jb.gy;
@@ -506,7 +517,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
           for (size_t i = 0; i < size_t(n) * n; ++i) fk[i] = fk[i] >= prm.solve.clip ? 1.0f : fk[i] * gain[k];
       }
       const double tl1 = now_ms();
-      std::vector<float> p(size_t(K) * 6);
+      std::vector<float>& p = o.p;
+      p.assign(size_t(K) * 6, 0.0f);
       // Per-tile coarse LK, started from the global affine re-expressed in tile
       // coordinates (t' = A o + t - o): one global affine is off by more than
       // the solver's Gauss-Newton basin at the frame corners (rotation, lens
@@ -535,8 +547,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       const bool use_sub = sub_size >= 64 && prm.tile_lk && !prm.paper_parity && sp.local_block == 16 &&
                            n % sub_size == 0 && look_t <= prm.sub_lk_max_noise;
       const int sub_nbx = (n + 15) / 16, sub_nby = (n + 15) / 16;
-      std::vector<float> sub_field;
+      std::vector<float>& sub_field = o.sub_field;
+      sub_field.clear();
       if (use_sub) sub_field.assign(size_t(K) * sub_nbx * sub_nby * 2, 0.0f);
+      o.use_sub = use_sub;
       std::vector<LkRef> qref;   // quadrant references, row-major in the order align_frame visits them
       if (use_sub) {
         const int gs = sub_size / 2;
@@ -620,7 +634,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         }
         std::vector<LkJob> jobs;
         for (int k = 1; k < K; ++k) jobs.push_back({&tref, gms[size_t(k)].data(), pgs[size_t(k)]});
-        if (!lkgpu.run(jobs, 30)) { std::lock_guard<std::mutex> l(mu); failed = true; fail_msg = "gpu lk"; cv.notify_all(); return; }
+        if (!lkgpu.run(jobs, 30)) { o.fail = true; return; }
         for (int k = 1; k < K; ++k) {
           const auto& pr = jobs[size_t(k - 1)].p;
           const auto& pg = pgs[size_t(k)];
@@ -651,7 +665,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
           }
           std::vector<LkJob> sj;
           for (size_t i = 0; i < subs.size(); ++i) sj.push_back({&qref[subs[i].qi], sms[i].data(), subs[i].ps});
-          if (!lkgpu.run(sj, 30)) { std::lock_guard<std::mutex> l(mu); failed = true; fail_msg = "gpu lk"; cv.notify_all(); return; }
+          if (!lkgpu.run(sj, 30)) { o.fail = true; return; }
           for (size_t i = 0; i < subs.size(); ++i) {
             const Sub& sb = subs[i];
             const LkRef& sr = qref[sb.qi];
@@ -688,6 +702,31 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         for (int k = 0; k < K; k += nt) align_frame(k, gmov);
         for (auto& th : helpers) th.join();
       }
+      o.prep_ms = now_ms() - tprep;
+      o.load_ms = tl1 - tl0;
+    };
+    static const bool prefetch_env = std::getenv("LKRL_NO_PREFETCH") == nullptr;
+    const bool prefetch = prefetch_env && !gpu_lk;   // the GPU LK would share this worker's queue
+    Prepared bufs[2];
+    int cb = 0;
+    { const size_t j0 = next.fetch_add(1); if (j0 < jobs.size()) prepare(j0, bufs[0]); }
+    std::thread pre;
+    struct Joiner { std::thread& t; ~Joiner() { if (t.joinable()) t.join(); } } joiner{pre};
+    for (;;) {
+      Prepared& cur = bufs[cb];
+      if (cur.ji >= jobs.size()) break;
+      if (cur.fail) { std::lock_guard<std::mutex> l(mu); failed = true; fail_msg = "gpu lk"; cv.notify_all(); return; }
+      const size_t jn = next.fetch_add(1);
+      const bool have_next = jn < jobs.size();
+      bufs[cb ^ 1].ji = SIZE_MAX;
+      if (have_next && prefetch) pre = std::thread([&prepare, &bufs, jn, slot = cb ^ 1] { prepare(jn, bufs[slot]); });
+      const size_t ji = cur.ji;
+      const TileJob& jb = jobs[ji];
+      const int gx = jb.gx, gy = jb.gy;
+      std::vector<float>& tf = cur.tf;
+      std::vector<float>& p = cur.p;
+      const bool use_sub = cur.use_sub;
+      std::vector<float>& sub_field = cur.sub_field;
       SolveStats ss;
       SolveParams spt = sp;
       if (!prm.model_error.empty()) {
@@ -743,8 +782,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       if (!ok) { failed = true; fail_msg = "tile solve failed"; cv.notify_all(); return; }
       S.ms_gpu += ss.gpu_ms;
       S.ms_solve += solve_ms;
-      S.ms_prep += ts - tprep;
-      S.ms_load += tl1 - tl0;
+      S.ms_prep += cur.prep_ms;
+      S.ms_load += cur.load_ms;
       S.ms_prior += ss.prior_ms;
       S.ms_init += ss.init_ms;
       S.ms_finish += ss.finish_ms;
@@ -760,6 +799,12 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       }
       S.ms_blend += now_ms() - t_blend;
       cv.notify_all();
+      l.unlock();
+      if (have_next) {
+        if (prefetch) pre.join();
+        else prepare(jn, bufs[cb ^ 1]);
+      }
+      cb ^= 1;
     }
     // Resolve names while this worker's Solver pipelines still exist. Profile
     // every worker; reporting just worker 1 misranks a full-frame tiled merge.
