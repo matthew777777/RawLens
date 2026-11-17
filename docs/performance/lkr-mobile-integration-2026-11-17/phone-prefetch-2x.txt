@@ -1,0 +1,3 @@
+scale 2 384x320 tiles 6 workers 2 values 368640
+scale 2 384x320 tiles 6 workers 2 values 368640
+PREFETCH_2X_BIT_IDENTICAL

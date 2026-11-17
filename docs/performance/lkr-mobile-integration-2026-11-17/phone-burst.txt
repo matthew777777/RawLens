@@ -1,0 +1,27 @@
+device: name=Mali-G615 MC2 subgroupSize=16 computeFamily=0
+8 frames 4080x3060 -> 4080x3060 s=1 tiles 63  sigma 0.00277 a 8.21e-06 b 1.61e-06  prior dct
+reference frame 0 (sharpest)
+DCT luma: on; lost-frame colour cleanup: on; KernelNet: independent noise-gated switch (LKRL_KNDN)
+look: prior 0.35 grain 0.00 (auto from noise)  local lambda 0.10
+ms: load 596 noise 398 coarseLK 1355 tiles 21397 (gpu 30949 prior 3044, 63 calls) TOTAL(merge) 22751
+workers 3, tile sums ms: solve 35084 (gpu 30949 prior 3044 init 0 finish 4066 other -2975) prep 19758 (load 505) blend 248 | setup 7445 wait 2
+GPU host totals: alloc 141 (651.0 MiB cumulative, 651.0 MiB summed peaks) 1470.7 ms; pipelines 120 7478.8 ms; sets 2142 8.4 ms
+GPU work totals: submissions 378 dispatches 4788 copies 315; record 117.9 queue 30.5 fenceWait 28482.4 coherency 477.1 query 0.0 ms
+device: name=Mali-G615 MC2 subgroupSize=16 computeFamily=0
+8 frames 4080x3060 -> 4080x3060 s=1 tiles 63  sigma 0.00277 a 8.21e-06 b 1.61e-06  prior dct
+reference frame 0 (sharpest)
+DCT luma: on; lost-frame colour cleanup: on; KernelNet: independent noise-gated switch (LKRL_KNDN)
+look: prior 0.35 grain 0.00 (auto from noise)  local lambda 0.10
+ms: load 579 noise 333 coarseLK 1328 tiles 19370 (gpu 27404 prior 1844, 63 calls) TOTAL(merge) 20698
+workers 3, tile sums ms: solve 30714 (gpu 27404 prior 1844 init 0 finish 3243 other -1778) prep 18536 (load 523) blend 218 | setup 7963 wait 2
+GPU host totals: alloc 141 (651.0 MiB cumulative, 651.0 MiB summed peaks) 657.6 ms; pipelines 120 7995.1 ms; sets 2142 7.2 ms
+GPU work totals: submissions 378 dispatches 4788 copies 315; record 74.4 queue 31.2 fenceWait 25069.7 coherency 370.9 query 0.0 ms
+device: name=Mali-G615 MC2 subgroupSize=16 computeFamily=0
+8 frames 4080x3060 -> 4080x3060 s=1 tiles 63  sigma 0.00277 a 8.21e-06 b 1.61e-06  prior dct
+reference frame 0 (sharpest)
+DCT luma: on; lost-frame colour cleanup: on; KernelNet: independent noise-gated switch (LKRL_KNDN)
+look: prior 0.35 grain 0.00 (auto from noise)  local lambda 0.10
+ms: load 590 noise 364 coarseLK 1315 tiles 16786 (gpu 35686 prior 3008, 63 calls) TOTAL(merge) 18101
+workers 3, tile sums ms: solve 39493 (gpu 35686 prior 3008 init 0 finish 3715 other -2916) prep 19902 (load 1102) blend 248 | setup 7625 wait 0
+GPU host totals: alloc 141 (651.0 MiB cumulative, 651.0 MiB summed peaks) 742.0 ms; pipelines 120 7671.1 ms; sets 2142 12.1 ms
+GPU work totals: submissions 378 dispatches 4788 copies 315; record 91.4 queue 45.1 fenceWait 31839.0 coherency 559.5 query 0.0 ms
