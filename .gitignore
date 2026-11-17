@@ -58,3 +58,6 @@ codex-session-*.md
 
 # Local benchmark / render output (generated, large)
 output/
+
+# Local agent worktrees are separate Git checkouts, not parent repository assets.
+/.claude/worktrees/
