@@ -629,7 +629,18 @@ class BguViewfinder @JvmOverloads constructor(
      * (moved verbatim from offer(); only the CPU fallback can bypass it).
      * Returns false to drop the frame (fatal or transient).
      */
+    // ADPF: per-frame GPU guide dispatch against a 60 fps budget (offer thread).
+    private val guideHint = AdpfFrameHint(context, AdpfHint.frameNs(60))
+
     private fun offerGpuGuide(
+        image: android.media.Image, buf: ByteBuffer, rowStride: Int, pixelStride: Int,
+        geo: BguGuideGeo,
+        slot: Int, channels: IntArray, levels: FloatArray, white: Float, offerT0: Long
+    ): Boolean = guideHint.measure {
+        offerGpuGuideUnhinted(image, buf, rowStride, pixelStride, geo, slot, channels, levels, white, offerT0)
+    }
+
+    private fun offerGpuGuideUnhinted(
         image: android.media.Image, buf: ByteBuffer, rowStride: Int, pixelStride: Int,
         geo: BguGuideGeo,
         slot: Int, channels: IntArray, levels: FloatArray, white: Float, offerT0: Long

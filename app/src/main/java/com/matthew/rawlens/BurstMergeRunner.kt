@@ -149,7 +149,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
         val ordered = MfsrMerge.prepareDecoded(frames)
             ?: throw IllegalStateException("No usable frames for MFSR")
         val tMerge = SystemClock.elapsedRealtime()
-        val merged = MfsrMerge.mergeDecoded(appContext, ordered, inputs.mfsr)
+        val merged = AdpfHint.boosted(appContext) { MfsrMerge.mergeDecoded(appContext, ordered, inputs.mfsr) }
             ?: throw IllegalStateException("MFSR merge failed")
         try {
             val mergeMs = SystemClock.elapsedRealtime() - tMerge
@@ -211,9 +211,9 @@ internal class BurstMergeRunner(private val appContext: Context) {
         listener: Listener
     ): Completed {
         val captureId = take.lastModified()
-        val merged = LkrMerge.mergeDecoded(appContext, frames,
+        val merged = AdpfHint.boosted(appContext) { LkrMerge.mergeDecoded(appContext, frames,
             LkrMerge.Settings(kernelNetDenoise = inputs.mfsr.lkrKernelNetDenoise, dctPrior = inputs.mfsr.lkrDctPrior, tuning = LkrTuning.overrides(appContext),
-                zoom = inputs.mfsr.lkrZoom, fullRes = inputs.mfsr.lkrFullRes))
+                zoom = inputs.mfsr.lkrZoom, fullRes = inputs.mfsr.lkrFullRes)) }
             ?: throw IllegalStateException("LK-R merge failed")
         try {
             reportSaving(listener, t0, take, merged.width, merged.height, format, Method.LKR)
@@ -287,8 +287,8 @@ internal class BurstMergeRunner(private val appContext: Context) {
         }
         val referenceIndex = (mergedInputs.size / 2).coerceIn(mergedInputs.indices)
         val tMerge = SystemClock.elapsedRealtime()
-        val mergedRaw = processor.merge(mergedInputs, referenceIndex, inputs.hdrPlus,
-            noiseSource = WaveletDenoiser.NoiseSource.of(frames[referenceIndex].metadata))
+        val mergedRaw = AdpfHint.boosted(appContext) { processor.merge(mergedInputs, referenceIndex, inputs.hdrPlus,
+            noiseSource = WaveletDenoiser.NoiseSource.of(frames[referenceIndex].metadata)) }
             ?: throw IllegalStateException("HDR+ merge failed")
         val mergeMs = SystemClock.elapsedRealtime() - tMerge
         val decision = processor.lastDecision

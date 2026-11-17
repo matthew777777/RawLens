@@ -1885,7 +1885,14 @@ class EncodedVideoRecorder internal constructor(
 
     // ---- frame path (camera thread) ----
 
-    private fun onFrame(rd: ImageReader) {
+    // ADPF: camera-thread per-frame work (grade/LUT/stab submits + encoder
+    // feed) against the take's frame period. Built lazily: fps is final by
+    // the first frame.
+    private val frameHint by lazy { AdpfFrameHint(appContext, AdpfHint.frameNs(fps)) }
+
+    private fun onFrame(rd: ImageReader) = frameHint.measure { onFrameUnhinted(rd) }
+
+    private fun onFrameUnhinted(rd: ImageReader) {
         if (!accepting) {
             // Drain without work so stop() isn't wedged behind stale frames.
             while (true) {
@@ -3499,6 +3506,7 @@ class EncodedVideoRecorder internal constructor(
         reader = null
         try { camThread?.quitSafely() } catch (_: Exception) {}
         try { camThread?.join(5_000) } catch (_: InterruptedException) {}
+        frameHint.close()
         while (pendingResultFrames.isNotEmpty()) {
             try { pendingResultFrames.removeFirst().image.close() } catch (_: Exception) {}
         }

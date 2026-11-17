@@ -1065,7 +1065,10 @@ internal class RawVideoRecorder(
         // runs ~10x slower — one exiled worker then poisons every commit
         // head while the other starves on pool checkout.
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
-        val cpuHint=RawVideoCpuHint.create(appContext,fps,workerCount)
+        // ADPF at every fps (30 fps under heat is where workers get exiled).
+        // Each worker owns every Nth frame, so its budget is N frame periods;
+        // the measured span includes the GPU DCT wait for that frame.
+        val cpuHint=AdpfHint.create(appContext,workerCount*AdpfHint.frameNs(fps))
         while (true) {
             if (workerParked.get(index) != 0) {
                 Log.i(TAG, "encode worker $index parked, exitting")

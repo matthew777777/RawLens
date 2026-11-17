@@ -2328,7 +2328,14 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private fun runVulkanSuperpixel(frame: GpuFrame, copy: Boolean): Int =
         runVulkanSuperpixel(frame, if (copy) VulkanTier.COPY else VulkanTier.BUFFER)
 
-    private fun runVulkanSuperpixel(frame: GpuFrame, tier: VulkanTier): Int {
+    // ADPF: dispatch + fence wait per preview frame against a 60 fps budget, so
+    // the OS lifts CPU/GPU-feeding clocks before the viewfinder drops frames.
+    private val vfHint = AdpfFrameHint(context, AdpfHint.frameNs(60))
+
+    private fun runVulkanSuperpixel(frame: GpuFrame, tier: VulkanTier): Int =
+        vfHint.measure { runVulkanSuperpixelUnhinted(frame, tier) }
+
+    private fun runVulkanSuperpixelUnhinted(frame: GpuFrame, tier: VulkanTier): Int {
         if (!vulkanInitialized) {
             val spv = loadVulkanSpv() ?: return VfVulkan.PIPELINE_FAILED
             val code = try {
@@ -2841,6 +2848,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
 
     private fun releaseGl() {
         // Runs on the GL worker: release native Vulkan imports first, then our refs.
+        vfHint.close()
         try {
             VfVulkan.resetNative()
         } catch (_: Exception) {

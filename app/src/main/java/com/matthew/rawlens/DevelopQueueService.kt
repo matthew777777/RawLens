@@ -47,6 +47,9 @@ class DevelopQueueService : Service() {
         if(item==null) { running=false;stopSelf();return }
         executor.execute {
             val cache=File(cacheDir,"develop-queue-${item.id}.dng")
+            // ADPF: background batch export, so ask the OS to favor efficiency
+            // (API 35) and keep the phone cool for the next capture.
+            val powerHint=AdpfHint.create(this,DEVELOP_HINT_NS).apply { preferPowerEfficiency(true) }
             try {
                 DevelopQueue.update(this,item.copy(state="Developing",detail="Reading DNG…"))
                 promote(item.name)
@@ -95,7 +98,7 @@ class DevelopQueueService : Service() {
             } catch(failure: Exception) {
                 Log.w("DevelopQueue","Export failed for ${item.name}",failure)
                 DevelopQueue.update(this,item.copy(state="Failed",detail=failure.message ?: "Export failed"))
-            } finally { cache.delete() }
+            } finally { cache.delete();powerHint.close() }
             next()
         }
     }
@@ -114,6 +117,7 @@ class DevelopQueueService : Service() {
         return System.currentTimeMillis()
     }
     companion object {
+        private const val DEVELOP_HINT_NS=10_000_000_000L
         private const val CHANNEL="develop_queue"
         private const val ID=1003
         private const val PAUSE="com.matthew.rawlens.PAUSE_DEVELOP_QUEUE"
