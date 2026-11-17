@@ -38,10 +38,13 @@ import kotlin.math.sqrt
  *
  * Camera frame: stored RAW axes, X right, Y down, Z into the scene. Sidecar
  * gyro rates are in the desktop camera frame ([GyroCameraFrameMapper]),
- * whose content law is shift ∝ (+fx·ry, −fy·rx) with +rz turning content
- * clockwise. The physical camera angular velocity in this frame is −r
- * ([cameraRate]); `StabPlannerTest` pins the sign against
- * [StabTrajectory]'s law.
+ * whose content law is shift ∝ (+fx·ry, −fy·rx). Roll: the mapper's note
+ * says +rz turns content clockwise, but feature tracking on device video
+ * (2026-11-17, two takes, R² 0.98/0.88) measured image rotation = −0.95·rz:
+ * +rz (clockwise device roll as the user sees it) turns content
+ * COUNTER-clockwise, as physics says. The physical camera angular velocity
+ * in this frame is (−rx, −ry, +rz) ([cameraRate]); with −rz the warp
+ * doubled the roll instead of cancelling it.
  *
  * Pure JVM, no Android dependencies.
  */
@@ -62,7 +65,11 @@ internal object StabPlanner {
         val weights: StabPathSolver.Weights? = null,
         /** Box-shrink rounds for frames that fail the exact border test. */
         val refineRounds: Int = 4,
-        val maxIterations: Int = 3000,
+        /**
+         * ADMM cap per axis. 3000 stopped unconverged on device takes; at
+         * 30000 every real take converged (worst 35k total its, < 1 s JVM).
+         */
+        val maxIterations: Int = 30000,
         /**
          * Level the horizon (roll) from the accelerometer, to the nearest 90°,
          * within the roll margin. Needs the accel↔camera axis signs to be
@@ -72,10 +79,12 @@ internal object StabPlanner {
         /**
          * Follow the real camera more in frames whose own exposure smears the
          * image: λ·(1 + (blur/[blurRefPx])²). A still path through blurred
-         * frames looks worse than a little residual motion. Tunable.
+         * frames looks worse than a little residual motion. Tunable; 0 =
+         * 1 % of the encode width (19 px at 1080p). 2 px eased 83 % of a
+         * 10 ms hand-held take on device and left the shake in.
          */
         val blurEase: Boolean = true,
-        val blurRefPx: Double = 2.0,
+        val blurRefPx: Double = 0.0,
     )
 
     /** Stage-3 self-calibration output (identity by default). */
@@ -87,6 +96,20 @@ internal object StabPlanner {
         val biasZ: Double = 0.0,
         /** Overrides the per-frame skew when > 0 (calibrated readout). */
         val readoutNs: Long = 0L,
+        /**
+         * Picture-fitted effective rate map (row-major 3x3, sidecar units),
+         * applied after bias: r' = M·(r − bias) + [rateOffset]. Absorbs the
+         * lever-arm translation of a hand-held phone at close range (image
+         * moves 2x+ more than pure rotation predicts) and OIS gain. Null =
+         * identity (pure gyro model).
+         */
+        val rateMatrix: DoubleArray? = null,
+        val rateOffset: DoubleArray? = null,
+        /**
+         * Fast-band map: with it, [rateMatrix] applies to the slow band
+         * ([StabCalib.lowBand]) and this to the remainder. Null = one band.
+         */
+        val rateMatrixHigh: DoubleArray? = null,
     )
 
     /** Lens in RAW-buffer pixel coordinates. */
@@ -184,7 +207,7 @@ internal object StabPlanner {
     }
 
     /** Physical camera angular velocity (stored camera frame) from sidecar desktop rates. */
-    fun cameraRate(rx: Double, ry: Double, rz: Double): DoubleArray = doubleArrayOf(-rx, -ry, -rz)
+    fun cameraRate(rx: Double, ry: Double, rz: Double): DoubleArray = doubleArrayOf(-rx, -ry, rz)
 
     /**
      * Plans the take, or null when it cannot be stabilized (thin gyro,
@@ -305,12 +328,13 @@ internal object StabPlanner {
         val fxe = lens.fx * sx
         val halfDiag = 0.5 * kotlin.math.hypot(w, ht)
         var blurEased = 0
+        val blurRef = if (o.blurRefPx > 0) o.blurRefPx else 0.01 * w
         val lamScale = if (!o.blurEase) null else DoubleArray(n) { i ->
             if (exp[i] <= 0) 1.0 else {
                 val r = Quat.log(Quat.mul(Quat.conj(track.at(ts[i] + skew[i] / 2)), track.at(ts[i] + skew[i] / 2 + exp[i])))
                 val blur = fxe * kotlin.math.hypot(r[0], r[1]) + abs(r[2]) * halfDiag
-                if (blur > o.blurRefPx) blurEased++
-                1.0 + (blur / o.blurRefPx) * (blur / o.blurRefPx)
+                if (blur > blurRef) blurEased++
+                1.0 + (blur / blurRef) * (blur / blurRef)
             }
         }
 
@@ -584,12 +608,28 @@ internal object StabPlanner {
                 var cur = doubleArrayOf(1.0, 0.0, 0.0, 0.0)
                 var prev: DoubleArray? = null
                 var prevT = 0L
+                val low = if (cal.rateMatrixHigh != null) StabCalib.lowBand(gyro) else null
                 for ((i, s) in gyro.withIndex()) {
-                    val w = cameraRate(
-                        s.xRadiansPerSecond - cal.biasX,
-                        s.yRadiansPerSecond - cal.biasY,
-                        s.zRadiansPerSecond - cal.biasZ,
-                    )
+                    val bx = s.xRadiansPerSecond - cal.biasX
+                    val by = s.yRadiansPerSecond - cal.biasY
+                    val bz = s.zRadiansPerSecond - cal.biasZ
+                    val m = cal.rateMatrix
+                    val o = cal.rateOffset
+                    val mh = cal.rateMatrixHigh
+                    val w = if (m == null) cameraRate(bx, by, bz) else {
+                        // slow band (bias-corrected) and fast remainder
+                        val lx = if (mh != null) low!![3 * i] - cal.biasX else bx
+                        val ly = if (mh != null) low!![3 * i + 1] - cal.biasY else by
+                        val lz = if (mh != null) low!![3 * i + 2] - cal.biasZ else bz
+                        val hx = bx - lx
+                        val hy = by - ly
+                        val hz = bz - lz
+                        val e = DoubleArray(3) { r ->
+                            m[3 * r] * lx + m[3 * r + 1] * ly + m[3 * r + 2] * lz + (o?.get(r) ?: 0.0) +
+                                (if (mh != null) mh[3 * r] * hx + mh[3 * r + 1] * hy + mh[3 * r + 2] * hz else 0.0)
+                        }
+                        cameraRate(e[0], e[1], e[2])
+                    }
                     val ti = s.timestampNanos + cal.gyroOffsetNs
                     if (prev != null) {
                         val dt = (ti - prevT) * 1e-9

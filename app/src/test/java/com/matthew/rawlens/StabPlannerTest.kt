@@ -101,16 +101,17 @@ class StabPlannerTest {
         assertEquals(expect, centre(yaw, i)[0] - 1920.0, abs(expect) * 0.2 + 2.0)
     }
 
-    @Test fun `positive rz rotates content clockwise`() {
+    @Test fun `positive rz rotates content counter-clockwise`() {
         val amp = 0.01
         val f = 1.5
         val plan = StabPlanner.plan(take(90) { t -> Triple(0.0, 0.0, amp * 2 * PI * f * cos(2 * PI * f * t)) })!!
         // At a frame where the roll angle is positive, a point right of centre
-        // samples from lower in the source (clockwise content in Y-down).
+        // samples from higher in the source (counter-clockwise content in
+        // Y-down; measured on device video 2026-11-17).
         val i = 5 // angle = amp·sin(2π·1.5·5/30) > 0
         val out = DoubleArray(2)
         plan.sourcePoint(i, 1920.0 + 800.0, 1080.0, out)
-        assertTrue("y ${out[1]}", out[1] > 1080.0 + 1.0)
+        assertTrue("y ${out[1]}", out[1] < 1080.0 - 1.0)
     }
 
     @Test fun `hand shake is removed and pans are kept without lag`() {
@@ -273,8 +274,10 @@ class StabPlannerTest {
         val tilt = 0.02
         val base = take(150) { t -> Triple(0.25 * sin(2 * PI * 1.1 * t), 0.3 * cos(2 * PI * 0.8 * t), 0.15 * sin(2 * PI * 0.6 * t)) }
         val t = withAccel(base, tilt)
-        // Leveling needs roll room: a 12 % margin with half of it for roll.
-        val room = StabPlanner.Options(cropMargin = 0.12, rollShare = 0.5)
+        // Leveling needs roll room: a 20 % margin with half of it for roll
+        // (12 % was enough before the roll-sign fix moved this synthetic
+        // take's virtual path).
+        val room = StabPlanner.Options(cropMargin = 0.2, rollShare = 0.5)
         val off = StabPlanner.plan(t, room)!!
         val on = StabPlanner.plan(t, room.copy(horizonLock = true))!!
         assertTrue(on.horizon, on.horizon.startsWith("applied"))
@@ -297,7 +300,7 @@ class StabPlannerTest {
     @Test fun `blur easing follows the camera through smeared frames`() {
         val ex = { n: Int -> StabSidecar.Extras(exposureNs = LongArray(n) { 30_000_000L }) }
         val shake = { tt: Double -> Triple(0.0, 0.6 * sin(2 * PI * 3 * tt), 0.0) }
-        val eased = StabPlanner.plan(take(90, extras = ex, rate = shake))!!
+        val eased = StabPlanner.plan(take(90, extras = ex, rate = shake), StabPlanner.Options(blurRefPx = 2.0))!!
         val stiff = StabPlanner.plan(take(90, extras = ex, rate = shake), StabPlanner.Options(blurEase = false))!!
         assertTrue(eased.blurEasedFrames > 10)
         var ce = 0.0

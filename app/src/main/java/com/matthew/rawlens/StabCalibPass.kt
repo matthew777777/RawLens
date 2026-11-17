@@ -19,7 +19,7 @@ import kotlin.math.sqrt
  */
 internal object StabCalibPass {
     private const val TAG = "StabCalib"
-    const val MAX_FRAMES = 300
+    const val MAX_FRAMES = 600
     private const val TARGET_W = 320
     /** Max standard error of an accepted pair shift, luma px (≈2 encode px at 4K/320). */
     private const val MAX_SE_LUMA_PX = 0.25

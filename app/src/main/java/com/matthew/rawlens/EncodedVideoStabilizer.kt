@@ -377,18 +377,20 @@ class EncodedVideoStabilizer(private val appContext: Context) {
                     cal = StabPlanner.Calibration(
                         gyroOffsetNs = if (r.offsetAccepted) r.calibration.gyroOffsetNs else 0L,
                         biasX = r.calibration.biasX, biasY = r.calibration.biasY,
+                        rateMatrix = r.calibration.rateMatrix, rateOffset = r.calibration.rateOffset,
+                        rateMatrixHigh = r.calibration.rateMatrixHigh,
                     )
                 }
                 Log.i(TAG, "stab calib pairs=${r?.pairsUsed ?: shifts.size} offsetMs=${cal.gyroOffsetNs / 1e6} " +
                     "accepted=${r?.offsetAccepted} seMs=${r?.offsetStdErrNs?.div(1e6)} bias=${cal.biasX},${cal.biasY} " +
-                    "rmsPx=${r?.rmsBeforePx}->${r?.rmsAfterPx} gain=${r?.gainX},${r?.gainY} ms=${android.os.SystemClock.elapsedRealtime() - t}")
+                    "rmsPx=${r?.rmsBeforePx}->${r?.rmsAfterPx} gain=${r?.gainX},${r?.gainY} matrix=${r?.matrixAccepted} cvPx=${r?.cvGyroPx}->${r?.cvFitPx} ms=${android.os.SystemClock.elapsedRealtime() - t}")
             }
             val t = android.os.SystemClock.elapsedRealtime()
             val horizon = try {
                 Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
                     .invoke(null, "debug.rawlens.stab_horizon") == "1"
             } catch (_: Throwable) { false }
-            val opts = StabPlanner.Options(cropMargin = StabTrajectory.CROP_MARGIN.toDouble(), horizonLock = horizon)
+            val opts = StabPlanner.Options(cropMargin = PLAN_CROP_MARGIN, horizonLock = horizon)
             val v2 = StabPlanner.plan(take, opts, cal)
             if (v2 != null) {
                 Log.i(TAG, "stab plan v2 frames=${v2.frameCount} rs=${v2.usedRollingShutter} lens=${v2.lens.calibrated} " +
@@ -878,6 +880,12 @@ class EncodedVideoStabilizer(private val appContext: Context) {
     }
 
     companion object {
+        /**
+         * v2 planner crop margin per side (10 % = 1.25x zoom). 5 % left ~40 px
+         * of room at 1080p; a hand-held take on device shook ±100 px.
+         */
+        const val PLAN_CROP_MARGIN = 0.10
+
         private const val TAG = "EncodedVideoStab"
         /**
          * Stall bound: loop iterations with zero codec progress before the

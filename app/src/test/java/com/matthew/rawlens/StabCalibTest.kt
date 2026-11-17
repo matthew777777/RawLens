@@ -86,6 +86,26 @@ class StabCalibTest {
         assertEquals(0.0, r.calibration.biasX, 0.002)
     }
 
+    /** Device case: close scene, wrist lever arm — image moves 2.4x the rotation model. */
+    @Test fun `lever-arm gain is learned from the picture`() {
+        val (take, shifts) = fixture(0L, 0.0, 0.0, 0.5)
+        val big = shifts.map { it.copy(dx = 2.4 * it.dx, dy = 2.4 * it.dy) }
+        val r = StabCalib.calibrate(take, big)!!
+        assertTrue("cv ${r.cvGyroPx}->${r.cvFitPx}", r.matrixAccepted && r.cvFitPx < 0.3 * r.cvGyroPx)
+        val m = r.calibration.rateMatrix!!
+        assertEquals(2.4, m[0], 0.1)
+        assertEquals(2.4, m[4], 0.1)
+    }
+
+    /** Pure gyro data: the fitted map must not beat it on held-out frames by chance. */
+    @Test fun `exact gyro model keeps identity or near-identity map`() {
+        val (take, shifts) = fixture(0L, 0.0, 0.0, 0.5)
+        val r = StabCalib.calibrate(take, shifts)!!
+        r.calibration.rateMatrix?.let { m ->
+            assertEquals(1.0, m[0], 0.05); assertEquals(1.0, m[4], 0.05)
+        }
+    }
+
     @Test fun `rejects an offset when there is no motion`() {
         val ts = LongArray(120) { (it * 1e9 / 30).toLong() }
         val gyro = (0 until 2000).map { GyroSample((it * 2.5e6).toLong() - 100_000_000L, 0f, 0f, 0f) }

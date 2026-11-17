@@ -2658,6 +2658,14 @@ class MainActivity : Activity() {
             return "STAB FAILED • OG KEPT" to null
         } finally {
             try { work.delete() } catch (_: Exception) {}
+            // `adb shell setprop debug.rawlens.stab_keep 1` keeps the sidecar
+            // (cache/stab_keep/) for host-side analysis of a take.
+            try {
+                val keep = Class.forName("android.os.SystemProperties")
+                    .getMethod("get", String::class.java)
+                    .invoke(null, "debug.rawlens.stab_keep") == "1"
+                if (keep) sidecar.copyTo(File(File(cacheDir, "stab_keep").apply { mkdirs() }, sidecar.name), true)
+            } catch (_: Exception) {}
             try { sidecar.delete() } catch (_: Exception) {}
         }
     }

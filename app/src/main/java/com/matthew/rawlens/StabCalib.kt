@@ -54,6 +54,11 @@ internal object StabCalib {
         /** Fitted image/gyro gain per axis (x = yaw→dx, y = pitch→dy): ≈1 ok, ≈0 OIS/no texture, < 0 axis/sign error. */
         val gainX: Double = Double.NaN,
         val gainY: Double = Double.NaN,
+        /** Picture-fitted rate map accepted (see [StabPlanner.Calibration.rateMatrix]). */
+        val matrixAccepted: Boolean = false,
+        /** Held-out RMS (px) of the gyro model vs the fitted map. */
+        val cvGyroPx: Double = Double.NaN,
+        val cvFitPx: Double = Double.NaN,
     )
 
     fun calibrate(take: StabSidecar.Take, shifts: List<PairShift>): Result? {
@@ -148,14 +153,134 @@ internal object StabCalib {
         if (by != 0.0 && axisErr(0.0, by, 0) >= axisErr(0.0, 0.0, 0)) by = 0.0
         if (bx != 0.0 && axisErr(bx, 0.0, 1) >= axisErr(0.0, 0.0, 1)) bx = 0.0
         residuals(tau, bx, by, r)
-        val rmsAfter = rms(r)
+        var rmsAfter = rms(r)
+        // Picture-fitted rate map: meas = A·[ix, iy, iz, dt] per image axis.
+        // Accepted only when it beats the gyro model on held-out frames in
+        // both folds of a block cross-validation (no tuned threshold).
+        val lowRates = lowBand(take.gyro)
+        val lowTable = RateIntegral(LongArray(take.gyro.size) { take.gyro[it].timestampNanos }, lowRates)
+        val ints = Array(pairs.size) { k ->
+            val p = pairs[k]
+            val a = tc[p.frame] + tau
+            val b = tc[p.frame + 1] + tau
+            val (ix, iy, iz) = table.between(a, b)
+            val (lx, ly, lz) = lowTable.between(a, b)
+            // [low x,y,z (bias-corrected), high x,y,z, dt]; index 0/1 stay the
+            // full-band bias-corrected integrals for the gyro-model baseline.
+            doubleArrayOf(lx - bx * dts[k], ly - by * dts[k], lz, ix - lx, iy - ly, iz - lz, dts[k])
+        }
+        val mx = DoubleArray(pairs.size) { pairs[it].dx }
+        val my = DoubleArray(pairs.size) { pairs[it].dy }
+        val wts = DoubleArray(pairs.size) { pairs[it].weight }
+        val fold = IntArray(pairs.size) { (pairs[it].frame / CV_BLOCK) % 2 }
+        var matrixOk = true
+        var cvGyro = 0.0
+        var cvFit = 0.0
+        for (f in 0..1) {
+            val ax = fitRows(ints, mx, wts) { fold[it] != f }
+            val ay = fitRows(ints, my, wts) { fold[it] != f }
+            if (ax == null || ay == null) { matrixOk = false; break }
+            var eg = 0.0; var ef = 0.0; var c = 0
+            for (k in pairs.indices) if (fold[k] == f) {
+                val gx = mx[k] - fx * (ints[k][1] + ints[k][4])
+                val gy = my[k] + fy * (ints[k][0] + ints[k][3])
+                val fxr = mx[k] - dotN(ax, ints[k])
+                val fyr = my[k] - dotN(ay, ints[k])
+                eg += gx * gx + gy * gy; ef += fxr * fxr + fyr * fyr; c++
+            }
+            if (c < MIN_PAIRS / 2 || ef >= eg) matrixOk = false
+            cvGyro += eg; cvFit += ef
+        }
+        var rateMatrix: DoubleArray? = null
+        var rateOffset: DoubleArray? = null
+        var rateMatrixHigh: DoubleArray? = null
+        if (matrixOk) {
+            val ax = fitRows(ints, mx, wts) { true }!!
+            val ay = fitRows(ints, my, wts) { true }!!
+            // dx = fx·iy', dy = −fy·ix'  ⇒  row y = A_x/fx, row x = −A_y/fy.
+            rateMatrix = doubleArrayOf(
+                -ay[0] / fy, -ay[1] / fy, -ay[2] / fy,
+                ax[0] / fx, ax[1] / fx, ax[2] / fx,
+                0.0, 0.0, 1.0,
+            )
+            rateMatrixHigh = doubleArrayOf(
+                -ay[3] / fy, -ay[4] / fy, -ay[5] / fy,
+                ax[3] / fx, ax[4] / fx, ax[5] / fx,
+                0.0, 0.0, 1.0,
+            )
+            rateOffset = doubleArrayOf(-ay[6] / fy, ax[6] / fx, 0.0)
+            var ss = 0.0
+            for (k in pairs.indices) {
+                val ex = mx[k] - dotN(ax, ints[k]); val ey = my[k] - dotN(ay, ints[k])
+                ss += ex * ex + ey * ey
+            }
+            rmsAfter = sqrt(ss / (2 * pairs.size))
+        }
+        val lastCv = doubleArrayOf(sqrt(cvGyro / (2 * pairs.size)), sqrt(cvFit / (2 * pairs.size)))
         // τ maps frame time → gyro clock; the planner shifts gyro stamps onto
         // the frame clock, so it takes the opposite sign.
-        val cal = StabPlanner.Calibration(gyroOffsetNs = -tau, biasX = bx, biasY = by)
-        return Result(cal, offsetOk, se, bx != 0.0 || by != 0.0, pairs.size, rmsBefore, rmsAfter, gainX, gainY)
+        val cal = StabPlanner.Calibration(
+            gyroOffsetNs = -tau, biasX = bx, biasY = by,
+            rateMatrix = rateMatrix, rateOffset = rateOffset, rateMatrixHigh = rateMatrixHigh,
+        )
+        return Result(cal, offsetOk, se, bx != 0.0 || by != 0.0, pairs.size, rmsBefore, rmsAfter, gainX, gainY,
+            matrixAccepted = rateMatrix != null, cvGyroPx = lastCv[0], cvFitPx = lastCv[1])
     }
 
     private const val MIN_PAIRS = 30
+
+    /**
+     * Two-band split of the gyro: slow motion (hand sway, lever-arm
+     * translation at close range) and fast shake (partly absorbed by OIS on
+     * device) map to the image with different gains — measured 3500-5250 vs
+     * ~1000 px/rad for yaw on device. Zero-phase boxcar of this width.
+     */
+    const val BAND_WINDOW_NS = 300_000_000L
+
+    /** Low-band rates (3 per sample, sidecar units) of [gyro]; high band = raw − low. */
+    fun lowBand(gyro: List<GyroSample>, windowNs: Long = BAND_WINDOW_NS): DoubleArray {
+        val ri = RateIntegral(gyro)
+        val half = windowNs / 2
+        return DoubleArray(gyro.size * 3) { k -> ri.mean(k % 3, gyro[k / 3].timestampNanos, half) }
+    }
+    /** Cross-validation block length (frames): longer than the shake period. */
+    private const val CV_BLOCK = 30
+
+    private fun dotN(a: DoubleArray, x: DoubleArray): Double { var v = 0.0; for (i in a.indices) v += a[i] * x[i]; return v }
+
+    /** Weighted least squares y ≈ a·x over rows where [use]; null if singular. */
+    internal fun fitRows(x: Array<DoubleArray>, y: DoubleArray, w: DoubleArray, use: (Int) -> Boolean): DoubleArray? {
+        val q = x.firstOrNull()?.size ?: return null
+        val ata = Array(q) { DoubleArray(q) }
+        val atb = DoubleArray(q)
+        var n = 0
+        for (k in x.indices) if (use(k)) {
+            n++
+            for (i in 0 until q) {
+                atb[i] += w[k] * x[k][i] * y[k]
+                for (j in 0 until q) ata[i][j] += w[k] * x[k][i] * x[k][j]
+            }
+        }
+        if (n < MIN_PAIRS / 2) return null
+        // Tiny ridge: an unexcited regressor (no roll in the take) gets a
+        // zero coefficient instead of a singular solve.
+        var diag = 0.0
+        for (i in 0 until q) diag = max(diag, ata[i][i])
+        if (diag <= 0) return null
+        for (i in 0 until q) ata[i][i] += 1e-9 * diag + 1e-300
+        val m = Array(q) { i -> DoubleArray(q + 1) { j -> if (j < q) ata[i][j] else atb[i] } }
+        for (c in 0 until q) {
+            var p = c
+            for (r in c + 1 until q) if (abs(m[r][c]) > abs(m[p][c])) p = r
+            if (abs(m[p][c]) < 1e-300) return null
+            val t = m[c]; m[c] = m[p]; m[p] = t
+            for (r in 0 until q) if (r != c) {
+                val f = m[r][c] / m[c][c]
+                for (j in c..q) m[r][j] -= f * m[c][j]
+            }
+        }
+        return DoubleArray(q) { m[it][q] / m[it][it] }
+    }
 
     /**
      * Least squares meas = g·pred + c·dt with one 3σ (robust) outlier pass.
@@ -221,25 +346,30 @@ internal object StabCalib {
     }
 
     /** Cumulative trapezoid integral of desktop rates, linear between samples. */
-    private class RateIntegral(gyro: List<GyroSample>) {
-        private val t = LongArray(gyro.size) { gyro[it].timestampNanos }
-        private val c = Array(3) { DoubleArray(gyro.size) }
+    internal class RateIntegral(private val t: LongArray, rates: DoubleArray) {
+        constructor(gyro: List<GyroSample>) : this(
+            LongArray(gyro.size) { gyro[it].timestampNanos },
+            DoubleArray(gyro.size * 3) { k ->
+                val g = gyro[k / 3]
+                when (k % 3) { 0 -> g.xRadiansPerSecond.toDouble(); 1 -> g.yRadiansPerSecond.toDouble(); else -> g.zRadiansPerSecond.toDouble() }
+            },
+        )
+        private val c = Array(3) { DoubleArray(t.size) }
 
         init {
-            for (i in 1 until gyro.size) {
+            for (i in 1 until t.size) {
                 val dt = (t[i] - t[i - 1]) * 1e-9
-                val a = gyro[i - 1]
-                val b = gyro[i]
-                c[0][i] = c[0][i - 1] + 0.5 * (a.xRadiansPerSecond + b.xRadiansPerSecond) * dt
-                c[1][i] = c[1][i - 1] + 0.5 * (a.yRadiansPerSecond + b.yRadiansPerSecond) * dt
-                c[2][i] = c[2][i - 1] + 0.5 * (a.zRadiansPerSecond + b.zRadiansPerSecond) * dt
+                for (a in 0 until 3) c[a][i] = c[a][i - 1] + 0.5 * (rates[3 * (i - 1) + a] + rates[3 * i + a]) * dt
             }
         }
+
+        /** Mean rate over [time − half, time + half] (zero-phase boxcar), per axis. */
+        fun mean(axis: Int, time: Long, half: Long): Double = (at(axis, time + half) - at(axis, time - half)) / (2 * half * 1e-9)
 
         fun between(a: Long, b: Long): Triple<Double, Double, Double> =
             Triple(at(0, b) - at(0, a), at(1, b) - at(1, a), at(2, b) - at(2, a))
 
-        private fun at(axis: Int, time: Long): Double {
+        fun at(axis: Int, time: Long): Double {
             if (t.isEmpty()) return 0.0
             if (time <= t[0]) return c[axis][0]
             if (time >= t[t.size - 1]) return c[axis][t.size - 1]
