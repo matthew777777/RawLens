@@ -37,34 +37,35 @@ class AgxScopeCurveTest {
 
     @Test
     fun scopeCurveAnchorsBlackAndWhite() {
-        val black = AgxDisplayTransform.scopeCurve(0f)
+        val agx = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX)
+        val black = AgxDisplayTransform.scopeCurve(0f, agx)
         assertEquals(0f, black, 1e-3f)
         // Negative/NaN clip to the same sigmoid black floor, never below it.
-        assertEquals(black, AgxDisplayTransform.scopeCurve(-1f), 0f)
-        assertEquals(0f, AgxDisplayTransform.scopeCurve(Float.NaN), 0f)
+        assertEquals(black, AgxDisplayTransform.scopeCurve(-1f, agx), 0f)
+        assertEquals(0f, AgxDisplayTransform.scopeCurve(Float.NaN, agx), 0f)
         // Diffuse white sits bright with headroom above; the shoulder plateau above
         // it is the brightest neutral the JPEG can hold (matches the pinned 0.699
         // linear -> ~0.85 encoded reference in AgxDisplayTransformTest).
-        val white = AgxDisplayTransform.scopeCurve(1f)
+        val white = AgxDisplayTransform.scopeCurve(1f, agx)
         assertTrue("diffuse white $white should sit bright", white in 0.7f..0.85f)
-        val peak = AgxDisplayTransform.scopeCurve(16f)
+        val peak = AgxDisplayTransform.scopeCurve(16f, agx)
         assertTrue("peak $peak should top diffuse white without clipping", peak >= white && peak <= 0.9f)
-        val mid = AgxDisplayTransform.scopeCurve(0.18f)
+        val mid = AgxDisplayTransform.scopeCurve(0.18f, agx)
         assertTrue("mid gray $mid should sit mid-scale", mid in 0.3f..0.7f)
     }
 
     @Test
     fun scopeCurveTracksContrastSlider() {
-        val flat = AgxDisplayTransform.scopeCurve(0.35f, JpegOutputSettings(agxContrast = 0.5f))
-        val base = AgxDisplayTransform.scopeCurve(0.35f, JpegOutputSettings(agxContrast = 1f))
-        val punchy = AgxDisplayTransform.scopeCurve(0.35f, JpegOutputSettings(agxContrast = 1.5f))
+        val flat = AgxDisplayTransform.scopeCurve(0.35f, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxContrast = 0.5f))
+        val base = AgxDisplayTransform.scopeCurve(0.35f, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxContrast = 1f))
+        val punchy = AgxDisplayTransform.scopeCurve(0.35f, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxContrast = 1.5f))
         // Above the pivot, more contrast pushes the tone brighter.
         assertTrue("flat=$flat base=$base punchy=$punchy", flat < base && base < punchy)
     }
 
     @Test
     fun scopeLutMatchesDirectEvaluation() {
-        val settings = JpegOutputSettings()
+        val settings = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX)
         val lut = AgxDisplayTransform.buildScopeLut(settings)
         assertEquals(AgxDisplayTransform.SCOPE_LUT_SIZE, lut.size)
         for (i in lut.indices step 37) {
@@ -85,13 +86,13 @@ class AgxScopeCurveTest {
         // defaults and at every range/contrast/shoulder extreme, staying
         // monotonic so bisection lands on the graded branch (never a clip).
         val settingsCases = listOf(
-            JpegOutputSettings(),
-            JpegOutputSettings(agxContrast = 0.5f),
-            JpegOutputSettings(agxContrast = 1.5f),
-            JpegOutputSettings(agxShadowEv = 4f, agxHighlightEv = 3f),
-            JpegOutputSettings(agxShadowEv = 14f, agxHighlightEv = 10f),
-            JpegOutputSettings(highlightShoulder = 0f),
-            JpegOutputSettings(agxContrast = 1.5f, agxShadowEv = 4f, agxHighlightEv = 3f)
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX),
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxContrast = 0.5f),
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxContrast = 1.5f),
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxShadowEv = 4f, agxHighlightEv = 3f),
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxShadowEv = 14f, agxHighlightEv = 10f),
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, highlightShoulder = 0f),
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxContrast = 1.5f, agxShadowEv = 4f, agxHighlightEv = 3f)
         )
         for (settings in settingsCases) {
             var previous = -1f

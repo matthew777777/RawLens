@@ -69,7 +69,7 @@ class HighlightLightingTest {
     }
 
     @Test fun greyRestoredShadowsLiftAndHighlightsStayBelowOffAfterCaptureBias() {
-        val base = JpegOutputSettings(highlightShoulder = 0f)
+        val base = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, highlightShoulder = 0f)
         fun code(x: Float, settings: JpegOutputSettings) = AgxDisplayTransform.scopeCurve(x, settings)
         for (level in ActiveDLighting.values().drop(1)) {
             val look = base.copy(activeDLighting = level)
@@ -98,7 +98,7 @@ class HighlightLightingTest {
 
     @Test fun repeatedResolutionDoesNotCompoundTheLookAndExtremeKnobsStayFinite() {
         for (level in ActiveDLighting.values()) {
-            val initial = JpegOutputSettings(activeDLighting = level, agxShadowEv = 14f, agxHighlightEv = 3f)
+            val initial = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, activeDLighting = level, agxShadowEv = 14f, agxHighlightEv = 3f)
             val resolved = initial.resolvedForPlatform()
             assertEquals(resolved, resolved.resolvedForPlatform())
             assertTrue(resolved.effectiveAgxShadowEv.isFinite())
@@ -108,7 +108,7 @@ class HighlightLightingTest {
 
     @Test fun adaptiveMeterDoesNotCompensatePackagedCaptureBiasTwice() {
         for (level in ActiveDLighting.values()) {
-            val look = JpegOutputSettings(activeDLighting = level)
+            val look = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, activeDLighting = level)
             val scale = 2.0.pow(-level.protectionEv).toFloat()
             val result = AdaptiveDevelopmentExposure.analyzeSamples(
                 FloatArray(1024) { 0.18f * scale }, 1024,
@@ -130,7 +130,7 @@ class HighlightLightingTest {
 
     @Test fun defaultsAndPersistencePreserveOldBehaviour() {
         assertEquals(ActiveDLighting.OFF, ActiveDLighting.fromName("future"))
-        val base = JpegOutputSettings()
+        val base = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX)
         assertEquals(base.agxShadowEv, base.effectiveAgxShadowEv, 0f)
         assertEquals(ProgramMetering.HIGHLIGHT_WEIGHTED,
             ProgramAeProfile.fromJson(ProgramAeProfile(metering = ProgramMetering.HIGHLIGHT_WEIGHTED).toJson()).metering)

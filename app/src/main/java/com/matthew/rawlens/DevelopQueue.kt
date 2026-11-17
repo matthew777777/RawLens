@@ -7,7 +7,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 internal data class DevelopQueueOptions(
-    val mapper: PhotoToneMapper = PhotoToneMapper.BASIC,
+    val mapper: PhotoToneMapper = PhotoToneMapper.SIGMOID,
     val autoExposure: Boolean = true,
     val exposureEv: Double = 0.0,
     val quality: Int = 100,

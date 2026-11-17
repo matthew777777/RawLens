@@ -11,19 +11,19 @@ import org.junit.Test
 class JpegOutputSettingsTest {
     @Test
     fun purityBoostIsBoundedAndDefaultsToPinnedAgxBase() {
-        assertEquals(1f, JpegOutputSettings().resolvedForPlatform().agxPurityBoost, 0f)
-        assertEquals(0f, JpegOutputSettings(agxPurityBoost = -1f).resolvedForPlatform().agxPurityBoost, 0f)
-        assertEquals(2f, JpegOutputSettings(agxPurityBoost = 3f).resolvedForPlatform().agxPurityBoost, 0f)
+        assertEquals(1f, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX).resolvedForPlatform().agxPurityBoost, 0f)
+        assertEquals(0f, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxPurityBoost = -1f).resolvedForPlatform().agxPurityBoost, 0f)
+        assertEquals(2f, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxPurityBoost = 3f).resolvedForPlatform().agxPurityBoost, 0f)
         assertEquals(
             1f,
-            JpegOutputSettings(agxPurityBoost = Float.NaN).resolvedForPlatform().agxPurityBoost,
+            JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxPurityBoost = Float.NaN).resolvedForPlatform().agxPurityBoost,
             0f
         )
     }
 
     @Test
     fun extendedAgxControlsResolveIntoSafeShaderRanges() {
-        val resolved = JpegOutputSettings(
+        val resolved = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX,
             agxContrast = 9f,
             agxSaturation = -1f,
             agxHuePreservation = 3f,
@@ -47,7 +47,7 @@ class JpegOutputSettingsTest {
 
     @Test
     fun highlightControlsDefaultToSkySafeAndShoulderOn() {
-        val resolved = JpegOutputSettings().resolvedForPlatform()
+        val resolved = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX).resolvedForPlatform()
         assertEquals(1f, resolved.highlightHeadroom, 0f)
         assertEquals(0.85f, resolved.highlightSoftHeadroom, 0f)
         assertEquals(1f, resolved.highlightShoulder, 0f)
@@ -57,29 +57,29 @@ class JpegOutputSettingsTest {
     fun shoulderOffReproducesPinnedAgxWhite() {
         val white = floatArrayOf(16f, 16f, 16f)
         val pinned = AgxDisplayTransform.acescgToOutputLinearSrgb(
-            white, JpegOutputSettings(highlightShoulder = 0f)
+            white, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, highlightShoulder = 0f)
         ).average().toFloat()
         // Pinned Filament Base maps 16x to near-white; full shoulder compresses to ~0.70.
         assertTrue("shoulder-off should stay near white, was $pinned", pinned > 0.9f)
         val soft = AgxDisplayTransform.acescgToOutputLinearSrgb(
-            white, JpegOutputSettings(highlightShoulder = 1f)
+            white, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, highlightShoulder = 1f)
         ).average().toFloat()
         assertTrue("shoulder-on should compress sun, was $soft", soft < pinned - 0.1f)
         // Midtones are bit-exact either way.
         val mid = floatArrayOf(0.18f, 0.18f, 0.18f)
-        val midOff = AgxDisplayTransform.acescgToOutputLinearSrgb(mid, JpegOutputSettings(highlightShoulder = 0f))
-        val midOn = AgxDisplayTransform.acescgToOutputLinearSrgb(mid, JpegOutputSettings(highlightShoulder = 1f))
+        val midOff = AgxDisplayTransform.acescgToOutputLinearSrgb(mid, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, highlightShoulder = 0f))
+        val midOn = AgxDisplayTransform.acescgToOutputLinearSrgb(mid, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, highlightShoulder = 1f))
         assertArrayEquals(midOff, midOn, 1e-6f)
     }
 
     @Test
     fun fullGamutCompressionFitsBoostedColorWithoutChangingNeutral() {
-        val boosted = JpegOutputSettings(agxPurityBoost = 2f, agxGamutCompression = 1f)
+        val boosted = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxPurityBoost = 2f, agxGamutCompression = 1f)
         val color = AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(0f, 1f, 0f), boosted)
         assertTrue(color.all { it in -1e-6f..1.000001f })
 
         val neutral = floatArrayOf(0.18f, 0.18f, 0.18f)
-        val base = AgxDisplayTransform.acescgToOutputLinearSrgb(neutral)
+        val base = AgxDisplayTransform.acescgToOutputLinearSrgb(neutral, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX))
         val compressed = AgxDisplayTransform.acescgToOutputLinearSrgb(neutral, boosted)
         assertArrayEquals(base, compressed, 2e-4f)
     }

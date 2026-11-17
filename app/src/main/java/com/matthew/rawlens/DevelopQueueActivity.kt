@@ -38,7 +38,7 @@ class DevelopQueueActivity : Activity() {
     private lateinit var shoulder: SettingsSlider
     private lateinit var defringe: SettingsSlider
     private lateinit var kit: SettingsKit
-    private var mapper=PhotoToneMapper.BASIC
+    private var mapper=PhotoToneMapper.SIGMOID
     private var onSettings=false
     private var last: List<DevelopQueueItem>?=null
     private val controls=mutableListOf<View>()

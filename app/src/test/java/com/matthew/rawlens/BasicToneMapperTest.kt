@@ -28,9 +28,9 @@ class BasicToneMapperTest {
         assertArrayEquals(AgxDisplayTransform.acescgToOutputLinearSrgb(scene, basic),
             AgxDisplayTransform.acescgToOutputLinearSrgb(scene, tuned), 0f)
         assertEquals(AgxLook.PUNCHY, tuned.copy(toneMapper = PhotoToneMapper.AGX).agxLook)
-        assertEquals(PhotoToneMapper.BASIC, JpegOutputSettings().toneMapper)
-        assertEquals(PhotoToneMapper.BASIC, PhotoToneMapper.fromPreference(null))
-        assertEquals(PhotoToneMapper.BASIC, PhotoToneMapper.fromPreference("unknown"))
+        assertEquals(PhotoToneMapper.SIGMOID, JpegOutputSettings().toneMapper)
+        assertEquals(PhotoToneMapper.SIGMOID, PhotoToneMapper.fromPreference(null))
+        assertEquals(PhotoToneMapper.SIGMOID, PhotoToneMapper.fromPreference("unknown"))
         assertEquals(PhotoToneMapper.AGX, PhotoToneMapper.fromPreference("AGX"))
         assertEquals(PhotoToneMapper.BASIC, PhotoToneMapper.fromPreference("BASIC"))
     }

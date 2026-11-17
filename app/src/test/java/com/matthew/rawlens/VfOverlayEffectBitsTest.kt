@@ -8,33 +8,33 @@ import org.junit.Test
 
 class VfOverlayEffectBitsTest {
     @Test fun `raw tonemap never flags AGX`() {
-        val moved = JpegOutputSettings(agxContrast = 1.2f, agxSaturation = 1.1f, agxPurityBoost = 0.5f)
+        val moved = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxContrast = 1.2f, agxSaturation = 1.1f, agxPurityBoost = 0.5f)
         assertTrue(vfOverlayEffectBits(false, moved).isEmpty())
     }
 
     @Test fun `jpeg tonemap flags moved sliders only`() {
-        val moved = JpegOutputSettings(agxContrast = 1.2f)
+        val moved = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, agxContrast = 1.2f)
         assertEquals(listOf("AGX+"), vfOverlayEffectBits(true, moved))
-        assertTrue(vfOverlayEffectBits(true, JpegOutputSettings()).isEmpty())
+        assertTrue(vfOverlayEffectBits(true, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX)).isEmpty())
     }
 
     @Test fun `ultra-hdr passes through in both modes`() {
-        val settings = JpegOutputSettings(ultraHdr = true)
+        val settings = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, ultraHdr = true)
         assertEquals(listOf("UHDR"), vfOverlayEffectBits(false, settings))
         assertEquals(listOf("UHDR"), vfOverlayEffectBits(true, settings))
     }
 
     @Test fun `wavelet flag adds badge`() {
-        val settings = JpegOutputSettings()
+        val settings = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX)
         assertEquals(listOf("WAVELET"), vfOverlayEffectBits(false, settings, wavelet = true))
         assertEquals(
             listOf("UHDR", "WAVELET"),
-            vfOverlayEffectBits(false, JpegOutputSettings(ultraHdr = true), wavelet = true)
+            vfOverlayEffectBits(false, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, ultraHdr = true), wavelet = true)
         )
         assertTrue(vfOverlayEffectBits(false, settings).isEmpty())
     }
 
     @Test fun `default settings report no effects`() {
-        assertFalse(vfOverlayEffectBits(false, JpegOutputSettings()).isNotEmpty())
+        assertFalse(vfOverlayEffectBits(false, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX)).isNotEmpty())
     }
 }
