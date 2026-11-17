@@ -1177,12 +1177,14 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       z_out->swap(out);
     }
   }
+  if (z_out) trace("final-z.f32", z_out->data(), nHR * 4);   // BM3D-lite prototype input
+  if (noise_scale && noise_scale->size() == size_t(H) * W) trace("noise-scale.f32", noise_scale->data(), size_t(H) * W * 4);
   bool dct_skip = false;
   if (x_out && prm.dct && prm.dct_fallback && noise_scale && noise_scale->size() == size_t(H) * W) {
     // Fallback: nothing to clean where no frame was lost (LK-R's fb_skip): x = z, no DCT pass.
     float mx = 0.0f;
     for (float v : *noise_scale) mx = std::max(mx, v);
-    if (mx <= 1.0f) { dct_skip = true; *x_out = *z_out; }
+    if (mx <= 1.0f && prm.dct_grain <= 0.0f && !prm.dct_chroma_all) { dct_skip = true; *x_out = *z_out; }
   }
   if (x_out && prm.dct && !dct_skip) {   // LK-R's DCT x-step on the final z (H, W % 4 == 0)
     const double prior_start = now_ms();
@@ -1208,10 +1210,50 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       for (size_t i = 0; i < size_t(H) * W; ++i) d[i] = std::sqrt(std::max((*noise_scale)[i] * (*noise_scale)[i] - 1.0f, 0.0f));
     } else if (hns) std::memcpy(dns.map, noise_scale->data(), size_t(H) * W * 4);
     const float denom = prm.noise_a * 0.18f + prm.noise_b;
-    DctPush d{H, W, ny, nx, 0, 0, H / 4, hns ? 1 : 0, prm.dct_sigma * prm.dct_sigma,
+    // Measured merged noise (2026-11-17): sigma/sqrt(K) under-reads Lite's real merged noise ~3x on
+    // real bursts (the fit does not average perfectly). In the noise-following modes the level is
+    // scaled by the ratio measured on THIS image: per 8x8 block, pixel variance of the merged luma
+    // over the model variance, on blocks with no lost frames; the 2nd percentile picks flat blocks
+    // (texture only raises a block), divided by that percentile of chi^2(63)/63 (pure noise). 1..16.
+    float noise_gain = 1.0f;
+    if (prm.dct_chroma_all || prm.dct_grain > 0.0f) {
+      static const float qf = std::getenv("LKRL_NQ") ? float(std::atof(std::getenv("LKRL_NQ"))) : 0.02f;
+      const float* zz = z_out->data();
+      const size_t HW = size_t(H) * W;
+      const float la = denom > 0 ? prm.noise_a / denom : 0.0f, lb = denom > 0 ? prm.noise_b / denom : 1.0f;
+      const float s2 = prm.dct_sigma * prm.dct_sigma;
+      std::vector<float> rr;
+      for (int by = 0; by + 8 <= H; by += 8)
+        for (int bx = 0; bx + 8 <= W; bx += 8) {
+          double sm = 0, sq = 0; bool lostb = false;
+          for (int y = by; y < by + 8; ++y)
+            for (int x = bx; x < bx + 8; ++x) {
+              const size_t i = size_t(y) * W + x;
+              if (hns && (*noise_scale)[i] > 1.0f) lostb = true;
+              const double v = 0.25 * (zz[i] * prm.wb[0] + zz[2 * HW + i] * prm.wb[2]) + 0.5 * zz[HW + i] * prm.wb[1];
+              sm += v; sq += v * v;
+            }
+          if (lostb) continue;
+          const double m = sm / 64, var = std::max(sq / 64 - m * m, 0.0) * 64.0 / 63.0;
+          const double mv = s2 * std::max(la * std::max(m, 0.0) + lb, 0.0);
+          if (mv > 0) rr.push_back(float(var / mv));
+        }
+      if (rr.size() >= 16) {
+        const size_t k = size_t(qf * (rr.size() - 1));
+        std::nth_element(rr.begin(), rr.begin() + k, rr.end());
+        // percentile of chi^2(63)/63 for pure noise ~ 1 + z_q sqrt(2/63) (z from a logistic fit of the normal)
+        const float zq = -1.7f * std::log((1.0f - qf) / qf) / 3.0f;
+        const float pq = std::max(1.0f + zq * std::sqrt(2.0f / 63.0f), 0.3f);
+        // Cap: a tile with no flat block cannot be measured (texture reads as noise); 16 = 4x the model sigma.
+        noise_gain = std::min(std::max(rr[k] / pq, 1.0f), 16.0f);
+      }
+      if (std::getenv("LKRL_NGAIN_LOG")) std::fprintf(stderr, "dct noise gain %.2f (%zu blocks)\n", noise_gain, rr.size());
+    }
+    DctPush d{H, W, ny, nx, 0, 0, H / 4, hns ? 1 : 0, prm.dct_sigma * prm.dct_sigma * noise_gain,
               denom > 0 ? prm.noise_a / denom : 0.0f, denom > 0 ? prm.noise_b / denom : 1.0f,
               prm.dct_luma * prm.dct_luma, prm.dct_chroma * prm.dct_chroma, prm.wb[0], prm.wb[1], prm.wb[2],
-              prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma, float(s), 0.0f, denom / float(K), 0.0f};
+              prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma, prm.dct_luma_cap, prm.dct_chroma_all ? 1.0f : 0.0f, prm.dct_luma_floor,
+              prm.dct_fallback ? prm.dct_grain * prm.dct_grain : 0.0f};
     gpu_->resetSets();
     VkDescriptorSet sy = gpu_->set(kdy_, {&z, &xb, &dns, &diw, &dnv}), su = gpu_->set(kdu_, {&z, &xb, &dns, &diw, &dnv}),
                     sv = gpu_->set(kdv_, {&z, &xb, &dns, &diw, &dnv}), sc = gpu_->set(kdyuv_, {&xb});
@@ -1225,6 +1267,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     gpu_->dispatch(kdyuv_, sc, &d, uint32_t(W / 4 + 15) / 16, uint32_t(H + 15) / 16);
     if (!submit()) return fail("dct submit");
     x_out->assign(xb.as<float>(), xb.as<float>() + nHR);
+    trace("final-x.f32", x_out->data(), nHR * 4);
     S.ms_prior += now_ms() - prior_start;
     ++S.prior_calls;
   }

@@ -237,7 +237,7 @@ internal object LkrMerge {
             buildString {
                 append("- Tile size: ${settings.tile}, overlap: ${settings.overlap}\n")
                 append("- Tiles: ${stats[LkrBridge.STAT_TILES].toInt()}\n")
-                append("- Prior: ${if (settings.dctPrior) "Sliding DCT" else "None"}\n")
+                append("- Prior: ${if (settings.dctPrior) "Shadow luma DCT" else "Colour DCT only"}\n")
                 append("- Crop (x, y, width, height): ${region.joinToString()}\n")
                 append("- Noise sigma: ${stats[LkrBridge.STAT_SIGMA]}\n")
                 append("- Coarse alignment: ${stats[LkrBridge.STAT_MS_COARSE]} ms\n")

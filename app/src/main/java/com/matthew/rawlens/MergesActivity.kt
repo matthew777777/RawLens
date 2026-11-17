@@ -704,7 +704,7 @@ class MergesActivity : Activity() {
             BurstMergeRunner.Method.LKR -> {
                 toggle("Automatic KernelNet denoise", tuningMfsr.lkrKernelNetDenoise) { tuningMfsr = tuningMfsr.copy(lkrKernelNetDenoise = it) }
                 content.addView(desc("KernelNet skips low-noise scenes and increases denoising as scene noise rises."))
-                toggle("DCT denoise", tuningMfsr.lkrDctPrior) { tuningMfsr = tuningMfsr.copy(lkrDctPrior = it) }
+                toggle("Shadow luma denoise", tuningMfsr.lkrDctPrior) { tuningMfsr = tuningMfsr.copy(lkrDctPrior = it) }
                 content.addView(desc("Crop zoom is set on the merge setup card. Output keeps the sensor resolution."))
             }
             BurstMergeRunner.Method.HDRPLUS -> {

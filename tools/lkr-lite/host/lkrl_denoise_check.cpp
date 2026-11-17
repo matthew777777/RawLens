@@ -152,7 +152,7 @@ int main() {
       p.s=scale; p.noise_a=0; p.noise_b=.000036f;
       p.sigma_noise=.006f; p.sigma_end=.006f; p.prior_gain=1;
       p.kernelnet_denoise=0; p.notch=false; p.highlight_desat=false; p.grain=0;
-      p.dct_fallback=mode==1; p.dct_prior=mode==2;
+      p.dct_fallback=mode>=1; p.dct_prior=mode==2;   // 0 off, 1 colour (base look), 2 colour + luma
       std::vector<float> motion(K*6,0);
       for (int k=0;k<K;++k) {motion[k*6]=1;motion[k*6+4]=1;}
       lkrl::SolveStats st;

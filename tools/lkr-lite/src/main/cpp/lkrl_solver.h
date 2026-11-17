@@ -41,6 +41,10 @@ struct LiteParams {
   bool dct = false;
   bool dct_fallback = false;   // shrink only the excess noise of lost frames (noise map sqrt(ns^2 - 1))
   float dct_sigma = 0.0f;                      // noise level handed to the shrinkage (LK-R: sigma_t * prior_gain)
+  float dct_grain = 0.0f;
+  float dct_luma_floor = 0.0f;
+  float dct_luma_cap = 1.0f;     // with dct_grain: most share of luma noise variance removed anywhere   // with dct_grain: least share of luma noise variance removed everywhere
+  bool dct_chroma_all = false;   // colour passes use the total merged noise everywhere (not only lost frames)   // see lkrl_api.h; push slot = grain^2 (dct_x.glsl)
   float dct_luma = 1.0f, dct_chroma = 2.0f;   // thresholds, multiples of the noise level
   float dct_dark_level = 0.02f, dct_dark_cap = 8.0f, dct_dark_luma = 0.25f;
   float wb[3] = {1.0f, 1.0f, 1.0f};

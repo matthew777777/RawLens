@@ -19,7 +19,7 @@ internal fun sharpMergeProvenance(
             append("- Merge: LK-R (Lucas-Kanade Reloaded)\n")
             append("- Zoom: ${settings.lkrZoom.factor}x\n")
             append("- Reconstruction scale: ${if (settings.lkrZoom == LkrZoom.X1 && !settings.lkrFullRes) 1 else 2}x\n")
-            append("- LK prior: ${if (settings.lkrDctPrior) "Sliding DCT" else "None"}\n")
+            append("- LK prior: ${if (settings.lkrDctPrior) "Shadow luma DCT" else "Colour DCT only"}\n")
         } else {
             append("- Merge: MFSR (Multi-Frame Super-Resolution)\n")
             append("- Requested kernel: ${settings.kernel}\n")

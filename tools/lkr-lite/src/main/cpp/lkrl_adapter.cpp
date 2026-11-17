@@ -65,23 +65,26 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   if (const char* v = std::getenv("LKRL_GMODE")) lp.guide_mode = std::atoi(v);
   // DCT prior: one x-step on the final z at LK-R's last-iteration level (sigma_end * prior_gain).
   if (const char* v = std::getenv("LKRL_CAVG")) lp.chroma_from_avg = std::atoi(v);
-  lp.dct = prm.dct_prior;
-  lp.dct_sigma = prm.sigma_end * prm.prior_gain;
-  // Lost-frame cleanup is colour-only: the DCT switch owns luma shrinkage.
-  // Previously off silently used a stronger luma threshold (2) than on (1).
+  // DCT look (2026-11-17, one pass at the end on the merged noise):
+  //  - always (base look): colour noise removed everywhere, following the measured merged noise
+  //    (k dct_chroma = 2: no edge bleeding; strong only where colour noise is visible);
+  //  - dct_prior ("DCT denoise" on): + noise-following luma: shadows keep at most dct_grain x
+  //    mid-grey's relative grain, mid-tones / highlights untouched. Off = luma unchanged (DCT round trip, ~1e-7).
+  //  --fallback 0 / LKRL_FB=0 = no DCT pass at all. LK-R's old full-image x-step is gone (no gain vs truth).
   const char* fb = std::getenv("LKRL_FB");
-  if (!prm.dct_prior && (fb ? std::atoi(fb) != 0 : prm.dct_fallback)) {
-    lp.dct = true; lp.dct_fallback = true;
+  if (fb ? std::atoi(fb) != 0 : prm.dct_fallback) {
+    lp.dct = true; lp.dct_fallback = true; lp.dct_chroma_all = true;
     lp.dct_sigma = prm.sigma_noise / std::sqrt(float(K));
   }
-  lp.dct_luma = prm.dct_luma; lp.dct_chroma = prm.dct_chroma;
-  lp.dct_dark_level = prm.dct_dark_level; lp.dct_dark_cap = prm.dct_dark_cap; lp.dct_dark_luma = prm.dct_dark_luma;
+  lp.dct_chroma = prm.dct_chroma;
+  lp.dct_dark_level = prm.dct_dark_level; lp.dct_dark_cap = 1.0f; lp.dct_dark_luma = prm.dct_dark_luma;
   for (int c = 0; c < 3; ++c) lp.wb[c] = prm.wb[c];
-  if (lp.dct_fallback) {
-    lp.dct_luma = std::getenv("LKRL_FBLUMA") ? float(std::atof(std::getenv("LKRL_FBLUMA"))) : 0.0f;
-    // Shadow texture energy must not amplify the fitted noise threshold.
-    lp.dct_dark_cap = 1.0f;
-  }
+  lp.dct_grain = 0.0f; lp.dct_luma = 0.0f;
+  if (lp.dct && prm.dct_prior) { lp.dct_grain = prm.dct_grain; lp.dct_luma = prm.dct_luma; lp.dct_luma_floor = prm.dct_luma_floor; lp.dct_luma_cap = prm.dct_luma_cap; }
+  if (const char* v = std::getenv("LKRL_LCAP")) lp.dct_luma_cap = float(std::atof(v));
+  if (const char* v = std::getenv("LKRL_LFLOOR")) lp.dct_luma_floor = float(std::atof(v));
+  if (const char* v = std::getenv("LKRL_GRAIN")) lp.dct_grain = float(std::atof(v));
+  if (lp.dct_grain > 0.0f && lp.dct_luma <= 0.0f) lp.dct_luma = prm.dct_luma;
   if (const char* v = std::getenv("LKRL_DSIG")) lp.dct_sigma *= float(std::atof(v));
   if (const char* v = std::getenv("LKRL_DLUMA")) lp.dct_luma = float(std::atof(v));
   if (const char* v = std::getenv("LKRL_DCHROMA")) lp.dct_chroma = float(std::atof(v));

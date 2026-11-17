@@ -135,7 +135,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             "On by default. PhotonCamera-based KernelNet denoising increases in noisy, " +
                 "low-light scenes. Low-noise scenes skip it."
         ))
-        content.addView(settingsCheck("LK-R denoise: sliding DCT", mfsrSettings.lkrDctPrior).apply {
+        content.addView(settingsCheck("LK-R shadow luma denoise", mfsrSettings.lkrDctPrior).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrDctPrior &&
                     !applyMfsrSettings(mfsrSettings.copy(lkrDctPrior = checked))) {
@@ -144,8 +144,9 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc(
-            "Off (default): no DCT luma smoothing; light colour cleanup remains where frames were rejected. " +
-                "On: also reduces luma noise after merging. Automatic KernelNet denoise is controlled separately."
+            "Colour noise is always removed, following the measured noise, without colour bleeding. " +
+                "On: also cleans luma noise in shadows down to a fine, even grain; mid-tones and highlights " +
+                "are left untouched. Off: luma is not touched. KernelNet denoise is controlled separately."
         ))
         content.addView(settingsCheck("LK-R reference: middle of the burst", mfsrSettings.lkrMiddleReference).apply {
             setOnCheckedChangeListener { _, checked ->

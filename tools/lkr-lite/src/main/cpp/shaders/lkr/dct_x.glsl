@@ -32,6 +32,9 @@ layout(push_constant) uniform P {
   float aperture_scale, aperture_strength;
   float coherence_sigma2;
   float correlated_error;
+#else
+  // Same slots as the aperture fields (host DctPush). grain2 > 0: noise-following luma (see main).
+  float luma_cap, chroma_all, luma_floor, grain2;   // luma_floor: least share of luma noise removed
 #endif
 } pc;
 
@@ -177,7 +180,7 @@ void main() {
   int o0 = iy * 4 * row + ix;
   mat4 a0, a1, b0, b1;
 #if CH == 0
-  float acc = 0.0;
+  float acc = 0.0, acc_t = 0.0;   // acc: noise handed in (fallback: excess only); acc_t: total merged noise
 #ifdef LKR_APERTURE
   vec3 noise_acc = vec3(0);
 #define AP_NOISE(O) noise_acc += colorNoise(O, plane) + colorNoise((O)+1, plane);
@@ -195,8 +198,9 @@ void main() {
     vec4 lb = max(pc.lv_a * max(yb, vec4(0.0)) + vec4(pc.lv_b), vec4(0.0));             \
     if (pc.has_ns != 0) {                                                               \
       vec4 na = ns[o], nb = ns[o + 1];                                                  \
+      acc_t += dot(la * (na * na + 1.0), vec4(1.0)) + dot(lb * (nb * nb + 1.0), vec4(1.0)); \
       la *= na * na; lb *= nb * nb;                                                     \
-    }                                                                                   \
+    } else acc_t += dot(la, vec4(1.0)) + dot(lb, vec4(1.0));                            \
     acc += dot(la, vec4(1.0)) + dot(lb, vec4(1.0));                                     \
   }
 #else
@@ -225,8 +229,25 @@ void main() {
   nv[iy * pc.nx + ix] = vec4(noise_acc / 64.0 * boost, isotropic);
 #else
   float sm2 = pc.sigma2 * level;
-  float boost = filt(a0, a1, b0, b1, pc.k_y2 * sm2, sm2, gate);
-  nv[iy * pc.nx + ix] = level * boost;
+  float ty = pc.k_y2 * sm2;
+#ifndef LKR_APERTURE
+  if (pc.grain2 > 0.0) {
+    // Noise-following luma: keep at most mid-grey's relative grain (x sqrt(grain2)) and remove only the
+    // noise above it. Shot noise makes relative noise grow as the scene darkens, so shadows are cleaned
+    // in proportion to how noisy they are and mid-grey and brighter stay untouched (no level threshold).
+    // Uses the TOTAL merged noise (fallback hands in only the excess sqrt(ns^2-1)).
+    float r = ymean / 0.18;
+    // ... and never less than luma_floor of all luma noise, so mid-tones / highlights get a gentle,
+    // even clean-up that keeps most of their grain (no hard on/off edge across brightness).
+    float tot = pc.sigma2 * (acc_t / 64.0);
+    // ... and never more than luma_cap of it: even the deepest shadow keeps part of its own grain
+    // (organic, no wax).
+    ty = pc.k_y2 * min(max(tot - pc.grain2 * pc.sigma2 * r * r, pc.luma_floor * tot), pc.luma_cap * tot);
+  }
+#endif
+  float boost = filt(a0, a1, b0, b1, ty, sm2, gate);
+  // Noise-following mode: colour passes see the TOTAL merged noise everywhere (not only lost-frame excess).
+  nv[iy * pc.nx + ix] = (pc.grain2 > 0.0 || pc.chroma_all > 0.0 ? acc_t / 64.0 : level) * boost;
 #endif
 #else
 #ifdef LKR_APERTURE

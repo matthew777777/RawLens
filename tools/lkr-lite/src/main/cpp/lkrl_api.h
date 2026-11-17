@@ -49,7 +49,12 @@ struct SolveParams {
   const float* model_error = nullptr;  // optional H*W nonnegative variance map, tile HR coordinates
   bool band_rejection = false;  // experimental same-CFA, cycle-spun Haar confidence; requires model_error
   float band_k = 1.0f;          // high-band noise standard deviations (1 = noise-calibrated)
-  float dct_luma = 1.0f, dct_chroma = 2.0f;   // noise-sigma multipliers; 16 erased real leaf colour
+  // dct_prior on: noise-following luma, shadows keep at most dct_grain x mid-grey's relative grain
+  // (1 = as grainy as mid-grey), luma strength dct_luma. Chroma (always): dct_chroma x total noise.
+  float dct_grain = 1.0f;
+  float dct_luma_floor = 0.10f;
+  float dct_luma_cap = 0.25f;     // dct_prior on: at most this share removed (deepest shadows keep grain)   // dct_prior on: at least this share of luma noise variance removed (mid-tones / highlights)
+  float dct_luma = 2.0f, dct_chroma = 2.0f;   // noise-sigma multipliers; 16 erased real leaf colour
   // Dark blocks (mean luma below dct_dark_level, full effect below a quarter) use their measured
   // AC energy as the noise level when it exceeds the model, up to dct_dark_cap x (1 = off).
   float dct_dark_level = 0.02f, dct_dark_cap = 8.0f;
