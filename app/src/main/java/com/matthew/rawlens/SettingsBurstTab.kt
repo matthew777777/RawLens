@@ -81,9 +81,6 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
         content.addView(settingsButton("Open merges").apply {
             setOnClickListener { openMerges() }
         })
-        content.addView(settingsButton("Develop DNGs · Import / export queue").apply {
-            setOnClickListener { startActivity(android.content.Intent(this@showBurstSettings, DevelopQueueActivity::class.java)) }
-        })
         content.addView(SettingsSwitch(this).apply {
             text = "Save ZSL bursts to .craw for offline merge"
             setTextColor(getColor(R.color.text_primary))

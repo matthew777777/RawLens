@@ -44,6 +44,11 @@ internal class PhotoSettingsTab(
     fun show() {
         host.clearTabStatusViews()
         kit.content.removeAllViews()
+        kit.content.addView(kit.settingsButton("Develop DNGs · Import / export queue").apply {
+            setOnClickListener {
+                activity.startActivity(android.content.Intent(activity, DevelopQueueActivity::class.java))
+            }
+        })
         if (LapisRootProfile.supported()) {
             val profile = LapisRootProfile.preferences(activity)
             kit.content.addView(kit.sectionTitle("Redmi Note 15 Pro 5G"))
