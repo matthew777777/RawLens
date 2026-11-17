@@ -27,7 +27,8 @@ class Video60ModeInstrumentedTest {
         val manager=context.getSystemService(CameraManager::class.java)
         val reports=JSONArray()
         try {
-            for(rate in listOf(24,30,60)) {
+            val rates=InstrumentationRegistry.getArguments().getString("video60Rates")?.split(',')?.map { it.trim().toInt() } ?: listOf(24,30,60)
+            for(rate in rates) {
                 val key=UUID.randomUUID().toString()
                 val ready=CompletableFuture<LapisRootSession.Spec?>()
                 LapisRootSessionControl.prepare(context,key,LapisRootProfile.Mode.VIDEO60) {
@@ -38,16 +39,17 @@ class Video60ModeInstrumentedTest {
                 val file=File(context.cacheDir,"video60-$rate.${if(encoded) "mp4" else "craw"}")
                 var stopped=false
                 var stop: (() -> Unit)?=null
+                var stats=""
                 try {
                     if(encoded) {
                         val recorder=EncodedVideoRecorder(manager,"0",context,lease)
                         recorder.fps=rate;recorder.width=1280;recorder.height=720;recorder.audioEnabled=false
-                        stop={recorder.stop();Unit}
+                        stop={stats=recorder.stop().toString()}
                         recorder.start(file)
                     } else {
                         val recorder=RawVideoRecorder(manager,"0",Size(spec.width,spec.height),context,lease)
                         recorder.fps=rate;recorder.audioEnabled=false;recorder.compressionCodec=CrawWriter.CODEC_FAST
-                        stop={recorder.stop();Unit}
+                        stop={stats=recorder.stop().toString()}
                         recorder.start(file,JSONObject().put("fps",rate).toString())
                     }
                     Thread.sleep(4000)
@@ -79,8 +81,9 @@ class Video60ModeInstrumentedTest {
                     }
                     assertTrue("No video frames at requested $rate",times.size>=20)
                     val measured=(times.size-1)*1e9/(times.last()-times.first())
+                    android.util.Log.i("Video60Test","rate=$rate measured=$measured frames=${times.size} stats=$stats")
                     assertTrue("Requested $rate but received $measured fps",measured>rate*0.5 && measured<rate*1.2)
-                    reports.put(JSONObject().put("requestedFps",rate).put("measuredFps",measured).put("frames",times.size).put("bytes",file.length()))
+                    reports.put(JSONObject().put("requestedFps",rate).put("measuredFps",measured).put("frames",times.size).put("bytes",file.length()).put("stats",stats))
                 } finally { if(!stopped)runCatching { stop?.invoke() };lease.close();file.delete() }
             }
         } finally {

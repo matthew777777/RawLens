@@ -454,8 +454,11 @@ class EncodedVideoRecorder internal constructor(
 
     private val captureResults = VideoResultWindow<CaptureResult>()
     private data class PendingResultFrame(val reader: ImageReader, val image: Image, val deadlineMs: Long)
-    // Camera-thread owned; two held images leave room in the eight-buffer reader for GPU work.
+    // Camera-thread owned. Hold depth follows the measured result lag
+    // ([VideoResultLag]), capped so READER_GPU_RESERVE images stay free for GPU work.
     private val pendingResultFrames = java.util.ArrayDeque<PendingResultFrame>()
+    private var resultLag = VideoResultLag(AdpfHint.frameNs(30))
+    private var readerImages = READER_IMAGES_BASE
     private val resultDrain = Runnable { drainPendingResults() }
     /** Reused by [refreshVideoRequest]; a null callback there silently ended result pairing. */
     private var repeatingCallback: CameraCaptureSession.CaptureCallback? = null
@@ -649,6 +652,7 @@ class EncodedVideoRecorder internal constructor(
             check(it.freeBytes() >= RawVideoRecorder.STORAGE_RESERVE_BYTES) { "Recording destination is full" }
         }
         startRealtimeMs = SystemClock.elapsedRealtime()
+        resultLag = VideoResultLag(AdpfHint.frameNs(fps))
         acquired.set(0); graded.set(0); dropped.set(0); resultMiss.set(0)
         diagnosticCaptureTimestamp = 0L; diagnosticImageTimestamp = 0L
         diagnosticRawFrames = 0
@@ -1211,7 +1215,10 @@ class EncodedVideoRecorder internal constructor(
         camThread = thread
         val handler = Handler(thread.looper)
         camHandler = handler
-        val r = ImageReader.newInstance(size.width, size.height, ImageFormat.RAW_SENSOR, 8)
+        // Above 30 fps the result lag spans more frames (measured ~115-130 ms at 60 on MT6878); four extra buffers
+        // (~75 MB at 9.4 MP) let the measured hold grow without starving GPU work.
+        readerImages = if (fps > 30) READER_IMAGES_HIGH_RATE else READER_IMAGES_BASE
+        val r = ImageReader.newInstance(size.width, size.height, ImageFormat.RAW_SENSOR, readerImages)
         reader = r
         sensorPreview = LapisVideoPreview.create(lapisLease?.spec,handler)
         accepting = true
@@ -1245,6 +1252,7 @@ class EncodedVideoRecorder internal constructor(
                         diagnosticCaptureTimestamp = ts
                     }
                     if (stabTableArmed) recordStabFrameMeta(ts, frameResult)
+                    resultLag.onResult(ts, SystemClock.elapsedRealtimeNanos())
                     captureResults.offer(ts, frameResult)
                     drainPendingResults()
                 }
@@ -1750,6 +1758,8 @@ class EncodedVideoRecorder internal constructor(
 
     fun stop(): Stats {
         val stopStartedMs = SystemClock.elapsedRealtime()
+        Log.i(TAG, "result lag peak=${resultLag.lagNs / 1000}us samples=${resultLag.samples} " +
+            "hold=${resultLag.holdFrames(readerImages - READER_GPU_RESERVE)} reader=$readerImages")
         EncodedVideoBreadcrumb.mark(appContext, "stopping")
         accepting = false
         try { session?.stopRepeating() } catch (_: Exception) {}
@@ -1956,11 +1966,13 @@ class EncodedVideoRecorder internal constructor(
                 return
             }
         }
-        if (pendingResultFrames.size >= 2) {
+        resultLag.onImage(image.timestamp, SystemClock.elapsedRealtimeNanos())
+        val hold = resultLag.holdFrames(readerImages - READER_GPU_RESERVE)
+        while (pendingResultFrames.size >= hold) {
             val oldest = pendingResultFrames.removeFirst()
             processOne(oldest.reader, oldest.image)
         }
-        val waitMs = (VideoResultWindow.maxAgeNanos(fps) + 999_999L) / 1_000_000L
+        val waitMs = (resultLag.waitNs() + 999_999L) / 1_000_000L
         pendingResultFrames.addLast(PendingResultFrame(rd, image, SystemClock.elapsedRealtime() + waitMs))
         drainPendingResults()
     }
@@ -3616,6 +3628,10 @@ class EncodedVideoRecorder internal constructor(
          * slots leave headroom for stalls mid-catch-up.
          */
         private const val QUEUE_DEPTH = 6
+        private const val READER_IMAGES_BASE = 8
+        private const val READER_IMAGES_HIGH_RATE = 12
+        /** Reader images never held for results: GPU copies in flight + backlog slack. */
+        private const val READER_GPU_RESERVE = 4
 
         /** Copy-worker wait for a frame's GPU completion; beyond this the GPU is treated as wedged. */
         private const val GPU_FENCE_TIMEOUT_MS = 1_000
