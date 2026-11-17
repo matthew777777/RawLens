@@ -1280,20 +1280,8 @@ class BguViewfinder @JvmOverloads constructor(
     private var lensDiagDone = false
 
     private fun snapshotLens(c: CameraCharacteristics, result: CaptureResult?): LensSnap? {
-        // HAL pre-applied shading: no map to apply (meter and look both run
-        // unlensed, like the legacy path). A static read, cheap every frame.
-        val preApplied = try {
-            c.get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) == true
-        } catch (_: Exception) {
-            false
-        }
-        if (preApplied) {
-            if (!lensDiagDone) {
-                lensDiagDone = true
-                Log.i(TAG, "lens HAL pre-applied: meter+look run unlensed")
-            }
-            return null
-        }
+        // Apply any returned residual map even when the sensor reports that
+        // it has already performed part of the shading correction.
         val now = SystemClock.elapsedRealtime()
         val cached = lensCache
         if (cached == null || now - cached.atMs >= 1000) {

@@ -736,7 +736,7 @@ class EncodedVideoRecorder internal constructor(
             c.get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) == true
         Log.i(TAG, "lens shading: " + when {
             !correctShading -> "disabled by flag (raw falloff)"
-            shadeHalApplied -> "HAL pre-applied (no map needed)"
+            shadeHalApplied -> "HAL pre-applied; apply any residual live map"
             else -> "live HAL map (first frame arms it)"
         })
         startStabMotion(c)
@@ -3185,7 +3185,7 @@ class EncodedVideoRecorder internal constructor(
      * Camera thread only.
      */
     private fun snapshotShading(result: CaptureResult?): Pair<IntArray?, ShortArray?> {
-        if (!correctShading || shadeHalApplied) return null to null
+        if (!correctShading) return null to null
         val c = chars ?: return shadeDims to shadeGains
         val map = try {
             result?.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)

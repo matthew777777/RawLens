@@ -1210,17 +1210,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     ): VfLensSnapshot {
         if (LapisRootSession.spec(c)?.metadataVerified == true)
             return VfLensSnapshot(null, 1, 1, 0, 0, imageWidth, imageHeight, false, null, null)
-        val alreadyApplied =
-            c.get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) == true
-        if (alreadyApplied) {
-            val a = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-            return VfLensSnapshot(
-                null, 1, 1,
-                a?.left ?: 0, a?.top ?: 0,
-                a?.right ?: imageWidth, a?.bottom ?: imageHeight,
-                false, null, null
-            )
-        }
+        // SENSOR_INFO_LENS_SHADING_APPLIED only describes sensor-side correction.
+        // A returned map still describes residual correction (as in the save path).
         // 1 Hz re-verify: skip the per-frame gain-copy + content hash while a
         // snapshot is cached. Active bounds are session-invariant for one
         // characteristics instance, so the cached verdict stays exact.

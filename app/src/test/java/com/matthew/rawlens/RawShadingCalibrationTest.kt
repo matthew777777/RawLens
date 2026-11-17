@@ -11,6 +11,21 @@ class RawShadingCalibrationTest {
         assertTrue(RawShadingCalibration.alreadyApplied(null,true))
     }
 
+    @Test fun nokiaSizedResidualMapIsPreservedWithSensorCorrection() {
+        // Supplied Nokia X30 DNG: 17 columns, 13 rows, substantial residual
+        // corner gains. A sensor-side correction flag must not discard it.
+        val gains = FloatArray(17 * 13 * 4) { 1.005859375f }
+        gains[0] = 4.69140625f
+        gains[1] = 4.69921875f
+        gains[2] = 4.69921875f
+        gains[3] = 5.498046875f
+        val map = LensShadingSnapshot(13, 17, ImmutableFloatValues(gains))
+        assertSame(map, RawShadingCalibration.readoutMap(map))
+        assertFalse(RawShadingCalibration.alreadyApplied(map, true))
+        assertFalse(RawShadingCalibration.alreadyApplied(map, false))
+        assertFalse(RawShadingCalibration.alreadyApplied(null, false))
+    }
+
     @Test fun preservesDistinctFullDcgAndCropMapsWithoutRecropping() {
         for(corner in listOf(4.1f,1.98f,1.54f,1.12f)) {
             val values=FloatArray(17*17*4) { 1f }.also { it[0]=corner;it[1]=corner-0.01f }

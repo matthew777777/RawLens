@@ -516,17 +516,11 @@ internal class RawVideoRecorder(
         val front = chars.get(CameraCharacteristics.LENS_FACING) ==
             CameraCharacteristics.LENS_FACING_FRONT
 
-        // Per-frame lens-shading context: disabled when the HAL already
-        // applied correction (embedding would double-correct) or when the
-        // geometry needed to cover the frame is missing.
-        if (chars.get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) == true) {
-            shadingCfa = null
-            shadingActive = null
-        } else {
-            shadingCfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
-            shadingActive = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let {
-                IntRectSnapshot(it.left, it.top, it.right, it.bottom)
-            }
+        // A returned map describes residual correction even if the sensor
+        // already applied shading. Missing maps naturally produce no chunk.
+        shadingCfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+        shadingActive = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let {
+            IntRectSnapshot(it.left, it.top, it.right, it.bottom)
         }
 
         // P4 streams start before the container opens so their presence is
