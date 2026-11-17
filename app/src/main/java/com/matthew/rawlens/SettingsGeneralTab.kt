@@ -71,6 +71,15 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
     fun markActive(active: Button) = p.markActive(active)
     val generalTab = p.tabs[0]
         content.removeAllViews()
+        content.addView(sectionTitle("Shutter"))
+        content.addView(SettingsSwitch(this).apply {
+            text = "Shutter sound"
+            isChecked = lensPreferences().getBoolean(KEY_SHUTTER_SOUND, true)
+            setOnCheckedChangeListener { _, enabled ->
+                lensPreferences().edit().putBoolean(KEY_SHUTTER_SOUND, enabled).apply()
+            }
+        })
+        content.addView(sectionDesc("Classic film SLR click. Follows Android silent/vibrate mode and system sound volume. Touch vibration follows Android's haptic feedback setting."))
         content.addView(sectionTitle("RAW capture"))
         content.addView(Button(this).apply {
             text = "DNG sensor calibration: levels, noise, color"

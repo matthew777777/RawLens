@@ -190,6 +190,7 @@ class RawCameraController(
     private val vendorKeysByKey: (settingsKey: String?) -> VendorKeyProfile = { VendorKeyProfile() }
 ) {
     private val virtualLensStore = VirtualLensStore(context)
+    @Volatile internal var onPhotoCaptureAccepted: (() -> Unit)? = null
 
     /**
      * Key per-lens settings are stored under: the active virtual lens when it sits on
@@ -2358,6 +2359,7 @@ class RawCameraController(
      */
     private fun captureHexadeca200(orientationDegrees: Int) {
         if (!hexadecaBusy.compareAndSet(false, true)) return
+        onPhotoCaptureAccepted?.invoke()
         val result = latestPreviewResult
         val gains = result?.get(CaptureResult.COLOR_CORRECTION_GAINS)
         val settings = LapisRootCapture.Settings(
@@ -2432,6 +2434,7 @@ class RawCameraController(
             onState("BURST ERROR")
             return null
         }
+        onPhotoCaptureAccepted?.invoke()
         onState("BURST ×${frames.size} • SAVING")
         return try {
             BurstCrawStore.writeZslRingToCraw(
@@ -3012,6 +3015,7 @@ class RawCameraController(
         // after consecutive zero-pair captures) keys off pairs produced by THIS
         // press, never a previous one.
         captureSequence.incrementAndGet()
+        onPhotoCaptureAccepted?.invoke()
         chainPairedAny = false
         onCaptureEnabled(false)
         activeCaptureFormat = outputFormat

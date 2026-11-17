@@ -219,6 +219,8 @@ class MainActivity : Activity() {
     /** Stereo meter peak hold [L, R] in dBFS. */
     private val videoAudioPeakDb = floatArrayOf(AudioPcmRecorder.METER_MIN_DB, AudioPcmRecorder.METER_MIN_DB)
 
+    private var photoCaptureFeedback: PhotoCaptureFeedback? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         restoreLaunchState()
@@ -241,8 +243,16 @@ class MainActivity : Activity() {
 
         val viewfinder = findViewById<AutoFitSurfaceView>(R.id.viewfinder)
         val shutter = findViewById<View>(R.id.shutter)
+        photoCaptureFeedback = PhotoCaptureFeedback(this)
         bindViewsAndOverlays()
         createController(dngInfo, sensorInfo, viewfinder, shutter)
+        controller.onPhotoCaptureAccepted = {
+            runOnUiThread {
+                if (activityResumed && !isVideoMode) {
+                    photoCaptureFeedback?.play(shutter, lensPreferences().getBoolean(KEY_SHUTTER_SOUND, true))
+                }
+            }
+        }
         applyControllerSettings(shutter)
         wireModeAndQuickControls(shutter)
         wireTouchAndManualControls(viewfinder)
@@ -1304,6 +1314,8 @@ class MainActivity : Activity() {
     }.getOrDefault("camera=? gps=?")
 
     override fun onDestroy() {
+        photoCaptureFeedback?.close()
+        photoCaptureFeedback = null
         recordingTools.close()
         gpsProvider?.close()
         lensDiscovery.close()
@@ -1865,7 +1877,7 @@ class MainActivity : Activity() {
 
     private fun triggerCapture(shutter: View, forceBurst: Boolean) {
         closeFloatingPanels()
-        shutter.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+        if (isVideoMode) shutter.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
         shutter.animate().cancel()
         shutter.animate().scaleX(0.9f).scaleY(0.9f).setDuration(70L).withEndAction {
             shutter.animate().scaleX(1f).scaleY(1f).setDuration(110L).start()
