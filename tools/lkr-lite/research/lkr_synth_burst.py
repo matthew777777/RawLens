@@ -73,6 +73,7 @@ def main():
     ap.add_argument('--person-blur', type=int, default=1, help='motion-blur sub-positions per exposure (1 = sharp)')
     ap.add_argument('--person-chroma', action='store_true', help='person at the background brightness, colour only')
     ap.add_argument('--no-rail', action='store_true', help='no railing (noise / SNR scenes)')
+    ap.add_argument('--flat-bg', type=float, default=-1.0, help='>= 0: uniform grey background at this level, no scene texture (clean edge tests)')
     ap.add_argument('--rail-level', type=float, default=0.08, help='bar brightness (background median 0.35)')
     ap.add_argument('--rail-tilt', type=float, default=0.0, help='bar tilt from vertical, degrees (0 = the old axis-aligned bars)')
     ap.add_argument('--rail-width', type=float, default=2.0, help='bar width, HR px')
@@ -89,6 +90,8 @@ def main():
     src = half_rgb(a.source)
     sy, sx = a.src_at[::-1] if a.src_at else ((src.shape[0] - HR) // 2, (src.shape[1] - HR) // 2)
     bg = src[sy:sy + HR, sx:sx + HR].copy()
+    if a.flat_bg >= 0:
+        bg[:] = np.float32(a.flat_bg)
     bg *= 0.35 / max(np.median(bg[..., 1]), 1e-6)            # mid-grey exposure
     yy, xx = np.mgrid[0:HR, 0:HR].astype('f4')
     # person: textured ellipse, strongly blue, own texture from another part of the source

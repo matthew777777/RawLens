@@ -695,8 +695,12 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         Push pc2 = q; pc2.tau = u.tau; pc2.LB = cd_r; pc2.robk = cd_k; pc2.rpow = cd_b;
         static const int cd_cl = std::getenv("LKRL_CDCL") ? std::atoi(std::getenv("LKRL_CDCL")) : 97;
         pc2.K = cd_cl;
-        gpu_->dispatch(cdupd_, gpu_->set(cdupd_, {&z, &acc, &cov, &ztb}), &pc2, div_up(uint32_t(H * W), 256));
-        gpu_->copy(ztb, z, nHR * 4);
+        if (cd_k > 0.0f) {   // the edge stop reads neighbours' G: write a copy, then swap it in
+          gpu_->dispatch(cdupd_, gpu_->set(cdupd_, {&z, &acc, &cov, &ztb}), &pc2, div_up(uint32_t(H * W), 256));
+          gpu_->copy(ztb, z, nHR * 4);
+        } else {   // each invocation reads only its own z: update in place (no copy)
+          gpu_->dispatch(cdupd_, gpu_->set(cdupd_, {&z, &acc, &cov, &z}), &pc2, div_up(uint32_t(H * W), 256));
+        }
         gpu_->fill(acc, 0);
         need_cov = false;
         continue;

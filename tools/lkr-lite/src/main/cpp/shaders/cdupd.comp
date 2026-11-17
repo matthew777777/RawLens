@@ -11,10 +11,10 @@
 // pc.rpow = beta: share of the R/B residuals moving G, pc.clip = clip level, pc.a/b = noise.
 #include "lite_common.glsl"
 layout(local_size_x = 256) in;
-layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 0) buffer Z { float z[]; };   // = ZT when the edge stop is off (in place)
 layout(std430, binding = 1) readonly buffer ACC { int acc[]; };
 layout(std430, binding = 2) readonly buffer COV { int cov[]; };
-layout(std430, binding = 3) writeonly buffer ZT { float zt[]; };
+layout(std430, binding = 3) buffer ZT { float zt[]; };
 
 void main() {
   int HW = pc.H * pc.W;

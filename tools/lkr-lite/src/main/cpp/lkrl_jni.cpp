@@ -122,6 +122,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     char v[PROP_VALUE_MAX] = {0};
     if (__system_property_get("debug.lkr.workers", v) > 0) prm.workers = std::atoi(v);
     if (__system_property_get("debug.lkr.tilelk", v) > 0 && v[0] == '0') prm.tile_lk = false;
+    // A/B of the colour-difference fit: debug.lkr.cdfit = D radius, -1 = the old independent fit (read once per process).
+    if (__system_property_get("debug.lkr.cdfit", v) > 0 && v[0]) setenv("LKRL_CDFIT", v, 0);
   }
 #endif
   const NoiseModelRef noise_model = g_noise_model;
