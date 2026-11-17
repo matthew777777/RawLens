@@ -13,10 +13,9 @@
 precision highp float;
 precision highp int;
 #ifndef RAPIDRAW_OUTPUT_FUSED
-#if MODE == 7 || MODE == 9
-layout(local_size_x=256) in;
-#elif MODE == 10
-layout(local_size_x=256) in;
+// GLES 3.1 guarantees 128 invocations; some mobile GPUs reject 256 in X.
+#if MODE == 7 || MODE == 9 || MODE == 10
+layout(local_size_x=128) in;
 #else
 layout(local_size_x=8,local_size_y=8) in;
 #endif
@@ -192,13 +191,13 @@ vec3 cleanupPixel(ivec2 p) {
 #ifndef RAPIDRAW_OUTPUT_FUSED
 #if MODE == 9 || MODE == 10
 shared uint bins[2048];
-shared uint totals[256];
+shared uint totals[gl_WorkGroupSize.x];
 #endif
 int sampleCols(int paddedWidth) { return (paddedWidth-4+6)/7; }
 void main() {
 #if MODE == 7
     // md_sample; grid-stride over the 1D sample index.
-    for(int s=int(gl_GlobalInvocationID.x);s<u_count;s+=int(gl_NumWorkGroups.x)*256){
+    for(int s=int(gl_GlobalInvocationID.x);s<u_count;s+=int(gl_NumWorkGroups.x*gl_WorkGroupSize.x)){
         float v=0.0;
         if(u_kind==0||u_kind==2){
             ivec2 pw=(u_kind==0?u_half:u_quarter)+2*PAD; int cols=sampleCols(pw.x);
@@ -226,29 +225,30 @@ void main() {
 #elif MODE == 9
     // md_hist: 11/11/10-bit radix histogram of non-negative float bits.
     uint li=gl_LocalInvocationIndex;
-    for(uint b=li;b<2048u;b+=256u)bins[b]=0u;
+    for(uint b=li;b<2048u;b+=gl_WorkGroupSize.x)bins[b]=0u;
     barrier();
     uint prefix=stats[PREFIX];
-    for(int s=int(gl_GlobalInvocationID.x);s<u_count;s+=int(gl_NumWorkGroups.x)*256){
+    for(int s=int(gl_GlobalInvocationID.x);s<u_count;s+=int(gl_NumWorkGroups.x*gl_WorkGroupSize.x)){
         uint bits=floatBitsToUint(samples[s]);
         if(u_pass==0)atomicAdd(bins[bits>>21u],1u);
         else if(u_pass==1){ if((bits>>21u)==prefix)atomicAdd(bins[(bits>>10u)&2047u],1u); }
         else if((bits>>10u)==prefix)atomicAdd(bins[bits&1023u],1u);
     }
     barrier();
-    for(uint b=li;b<2048u;b+=256u){ uint v=bins[b]; if(v!=0u)atomicAdd(stats[RADIX+b],v); }
+    for(uint b=li;b<2048u;b+=gl_WorkGroupSize.x){ uint v=bins[b]; if(v!=0u)atomicAdd(stats[RADIX+b],v); }
 #elif MODE == 10
     // md_pick: one workgroup finds the bucket holding rank n/2, then clears the histogram.
     uint li=gl_LocalInvocationIndex,n=uint(u_count);
     if(n==0u){ if(li==0u)medians[u_slot]=0.0; return; }
     uint rank=u_pass==0?n/2u:stats[RANK];
     uint prefix=u_pass==0?0u:stats[PREFIX];
-    uint per=(u_pass==2?1024u:2048u)/256u,first=li*per,own=0u;
-    uint counts[8];
+    uint per=(u_pass==2?1024u:2048u)/gl_WorkGroupSize.x,first=li*per,own=0u;
+    // Each lane owns 16 bins at 128 threads (8 in the final radix pass).
+    uint counts[2048u/gl_WorkGroupSize.x];
     for(uint k=0u;k<per;k++){ counts[k]=stats[RADIX+first+k]; stats[RADIX+first+k]=0u; own+=counts[k]; }
     totals[li]=own;
     barrier();
-    for(uint step=1u;step<256u;step<<=1u){
+    for(uint step=1u;step<gl_WorkGroupSize.x;step<<=1u){
         uint add=li>=step?totals[li-step]:0u;
         barrier();
         totals[li]+=add;

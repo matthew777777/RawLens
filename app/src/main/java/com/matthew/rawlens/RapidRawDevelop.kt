@@ -197,7 +197,7 @@ internal class RapidRawDevelop(context: Context, private val dispatchBudget: Int
         }
         /** md_sample + three md_hist/md_pick radix passes; result lands in medians[slot]. */
         fun median(kind: Int, slot: Int, n: Int, a: Texture? = null, b: Texture? = null) {
-            val groups = ((n + 255) / 256).coerceIn(1, STRIDE_GROUPS)
+            val groups = ((n + MEDIAN_WORKGROUP_SIZE - 1) / MEDIAN_WORKGROUP_SIZE).coerceIn(1, STRIDE_GROUPS)
             linear(7, groups, a, b) { int(it, "u_kind", kind); int(it, "u_count", n) }
             for (pass in 0..2) {
                 linear(9, groups) { int(it, "u_pass", pass); int(it, "u_count", n) }
@@ -279,6 +279,7 @@ internal class RapidRawDevelop(context: Context, private val dispatchBudget: Int
         const val SHADER = "shaders/display/rapidraw_develop.glsl"
         private const val PAD = 2
         private const val STATS_WORDS = 2050
+        private const val MEDIAN_WORKGROUP_SIZE = 128 // Matches rapidraw_develop.glsl.
         private const val STRIDE_GROUPS = 1024
     }
 }
