@@ -249,7 +249,13 @@ class MainActivity : Activity() {
         controller.onPhotoCaptureAccepted = {
             runOnUiThread {
                 if (activityResumed && !isVideoMode) {
-                    photoCaptureFeedback?.play(shutter, lensPreferences().getBoolean(KEY_SHUTTER_SOUND, true))
+                    val preferences = lensPreferences()
+                    photoCaptureFeedback?.play(
+                        shutter,
+                        preferences.getBoolean(KEY_SHUTTER_SOUND, true),
+                        preferences.getBoolean(KEY_SHUTTER_HAPTICS, true),
+                        preferences.getInt(KEY_SHUTTER_HAPTICS_STRENGTH, DEFAULT_SHUTTER_HAPTICS_STRENGTH)
+                    )
                 }
             }
         }

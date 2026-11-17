@@ -80,6 +80,38 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc("Classic film SLR click. Follows Android silent/vibrate mode and system sound volume. Touch vibration follows Android's haptic feedback setting."))
+        val hapticsEnabled = lensPreferences().getBoolean(KEY_SHUTTER_HAPTICS, true)
+        val hapticsStrength = lensPreferences().getInt(
+            KEY_SHUTTER_HAPTICS_STRENGTH, DEFAULT_SHUTTER_HAPTICS_STRENGTH
+        ).coerceIn(0, 100)
+        val strengthLabel = sectionDesc("Vibration strength: $hapticsStrength%")
+        val strengthSlider = SettingsSlider(this).apply {
+            max = 100
+            progress = hapticsStrength
+            contentDescription = "Photo vibration strength"
+            isEnabled = hapticsEnabled
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
+                    strengthLabel.text = "Vibration strength: $progress%"
+                    if (fromUser) lensPreferences().edit().putInt(KEY_SHUTTER_HAPTICS_STRENGTH, progress).apply()
+                }
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) = Unit
+            })
+        }
+        content.addView(SettingsSwitch(this).apply {
+            text = "Photo vibration"
+            isChecked = hapticsEnabled
+            setOnCheckedChangeListener { _, enabled ->
+                lensPreferences().edit().putBoolean(KEY_SHUTTER_HAPTICS, enabled).apply()
+                strengthSlider.isEnabled = enabled
+                strengthLabel.alpha = if (enabled) 1f else 0.5f
+            }
+        })
+        strengthLabel.alpha = if (hapticsEnabled) 1f else 0.5f
+        content.addView(strengthLabel)
+        content.addView(strengthSlider)
+        content.addView(sectionDesc("One vibration per photo or burst. 0% disables vibration. On phones without intensity control, strength adjusts pulse length."))
         content.addView(sectionTitle("RAW capture"))
         content.addView(Button(this).apply {
             text = "DNG sensor calibration: levels, noise, color"
