@@ -53,6 +53,17 @@ def half_rgb(path):
     return np.clip(out / cnt, 0, None)
 
 
+def rgb_unprocessed(path, seed):
+    """sRGB photo (jpg/png) -> linear camera-like RGB (Brooks et al. 2019 'unprocessing', simplified):
+    inverse sRGB gamma, then divide by a random white balance so the raw has a camera-like cast."""
+    from PIL import Image
+    im = np.asarray(Image.open(path).convert('RGB')).astype('f4') / 255.0
+    lin = np.where(im <= 0.04045, im / 12.92, ((im + 0.055) / 1.055) ** 2.4)
+    rng = np.random.default_rng(seed)
+    wb = np.array([rng.uniform(1.8, 2.4), 1.0, rng.uniform(1.4, 1.9)], 'f4')   # R, G, B gains undone
+    return np.clip(lin / wb, 0, None).astype('f4')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('template')
@@ -73,6 +84,8 @@ def main():
     ap.add_argument('--person-blur', type=int, default=1, help='motion-blur sub-positions per exposure (1 = sharp)')
     ap.add_argument('--person-chroma', action='store_true', help='person at the background brightness, colour only')
     ap.add_argument('--no-rail', action='store_true', help='no railing (noise / SNR scenes)')
+    ap.add_argument('--no-person', action='store_true', help='no moving person patch (natural training scenes)')
+    ap.add_argument('--no-clip', action='store_true', help='expose so the scene stays below clipping (training pairs)')
     ap.add_argument('--flat-bg', type=float, default=-1.0, help='>= 0: uniform grey background at this level, no scene texture (clean edge tests)')
     ap.add_argument('--rail-level', type=float, default=0.08, help='bar brightness (background median 0.35)')
     ap.add_argument('--rail-tilt', type=float, default=0.0, help='bar tilt from vertical, degrees (0 = the old axis-aligned bars)')
@@ -87,12 +100,14 @@ def main():
     x0, y0 = a.at
 
     # ---- ground-truth layers on the HR grid (output scale 2) ----
-    src = half_rgb(a.source)
+    src = rgb_unprocessed(a.source, a.seed) if a.source.lower().endswith(('.jpg', '.jpeg', '.png')) else half_rgb(a.source)
     sy, sx = a.src_at[::-1] if a.src_at else ((src.shape[0] - HR) // 2, (src.shape[1] - HR) // 2)
     bg = src[sy:sy + HR, sx:sx + HR].copy()
     if a.flat_bg >= 0:
         bg[:] = np.float32(a.flat_bg)
     bg *= 0.35 / max(np.median(bg[..., 1]), 1e-6)            # mid-grey exposure
+    if a.no_clip:   # training scenes: keep highlights below clipping (the truth is never clipped)
+        bg *= min(1.0, 0.85 / max(float(np.percentile(bg.max(-1), 99.9)), 1e-6))
     yy, xx = np.mgrid[0:HR, 0:HR].astype('f4')
     # person: textured ellipse, strongly blue, own texture from another part of the source
     ptex = src[(sy + HR // 2) % (src.shape[0] - HR):, :][:HR, :HR]
@@ -105,6 +120,7 @@ def main():
     prx, pry = 0.07 * HR, 0.20 * HR
 
     def person_mask(cx, cy, wob=1.0):
+        if a.no_person: return np.zeros_like(xx)
         return (((xx - cx) / (prx * wob)) ** 2 + ((yy - cy) / pry) ** 2 <= 1.0).astype('f4')
 
     # railing: vertical bars, 2 HR px wide, period 9 HR px, over the person's band, plus a top rail
