@@ -50,12 +50,26 @@ float robustWeight(float r, float yv, int k) {
 // (0 = off). Shaders that warp define LKR_LOCAL_BINDING before the include.
 #ifdef LKR_LOCAL_BINDING
 layout(std430, binding = LKR_LOCAL_BINDING) readonly buffer LD { vec2 dloc[]; };
+// Block offsets are estimated per B x B block but applied as a continuous field: bilinear between
+// block centres (2026-11-17). Nearest-block offsets put a step of up to ~1 px at every block border
+// on a turning / approaching subject (moving car, IMG_20260919_184641_979): its edge samples landed
+// off by a fraction of a pixel, kept 0.5-0.8 weight and were fitted as a period-4 zipper.
+vec2 blockOffset(int k, vec2 u, int B, int nbx, int nby) {
+  vec2 c = u / float(B) - 0.5;
+  vec2 fl = floor(c);
+  vec2 f = c - fl;
+  int x0 = clamp(int(fl.x), 0, nbx - 1), y0 = clamp(int(fl.y), 0, nby - 1);
+  int x1 = clamp(int(fl.x) + 1, 0, nbx - 1), y1 = clamp(int(fl.y) + 1, 0, nby - 1);
+  int b = k * nby;
+  vec2 d00 = dloc[(b + y0) * nbx + x0], d01 = dloc[(b + y0) * nbx + x1];
+  vec2 d10 = dloc[(b + y1) * nbx + x0], d11 = dloc[(b + y1) * nbx + x1];
+  return mix(mix(d00, d01, f.x), mix(d10, d11, f.x), f.y);
+}
 vec2 localD(int k, vec2 u) {
   if (pc.kOff <= 0) return vec2(0.0);
   int B = pc.kOff;
   int nbx = (pc.w + B - 1) / B, nby = (pc.h + B - 1) / B;
-  int bx = clamp(int(u.x) / B, 0, nbx - 1), by = clamp(int(u.y) / B, 0, nby - 1);
-  return dloc[(k * nby + by) * nbx + bx];
+  return blockOffset(k, u, B, nbx, nby);
 }
 #else
 vec2 localD(int k, vec2 u) { return vec2(0.0); }

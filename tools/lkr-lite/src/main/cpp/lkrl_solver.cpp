@@ -397,6 +397,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   VkDescriptorSet sResid0 = gpu_->set(resid_, {&z0, &y, &pb, &db, &r, &vm});
   VkDescriptorSet sErr = gpu_->set(werr_, {&r, &y, &e});
   VkDescriptorSet sAvg = gpu_->set(wavg_, {&e, &r});      // r is dead after werr: holds pre-spread weights
+  VkDescriptorSet sAvgRes = gpu_->set(wavg_, {&e, &wrawb});   // residual weights for the guide AND test
   VkDescriptorSet sMinH = gpu_->set(wminh_, {&r, &e, &vm});
   VkDescriptorSet sMinV = gpu_->set(wminv_, {&e, &wt, &vm});
   VkDescriptorSet sAdj = gpu_->set(adj_, {&z, &y, &pb, &db, &wt, &acc, &cov});
@@ -478,6 +479,16 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         gpu_->fill(wtr, 0x3f800000u);   // 1.0f: no temporal gate
       }
       KPush qg = kq; qg.f0 = prm.guide; qg.f1 = 0.0f;
+      // Guide AND residual (LK-R guide_residual): the guide's local colour means miss wind-moved
+      // leaves (IMG_20261112_125318_179: 12.1 / 16 frames merged on them -> blur). w = min(guide,
+      // residual^a), residual = Lite's weight_e Cauchy test vs the reference start, into wrawb.
+      static const float gres = std::getenv("LKRL_GRES") ? float(std::atof(std::getenv("LKRL_GRES"))) : prm.guide_residual;
+      if (gres > 0.0f) {
+        gpu_->dispatch(resid_, sResid0, &q, gx, gy);
+        gpu_->dispatch(werr_, sErr, &q, gx, gy);
+        gpu_->dispatch(wavg_, sAvgRes, &q, gx, gy);
+        qg.f1 = gres;
+      }
       gpu_->dispatch(kguide_, kG, &qg, gqx, gqy, uint32_t(K));
       KPush qm = kq; qm.f3 = float(prm.robust_spread);
       const uint32_t g1 = div_up(uint32_t(w), 16);
@@ -810,7 +821,9 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     struct HybPush { int32_t H, W, K, mode; float a, b, t, clip, wbr, wbg, wbb, pad; };
     static_assert(sizeof(HybPush) == 48, "hyb push");
     const float rel = std::sqrt(std::max(0.18f * prm.noise_a + prm.noise_b, 0.0f)) / 0.18f;
-    const float t_auto = std::min(std::max((rel - 0.03f) / 0.03f, 0.0f), 1.0f);
+    // Luma = the fit, always (2026-11-17). The noise-following shrink toward the average blurred moving leaves and the wall behind them
+    // (IMG_20261112_125318_179 2x, noise reported 6 %: fine detail 0.067 -> 0.032) and removed the grain; LKRL_LT re-enables it.
+    (void)rel; const float t_auto = 0.0f;
     const float t = std::getenv("LKRL_LT") ? float(std::atof(std::getenv("LKRL_LT"))) : t_auto;
     // Chroma: blurred fit chroma, r 1 at 1x / 2 at 2x (LKRL_CBLUR = radius; -1 = the average's chroma).
     const float cr = std::getenv("LKRL_CBLUR") ? float(std::atoi(std::getenv("LKRL_CBLUR"))) : (s == 1 ? 1.0f : 2.0f);
@@ -843,7 +856,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       // Strength follows the measured noise (user 2026-11-14: ~1 sigma in dim scenes, off in daylight):
       // relative noise at mid-grey sqrt(0.18 a + b) / 0.18, ramp 3 % (off) .. 6 % (t = 1).
       const float rel = std::sqrt(std::max(0.18f * prm.noise_a + prm.noise_b, 0.0f)) / 0.18f;
-      const float t_auto = std::min(std::max((rel - 0.03f) / 0.03f, 0.0f), 1.0f);
+      // Luma = the fit, always (2026-11-17); see the GPU path above. LKRL_LT re-enables the shrink.
+      (void)rel; const float t_auto = 0.0f;
       const float t = std::getenv("LKRL_LT") ? float(std::atof(std::getenv("LKRL_LT"))) : t_auto;
       // Chroma: from the all-frame average by default (tc < 0). The 2x edge zipper is the fit's CHROMA
       // (car burst 184641: chroma zipper-line power 0.0152 vs luma 0.0021; average chroma 0.0055, fit luma
@@ -1003,10 +1017,14 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   }
   const float kndn_env = prm.kernelnet_denoise >= 0.0f ? prm.kernelnet_denoise :
       (std::getenv("LKRL_KNDN") ? float(std::atof(std::getenv("LKRL_KNDN"))) : 1.0f);
-  // Noise-gated (daylight keeps its fine grain and texture): x 0 at <= 4 % relative noise
-  // at mid-grey, x 1 at >= 8 % (user 2026-11-14: "on" lost HF noise and detail on IMG_20210228, 3.7 %).
+  // Noise-gated, night only: x 0 at <= 10 % relative noise at mid-grey, x 1 at >= 16 %.
+  // The 4 -> 8 % gate (2026-11-14) opened on daylight and dusk bursts and smeared foliage
+  // (IMG_20260919_184641_979 5 %: 2x fine detail 0.110 -> 0.081; IMG_20261112_125318_179 8 %,
+  // IMG_20260921_194618_520 8.5 % fully on). Measured 2026-11-17: daylight 0.6-5 %, dusk ~8.5 %,
+  // HDR+ night 0155_20160923 11.6 %.
   const float kn_rel = std::sqrt(std::max(0.18f * prm.noise_a + prm.noise_b, 0.0f)) / 0.18f;
-  const float kndn = kndn_env * std::min(std::max((kn_rel - 0.04f) / 0.04f, 0.0f), 1.0f);   // 4 % -> 8 %
+  const float kndn = kndn_env * std::min(std::max((kn_rel - 0.10f) / 0.06f, 0.0f), 1.0f);   // 10 % -> 16 %
+  if (std::getenv("LKRL_KN_PRINT")) std::fprintf(stderr, "kn_rel %.4f kndn %.3f\n", kn_rel, kndn);
   static const bool kn_cpu = std::getenv("LKRL_KNDN_CPU") != nullptr;
   if (kndn > 0.0f && !kn_cpu && noise_scale && noise_scale->size() == size_t(H) * W) {
     // GPU (as PhotonCamera runs it): KernelNet conv layers (kn_conv) then the denoise (kn_dn).

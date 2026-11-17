@@ -28,6 +28,7 @@ struct LiteParams {
   // Reference-guide confidence (LK-R --guide): > 0 = strength (LK-R default 2). Needs even h, w.
   float guide = 2.0f;
   int guide_mode = 1;
+  float guide_residual = 0.0f;   // > 0: w = min(guide, residual^a) (LK-R guide_residual)
   // LK-R's exact weight chain (shaders/lkr, verbatim): temporal gate vs the reference-only image
   // (detail term, dark-wide window) x reference guide, min spread; recomputed per geometry.
   // Needs guide > 0 (LK-R --guide); false = Lite's own residual test (guide_mode).

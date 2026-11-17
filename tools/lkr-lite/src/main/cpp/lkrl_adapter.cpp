@@ -45,6 +45,7 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   lp.robust_tau = prm.robust_tau;
   lp.robust_spread = prm.robust_spread;
   lp.guide = prm.guide_confidence;
+  lp.guide_residual = prm.guide_residual;
   lp.robust = prm.robust;
   lp.temporal_k = prm.temporal_k; lp.temporal_tau = prm.temporal_tau; lp.temporal_detail = prm.temporal_detail;
   lp.temporal_dark_wide = prm.temporal_dark_wide; lp.temporal_dark_level = prm.temporal_dark_level;
