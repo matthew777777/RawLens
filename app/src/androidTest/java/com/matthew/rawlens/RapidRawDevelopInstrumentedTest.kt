@@ -98,6 +98,33 @@ class RapidRawDevelopInstrumentedTest {
         }
     }
 
+    /** Manual render: needs /data/local/tmp/rapidraw-scene.rgba16 (4080x3060 ACEScg half RGBA). */
+    @Test fun renderPushedScene() {
+        val src=java.io.File("/data/local/tmp/rapidraw-scene.rgba16")
+        org.junit.Assume.assumeTrue(src.isFile)
+        val context=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val w=4080;val h=3060
+        val buf=ByteBuffer.allocateDirect(w*h*8).order(ByteOrder.nativeOrder())
+        java.io.FileInputStream(src).channel.use{while(buf.hasRemaining()&&it.read(buf)>=0){}}
+        buf.rewind()
+        Gles31AmazeProcessor.EglComputeContext().use {
+            withTexture(buf,w,h){scene ->
+                val processor=Gles31JpegOutputProcessor(context)
+                try {
+                    for(on in listOf(false,true)){
+                        val settings=JpegOutputSettings(chromaCleanup=ChromaCleanup(rapidRawPreprocessing=on))
+                        val t0=android.os.SystemClock.elapsedRealtime()
+                        val jpeg=processor.process(scene,settings)
+                        report("render on=$on ms=${android.os.SystemClock.elapsedRealtime()-t0}")
+                        java.io.File(context.getExternalFilesDir(null),"render_${if(on)"on" else "off"}.jpg").outputStream().use{
+                            jpeg.bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,95,it)}
+                        jpeg.bitmap.recycle();jpeg.gainmap?.recycle()
+                    }
+                }finally{processor.close()}
+            }
+        }
+    }
+
     private fun report(text:String) {
         android.util.Log.i("RapidRawDevelopTest",text)
         val context=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
