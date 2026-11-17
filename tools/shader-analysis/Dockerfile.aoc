@@ -1,0 +1,5 @@
+# Runtime dependencies only. The licensed compiler is mounted from .local at run time.
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libstdc++6 libtinfo6 zlib1g && rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp

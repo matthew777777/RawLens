@@ -25,6 +25,10 @@ For a launcher that builds the JVM/native/shader components, use `sr-pipeline/ru
 
 ## Capture-format checks
 
+GPU offline analysis: [`shader-analysis/`](shader-analysis/README.md) runs Mali
+reports over packaged Vulkan modules and provides a configurable adapter for a
+licensed Adreno Offline Compiler installation.
+
 | Path | What |
 |---|---|
 | `tinydng_roundtrip.c`, `verify_tinydng.py` | Host regression for the vendored TinyDNG writer. |

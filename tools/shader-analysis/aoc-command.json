@@ -1,0 +1,10 @@
+[
+  "python3",
+  "{root}/tools/shader-analysis/aoc.py",
+  "-api=Vulkan",
+  "-arch={core}",
+  "-dump=stats_perf",
+  "-output_format=json",
+  "{stage}",
+  "{input}"
+]
