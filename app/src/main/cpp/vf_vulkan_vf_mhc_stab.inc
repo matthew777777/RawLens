@@ -209,6 +209,45 @@ Java_com_matthew_rawlens_VfMhc_mhcSubmitNative(
 // and round-trip 150MB of RGB; fusing removes both. Params reuse the
 // packMhc + packGrade arrays (same semantics) via a per-slot SSBO.
 
+// Test-only GPU timing: enable before initFusedYuvNative; read after the
+// submit's sync fd signalled. Returns {green ms, main ms} or null.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfVideoGrade_setFusedTimingNative(JNIEnv*, jobject, jboolean on) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    gFusedTiming = on;
+    return VFVK_OK;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_matthew_rawlens_VfVideoGrade_fusedTimingNative(JNIEnv* env, jobject, jint slot) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr || g->fusedQueries == VK_NULL_HANDLE || slot < 0 || slot > 2 || !g->fusedQueryWritten[slot]) return nullptr;
+    uint64_t t[3];
+    if (vkGetQueryPoolResults(g->device, g->fusedQueries, uint32_t(slot) * 3u, 3, sizeof(t), t, sizeof(uint64_t),
+                              VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) return nullptr;
+    const double ns = g->fusedTsPeriodNs;
+    jfloat out[2] = {jfloat((t[1] - t[0]) * ns * 1e-6), jfloat((t[2] - t[1]) * ns * 1e-6)};
+    jfloatArray arr = env->NewFloatArray(2);
+    if (arr) env->SetFloatArrayRegion(arr, 0, 2, out);
+    return arr;
+}
+
+// Test-only: see gFusedGreenOverride. null restores the embedded prepass.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfVideoGrade_setFusedGreenOverrideNative(JNIEnv* env, jobject, jbyteArray spv, jint pixels) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (pixels != 2 && pixels != 8) return VFVK_BAD_ARGUMENT;
+    gFusedGreenOverride.clear();
+    gFusedGreenPixels = 2;
+    if (spv == nullptr) return VFVK_OK;
+    jsize bytes = env->GetArrayLength(spv);
+    if (bytes <= 0 || bytes % 4 != 0) return VFVK_BAD_ARGUMENT;
+    gFusedGreenOverride.resize(bytes / 4);
+    env->GetByteArrayRegion(spv, 0, bytes, reinterpret_cast<jbyte*>(gFusedGreenOverride.data()));
+    gFusedGreenPixels = (uint32_t)pixels;
+    return VFVK_OK;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_VfVideoGrade_initFusedYuvNative(JNIEnv* env, jobject, jbyteArray spv) {
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
@@ -365,7 +404,8 @@ Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
         int r = importP010Out(g, dstBuf, yStrideB, uvStrideB, fw, fh, &dstImg);
         if (r != VFVK_OK) return (r == -20) ? -20 : -r;
     }
-    if(!ensureFusedGreen(g,slot,params.cDims[0],params.cDims[1])) return -VFVK_DEVICE_FAILED;
+    const bool diffPlanes = params.cDims[0] != params.oDims[0] || params.cDims[1] != params.oDims[1];
+    if(!ensureFusedGreen(g,slot,params.cDims[0],params.cDims[1],diffPlanes)) return -VFVK_DEVICE_FAILED;
     // Params in (per-slot coherent SSBO; flush for good measure).
     memcpy(g->fusedParamMaps[slot], &params, sizeof(params));
     {
@@ -482,10 +522,37 @@ Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &acquire, 0, nullptr);
     }
+    const bool timed = gFusedTiming && g->fusedQueries != VK_NULL_HANDLE;
+    // Field log: the slot is idle (checked above), so its previous
+    // timestamps are final; read without waiting, aggregate, log per window.
+    if (timed && g->fusedQueryWritten[slot]) {
+        uint64_t t[3];
+        if (vkGetQueryPoolResults(g->device, g->fusedQueries, uint32_t(slot) * 3u, 3, sizeof(t), t, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            const double green = double(t[1] - t[0]) * g->fusedTsPeriodNs * 1e-6;
+            const double main = double(t[2] - t[1]) * g->fusedTsPeriodNs * 1e-6;
+            g->fusedLogGreen += green; g->fusedLogMain += main;
+            g->fusedLogGreenMax = std::max(g->fusedLogGreenMax, green);
+            g->fusedLogMainMax = std::max(g->fusedLogMainMax, main);
+            if (++g->fusedLogN >= 120) {
+                LOGI("vf-vk: fused gpu %dx%d->%dx%d path=%d green=%.2f/%.2f main=%.2f/%.2f total=%.2f ms (avg/max, n=%u)",
+                     g->fusedLogDims[0], g->fusedLogDims[1], g->fusedLogDims[2], g->fusedLogDims[3], g->fusedLogPath,
+                     g->fusedLogGreen / g->fusedLogN, g->fusedLogGreenMax, g->fusedLogMain / g->fusedLogN, g->fusedLogMainMax,
+                     (g->fusedLogGreen + g->fusedLogMain) / g->fusedLogN, g->fusedLogN);
+                g->fusedLogN = 0; g->fusedLogGreen = g->fusedLogMain = g->fusedLogGreenMax = g->fusedLogMainMax = 0;
+            }
+        }
+    }
+    if (timed) {
+        vkCmdResetQueryPool(cmd, g->fusedQueries, uint32_t(slot) * 3u, 3);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, g->fusedQueries, uint32_t(slot) * 3u);
+    }
     vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,
                            g->fusedPipelineLayout,0,1,&g->fusedSets[slot],0,nullptr);
     vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,g->fusedGreenPipeline);
-    vkCmdDispatch(cmd,(uint32_t(params.cDims[0])+31)/32,(uint32_t(params.cDims[1])+15)/16,1);
+    // vf_mhc_green: 16x16 invocations, 2 pixels of one row each.
+    const uint32_t greenSpan = 16u * gFusedGreenPixels;
+    vkCmdDispatch(cmd,(uint32_t(params.cDims[0])+greenSpan-1)/greenSpan,(uint32_t(params.cDims[1])+15)/16,1);
     VkBufferMemoryBarrier greenBarrier{};
     greenBarrier.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
     greenBarrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;greenBarrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
@@ -493,7 +560,37 @@ Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
     greenBarrier.buffer=g->fusedGreenBufs[slot];greenBarrier.offset=0;greenBarrier.size=VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0,0,nullptr,1,&greenBarrier,0,nullptr);
-    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,g->fusedPipeline);
+    if (timed) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, g->fusedQueries, uint32_t(slot) * 3u + 1u);
+    // Take-shape pipeline: path 1 only for crop == output (its fallback has
+    // no downscale filter); path 2 only for ratios inside the shader's
+    // 2:1 / 3:2 window with margin (its fallback always downscales; the
+    // margin dwarfs GPU division error, so the all-path shader would take
+    // the same branch). Anything else binds the all-path pipeline.
+    VkPipeline fusedPipe = g->fusedPipeline;
+    VkPipeline borderPipe = VK_NULL_HANDLE;   // path 3, 1:1 only
+    const uint32_t cellsX = (uint32_t(params.oDims[0]) + 1) / 2, cellsY = (uint32_t(params.oDims[1]) + 1) / 2;
+    if (params.cDims[0] == params.oDims[0] && params.cDims[1] == params.oDims[1]) {
+        // Interior pipeline + border pipeline (needs even pitch: the shader's
+        // interior test; and >= 4 cells per axis for the border indexing).
+        if (g->fusedPathPipelines[0] != VK_NULL_HANDLE && g->fusedPathPipelines[2] != VK_NULL_HANDLE &&
+            (params.cPitch & 1) == 0 && cellsX >= 4 && cellsY >= 4) {
+            fusedPipe = g->fusedPathPipelines[0];
+            borderPipe = g->fusedPathPipelines[2];
+        }
+    } else if (g->fusedPathPipelines[1] != VK_NULL_HANDLE) {
+        auto near = [](float r) { return std::fabs(r - 2.0f) < 0.019f || std::fabs(r - 1.5f) < 0.014f; };
+        if (near(float(params.cDims[0]) / float(params.oDims[0])) &&
+            near(float(params.cDims[1]) / float(params.oDims[1]))) fusedPipe = g->fusedPathPipelines[1];
+    }
+    if (g->fusedPathOverride == 0) { fusedPipe = g->fusedPipeline; borderPipe = VK_NULL_HANDLE; }
+    const int pathUsed = fusedPipe == g->fusedPathPipelines[0] ? 1 : fusedPipe == g->fusedPathPipelines[1] ? 2 : 0;
+    if (pathUsed != g->fusedLogPath || params.cDims[0] != g->fusedLogDims[0] || params.oDims[0] != g->fusedLogDims[2]) {
+        g->fusedLogN = 0; g->fusedLogGreen = g->fusedLogMain = g->fusedLogGreenMax = g->fusedLogMainMax = 0;
+    }
+    g->fusedLogPath = pathUsed;
+    g->fusedLogDims[0] = params.cDims[0]; g->fusedLogDims[1] = params.cDims[1];
+    g->fusedLogDims[2] = params.oDims[0]; g->fusedLogDims[3] = params.oDims[1];
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,fusedPipe);
     bindRecordCube(g, cmd, g->fusedPipelineLayout);
     // vf_mhcyuv: 16x16 invocations, each owning a complete 2x2 cell.
     // https://docs.vulkan.org/spec/latest/chapters/dispatch.html
@@ -501,6 +598,16 @@ Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
     const uint32_t gx = (pairs + 15) / 16;
     const uint32_t gy = (uint32_t)(params.oDims[1] + 31) / 32;
     vkCmdDispatch(cmd, gx, gy, 1);
+    if (borderPipe != VK_NULL_HANDLE) {
+        // Border cells (disjoint from the interior dispatch's writes).
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, borderPipe);
+        const uint32_t borderCells = 4 * cellsX + 4 * (cellsY - 4);
+        vkCmdDispatch(cmd, (borderCells + 255) / 256, 1, 1);
+    }
+    if (timed) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g->fusedQueries, uint32_t(slot) * 3u + 2u);
+        g->fusedQueryWritten[slot] = true;
+    }
     inBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     inBarrier.dstAccessMask = 0;
     inBarrier.srcQueueFamilyIndex = g->queueFamily;

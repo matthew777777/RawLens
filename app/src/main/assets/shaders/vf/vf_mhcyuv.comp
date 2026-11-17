@@ -23,10 +23,20 @@
 // threads to cover tap latency with.
 layout(local_size_x = 16, local_size_y = 16) in;
 
+// Fast-path pipeline variant (VkSpecializationInfo, constant 0). Mali/Adreno
+// allocate registers for the largest path in a pipeline, so the host builds
+// one pipeline per take shape: 1 = 1:1 interior cells only (4K window, no
+// fallback compiled in: the fallback cost path 1 ~9 % on the phone),
+// 3 = 1:1 border cells only (per-tap path; tiny second dispatch, disjoint
+// writes), 2 = 2:1 / 3:2 (downscale filter only). 0 keeps every path.
+// (A per-cell downscale site window was 4 % slower on the Mali-G615 phone.)
+layout(constant_id = 0) const int FUSED_PATH = 0;
+
 // Byte-exact sensor view (vf_superpixel convention): each uint holds 2
 // LE pixels, stride is the Image plane pitch in pixels.
 layout(binding = 0) readonly buffer Bayer { uint codes[]; };
-layout(binding = 1) writeonly buffer P010 { uint words[]; } buf_out;
+// Not writeonly: unaligned / row-end stores use 16-bit atomics (storeY2).
+layout(binding = 1) buffer P010 { uint words[]; } buf_out;
 
 // Mirrors FusedParams in vf_vulkan_vf.cpp exactly (192 bytes, std430).
 struct FusedParams {
@@ -128,6 +138,14 @@ float greenAt(ivec2 s) {
     vec2 pair = unpackHalf2x16(word);
     return ((m.x & 1) == 0) ? pair.x : pair.y;
 }
+// cfa - half(green) at same-colour site b of colour i (0 = R, 1 = B), from
+// the planes vf_mhc_green writes after the green plane on downscale takes.
+// Mirroring keeps CFA phase, so the mirrored site has the same colour.
+float diffAt(int i, ivec2 b) {
+    ivec2 m = ivec2(mir(b.x, u.cDims.x), mir(b.y, u.cDims.y));
+    int qw = (u.cDims.x + 1) / 2, qh = (u.cDims.y + 1) / 2;
+    return uintBitsToFloat(greenWords[qw * u.cDims.y + i * qw * qh + (m.y >> 1) * qw + (m.x >> 1)]);
+}
 vec3 mhcRgb(ivec2 s) {
     float c=normEdge(s);
     int col=colorAt(s);
@@ -194,10 +212,17 @@ vec3 scaledRgb(ivec2 ij, vec2 r, out ivec2 s) {
         vec2 fq = floor(q);
         vec2 f = q - fq;
         ivec2 b = ivec2(fq) * 2 + ivec2(ph);
-        float d00 = normEdge(b) - greenAt(b);
-        float d10 = normEdge(b + ivec2(2, 0)) - greenAt(b + ivec2(2, 0));
-        float d01 = normEdge(b + ivec2(0, 2)) - greenAt(b + ivec2(0, 2));
-        float d11 = normEdge(b + ivec2(2, 2)) - greenAt(b + ivec2(2, 2));
+        float d00, d10, d01, d11;
+        if (FUSED_PATH == 2) {
+            // Precomputed exact differences (vf_mhc_green planes).
+            d00 = diffAt(i, b); d10 = diffAt(i, b + ivec2(2, 0));
+            d01 = diffAt(i, b + ivec2(0, 2)); d11 = diffAt(i, b + ivec2(2, 2));
+        } else {
+            d00 = normEdge(b) - greenAt(b);
+            d10 = normEdge(b + ivec2(2, 0)) - greenAt(b + ivec2(2, 0));
+            d01 = normEdge(b + ivec2(0, 2)) - greenAt(b + ivec2(0, 2));
+            d11 = normEdge(b + ivec2(2, 2)) - greenAt(b + ivec2(2, 2));
+        }
         d[i] = mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
     }
     return clamp(vec3(g + d[0], g, g + d[1]), vec3(0.0), vec3(OUTPUT_CLAMP_HI));
@@ -337,7 +362,8 @@ vec3 desatWhite(vec3 rgb) {
 }
 
 // Display RGB for one output texel (nearest src cover + MHC + grade).
-vec3 pixelLog(ivec2 ij) {
+// Linear (pre-grade) output texel (demosaic + white protection + shading).
+vec3 linearLog(ivec2 ij) {
     ivec2 s;
     vec3 rgb;
     // 2:1 (4K window -> 1080p) or 3:2 (-> 1440p), within 1% (2.39:1
@@ -345,7 +371,10 @@ vec3 pixelLog(ivec2 ij) {
     vec2 r = vec2(u.cDims) / vec2(u.oDims);
     bvec2 near2 = lessThan(abs(r - 2.0), vec2(0.02));
     bvec2 near32 = lessThan(abs(r - 1.5), vec2(0.015));
-    if (all(bvec2(near2.x || near32.x, near2.y || near32.y))) {
+    // Path 1 is only bound when crop == output, so its edge fallback never
+    // needs the downscale filter; path 2 only when the ratio is inside the
+    // window with margin (host check), so this test is always true there.
+    if (FUSED_PATH == 2 || (FUSED_PATH != 1 && FUSED_PATH != 3 && all(bvec2(near2.x || near32.x, near2.y || near32.y)))) {
         rgb = desatWhite(scaledRgb(ij, r, s));
     } else {
         if (all(equal(u.cDims, u.oDims))) s = ij;
@@ -359,8 +388,109 @@ vec3 pixelLog(ivec2 ij) {
         vec4 sg = shadeGains(s + u.cOrigin);
         rgb *= vec3(sg.x, 0.5 * (sg.y + sg.z), sg.w);
     }
-    return gradeRgb(rgb);
+    return rgb;
 }
+
+
+// ---- 1:1 (4K) fast path: whole-cell register window ----
+// Mobile GPUs are bound by load/store INSTRUCTIONS, not bytes. The per-tap
+// path issues ~46 scalar loads per 2x2 cell, each with its own mirror and
+// index math. Interior cells instead load the raw code words of rows
+// y-2..y+3 (6 px wide = 3-4 words) and green rows y-1..y+2 (3 words) once,
+// then decode taps with constant indices: same codes, same FMA, same
+// expression order as mhcRgb, so the output is bit-identical.
+// Each row holds exactly the 6 pixels x0-2..x0+3 as 3 "virtual" words:
+// when the crop starts on an odd sensor column the loader funnel-shifts
+// neighbouring words into alignment once, so taps need no parity select
+// and only 18 words stay live (was 24 + per-tap selects; Mali spilled).
+uint Wc[6][3];
+uint Wg[4][3];
+ivec2 fCell;      // cell origin (crop coords, both even)
+
+float C(int dx, int dy) {
+    return normShift(Wc[dy + 2][(dx + 2) >> 1], uint(((dx + 2) & 1) * 16), quadOf(fCell + ivec2(dx, dy)));
+}
+float G(int dx, int dy) {
+    vec2 pair = unpackHalf2x16(Wg[dy + 1][(dx + 2) >> 1]);
+    return ((dx & 1) == 0) ? pair.x : pair.y;
+}
+// 1:1 cells whose whole window is inside the crop (paths 1 / 3 split here;
+// the host binds them only for even pitch, so the pitch test is redundant there).
+bool cellInterior(ivec2 cell) {
+    return !(cell.x < 2 || cell.y < 2 || cell.x + 3 >= u.cDims.x || cell.y + 3 >= u.cDims.y
+        || (u.cPitch & 1) != 0);
+}
+bool loadCellWindow(ivec2 cell) {
+    if (!cellInterior(cell)) return false;
+    fCell = cell;
+    int fPx = (cell.x + u.cOrigin.x) & 1;
+    [[unroll]] for (int k = 0; k < 6; ++k) {
+        int row = (cell.y + k - 2 + u.cOrigin.y) * u.cPitch + (cell.x + u.cOrigin.x) - 2 - fPx;
+        uint w0 = uint(row) >> 1u;
+        uint a = codes[w0], b = codes[w0 + 1u], c = codes[w0 + 2u];
+        if (fPx != 0) {
+            uint d = codes[w0 + 3u];
+            a = (a >> 16u) | (b << 16u); b = (b >> 16u) | (c << 16u); c = (c >> 16u) | (d << 16u);
+        }
+        Wc[k][0] = a; Wc[k][1] = b; Wc[k][2] = c;
+    }
+    int gw = (u.cDims.x + 1) / 2;
+    [[unroll]] for (int k = 0; k < 4; ++k) {
+        int base = (cell.y + k - 1) * gw + (cell.x - 2) / 2;
+        Wg[k][0] = greenWords[base];
+        Wg[k][1] = greenWords[base + 1];
+        Wg[k][2] = greenWords[base + 2];
+    }
+    return true;
+}
+// mhcRgb at fCell + (dx, dy), taps from the window (same expressions).
+vec3 mhcRgbW(int dx, int dy) {
+    ivec2 s = fCell + ivec2(dx, dy);
+    float c=C(dx,dy);
+    int col=colorAt(s);
+    float g=(col==1) ? c : G(dx,dy);
+    float r; float b;
+    if (col==1) {
+        float n=C(dx,dy-1); float so=C(dx,dy+1);
+        float w=C(dx-1,dy); float e=C(dx+1,dy);
+        float w2=C(dx-2,dy); float e2=C(dx+2,dy);
+        float n2=C(dx,dy-2); float s2=C(dx,dy+2);
+        float gw=G(dx-1,dy); float ge=G(dx+1,dy);
+        float gn=G(dx,dy-1); float gs=G(dx,dy+1);
+        float ww=0.001+abs(g-ge)+abs(c-e2);
+        float we=0.001+abs(g-gw)+abs(c-w2);
+        float wn=0.001+abs(g-gs)+abs(c-s2);
+        float ws=0.001+abs(g-gn)+abs(c-n2);
+        float ew=g+(ww*(w-gw)+we*(e-ge))/(ww+we);
+        float ns=g+(wn*(n-gn)+ws*(so-gs))/(wn+ws);
+        bool redEW=colorAt(s+ivec2(1,0))==0;
+        r=redEW ? ew : ns; b=redEW ? ns : ew;
+    } else {
+        float nw=C(dx-1,dy-1); float ne=C(dx+1,dy-1);
+        float sw=C(dx-1,dy+1); float se=C(dx+1,dy+1);
+        float gnw=G(dx-1,dy-1); float gne=G(dx+1,dy-1);
+        float gsw=G(dx-1,dy+1); float gse=G(dx+1,dy+1);
+        float wnw=1.0/(0.001+abs(g-gnw)+abs(nw-se));
+        float wse=1.0/(0.001+abs(g-gse)+abs(nw-se));
+        float wne=1.0/(0.001+abs(g-gne)+abs(ne-sw));
+        float wsw=1.0/(0.001+abs(g-gsw)+abs(ne-sw));
+        float opposite=g+(wnw*(nw-gnw)+wne*(ne-gne)+wsw*(sw-gsw)+wse*(se-gse))/(wnw+wne+wsw+wse);
+        r=(col==0) ? c : opposite;
+        b=(col==2) ? c : opposite;
+    }
+    return clamp(vec3(r,g,b),vec3(0.0),vec3(OUTPUT_CLAMP_HI));
+}
+// pixelLog for the 1:1 path with the window already loaded.
+// Linear (pre-grade) value: demosaic + white protection + lens shading.
+vec3 linearW(int dx, int dy) {
+    vec3 rgb = desatWhite(mhcRgbW(dx, dy));
+    if (u.sDims.z != 0) {
+        vec4 sg = shadeGains(fCell + ivec2(dx, dy) + u.cOrigin);
+        rgb *= vec3(sg.x, 0.5 * (sg.y + sg.z), sg.w);
+    }
+    return rgb;
+}
+
 
 vec3 rgbToYuv(vec3 rgb, int mode) {
     if (mode == 2) {
@@ -381,12 +511,58 @@ uint pack10(float v, float low, float high) {
     return (code << 6) & 0xFFC0u;
 }
 
+// Store two adjacent 16-bit samples at sample index idx. The common case
+// (even idx, both samples inside the row) is one 32-bit store. An odd idx
+// (odd stride / plane offset) or a row-end cell of an odd-width frame would
+// make neighbouring invocations write the same 32-bit word, so those write
+// each sample's half with atomics instead (and never past the row end).
+void storeHalf(uint idx, uint v) {
+    uint w = idx >> 1u;
+    uint sh = (idx & 1u) * 16u;
+    atomicAnd(buf_out.words[w], ~(0xFFFFu << sh));
+    atomicOr(buf_out.words[w], v << sh);
+}
+void storeY2(uint idx, uint a, uint b, bool hasB) {
+    if ((idx & 1u) == 0u && hasB) {
+        buf_out.words[idx >> 1u] = a | (b << 16u);
+        return;
+    }
+    storeHalf(idx, a);
+    if (hasB) storeHalf(idx + 1u, b);
+}
+
+// 4:2:0 chroma of the cell (mean of its four YUV values).
+void storeUV(ivec2 ij, vec3 sumTop, vec3 sumBot) {
+    vec3 meanUV = (sumTop + sumBot) * 0.25;
+    uint pairIdx = uint(u.gMisc.w) / 2u
+        + uint(ij.y / 2) * uint(u.gMisc.z) + uint(ij.x);
+    storeY2(pairIdx, pack10(meanUV.g, 64.0, 960.0), pack10(meanUV.b, 64.0, 960.0), true);
+}
 void main() {
     // Own a complete 2x2 P010 cell: all four encoded pixels contribute
     // to 4:2:0 chroma. Sampling only the top row aliases Bayer-phase
     // color errors into cyan stripes on subpixel specular highlights.
     // Four pixels / half as many invocations: no extra demosaic work.
     ivec2 ij = ivec2(gl_GlobalInvocationID.xy) * 2;
+    if (FUSED_PATH == 3) {
+        // Border pass: 1-D index over the 2-cell-wide frame of cells (a
+        // superset of every non-interior cell); interior cells are path 1's.
+        int cellsX = (u.oDims.x + 1) / 2, cellsY = (u.oDims.y + 1) / 2;
+        int i = int(gl_WorkGroupID.x) * 256 + int(gl_LocalInvocationIndex);
+        int rowCells = 4 * cellsX;
+        ivec2 cell;
+        if (i < rowCells) {
+            int r = i / cellsX;
+            cell = ivec2(i - r * cellsX, r < 2 ? r : cellsY - 4 + r);
+        } else {
+            int j = i - rowCells, colH = cellsY - 4;
+            if (j >= 4 * colH) return;
+            int r = j / colH;
+            cell = ivec2(r < 2 ? r : cellsX - 4 + r, 2 + (j - r * colH));
+        }
+        ij = cell * 2;
+        if (cellInterior(ij)) return;
+    }
     if (any(greaterThanEqual(ij, u.oDims))) return;
     int yStride = int(u.gMisc.y);
     int outMode = u.sDims.w;
@@ -394,20 +570,32 @@ void main() {
     // 64 registers on Mali-G615 (malioc). Same values, same sum order.
     uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);
     vec3 sumTop, sumBot;
+    if ((FUSED_PATH == 0 || FUSED_PATH == 1) && all(equal(u.cDims, u.oDims)) && ij.x + 1 < u.oDims.x && ij.y + 1 < u.oDims.y
+        && loadCellWindow(ij)) {
+        vec3 a0 = rgbToYuv(gradeRgb(linearW(0, 0)), outMode);
+        vec3 b0 = rgbToYuv(gradeRgb(linearW(1, 0)), outMode);
+        storeY2(yIdx, pack10(a0.x, 64.0, 940.0), pack10(b0.x, 64.0, 940.0), true);
+        sumTop = a0 + b0;
+        vec3 a1 = rgbToYuv(gradeRgb(linearW(0, 1)), outMode);
+        vec3 b1 = rgbToYuv(gradeRgb(linearW(1, 1)), outMode);
+        storeY2(yIdx + uint(yStride), pack10(a1.x, 64.0, 940.0), pack10(b1.x, 64.0, 940.0), true);
+        // Finish here: nothing of this path stays live into the fallback's
+        // join (the shared tail made Mali spill 4 bytes in path 1).
+        storeUV(ij, sumTop, a1 + b1);
+        return;
+    }
+    if (FUSED_PATH == 1) return;   // border cells: path 3's dispatch
     [[dont_unroll]] for (int r = 0; r < 2; ++r) {
         int y = min(ij.y + r, u.oDims.y - 1);
-        vec3 yuvA = rgbToYuv(pixelLog(ivec2(ij.x, y)), outMode);
-        vec3 yuvB = rgbToYuv(pixelLog(ivec2(min(ij.x + 1, u.oDims.x - 1), y)), outMode);
+        ivec2 pa = ivec2(ij.x, y), pb = ivec2(min(ij.x + 1, u.oDims.x - 1), y);
+        vec3 yuvA = rgbToYuv(gradeRgb(linearLog(pa)), outMode);
+        vec3 yuvB = rgbToYuv(gradeRgb(linearLog(pb)), outMode);
         if (ij.y + r < u.oDims.y) {
             uint idx = yIdx + uint(r) * uint(yStride);
-            buf_out.words[idx >> 1u] = pack10(yuvA.x, 64.0, 940.0)
-                | (pack10(yuvB.x, 64.0, 940.0) << 16u);
+            storeY2(idx, pack10(yuvA.x, 64.0, 940.0), pack10(yuvB.x, 64.0, 940.0), ij.x + 1 < u.oDims.x);
         }
-        if (r == 0) sumTop = yuvA + yuvB; else sumBot = yuvA + yuvB;
+        vec3 sum = yuvA + yuvB;
+        if (r == 0) sumTop = sum; else sumBot = sum;
     }
-    vec3 meanUV = (sumTop + sumBot) * 0.25;
-    uint pairIdx = uint(u.gMisc.w) / 2u
-        + uint(ij.y / 2) * uint(u.gMisc.z) + uint(ij.x);
-    buf_out.words[pairIdx >> 1u] = pack10(meanUV.g, 64.0, 960.0)
-        | (pack10(meanUV.b, 64.0, 960.0) << 16u);
+    storeUV(ij, sumTop, sumBot);
 }

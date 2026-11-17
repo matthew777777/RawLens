@@ -456,6 +456,19 @@ internal object VfVideoGrade {
     external fun initFusedYuvNative(spv: ByteArray): Int
 
     /**
+     * Test-only A/B hook: the next [initFusedYuvNative] builds its green
+     * prepass from [spv] dispatched at [pixelsPerInvocation] (2 or 8 pixels
+     * per invocation). null restores the embedded one (2).
+     */
+    external fun setFusedGreenOverrideNative(spv: ByteArray?, pixelsPerInvocation: Int): Int
+
+    /** GPU timestamps around the fused submit's dispatches (default on; feeds the `vf-vk: fused gpu` log). */
+    external fun setFusedTimingNative(on: Boolean): Int
+
+    /** Test-only: {green ms, main ms} of [slot]'s last completed submit, or null. */
+    external fun fusedTimingNative(slot: Int): FloatArray?
+
+    /**
      * Fused record stage (see `vf_mhcyuv.comp`): CFA mosaic straight to
      * graded P010 in one dispatch — no RGB round trip, one queue slot.
      * Params reuse [VfMhc.packMhc] + [packGrade] (same semantics) via a

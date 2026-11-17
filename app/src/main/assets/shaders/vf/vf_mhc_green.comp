@@ -2,7 +2,23 @@
 // Coherent MHC-family green plane. One invocation packs two half-float
 // greens in a uint: universally available Vulkan storage, no fp16 ALU or
 // 16-bit storage feature required. Measured greens are retained.
+//
+// Mobile layout: one invocation owns 2 pixels (one output word) so adjacent
+// lanes touch adjacent words (coalesced; an 8-pixel-per-lane layout halved
+// the load count but ran ~5 % slower on Mali-G615: uncoalesced). Interior
+// pairs load their row's code words once (x-2..x+3: 3-4 words) plus only
+// the 4 vertical taps of the non-green pixel: ~7-8 loads instead of 10.
+// Same codes, same FMA, same math, so the plane is bit-identical.
+// Host dispatch: ((cDims.x + 31) / 32, (cDims.y + 15) / 16).
+//
+// Downscale takes (cDims != oDims) also write the exact float32 colour
+// difference d = cfa - half(green) of every R / B site into two dense
+// quarter-res planes after the green plane (R plane, then B plane; index
+// (y>>1)*qw + (x>>1), qw = (cDims.x+1)/2). vf_mhcyuv's 2:1 / 3:2 filter then
+// reads one float per chroma tap instead of a CFA decode + green load. The
+// host sizes the buffer for the planes on exactly those takes.
 #version 450
+#extension GL_EXT_control_flow_attributes : require
 layout(local_size_x=16,local_size_y=16) in;
 layout(binding=0) readonly buffer Bayer { uint codes[]; };
 layout(binding=5) writeonly buffer Green { uint greenWords[]; };
@@ -50,10 +66,74 @@ float green(ivec2 s) {
     float hh=dh*dh+1e-8;float vv=dv*dv+1e-8;
     return max(0.0,(gh*vv+gv*hh)/(hh+vv));
 }
+// Interior tap without the mirror (identity there): same value as tap().
+float tapI(ivec2 s) {
+    ivec2 p=s+u.cOrigin;
+    int q=((p.y&1)<<1)|(p.x&1);
+    uint idx=uint(p.y*u.cPitch+p.x);
+    uint word=codes[idx>>1u];
+    uint code=(word>>((idx&1u)*16u))&65535u;
+    return clamp(fma(float(code),u.cInvRange[q],u.cNormBias[q]),0.0,1.0);
+}
+uint R[4];      // row y code words covering x0-2 .. x0+3
+int rPx;        // sensor-x parity of x0 (uniform)
+ivec2 rS;       // span origin
+float rowTap(int dx) {   // dx in -2..3, constant after unrolling
+    uint w=(rPx==0) ? R[(dx+2)>>1] : R[(dx+3)>>1];
+    uint sh=(rPx==0) ? uint(((dx+2)&1)*16) : uint(((dx+3)&1)*16);
+    ivec2 p=rS+ivec2(dx,0)+u.cOrigin;
+    int q=((p.y&1)<<1)|(p.x&1);
+    uint code=(w>>sh)&65535u;
+    return clamp(fma(float(code),u.cInvRange[q],u.cNormBias[q]),0.0,1.0);
+}
+// green() for pixel rS + (dx, 0) with row taps from R (same expressions).
+float greenW(int dx) {
+    ivec2 s=rS+ivec2(dx,0);
+    ivec2 p=s+u.cOrigin;
+    int q=((p.y&1)<<1)|(p.x&1);
+    float c=rowTap(dx);
+    if(q==u.cChans.y || q==u.cChans.z) return c;
+    float n=tapI(s+ivec2(0,-1));float so=tapI(s+ivec2(0,1));
+    float w=rowTap(dx-1);float e=rowTap(dx+1);
+    float n2=tapI(s+ivec2(0,-2));float s2=tapI(s+ivec2(0,2));
+    float w2=rowTap(dx-2);float e2=rowTap(dx+2);
+    float ch=2.0*c-w2-e2;float cv=2.0*c-n2-s2;
+    float gh=0.5*(w+e)+0.25*ch;float gv=0.5*(n+so)+0.25*cv;
+    float dh=abs(w-e)+0.5*abs(ch);float dv=abs(n-so)+0.5*abs(cv);
+    float hh=dh*dh+1e-8;float vv=dv*dv+1e-8;
+    return max(0.0,(gh*vv+gv*hh)/(hh+vv));
+}
+// Colour-difference planes (downscale takes only, see header).
+void storeDiff(ivec2 s, float c, float g) {
+    ivec2 p=s+u.cOrigin;
+    int q=((p.y&1)<<1)|(p.x&1);
+    if(q==u.cChans.y || q==u.cChans.z) return;
+    int qw=(u.cDims.x+1)/2, qh=(u.cDims.y+1)/2;
+    int plane=(q==u.cChans.x) ? 0 : 1;
+    float d=c-unpackHalf2x16(packHalf2x16(vec2(g,0.0))).x;
+    greenWords[qw*u.cDims.y+plane*qw*qh+(s.y>>1)*qw+(s.x>>1)]=floatBitsToUint(d);
+}
 void main() {
-    ivec2 s=ivec2(gl_GlobalInvocationID.xy)*ivec2(2,1);
-    if(any(greaterThanEqual(s,u.cDims))) return;
-    float a=green(s);
-    float b=(s.x+1<u.cDims.x) ? green(s+ivec2(1,0)) : a;
-    greenWords[s.y*((u.cDims.x+1)/2)+s.x/2]=packHalf2x16(vec2(a,b));
+    ivec2 s0=ivec2(gl_GlobalInvocationID.xy)*ivec2(2,1);
+    if(any(greaterThanEqual(s0,u.cDims))) return;
+    int gw=(u.cDims.x+1)/2;
+    bool diffs=any(notEqual(u.cDims,u.oDims));
+    if(s0.x>=2 && s0.x+3<u.cDims.x && s0.y>=2 && s0.y+2<u.cDims.y && (u.cPitch&1)==0) {
+        rS=s0;
+        rPx=(s0.x+u.cOrigin.x)&1;
+        uint w0=uint((s0.y+u.cOrigin.y)*u.cPitch+(s0.x+u.cOrigin.x)-2-rPx)>>1u;
+        R[0]=codes[w0]; R[1]=codes[w0+1u]; R[2]=codes[w0+2u];
+        R[3]=(rPx!=0) ? codes[w0+3u] : 0u;
+        float a=greenW(0), b=greenW(1);
+        greenWords[s0.y*gw+s0.x/2]=packHalf2x16(vec2(a,b));
+        if(diffs) { storeDiff(s0,rowTap(0),a); storeDiff(s0+ivec2(1,0),rowTap(1),b); }
+        return;
+    }
+    float a=green(s0);
+    float b=(s0.x+1<u.cDims.x) ? green(s0+ivec2(1,0)) : a;
+    greenWords[s0.y*gw+s0.x/2]=packHalf2x16(vec2(a,b));
+    if(diffs) {
+        storeDiff(s0,tap(s0),a);
+        if(s0.x+1<u.cDims.x) storeDiff(s0+ivec2(1,0),tap(s0+ivec2(1,0)),b);
+    }
 }

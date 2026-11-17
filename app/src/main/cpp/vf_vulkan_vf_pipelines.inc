@@ -1000,14 +1000,55 @@ bool createFusedPipeline(Context* ctx, const uint32_t* code, size_t words) {
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->fusedPipelineLayout;
     VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->fusedPipeline);
-    vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
+        vkDestroyShaderModule(ctx->device, module, nullptr);
         LOGW("vf-vk: fused compute pipeline failed %d", r);
         return false;
     }
+    // Per-take-shape variants (vf_mhcyuv FUSED_PATH, constant 0): mobile
+    // GPUs size registers for the largest path in a pipeline, so 1:1 and
+    // 2:1 / 3:2 takes each get a pipeline holding only their fast path.
+    // Modules without the constant ignore the entry (same code, harmless).
+    for (int path = 1; path <= 3; ++path) {
+        const int32_t value = path;
+        VkSpecializationMapEntry entry{0, 0, sizeof(int32_t)};
+        VkSpecializationInfo spec{1, &entry, sizeof(int32_t), &value};
+        pipeInfo.stage.pSpecializationInfo = &spec;
+        r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr,
+                                     &ctx->fusedPathPipelines[path - 1]);
+        if (r != VK_SUCCESS) {
+            // Optional speed-up: fall back to the all-path pipeline.
+            LOGW("vf-vk: fused path %d pipeline failed %d", path, r);
+            ctx->fusedPathPipelines[path - 1] = VK_NULL_HANDLE;
+        }
+    }
+    pipeInfo.stage.pSpecializationInfo = nullptr;
+    vkDestroyShaderModule(ctx->device, module, nullptr);
+    // Field A/B switch: debug.rawlens.fusedpath=0 binds the all-path
+    // pipeline for every take (the pre-2026-11-17 single-pipeline layout).
+    {
+        char prop[PROP_VALUE_MAX] = {0};
+        ctx->fusedPathOverride = (__system_property_get("debug.rawlens.fusedpath", prop) > 0) ? atoi(prop) : -1;
+    }
+    // Timestamp queries for the field log (optional: skipped if unsupported).
+    {
+        uint32_t n = 0; vkGetPhysicalDeviceQueueFamilyProperties(ctx->gpu, &n, nullptr);
+        std::vector<VkQueueFamilyProperties> qp(n); vkGetPhysicalDeviceQueueFamilyProperties(ctx->gpu, &n, qp.data());
+        VkPhysicalDeviceProperties props; vkGetPhysicalDeviceProperties(ctx->gpu, &props);
+        ctx->fusedTsPeriodNs = props.limits.timestampPeriod;
+        if (ctx->fusedQueries == VK_NULL_HANDLE && ctx->queueFamily < n && qp[ctx->queueFamily].timestampValidBits > 0) {
+            VkQueryPoolCreateInfo qi{}; qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP; qi.queryCount = 9;
+            if (vkCreateQueryPool(ctx->device, &qi, nullptr, &ctx->fusedQueries) != VK_SUCCESS) ctx->fusedQueries = VK_NULL_HANDLE;
+        }
+        LOGI("vf-vk: fused record pipelines ready gpu=%s paths=%d/%d/%d fusedpath=%d timing=%s",
+             props.deviceName, ctx->fusedPathPipelines[0] != VK_NULL_HANDLE, ctx->fusedPathPipelines[1] != VK_NULL_HANDLE,
+             ctx->fusedPathPipelines[2] != VK_NULL_HANDLE,
+             ctx->fusedPathOverride, ctx->fusedQueries != VK_NULL_HANDLE ? "on" : "unsupported");
+    }
     // The private green prepass uses the same layout/slot descriptors.
-    modInfo.codeSize = sizeof(kMhcGreenSpv);
-    modInfo.pCode = kMhcGreenSpv;
+    modInfo.codeSize = gFusedGreenOverride.empty() ? sizeof(kMhcGreenSpv) : gFusedGreenOverride.size() * 4;
+    modInfo.pCode = gFusedGreenOverride.empty() ? kMhcGreenSpv : gFusedGreenOverride.data();
     if (vkCreateShaderModule(ctx->device,&modInfo,nullptr,&module)!=VK_SUCCESS) return false;
     pipeInfo.stage.module=module;
     r=vkCreateComputePipelines(ctx->device,pipelineCacheFor(ctx),1,&pipeInfo,nullptr,&ctx->fusedGreenPipeline);
@@ -1220,8 +1261,11 @@ bool ensureShadeSampler(Context* ctx) {
 }
 
 
-bool ensureFusedGreen(Context* ctx,int slot,int width,int height) {
-    const VkDeviceSize bytes=((VkDeviceSize(width)+1)/2)*VkDeviceSize(height)*4;
+// Green plane (packed half pairs) plus, on downscale takes, vf_mhc_green's
+// two quarter-res float32 colour-difference planes (R, B) right after it.
+bool ensureFusedGreen(Context* ctx,int slot,int width,int height,bool diffPlanes) {
+    const VkDeviceSize qw=(VkDeviceSize(width)+1)/2, qh=(VkDeviceSize(height)+1)/2;
+    const VkDeviceSize bytes=(qw*VkDeviceSize(height)+(diffPlanes ? 2*qw*qh : 0))*4;
     if(ctx->fusedGreenBufs[slot]!=VK_NULL_HANDLE && ctx->fusedGreenBytes[slot]==bytes) return true;
     if(ctx->fusedGreenBufs[slot]!=VK_NULL_HANDLE) vkDestroyBuffer(ctx->device,ctx->fusedGreenBufs[slot],nullptr);
     if(ctx->fusedGreenMems[slot]!=VK_NULL_HANDLE) vkFreeMemory(ctx->device,ctx->fusedGreenMems[slot],nullptr);

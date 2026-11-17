@@ -94,23 +94,37 @@ class MhcHighlightDeviceTest {
         val iterations=args.getString("iterations","300").toInt().coerceIn(60,3000)
         val report=StringBuilder()
         val violations=mutableListOf<String>()
-        for ((width,height,fps) in listOf(Triple(1920,1080,30),Triple(2560,1440,30),Triple(3840,2160,24))) {
+        // Optional interleaved A/B: -e abSpv /data/local/tmp/candidate.spv runs the bundled
+        // variant and the candidate alternately (-e abRounds N) in one sequence, because this
+        // shared phone drifts between separate runs.
+        val abSpv=args.getString("abSpv")?.let { File(it).readBytes() }
+        // -e abGreenSpv FILE -e abGreenPx 2: the candidate also gets this green prepass.
+        val abGreen=args.getString("abGreenSpv")?.let { File(it).readBytes() }
+        val abGreenPx=args.getString("abGreenPx","2").toInt()
+        val rounds=if(abSpv!=null) args.getString("abRounds","3").toInt().coerceIn(1,20) else 1
+        val sizes=listOf(Triple(1920,1080,30),Triple(2560,1440,30),Triple(3840,2160,24))
+            .filter { args.getString("sizes")?.split(',')?.contains("${it.first}x${it.second}") ?: true }
+        for ((width,height,fps) in sizes) for (round in 0 until rounds) for (candidate in listOfNotNull(false, if(abSpv!=null) true else null)) {
             assertEquals(0,VfVulkan.initNative(asset("vf_superpixel")))
             val f16=VfVulkan.supportsF16MathNative()
-            val variant=if(f16 && args.getString("precision","fp32")!="fp32") "vf_mhcyuv_f16" else "vf_mhcyuv"
+            val bundled=if(f16 && args.getString("precision","fp32")!="fp32") "vf_mhcyuv_f16" else "vf_mhcyuv"
+            val variant=if(candidate) "candidate" else bundled
             val sw=4080; val sh=3060
             val raw=requireNotNull(VfEglImport.createBlobBayerInput(sw,sh))
             assertEquals(sw,VfEglImport.fillBlobBayer(raw,sw,sh))
             val p010=requireNotNull(VfEglImport.createP010(width,height))
             try {
                 assertEquals(0,VfVideoGrade.initGradeNative(asset("vf_videograde")))
-                assertEquals(0,VfVideoGrade.initFusedYuvNative(asset(variant)))
+                assertEquals(0,VfVideoGrade.setFusedGreenOverrideNative(if(candidate) abGreen else null,if(candidate && abGreen!=null) abGreenPx else 2))
+                assertEquals(0,VfVideoGrade.setFusedTimingNative(true))
+                assertEquals(0,VfVideoGrade.initFusedYuvNative(if(candidate) abSpv!! else asset(variant)))
                 assertEquals(0,VfVideoGrade.gradeLutUploadNative(VfVideoGrade.bakeLut(1f)))
                 val layout=requireNotNull(VfEglImport.describeP010(p010))
                 val dims=intArrayOf(width,height)
                 val (mi,mf)=VfMhc.packMhc(3840,2160,120,450,intArrayOf(0,1,2,3),sw,FloatArray(4),1023f)
                 val (_,gf)=VfVideoGrade.packGrade(dims,floatArrayOf(1.93f,1f,1.61f,1f),VfVideoGrade.IDENTITY_CCM,0f,false,profile=EncodedVideoProfile.ACES)
                 val strides=intArrayOf(layout[0],layout[1],width,height)
+                val gpuGreen=ArrayList<Double>(); val gpuMain=ArrayList<Double>()
                 fun frame() {
                     val end=System.nanoTime()+5_000_000_000L
                     var fd=VfVideoGrade.fusedYuvSubmitNative(raw,p010,mi,mf,dims,gf,strides,0,null,null)
@@ -122,17 +136,20 @@ class MhcHighlightDeviceTest {
                         while(!VfEglImport.pollSyncFd(fd) && System.nanoTime()<end) Thread.yield()
                         assertTrue("perf fence timeout",VfEglImport.pollSyncFd(fd))
                     } finally { VfEglImport.closeSyncFd(fd) }
+                    VfVideoGrade.fusedTimingNative(0)?.let { gpuGreen.add(it[0].toDouble());gpuMain.add(it[1].toDouble()) }
                 }
                 repeat(30) { frame() }
+                gpuGreen.clear();gpuMain.clear()
                 val ms=DoubleArray(iterations) {
                     val t=System.nanoTime();frame();(System.nanoTime()-t)/1e6
                 }.sorted()
                 val budget=1000.0/fps
                 val over=ms.count { it>budget }
-                val line="${width}x$height@$fps variant=$variant frames=$iterations mean=${ms.average()} p50=${ms[iterations/2]} p95=${ms[(iterations*.95).toInt()]} p99=${ms[(iterations*.99).toInt()]} max=${ms.last()} budget=$budget over=$over"
+                val line="${width}x$height@$fps variant=$variant frames=$iterations mean=${ms.average()} p50=${ms[iterations/2]} p95=${ms[(iterations*.95).toInt()]} p99=${ms[(iterations*.99).toInt()]} max=${ms.last()} budget=$budget over=$over" +
+                    (if(gpuMain.isNotEmpty()) " gpuGreenP50=${gpuGreen.sorted()[gpuGreen.size/2]} gpuMainP50=${gpuMain.sorted()[gpuMain.size/2]} gpuTotalP95=${gpuGreen.indices.map{gpuGreen[it]+gpuMain[it]}.sorted()[(gpuMain.size*.95).toInt()]}" else "")
                 report.append(line).append('\n');Log.i("MhcHighlights",line)
                 if(over>0) violations.add(line)
-            } finally { VfVulkan.resetNative();p010.close();raw.close() }
+            } finally { VfVideoGrade.setFusedTimingNative(false);VfVideoGrade.setFusedGreenOverrideNative(null,2);VfVulkan.resetNative();p010.close();raw.close() }
         }
         File(context.getExternalFilesDir(null),"mhc-headless-performance.txt").writeText(report.toString())
         assertTrue("Headless budget misses: ${violations.joinToString()}",violations.isEmpty())

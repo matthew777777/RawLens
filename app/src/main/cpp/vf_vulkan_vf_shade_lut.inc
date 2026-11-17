@@ -324,6 +324,13 @@ void destroyFused(Context* ctx) {
     if(ctx->fusedGreenPipeline!=VK_NULL_HANDLE) vkDestroyPipeline(ctx->device,ctx->fusedGreenPipeline,nullptr);
     ctx->fusedGreenPipeline=VK_NULL_HANDLE;
     if (ctx->fusedPipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->fusedPipeline, nullptr);
+    if (ctx->fusedQueries != VK_NULL_HANDLE) vkDestroyQueryPool(ctx->device, ctx->fusedQueries, nullptr);
+    ctx->fusedQueries = VK_NULL_HANDLE;
+    for (bool& w : ctx->fusedQueryWritten) w = false;
+    for (VkPipeline& path : ctx->fusedPathPipelines) {
+        if (path != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, path, nullptr);
+        path = VK_NULL_HANDLE;
+    }
     if (ctx->fusedPipelineLayout != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(ctx->device, ctx->fusedPipelineLayout, nullptr);
     if (ctx->fusedSetLayout != VK_NULL_HANDLE)
