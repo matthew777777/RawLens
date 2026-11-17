@@ -113,19 +113,6 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean) {
             progressDialog?.dismiss()
             progressOverlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
             progressOverlay = null
-            if (lenses.isEmpty()) {
-                // No selection page follows; stay fullscreen (the dialog
-                // re-hides the bars via onWindowFocusChanged on dismiss).
-                // The deferred first-run consent fires as this alert
-                // leaves, so it never stacks over discovery either.
-                RawLensDialogBuilder(this)
-                    .setTitle("No RAW lenses found")
-                    .setMessage("The camera service did not expose a RAW-capable camera ID.")
-                    .setPositiveButton("OK", null)
-                    .setOnDismissListener { updateFlow.showPendingConsent() }
-                    .show()
-                return@runOnUiThread
-            }
             val missingSaved = selectedLensIds()
                 .filterNot { savedId -> lenses.any { it.id == savedId } }
                 .map { unavailableLens(it) }
@@ -149,6 +136,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     val opticCount = groupByOptic(lenses).count { it.key != "unavailable" }
     val routeCount = groups.sumOf { it.lenses.size }
     // Preserve saved choices; new routes remain unchecked.
+    val pickerLenses = lenses.toMutableList()
     val checked = lenses.associate { lens ->
         lens.id to (lens.id in selected)
     }.toMutableMap()
@@ -185,7 +173,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
             note.setTextColor(getColor(if (isChecked && clashing.isNotEmpty()) R.color.accent else R.color.text_muted))
             note.visibility = if (others.isEmpty()) View.GONE else View.VISIBLE
         }
-        val picked = available.filter { checked[it.id] == true }
+        val picked = pickerLenses.filter { checked[it.id] == true }
         val pickedLenses = picked.map(::opticFingerprint).distinct().size
         selectionSummary.text = when {
             picked.isEmpty() -> "Nothing checked yet."
@@ -283,7 +271,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     ))
     copyReport.setOnClickListener {
         val report = lensReport(
-            lenses,
+            pickerLenses,
             chosenSize = { rawSizePreferenceStore.get(it) },
             chosenFormat = { rawFormatPreferenceStore.get(it) }
         )
@@ -495,6 +483,61 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
             }
         }
     }
+    val manualId = EditText(this).apply {
+        hint = "Lens ID, e.g. 0, 0-3 or 0/3"
+        contentDescription = "Lens ID"
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        setSingleLine(true)
+        setTextColor(getColor(R.color.text_primary))
+        setHintTextColor(getColor(R.color.text_muted))
+    }
+    val manualEntries = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    val addManual = Button(this).apply {
+        text = "Add lens ID"
+        RawLensUi.styleButton(this)
+        setOnClickListener {
+            val id = manualId.text.toString().trim()
+            if (id.isEmpty()) {
+                manualId.error = "Enter a lens ID"
+                return@setOnClickListener
+            }
+            // Preserve the exact vendor ID: dashes and slashes have different meanings.
+            if (id !in checked) {
+                val lens = DiscoveredLens(
+                    id = id,
+                    label = "Camera $id · manually added",
+                    title = "Camera $id",
+                    details = "Manually added · RAW support checked when opened",
+                    route = "Manual camera route"
+                )
+                pickerLenses += lens
+                checked[id] = true
+                manualEntries.addView(lensCard(lens))
+            } else {
+                checked[id] = true
+                checkBoxes.firstOrNull { it.tag == id }?.isChecked = true
+            }
+            manualId.text.clear()
+            manualId.error = null
+            refreshQuickState()
+            refreshDuplicates()
+        }
+    }
+    listBody.addView(TextView(this).apply {
+        text = "Add a lens manually"
+        setTextColor(getColor(R.color.text_primary))
+        textSize = 14f
+        typeface = Typeface.DEFAULT_BOLD
+        setPadding(0, dp(16), 0, dp(4))
+    })
+    listBody.addView(TextView(this).apply {
+        text = "Enter any camera ID omitted by discovery. Tap Save to keep it; availability and RAW support depend on the camera service."
+        setTextColor(getColor(R.color.text_secondary))
+        textSize = 12f
+    })
+    listBody.addView(manualId)
+    listBody.addView(addManual)
+    listBody.addView(manualEntries)
     listBody.addView(virtualLensSection(lenses, ::zoomOf) { id -> checked[id] == true })
     container.addView(listScroll)
     container.addView(TextView(this).apply {
