@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #version 450
+#extension GL_EXT_control_flow_attributes : require
 // 1:1 port of merge.py cpu_accumulate (Alg.4 Accumulation): per-HR-pixel 3x3,
 // op-for-op identical to the proven Vulkan-port decomposition
 // (merge.comp:accumulate, dual parity there).
@@ -37,10 +38,17 @@ vec4 flowWeights(float t) {
 
 // Interpolating cubic on the complete sensor grid after directional green
 // reconstruction. No inverse-filter sharpening or narrowed Gaussian.
+// Keys cubic parameter. -0.5 (Catmull-Rom) averaged over sub-pixel frame
+// offsets low-passes luma ("too soft"). -1.5 on burst 125318_179, three
+// 512 px crops: G detail band x1.14, axial-Nyquist (zipper) energy x1.04
+// absolute, checker x1.0; overshoot stays inside the 4x4 min/max clamp.
+// Same 16 taps, so no cost change.
+const float GREEN_A = -1.5;
 float greenCubic(float x) {
+  const float a = GREEN_A;
   x = abs(x);
-  if (x < 1.0) return ((1.5*x-2.5)*x)*x+1.0;
-  if (x < 2.0) return ((-0.5*x+2.5)*x-4.0)*x+2.0;
+  if (x < 1.0) return ((a+2.0)*x-(a+3.0))*x*x+1.0;
+  if (x < 2.0) return ((a*x-5.0*a)*x+8.0*a)*x-4.0*a;
   return 0.0;
 }
 
@@ -52,22 +60,23 @@ float sensorGreen(int j,int i) {
   j=clamp(j,jp,int(p.width)-2+jp);i=clamp(i,ip,int(p.height)-2+ip);
   return compImg[uint(i)*p.width+uint(j)];
 }
-float denseGreen(int j,int i) {
-  if(((j+i)&1)==1) return sensorGreen(j,i);
-  float l=sensorGreen(j-1,i),r=sensorGreen(j+1,i);
-  float u=sensorGreen(j,i-1),d=sensorGreen(j,i+1);
+float dirGreen(float l,float r,float u,float d) {
   float dh=abs(l-r),dv=abs(u-d);
-  // Prefer the direction that varies least, with continuous positive weights
-  // instead of a hard horizontal/vertical switch. The small floor bounds the
-  // inverse weights in normalized RAW units; it is not a spatial grain mask.
   float wh=1.0/(1e-8+dh*dh),wv=1.0/(1e-8+dv*dv);
   return (wh*(l+r)+wv*(u+d))/(2.0*(wh+wv));
 }
 float interpolateGreen(vec2 position) {
   vec2 q=position-0.5;ivec2 base=ivec2(floor(q));vec2 t=fract(q);
   float value=0.0,lo=3.402823e38,hi=-3.402823e38;
-  for(int y=-1;y<=2;++y) for(int x=-1;x<=2;++x) {
-    float c=denseGreen(base.x+x,base.y+y);
+  // One tap at a time, missing greens from 4 neighbours, sensor greens
+  // direct: 48 loads instead of 80 and a small live set (a cached 6x6
+  // window or a vectorised row pushed this shader to 64 work registers,
+  // half occupancy on Mali-G615).
+  [[dont_unroll]] for(int k=0;k<16;++k) {
+    int x=(k&3)-1, y=(k>>2)-1;
+    int j=base.x+x, i=base.y+y;
+    float c=((j+i)&1)==1 ? sensorGreen(j,i)
+        : dirGreen(sensorGreen(j-1,i),sensorGreen(j+1,i),sensorGreen(j,i-1),sensorGreen(j,i+1));
     value+=greenCubic(float(x)-t.x)*greenCubic(float(y)-t.y)*c;
     lo=min(lo,c);hi=max(hi,c);
   }
@@ -187,8 +196,14 @@ void main() {
   // reconstruction as comparisons; this retains its original fine texture.
   bool detailGreen = bayer && refKernels && p.pad[5] != 0u &&
                      (p.pad[4] == 0u || p.beta != 1.0);
+  // With detailGreen the green taps are skipped: visit only the R/B sites
+  // of each row (j parity == row parity in RGGB), same taps in the same
+  // order, so bit-identical at half the 7x7 loop trips.
+  int djStep = detailGreen ? 2 : 1;
   for (int di = -radius; di <= radius; di++) {
-    for (int dj = -radius; dj <= radius; dj++) {
+    int dj0 = -radius;
+    if (detailGreen && (((center_j + dj0) ^ (center_i + di)) & 1) != 0) dj0++;
+    for (int dj = dj0; dj <= radius; dj += djStep) {
       int j = center_j + dj;
       int i2 = center_i + di;
       if (!(j >= 0 && j < int(lrW) && i2 >= 0 && i2 < int(lrH))) continue;

@@ -146,6 +146,9 @@ class SrpPipelineFullresDeviceTest {
                 // Collect after every frame: GC timing must not decide
                 // survival at the 512 MB ceiling (values-identical).
                 memoryTight = true,
+                // -e rawlensSrpColourDiff true: the app's default zipper-fix
+                // colour-difference merge (WB 1,1: same cost as the app).
+                colourDiff = if (args.getString("rawlensSrpColourDiff") == "true") floatArrayOf(1f, 1f) else null,
                 // -e rawlensSrpKernel kernelnet|wronski (default wronski);
                 // the merge input IS the full frame here.
                 kernelNet = if (args.getString("rawlensSrpKernel") != "kernelnet") null else {

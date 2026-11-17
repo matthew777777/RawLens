@@ -61,8 +61,17 @@ internal class MotionField(private val width: Int, private val height: Int, hess
         val threshold = max(kotlin.math.abs(motionThreshold), 1e-3f)
         val invThreshold2 = 1f / (threshold * threshold)
         for (iteration in 0 until 160) {
+            // Jacobi: each tile reads only `current`, so rows are independent
+            // and run in parallel (bit-identical; max is order-free).
+            val cur = current; val nxt = next
+            val rowChange = FloatArray(height)
+            // Parallel only for large grids: at tile 32 (~12k tiles) the per-
+            // iteration fork cost doubled the phone time (435 -> 905 ms).
+            val rows = java.util.stream.IntStream.range(0, height)
+            (if (count >= 32768) rows.parallel() else rows).forEach { y ->
+            val current = cur; val next = nxt
             var maxChange = 0f
-            for (y in 0 until height) for (x in 0 until width) {
+            for (x in 0 until width) {
                 val t = y*width+x; val i = t*2
                 var sumX = 0f; var sumY = 0f; var sumW = 0f
                 for (direction in 0..3) {
@@ -79,6 +88,9 @@ internal class MotionField(private val width: Int, private val height: Int, hess
                 maxChange = max(maxChange, kotlin.math.abs(next[i]-current[i]))
                 maxChange = max(maxChange, kotlin.math.abs(next[i+1]-current[i+1]))
             }
+            rowChange[y] = maxChange
+            }
+            val maxChange = rowChange.max()
             val old = current; current = next; next = old
             if (maxChange < 1e-4f) break
         }

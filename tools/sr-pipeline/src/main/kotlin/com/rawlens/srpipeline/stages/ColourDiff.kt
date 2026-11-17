@@ -66,10 +66,42 @@ object ColourDiff {
     fun packInto(f: Array<FloatArray>, buf: ByteBuffer, wbR: Float, wbB: Float): ByteBuffer {
         buf.rewind()
         val fb = buf.asFloatBuffer()
-        val row = FloatArray(f[0].size)
-        for (y in f.indices) {
-            for (x in row.indices) row[x] = valueAt(f, y, x, wbR, wbB)
-            fb.put(row)
+        val w = f[0].size
+        // Row-parallel (~170 ms/frame single-threaded at 12.5 MP): every row
+        // is independent and written to its own slice, so bit-identical.
+        java.util.stream.IntStream.range(0, f.size).parallel().forEach { y ->
+            val row = FloatArray(w)
+            if (y < 2 || y >= f.size - 2 || w < 5) {
+                for (x in row.indices) row[x] = valueAt(f, y, x, wbR, wbB)
+            } else {
+                // Interior fast path: [valueAt]/[gHat] inlined without the
+                // clamping closure (ART allocates it per call), same float
+                // operations in the same order, so bit-identical.
+                val um = f[y - 2]; val u = f[y - 1]; val c0 = f[y]; val d = f[y + 1]; val dm = f[y + 2]
+                val wb = if (y and 1 == 0) wbR else wbB
+                for (x in 0 until 2) row[x] = valueAt(f, y, x, wbR, wbB)
+                for (x in w - 2 until w) row[x] = valueAt(f, y, x, wbR, wbB)
+                for (x in 2 until w - 2) {
+                    val c = c0[x]
+                    if ((y + x) and 1 == 1) { row[x] = c; continue }
+                    val l = c0[x - 1]; val r = c0[x + 1]; val up = u[x]; val dn = d[x]
+                    val lapH = 2 * c - c0[x - 2] - c0[x + 2]
+                    val lapV = 2 * c - um[x] - dm[x]
+                    val gh = (l + r) / 2 + lapH / 4
+                    val gv = (up + dn) / 2 + lapV / 4
+                    val dh = kotlin.math.abs(l - r) + kotlin.math.abs(lapH)
+                    val dv = kotlin.math.abs(up - dn) + kotlin.math.abs(lapV)
+                    val g = when {
+                        dh < dv -> gh
+                        dv < dh -> gv
+                        else -> (gh + gv) / 2
+                    }
+                    row[x] = wb * c - g
+                }
+            }
+            val slice = fb.duplicate()
+            slice.position(y * w)
+            slice.put(row)
         }
         buf.rewind()
         return buf
@@ -77,10 +109,14 @@ object ColourDiff {
 
     /** After the divide: interleaved RGB (R, G, B per pixel) back from (D_R, G, D_B). */
     fun reconstruct(rgb: FloatBuffer, pixels: Int, wbR: Float, wbB: Float) {
-        for (i in 0 until pixels) {
-            val g = rgb.get(3 * i + 1)
-            rgb.put(3 * i, (g + rgb.get(3 * i)) / wbR)
-            rgb.put(3 * i + 2, (g + rgb.get(3 * i + 2)) / wbB)
+        // Absolute get/put on disjoint chunks: parallel and bit-identical.
+        val chunk = 1 shl 16
+        java.util.stream.IntStream.range(0, (pixels + chunk - 1) / chunk).parallel().forEach { k ->
+            for (i in k * chunk until minOf(pixels, (k + 1) * chunk)) {
+                val g = rgb.get(3 * i + 1)
+                rgb.put(3 * i, (g + rgb.get(3 * i)) / wbR)
+                rgb.put(3 * i + 2, (g + rgb.get(3 * i + 2)) / wbB)
+            }
         }
     }
 
