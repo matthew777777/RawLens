@@ -7,6 +7,14 @@
 // mode 2 only accumulates coverage (no residual): with the validity bound as wt, U^T 1.
 #define LITE_WARP 2
 #include "lite_common.glsl"
+// ADJ_SCALE (compile-time 1 or 2): one variant per scale. The 2x path's 4 sub-sample taps set the
+// register budget, so the generic shader ran 1x merges at 64 registers on Mali (half occupancy);
+// the 1x-only build needs 32 (malioc G615 2026-11-17). Unset: the generic pc.s build.
+#ifdef ADJ_SCALE
+#define ADJ_S ADJ_SCALE
+#else
+#define ADJ_S pc.s
+#endif
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(std430, binding = 0) readonly buffer Z { float z[]; };
 layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
@@ -70,7 +78,7 @@ void main() {
   if (pc.rpow < 0.0 && yv(int(o)) >= pc.clip) wk = 1e-3;
   if (wk == 0.0 || (pc.mode != 2 && pc.rpow >= 0.0 && yv(int(o)) >= pc.clip)) return;
   int base = bayerChannel(i, j) * pc.H * pc.W;
-  float invn = 1.0 / float(pc.s * pc.s);
+  float invn = 1.0 / float(ADJ_S * ADJ_S);
   // s is 1 or 2: keep the taps of up to 4 sub-samples in registers (no arrays: Mali stack).
   ivec2 x0a, x0b, x0c, x0d; vec2 fa, fb, fc, fd;
   // Every tap is checked here too: the weights may predate the last motion step (weights_once).
@@ -78,7 +86,7 @@ void main() {
   int ta = base + x0a.y * pc.W + x0a.x;
   float sum = mix(mix(z[ta], z[ta + 1], fa.x), mix(z[ta + pc.W], z[ta + pc.W + 1], fa.x), fa.y);
   int tb = 0, tc = 0, td = 0;
-  if (pc.s == 2) {
+  if (ADJ_S == 2) {
     if (!taps(warpQ(k, subPos(i, j, 1, 0)), x0b, fb) || !taps(warpQ(k, subPos(i, j, 0, 1)), x0c, fc) ||
         !taps(warpQ(k, subPos(i, j, 1, 1)), x0d, fd)) return;
     tb = base + x0b.y * pc.W + x0b.x; tc = base + x0c.y * pc.W + x0c.x; td = base + x0d.y * pc.W + x0d.x;
@@ -89,7 +97,7 @@ void main() {
   float rs = (sum * invn - yv(int(o))) * wk * invn * pc.scale;
   bool c = pc.mode >= 1;
   float cv = wk * invn * pc.dscale;
-  if (pc.s == 2) {
+  if (ADJ_S == 2) {
     ivec2 lo = min(min(x0a, x0b), min(x0c, x0d)), hi = max(max(x0a, x0b), max(x0c, x0d));
     if (hi.x - lo.x <= 1 && hi.y - lo.y <= 1) {
       scatter3x3(base + lo.y * pc.W + lo.x, x0a - lo, fa, x0b - lo, fb, x0c - lo, fc, x0d - lo, fd, rs, c, cv);

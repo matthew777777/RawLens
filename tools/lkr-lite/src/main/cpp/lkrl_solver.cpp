@@ -33,6 +33,12 @@ static const uint32_t wminv[] = {
 static const uint32_t adj[] = {
 #include "adj.inc"
 };
+static const uint32_t adj_s1[] = {   // adj.comp built per scale (ADJ_SCALE): fewer registers at 1x
+#include "adj_s1.inc"
+};
+static const uint32_t adj_s2[] = {
+#include "adj_s2.inc"
+};
 static const uint32_t zupd[] = {
 #include "zupd.inc"
 };
@@ -68,6 +74,15 @@ static const uint32_t kdv[] = {
 };
 static const uint32_t kdyuv[] = {
 #include "lkr_dct_yuv.inc"
+};
+static const uint32_t kdyo[] = {   // previous one-block-per-invocation DCT (A/B)
+#include "lkr_dct_xo_y.inc"
+};
+static const uint32_t kduo[] = {
+#include "lkr_dct_xo_u.inc"
+};
+static const uint32_t kdvo[] = {
+#include "lkr_dct_xo_v.inc"
 };
 static const uint32_t fin[] = {
 #include "fin.inc"
@@ -208,13 +223,16 @@ bool solve6(double A[6][6], double b[6], double x[6]) {   // Gaussian eliminatio
 LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   if (!gpu_ || !gpu_->ok()) return;
   LKRL_PIPE(resid, 6); LKRL_PIPE(werr, 3); LKRL_PIPE(wavg, 2); LKRL_PIPE(wminh, 3); LKRL_PIPE(wminv, 3);
-  LKRL_PIPE(adj, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 4); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 3);
+  LKRL_PIPE(adj, 7); LKRL_PIPE(adj_s1, 7); LKRL_PIPE(adj_s2, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 4); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 3);
 #define LKRL_KPIPE(name, nb) name##_ = gpu_->pipeline(spv::name, sizeof(spv::name), nb, sizeof(KPush))
   LKRL_KPIPE(kresid, 5); LKRL_KPIPE(ktdet, 3); LKRL_KPIPE(kth, 5); LKRL_KPIPE(kt, 6); LKRL_KPIPE(ktv, 8);
   LKRL_KPIPE(ktd, 8); LKRL_KPIPE(kguide, 6); LKRL_KPIPE(kminh, 3); LKRL_KPIPE(kmin, 5);
   kdy_ = gpu_->pipeline(spv::kdy, sizeof(spv::kdy), 5, sizeof(DctPush));
   kdu_ = gpu_->pipeline(spv::kdu, sizeof(spv::kdu), 5, sizeof(DctPush));
   kdv_ = gpu_->pipeline(spv::kdv, sizeof(spv::kdv), 5, sizeof(DctPush));
+  kdyo_ = gpu_->pipeline(spv::kdyo, sizeof(spv::kdyo), 5, sizeof(DctPush));
+  kduo_ = gpu_->pipeline(spv::kduo, sizeof(spv::kduo), 5, sizeof(DctPush));
+  kdvo_ = gpu_->pipeline(spv::kdvo, sizeof(spv::kdvo), 5, sizeof(DctPush));
   kdyuv_ = gpu_->pipeline(spv::kdyuv, sizeof(spv::kdyuv), 1, sizeof(DctPush));
   knconv_ = gpu_->pipeline(spv::kn_conv, sizeof(spv::kn_conv), 3, 48);
   kndn_ = gpu_->pipeline(spv::kn_dn, sizeof(spv::kn_dn), 4, 48);
@@ -222,7 +240,7 @@ LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   adjwg_ = gpu_->pipeline(spv::adj_wg, sizeof(spv::adj_wg), 7, sizeof(Push));
   fin_ = gpu_->pipeline(spv::fin, sizeof(spv::fin), 7, 64);
   ok_ = true;
-  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_})
+  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_})
     ok_ = ok_ && q->pipe != VK_NULL_HANDLE;
 }
 
@@ -231,11 +249,11 @@ std::string LiteSolver::profileNames() const {
   char b[64];
   const std::pair<const Pipeline*, const char*> names[] = {
       {&resid_, "resid"}, {&werr_, "werr"}, {&wavg_, "wavg"}, {&wminh_, "wminh"}, {&wminv_, "wminv"},
-      {&adj_, "adj"}, {&zupd_, "zupd"}, {&jac_, "jac"}, {&jacblk_, "jacblk"}, {&solveblk_, "solveblk"},
+      {&adj_, "adj"}, {&adj_s1_, "adj_s1"}, {&adj_s2_, "adj_s2"}, {&zupd_, "zupd"}, {&jac_, "jac"}, {&jacblk_, "jacblk"}, {&solveblk_, "solveblk"},
       {&gstats_, "gstats"}, {&wguide_, "wguide"}, {&wvalid_, "wvalid"}, {&kresid_, "lkr_resid"},
       {&ktdet_, "lkr_weight_tdet"}, {&kth_, "lkr_weight_th"}, {&kt_, "lkr_weight_t"}, {&ktv_, "lkr_weight_tv"},
       {&ktd_, "lkr_weight_td"}, {&kguide_, "lkr_weight_guide"}, {&kminh_, "lkr_weight_minh"}, {&kmin_, "lkr_weight_min"},
-      {&kdy_, "dct_y"}, {&kdu_, "dct_u"}, {&kdv_, "dct_v"}, {&kdyuv_, "dct_yuv"}, {&knconv_, "kn_conv"},
+      {&kdy_, "dct_y"}, {&kdu_, "dct_u"}, {&kdv_, "dct_v"}, {&kdyo_, "dct_y_old"}, {&kduo_, "dct_u_old"}, {&kdvo_, "dct_v_old"}, {&kdyuv_, "dct_yuv"}, {&knconv_, "kn_conv"},
       {&kndn_, "kn_dn"}, {&hyb_, "hyb"}, {&adjwg_, "adj_wg"}, {&fin_, "fin"}, {&edgeshift_, "edgeshift"}, {&cdupd_, "cdupd"}};
   for (const auto& n : names) {
     std::snprintf(b, sizeof(b), "%s%s=%p", out.empty() ? "" : " ", n.second, static_cast<const void*>(n.first));
@@ -248,7 +266,7 @@ LiteSolver::~LiteSolver() {
   if (!gpu_ || !gpu_->ok()) return;
   for (Entry& e : cache_) gpu_->free(e.buf);
   for (Entry& e : fcache_) gpu_->free(e.buf);
-  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_}) gpu_->destroy(*q);
+  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_}) gpu_->destroy(*q);
 }
 
 bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<float>& p, std::vector<float>& dloc,
@@ -408,13 +426,16 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   VkDescriptorSet sAvgRes = gpu_->set(wavg_, {&e, &wrawb});   // residual weights for the guide AND test
   VkDescriptorSet sMinH = gpu_->set(wminh_, {&r, &e, &vm});
   VkDescriptorSet sMinV = gpu_->set(wminv_, {&e, &wt, &vm});
-  VkDescriptorSet sAdj = gpu_->set(adj_, {&z, &y, &pb, &db, &wt, &acc, &cov});
+  // adj.comp built for this scale (half the Mali registers at 1x); LKRL_ADJ_GENERIC = the pc.s build (A/B).
+  static const bool adj_generic = std::getenv("LKRL_ADJ_GENERIC") && std::atoi(std::getenv("LKRL_ADJ_GENERIC")) != 0;
+  const Pipeline& adjP = adj_generic ? adj_ : (s == 2 ? adj_s2_ : adj_s1_);
+  VkDescriptorSet sAdj = gpu_->set(adjP, {&z, &y, &pb, &db, &wt, &acc, &cov});
   // LKRL_ADJ_WG=1: workgroup-per-tile adjoint (bit-identical acc; phone A/B 2026-11-14: no gain, atomics
   // are not adj's cost -- off).
   static const bool adj_old = !(std::getenv("LKRL_ADJ_WG") && std::atoi(std::getenv("LKRL_ADJ_WG")) != 0);
   VkDescriptorSet sAdjW = adj_old ? VK_NULL_HANDLE : gpu_->set(adjwg_, {&z, &y, &pb, &db, &wt, &acc, &cov});
   const uint32_t gxw = div_up(uint32_t(w), 16), gyw = div_up(uint32_t(h), 16);
-  VkDescriptorSet sAdjF = gpu_->set(adj_, {&z, &y2, &pb, &db, &vm, &acc, &cov});   // freq-robust average
+  VkDescriptorSet sAdjF = gpu_->set(adjP, {&z, &y2, &pb, &db, &vm, &acc, &cov});   // freq-robust average
   VkDescriptorSet sGStats = gpu_->set(gstats_, {&y, &gm, &gv});
   VkDescriptorSet sGuide = gpu_->set(wguide_, {&gm, &gv, &pb, &db, &r});
   const uint32_t gqx = div_up(uint32_t(w / 2), 16), gqy = div_up(uint32_t(h / 2), 16);
@@ -440,7 +461,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   kq.rob_a = prm.noise_a; kq.rob_b = prm.noise_b; kq.rob_k = prm.robust_k;
   kq.rob_on = (prm.robust && prm.noise_b > 0) ? std::max(1.0f, prm.robust_pow) : 0.0f;
   const bool ktemporal = prm.temporal_k > 0.0f && prm.robust_spread > 0;
-  VkDescriptorSet sAdjPlain = noise_scale ? gpu_->set(adj_, {&z, &y, &pb, &db, &vm, &acc, &cov1}) : VK_NULL_HANDLE;
+  VkDescriptorSet sAdjPlain = noise_scale ? gpu_->set(adjP, {&z, &y, &pb, &db, &vm, &acc, &cov1}) : VK_NULL_HANDLE;
   // Final residual vs z (motion look): written to e, validity to r (both dead by then).
   VkDescriptorSet sResidZ = resid_out ? gpu_->set(resid_, {&z, &y, &pb, &db, &e, &r}) : VK_NULL_HANDLE;
   VkDescriptorSet sUpd = gpu_->set(zupd_, {&z, &acc, &cov, &dvb});
@@ -647,13 +668,13 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
               }
           }
         PackHalf(Y2, nLR, y2.as<uint32_t>());
-        gpu_->dispatch(adj_, sAdjF, &m, gx, gy);
+        gpu_->dispatch(adjP, sAdjF, &m, gx, gy);
       } else if (!adj_old) {
         gpu_->dispatch(adjwg_, sAdjW, &m, gxw, gyw);
       } else {
         Push mk = m;
         if (!avg && fitK < K) mk.K = fitK;   // experiment: the fit on the first fitK frames only
-        gpu_->dispatch(adj_, sAdj, &mk, uint32_t(mk.K) * div_up(uint32_t(w), 16), gy);
+        gpu_->dispatch(adjP, sAdj, &mk, uint32_t(mk.K) * div_up(uint32_t(w), 16), gy);
       }
       if (!avg) ++trace_j;
       if (!trace_prefix.empty() && !avg && trace_j==1) {
@@ -851,11 +872,11 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     if (need_cov) {   // weights changed after the last merge step: weighted coverage too
       gpu_->fill(cov, 0);
       Push m = q; m.mode = 2;
-      gpu_->dispatch(adj_, sAdj, &m, gx, gy);
+      gpu_->dispatch(adjP, sAdj, &m, gx, gy);
     }
     gpu_->fill(cov1, 0);
     Push m = q; m.mode = 2;
-    gpu_->dispatch(adj_, sAdjPlain, &m, gx, gy);
+    gpu_->dispatch(adjP, sAdjPlain, &m, gx, gy);
   }
   if (resid_out || weights_out) {
     if (weights_stale) weights();
@@ -1255,15 +1276,22 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
               prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma, prm.dct_luma_cap, prm.dct_chroma_all ? 1.0f : 0.0f, prm.dct_luma_floor,
               prm.dct_fallback ? prm.dct_grain * prm.dct_grain : 0.0f};
     gpu_->resetSets();
-    VkDescriptorSet sy = gpu_->set(kdy_, {&z, &xb, &dns, &diw, &dnv}), su = gpu_->set(kdu_, {&z, &xb, &dns, &diw, &dnv}),
-                    sv = gpu_->set(kdv_, {&z, &xb, &dns, &diw, &dnv}), sc = gpu_->set(kdyuv_, {&xb});
+    // LKRL_DCT_OLD (debug.lkr.dctold): the previous one-block-per-invocation shaders, for A/B.
+    static const bool dct_old = std::getenv("LKRL_DCT_OLD") && std::atoi(std::getenv("LKRL_DCT_OLD")) != 0;
+    const Pipeline &py_ = dct_old ? kdyo_ : kdy_, &pu_ = dct_old ? kduo_ : kdu_, &pv_ = dct_old ? kdvo_ : kdv_;
+    VkDescriptorSet sy = gpu_->set(py_, {&z, &xb, &dns, &diw, &dnv}), su = gpu_->set(pu_, {&z, &xb, &dns, &diw, &dnv}),
+                    sv = gpu_->set(pv_, {&z, &xb, &dns, &diw, &dnv}), sc = gpu_->set(kdyuv_, {&xb});
     gpu_->begin();
     gpu_->fill(xb, 0);
-    const std::pair<const Pipeline*, VkDescriptorSet> ch[3] = {{&kdy_, sy}, {&kdu_, su}, {&kdv_, sv}};
+    const std::pair<const Pipeline*, VkDescriptorSet> ch[3] = {{&py_, sy}, {&pu_, su}, {&pv_, sv}};
     for (const auto& c : ch)
       for (d.py = 0; d.py < 2; ++d.py)
-        for (d.px = 0; d.px < 2; ++d.px)
-          gpu_->dispatch(*c.first, c.second, &d, uint32_t((nx + 1) / 2 + 3) / 4, uint32_t((ny + 1) / 2 + 3) / 4);
+        for (d.px = 0; d.px < 2; ++d.px) {
+          if (dct_old)
+            gpu_->dispatch(*c.first, c.second, &d, uint32_t((nx + 1) / 2 + 3) / 4, uint32_t((ny + 1) / 2 + 3) / 4);
+          else   // dct_x.glsl: 8 blocks (8 row invocations each) per workgroup, blocks of this phase in x.
+            gpu_->dispatch(*c.first, c.second, &d, uint32_t(((nx + 1) / 2) * ((ny + 1) / 2) + 7) / 8, 1);
+        }
     gpu_->dispatch(kdyuv_, sc, &d, uint32_t(W / 4 + 15) / 16, uint32_t(H + 15) / 16);
     if (!submit()) return fail("dct submit");
     x_out->assign(xb.as<float>(), xb.as<float>() + nHR);

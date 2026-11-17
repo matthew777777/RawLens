@@ -124,6 +124,10 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.tilelk", v) > 0 && v[0] == '0') prm.tile_lk = false;
     // A/B of the colour-difference fit: debug.lkr.cdfit = D radius, -1 = the old independent fit (read once per process).
     if (__system_property_get("debug.lkr.cdfit", v) > 0 && v[0]) setenv("LKRL_CDFIT", v, 0);
+    // A/B of the cooperative DCT prior: debug.lkr.dctold = 1 runs the previous one-block-per-invocation shaders.
+    if (__system_property_get("debug.lkr.dctold", v) > 0 && v[0]) setenv("LKRL_DCT_OLD", v, 0);
+    // A/B of the per-scale adjoint: debug.lkr.adjgen = 1 runs the generic (pc.s) adj build.
+    if (__system_property_get("debug.lkr.adjgen", v) > 0 && v[0]) setenv("LKRL_ADJ_GENERIC", v, 0);
   }
 #endif
   const NoiseModelRef noise_model = g_noise_model;

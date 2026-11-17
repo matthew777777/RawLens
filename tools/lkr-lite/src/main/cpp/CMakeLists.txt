@@ -32,13 +32,24 @@ foreach(sh ${LKRL_SHADERS})
       VERBATIM)
   list(APPEND LKRL_INCS "${LKRL_GEN}/${sh}.inc")
 endforeach()
+# adj.comp per output scale (ADJ_SCALE): the 1x build needs half the registers of the generic one.
+foreach(sc 1 2)
+  add_custom_command(
+      OUTPUT "${LKRL_GEN}/adj_s${sc}.inc"
+      COMMAND "${LKRL_GLSLC}" --target-env=vulkan1.1 -fshader-stage=compute -O -mfmt=num -DADJ_SCALE=${sc}
+              -I "${LKRL_DIR}/shaders" -o "${LKRL_GEN}/adj_s${sc}.inc" "${LKRL_DIR}/shaders/adj.comp"
+      DEPENDS "${LKRL_DIR}/shaders/adj.comp" "${LKRL_DIR}/shaders/lite_common.glsl"
+      VERBATIM)
+  list(APPEND LKRL_INCS "${LKRL_GEN}/adj_s${sc}.inc")
+endforeach()
 # LK-R's weight shaders, verbatim copies in shaders/lkr (own include dir: lkr_common.glsl).
-foreach(sh resid weight_tdet weight_th weight_t weight_tv weight_td weight_guide weight_minh weight_min dct_x_y dct_x_u dct_x_v dct_yuv)
+foreach(sh resid weight_tdet weight_th weight_t weight_tv weight_td weight_guide weight_minh weight_min dct_x_y dct_x_u dct_x_v dct_yuv dct_xo_y dct_xo_u dct_xo_v)
   add_custom_command(
       OUTPUT "${LKRL_GEN}/lkr_${sh}.inc"
       COMMAND "${LKRL_GLSLC}" --target-env=vulkan1.1 -fshader-stage=compute -O -mfmt=num
               -I "${LKRL_DIR}/shaders/lkr" -o "${LKRL_GEN}/lkr_${sh}.inc" "${LKRL_DIR}/shaders/lkr/${sh}.comp"
-      DEPENDS "${LKRL_DIR}/shaders/lkr/${sh}.comp" "${LKRL_DIR}/shaders/lkr/lkr_common.glsl" "${LKRL_DIR}/shaders/lkr/dct_x.glsl" VERBATIM)
+      DEPENDS "${LKRL_DIR}/shaders/lkr/${sh}.comp" "${LKRL_DIR}/shaders/lkr/lkr_common.glsl" "${LKRL_DIR}/shaders/lkr/dct_x.glsl"
+              "${LKRL_DIR}/shaders/lkr/dct_x_old.glsl" VERBATIM)
   list(APPEND LKRL_INCS "${LKRL_GEN}/lkr_${sh}.inc")
 endforeach()
 add_custom_command(
