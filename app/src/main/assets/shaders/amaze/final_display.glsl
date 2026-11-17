@@ -112,14 +112,15 @@ void main() {
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
     highp vec3 outputLinear;
     highp vec3 basicEncoded = vec3(0.0);
-    if (u_basic != 0) {
+    if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(ACESCG_TO_REC2020_D65 * sceneAcescg);
+    else if (u_basic == 1) {
         basicEncoded = basic_encoded(outputMatrix * (ACESCG_TO_REC2020_D65 * sceneAcescg));
         outputLinear = vec3(0.0);
         if (u_write_gainmap != 0) outputLinear = basic_decode(basicEncoded);
     }
     else outputLinear = compress_output_gamut(outputMatrix * agx_base(sceneAcescg));
     highp vec3 baseLinear = clamp(outputLinear, 0.0, 1.0);
-    highp vec3 encoded = (u_basic != 0) ? basicEncoded : srgb_oetf(baseLinear);
+    highp vec3 encoded = (u_basic == 1) ? basicEncoded : srgb_oetf(baseLinear);
     highp vec3 dither = vec3(
         hash01(outputPixel, 0u), hash01(outputPixel, 1u), hash01(outputPixel, 2u)
     ) - 0.5;

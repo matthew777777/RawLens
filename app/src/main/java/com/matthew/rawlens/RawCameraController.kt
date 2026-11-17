@@ -7108,7 +7108,8 @@ class RawCameraController(
         // to the exact published Range object.
         val target = if(lapisSessionSpec!=null && selectedCameraId=="0") lapisSessionSpec!!.fps
             else selectedCameraId?.let { runCatching { vendorKeys(it).rawPreviewFps }.getOrDefault(0) } ?: 0
-        val selected = if (target != 0) VendorKeyProfile(rawPreviewFps = target)
+        val rootVideo=lapisSessionSpec?.takeIf { it.video && selectedCameraId=="0" }
+        val selected = if(rootVideo!=null) Range(target,target) else if (target != 0) VendorKeyProfile(rawPreviewFps = target)
             .rawPreviewRange(ranges.map { it.lower..it.upper })?.let { Range(it.first, it.last) }
         else ZslPolicy.selectRawZslFpsRange(
             ranges.map { it.lower..it.upper }, RAW_ZSL_TARGET_FPS

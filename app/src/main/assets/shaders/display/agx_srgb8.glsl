@@ -167,6 +167,8 @@ highp vec3 srgb_oetf(highp vec3 linear) {
     return mix(hi, lo, low);
 }
 
+// SIGMOID_FUNCTIONS
+
 // Basic RAW display curve with an optional ratio-preserving highlight shoulder.
 highp vec3 basic_encoded(highp vec3 scene) {
     highp float peak = max(scene.r, max(scene.g, scene.b));
@@ -236,7 +238,8 @@ void main() {
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
     highp vec3 outputLinear;
     highp vec3 basicEncoded = vec3(0.0);
-    if (EFFECTIVE_BASIC != 0) {
+    if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(ACESCG_TO_REC2020_D65 * sceneAcescg);
+    else if (EFFECTIVE_BASIC == 1) {
         highp vec3 sceneOutput = outputMatrix * (ACESCG_TO_REC2020_D65 * sceneAcescg);
         basicEncoded = basic_encoded(sceneOutput);
         outputLinear = vec3(0.0);
@@ -252,7 +255,7 @@ void main() {
     highp vec3 baseLinear = (EFFECTIVE_HDR_PQ != 0) ? max(outputLinear, vec3(0.0))
                                            : clamp(outputLinear, 0.0, 1.0);
     highp vec3 encoded = (EFFECTIVE_HDR_PQ != 0) ? pq_oetf(baseLinear * vec3(100.0))
-                                         : ((EFFECTIVE_BASIC != 0) ? basicEncoded : srgb_oetf(baseLinear));
+                                         : ((EFFECTIVE_BASIC == 1) ? basicEncoded : srgb_oetf(baseLinear));
     if (EFFECTIVE_GAINMAP_ONLY == 0 && EFFECTIVE_GRAIN_AMOUNT > 0.0) {
         // Neutral, zero-mean display grain replaces sensor residual retention. Combining an
         // independent sample with a 2x2 value field gives film-like clumps without color noise.

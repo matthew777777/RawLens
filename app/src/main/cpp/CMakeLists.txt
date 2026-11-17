@@ -120,8 +120,6 @@ add_dependencies(jpeg_turbo_static libjpeg_turbo_external)
 # container mux (byte logic via RAWR from google/libultrahdr); color/ and
 # encoding/ headers are header-only (UltraHdrParams, UltraHdrMapFit).
 add_library(dngCreator SHARED
-    "${CMAKE_CURRENT_SOURCE_DIR}/rapidraw_cleanup.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rapidraw_cleanup_jni.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/native_jpeg_encoder.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/ultra_hdr_writer.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/gainmap/UltrahdrMux.cpp")
@@ -132,8 +130,6 @@ target_include_directories(dngCreator PRIVATE
     "${LIBJPEG_TURBO_INCLUDE_DIR}"
     "${LIBJPEG_TURBO_BINARY_DIR}")
 target_compile_features(dngCreator PRIVATE cxx_std_17)
-set_source_files_properties(rapidraw_cleanup.cpp rapidraw_cleanup_jni.cpp
-    PROPERTIES COMPILE_OPTIONS "-O3;-fno-fast-math;-ffp-contract=off")
 target_link_libraries(dngCreator log dl m jnigraphics jpeg_turbo_static)
 target_link_options(dngCreator PRIVATE "-Wl,-z,max-page-size=16384")
 

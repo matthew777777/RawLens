@@ -23,9 +23,9 @@ data class DevelopedJpeg(val bitmap: Bitmap, val settings: JpegOutputSettings, v
 
 /** Converts an unclamped scene-linear ACEScg texture into a color-tagged JPEG Bitmap. */
 class Gles31JpegOutputProcessor(context: Context) {
-    private val cleanup = RapidRawCleanup(context.applicationContext)
+    private val cleanup = RapidRawDevelop(context.applicationContext)
     private val shaderSource = context.applicationContext.assets.open(SHADER).bufferedReader().use {
-        it.readText()
+        it.readText().replace("// SIGMOID_FUNCTIONS", SigmoidDisplayTransform.glsl)
     }
     // This processor is invoked inside Gles31AmazeProcessor.process(), on its persistent writer
     // EGL context. Compile once per context instead of once per saved JPEG.
@@ -71,12 +71,12 @@ class Gles31JpegOutputProcessor(context: Context) {
     }
 
     fun process(scene: AmazeGpuOutput, settings: JpegOutputSettings = JpegOutputSettings()): DevelopedJpeg =
-        if (settings.chromaCleanup.rapidRawPreprocessing) {
-            cleanup.withPrepared(scene) { prepared -> processCleaned(scene, settings, prepared) }
+        if (settings.chromaCleanup.rapidRawActive) {
+            cleanup.withPrepared(scene, settings.chromaCleanup.rapidRawAmounts) { prepared -> processCleaned(scene, settings, prepared) }
         } else processCleaned(scene, settings)
 
     private fun processCleaned(scene: AmazeGpuOutput, settings: JpegOutputSettings,
-                               prepared: RapidRawCleanup.Prepared? = null): DevelopedJpeg {
+                               prepared: RapidRawDevelop.Prepared? = null): DevelopedJpeg {
         val startedAt = SystemClock.elapsedRealtime()
         require(scene.internalFormat == AmazeTextureFormat.RGBA16F)
         require(scene.colorDomain == AmazeColorDomain.ACESCG) {
@@ -132,7 +132,7 @@ class Gles31JpegOutputProcessor(context: Context) {
                 ceilDiv(scene.width, GAINMAP_DOWNSCALE), ceilDiv(scene.height, GAINMAP_DOWNSCALE)
             )
             GLES31.glUniform1i(location(outputProgram, "u_display_p3"), if (resolved.displayP3) 1 else 0)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(outputProgram, "u_basic"), if (resolved.toneMapper == PhotoToneMapper.BASIC) 1 else 0)
+            GLES31.glUniform1i(GLES31.glGetUniformLocation(outputProgram, "u_basic"), resolved.toneMapper.shaderMode)
             GLES31.glUniform1f(location(outputProgram, "u_agx_purity_boost"), resolved.agxPurityBoost)
             GLES31.glUniform1i(location(outputProgram, "u_agx_punchy"), if (resolved.agxLook == AgxLook.PUNCHY) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_contrast"), resolved.agxContrast)

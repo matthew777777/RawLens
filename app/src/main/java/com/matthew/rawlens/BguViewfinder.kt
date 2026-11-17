@@ -124,7 +124,7 @@ class BguViewfinder @JvmOverloads constructor(
         agx = floatArrayOf(
             r.agxContrast, r.agxSaturation, r.agxPurityBoost, r.agxHuePreservation,
             r.effectiveAgxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder, if (r.agxLook == AgxLook.PUNCHY) 1f else 0f,
-            if (r.toneMapper == PhotoToneMapper.BASIC) 1f else 0f
+            r.toneMapper.shaderMode.toFloat()
         )
         // The VF meter runs the save's tuning, so VF EV == save EV: same
         // derived broad guard and shoulder as AdaptiveExposureTuning.

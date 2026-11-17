@@ -1227,7 +1227,7 @@ class Gles31AmazeProcessor(
                 val settings = requireNotNull(fusedSettings)
                 finalProgram.ivec2("u_output_size", input.width, input.height)
                 finalProgram.integer("u_display_p3", if (settings.displayP3) 1 else 0)
-                finalProgram.integer("u_basic", if (settings.toneMapper == PhotoToneMapper.BASIC) 1 else 0)
+                finalProgram.integer("u_basic", settings.toneMapper.shaderMode)
                 finalProgram.float("u_agx_purity_boost", settings.agxPurityBoost)
                 finalProgram.integer("u_agx_punchy", if (settings.agxLook == AgxLook.PUNCHY) 1 else 0)
                 finalProgram.float("u_agx_contrast", settings.agxContrast)
@@ -1390,7 +1390,7 @@ class Gles31AmazeProcessor(
         }.also(GLES31::glUseProgram)
 
         private fun read(path: String): String =
-            context.assets.open(path).bufferedReader().use { it.readText() }
+            context.assets.open(path).bufferedReader().use { it.readText().replace("// SIGMOID_FUNCTIONS", SigmoidDisplayTransform.glsl) }
 
         private fun compile(source: String, name: String): Int {
             val shader = GLES31.glCreateShader(GLES31.GL_COMPUTE_SHADER)

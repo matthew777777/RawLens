@@ -284,7 +284,10 @@ internal object VfGpuImport {
             " cam = mix(cam, u_cameraWhite, whiteBlend);" +
             " cam *= exp2(u_exposureEv);" +
             " vec3 scene2020 = acesCgToRec2020() * (u_camToAces * cam);" +
-            " if (u_basic != 0) {" +
+            " if (u_basic == 2) { mat3 sm=rec2020ToSrgb(); if(u_displayP3!=0)sm=rec2020ToDisplayP3();" +
+            " vec3 se=srgbOetf(clamp(sm*dt_sigmoid(scene2020),0.0,1.0));" +
+            " @OUT@=vec4(se,1.0); return; }" +
+            " if (u_basic == 1) {" +
             "  mat3 basicMat = rec2020ToSrgb(); if (u_displayP3 != 0) basicMat = rec2020ToDisplayP3();" +
             "  vec3 basicScene = basicMat * scene2020; float peak = max(basicScene.r, max(basicScene.g, basicScene.b));" +
             "  if (peak > 0.6 && u_highlightShoulder > 0.0) { float t = peak - 0.6;" +
@@ -456,7 +459,7 @@ internal object VfGpuImport {
             "varying VFHP vec2 tex; uniform VFHP sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             LENS_UNIFORMS_COMMON +
-            TONEMAP_HELPERS +
+            TONEMAP_HELPERS + SigmoidDisplayTransform.glsl +
             LENS_GAIN_ES1 +
             "void main() { vec4 b = texture2D(raw, tex); b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "gl_FragColor")
@@ -486,7 +489,7 @@ internal object VfGpuImport {
             "uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             "in highp vec2 tex; out vec4 fragColor;" +
-            TONEMAP_HELPERS +
+            TONEMAP_HELPERS + SigmoidDisplayTransform.glsl +
             LENS_GAIN_ES3 +
             // Runtime-specialized unpack: black/white for the exact RAW bit depth
             // (10/12/16-bit sensor modes all present as unpacked 16-bit codes) are

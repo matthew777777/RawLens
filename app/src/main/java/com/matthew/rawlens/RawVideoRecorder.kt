@@ -133,7 +133,12 @@ internal class RawVideoRecorder(
     var fps: Int = FPS
 
     /** Frame-level parallelism; three workers limit retained RAW/payload memory. */
-    var encodeWorkers: Int = DEFAULT_WORKERS
+    private var requestedWorkers: Int? = null
+    var encodeWorkers: Int
+        get() = requestedWorkers ?: RawVideoPerformance.workers(fps,Runtime.getRuntime().availableProcessors())
+        set(value) { requestedWorkers=value }
+    private var lastPreviewOfferNs=Long.MIN_VALUE
+    private var workerHealth=RawVideoWorkerHealth(MAX_WORKERS)
 
     /** Selected before start; frozen for the entire take. */
     var compressionCodec: Int = CrawWriter.CODEC_LIVE
@@ -430,6 +435,7 @@ internal class RawVideoRecorder(
         lastStatsLogTs = 0L
         val workers = encodeWorkers.coerceIn(1, MAX_WORKERS)
         encodeWorkers = workers
+        workerHealth=RawVideoWorkerHealth(MAX_WORKERS,SKIP_TIMEOUT_MS)
         require(compressionCodec == CrawWriter.CODEC_FAST || compressionCodec == CrawWriter.CODEC_LIVE ||
             compressionCodec == CrawWriter.CODEC_LIVE_V1)
         takeCodec = compressionCodec
@@ -447,6 +453,7 @@ internal class RawVideoRecorder(
         gyroSamples.set(0)
         accelSamples.set(0)
         fpsEstimate = 0f
+        lastPreviewOfferNs=Long.MIN_VALUE
         encodeMsAvg = 0f
         encodeMsMax = 0f
         resultWaitMsAvg = 0f
@@ -598,6 +605,12 @@ internal class RawVideoRecorder(
             java.nio.ByteBuffer.allocateDirect(payloadBound)
                 .order(java.nio.ByteOrder.nativeOrder())
         }
+        // Reserve the existing bounded pool before high-rate camera requests begin.
+        if(fps>30) {
+            val warm=ArrayList<java.nio.ByteBuffer>()
+            try { repeat(workers+2) { payloadPool.poll(0,TimeUnit.MILLISECONDS)?.let(warm::add) } }
+            finally { warm.forEach { payloadPool.offer(it) } }
+        }
         workerCount = workers
         for (i in 0 until MAX_WORKERS) {
             inflightSeq.set(i, -1L)
@@ -634,7 +647,8 @@ internal class RawVideoRecorder(
                 // release the camera ref after encoding; native close fires
                 // when the GPU lease (if any) also returns. Never blocks,
                 // never copies.
-                vfView?.takeUnless { monitoringSuspended }?.let { view ->
+                vfView?.takeUnless { monitoringSuspended || !RawVideoPerformance.offerPreview(lastPreviewOfferNs,img.timestamp,fps) }?.let { view ->
+                    lastPreviewOfferNs=img.timestamp
                     try {
                         RawImageOwnership.adopt(img, rd)
                         try {
@@ -1051,6 +1065,7 @@ internal class RawVideoRecorder(
         // runs ~10x slower — one exiled worker then poisons every commit
         // head while the other starves on pool checkout.
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
+        val cpuHint=RawVideoCpuHint.create(appContext,fps,workerCount)
         while (true) {
             if (workerParked.get(index) != 0) {
                 Log.i(TAG, "encode worker $index parked, exitting")
@@ -1064,6 +1079,7 @@ internal class RawVideoRecorder(
             if (item === Poison) break
             val task = item as EncodeTask
             inflightSeq.set(index, task.seq)
+            val taskStartedMs=SystemClock.elapsedRealtime()
             var buf: java.nio.ByteBuffer? = null
             var stage = "payload checkout"
             try {
@@ -1097,7 +1113,9 @@ internal class RawVideoRecorder(
                     encTop, task.cropHeight, buf, binActive, binCfa, crawBitDepth,
                     takeCodec, binRgbActive
                 )
-                val ms = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
+                val elapsedNs=SystemClock.elapsedRealtimeNanos()-t0
+                cpuHint.report(elapsedNs)
+                val ms = elapsedNs / 1e6f
                 // Benign races on stats: worst case a slightly stale overlay.
                 encodeMsAvg =
                     if (encodeMsAvg == 0f) ms else encodeMsAvg * 0.95f + ms * 0.05f
@@ -1160,6 +1178,7 @@ internal class RawVideoRecorder(
                 }
             } finally {
                 releaseDct(task)
+                workerHealth.completed(index,SystemClock.elapsedRealtime()-taskStartedMs)
                 inflightSeq.set(index, -1L)
                 // Registry-aware: closes directly when never adopted for
                 // the VF, waits out the GPU lease when borrowed.
@@ -1172,6 +1191,7 @@ internal class RawVideoRecorder(
                     if (closeMs > closeMsMax) closeMs else closeMsMax * 0.999f + closeMs * 0.001f
             }
         }
+        cpuHint.close()
         if (workersAlive.decrementAndGet() == 0) {
             Log.i(TAG, "last encode worker exitting")
         }
@@ -1224,7 +1244,7 @@ internal class RawVideoRecorder(
                     Log.w(TAG, "commit head stalled, skipping seq=$nextCommitSeq")
                     val culprit = findInflightWorker(nextCommitSeq)
                     skipHead()
-                    if (culprit >= 0) parkWorker(culprit)
+                    if (culprit >= 0 && workerHealth.timedOut(culprit)) parkWorker(culprit)
                     headWaitStart = -1L
                     continue
                 }
@@ -1666,7 +1686,6 @@ internal class RawVideoRecorder(
         private const val PREFER_FLOAT_AUDIO = false
         // Six full-frame workspaces competed with the camera/viewfinder.
         // Device profiling can override this before starting a take.
-        private val DEFAULT_WORKERS = Runtime.getRuntime().availableProcessors().coerceIn(1, 3)
         private const val SKIP_TIMEOUT_MS = 250L
         private const val COMMIT_POLL_MS = 10L
         private const val POOL_WAIT_MS = 100L

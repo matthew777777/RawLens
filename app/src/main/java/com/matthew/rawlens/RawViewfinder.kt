@@ -893,7 +893,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      */
     override fun setAgx(settings: JpegOutputSettings) {
         val resolved = settings.resolvedForPlatform()
-        basicTone = if (resolved.toneMapper == PhotoToneMapper.BASIC) 1 else 0
+        basicTone = resolved.toneMapper.shaderMode
         agxPunchy = if (resolved.agxLook == AgxLook.PUNCHY) 1f else 0f
         agxContrast = resolved.agxContrast
         agxSaturation = resolved.agxSaturation

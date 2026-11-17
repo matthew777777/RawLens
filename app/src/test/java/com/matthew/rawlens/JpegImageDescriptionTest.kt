@@ -38,7 +38,7 @@ class JpegImageDescriptionTest {
         val off = JpegOutputSettings()
         assertFalse(off.chromaCleanup.rapidRawPreprocessing)
         val on = off.copy(chromaCleanup = off.chromaCleanup.copy(rapidRawPreprocessing = true))
-        assertTrue(jpegImageDescription(on, null, null).contains("RapidRAW ON; chroma 0.500"))
+        assertTrue(jpegImageDescription(on, null, null).contains("RapidRAW 1.7 develop ON; color NR 0.500, sharpening 0.350"))
         val text = jpegImageDescription(off, null, null)
         assertTrue(text.contains("RapidRAW OFF"))
         assertFalse(text.contains("gentle detail 0.350"))

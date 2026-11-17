@@ -4,7 +4,8 @@ package com.matthew.rawlens
 
 /** Persisted with the develop contract, including queued captures and offline merges. */
 enum class PhotoToneMapper(val label: String) {
-    BASIC("Basic"), AGX("AgX");
+    BASIC("Basic"), AGX("AgX"), SIGMOID("Sigmoid");
+    val shaderMode: Int get() = when(this) { AGX -> 0; BASIC -> 1; SIGMOID -> 2 }
     companion object {
         const val PREFERENCE_KEY = "jpeg_tone_mapper"
         fun fromPreference(value: String?): PhotoToneMapper =

@@ -630,7 +630,7 @@ class RawDevelopmentCoordinator(context: Context) {
             settings,
             fusedOutputSettings = outputSettings,
             // RapidRAW chroma/detail preprocessing needs the linear frame before encoding.
-            allowOutputFusion = !outputSettings.chromaCleanup.rapidRawPreprocessing
+            allowOutputFusion = !outputSettings.chromaCleanup.rapidRawActive
         ) { frame ->
             if (frame.texture.internalFormat == AmazeTextureFormat.RGBA8) {
                 jpegOutput.processEncoded(frame.texture, outputSettings)
@@ -797,7 +797,7 @@ class RawDevelopmentCoordinator(context: Context) {
                 clipPoint = reconstructedCfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = if (cameraLinearPlan || outputSettings.chromaCleanup.rapidRawPreprocessing) null else outputSettings,
+                fusedOutputSettings = if (cameraLinearPlan || outputSettings.chromaCleanup.rapidRawActive) null else outputSettings,
                 whiteWindow = tapWhiteWindow,
                 cameraLinear = cameraLinearPlan
             ) { output ->
@@ -906,7 +906,7 @@ class RawDevelopmentCoordinator(context: Context) {
                 clipPoint = reconstructed.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = if (developOutput.chromaCleanup.rapidRawPreprocessing ||
+                fusedOutputSettings = if (developOutput.chromaCleanup.rapidRawActive ||
                     (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)) null else developOutput,
                 whiteWindow = whiteWindow,
                 cameraLinear = settings.denoise.captureSharpening.enabled && !metadata.quadBayer

@@ -18,7 +18,7 @@ internal fun jpegImageDescription(
     fun number(value: Number): String = String.format(Locale.US, "%.3f", value.toDouble())
     val rgbMerge = typeSuffix == CaptureFileNames.TYPE_MFSR || typeSuffix == CaptureFileNames.TYPE_LKR
     val input = if (rgbMerge) "Merged linear camera RGB" else "RAW_SENSOR"
-    val tone = if (settings.toneMapper == PhotoToneMapper.BASIC) "Basic" else "AgX ${settings.agxLook.label}"
+    val tone = if (settings.toneMapper == PhotoToneMapper.SIGMOID) "Sigmoid" else if (settings.toneMapper == PhotoToneMapper.BASIC) "Basic" else "AgX ${settings.agxLook.label}"
     val gamut = if (settings.displayP3) "Display P3" else "sRGB"
     if (!description.isNullOrBlank()) append(description.trimEnd()).append("\n\nJPEG DEVELOPMENT\n")
     else append("Captured with RawLens\nJPEG DEVELOPMENT\n")
@@ -29,6 +29,8 @@ internal fun jpegImageDescription(
     if (settings.toneMapper == PhotoToneMapper.BASIC) {
         append("- Basic response: sRGB transfer, brightness gamma 1.100, cubic contrast blend 0.750\n")
         append("- Highlight compression: ratio-preserving rational shoulder; knee 0.600, white limit 1.000, strength ${number(settings.highlightShoulder)}\n")
+    } else if (settings.toneMapper == PhotoToneMapper.SIGMOID) {
+        append("- Sigmoid: contrast 1.5, skew 0, preserve hue 100%, Rec.2020 primaries\n")
     } else {
         append("- AgX look: ${settings.agxLook.label}\n")
         append("- AgX contrast: ${number(settings.agxContrast)}\n")
@@ -41,8 +43,9 @@ internal fun jpegImageDescription(
         append("- Highlight compression: exponential shoulder; knee 0.900, strength ${number(settings.highlightShoulder)}\n")
     }
     append("- Working space: scene-linear ACEScg (AP1, D60)\n")
-    append(if (settings.chromaCleanup.rapidRawPreprocessing)
-        "- JPEG preprocessing: RapidRAW ON; chroma 0.500, gentle detail 0.350 (linear sRGB)\n"
+    append(if (settings.chromaCleanup.rapidRawActive)
+        "- JPEG preprocessing: RapidRAW 1.7 develop ON; color NR ${number(settings.chromaCleanup.rapidRawColorNoiseReduction)}, " +
+            "sharpening ${number(settings.chromaCleanup.rapidRawSharpening)} (linear sRGB)\n"
     else "- JPEG preprocessing: RapidRAW OFF\n")
     append("- Output: $gamut, 8-bit SDR base, sRGB transfer\n")
     if (outputWidth != null && outputHeight != null) append("- Dimensions: ${outputWidth}x${outputHeight}\n")

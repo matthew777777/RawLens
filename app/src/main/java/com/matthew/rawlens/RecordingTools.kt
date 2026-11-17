@@ -136,10 +136,11 @@ internal class RecordingTools(private val activity: MainActivity) : AutoCloseabl
     }
 
     fun updateHealth(s: RawVideoRecorder.VideoStats) {
-        updateHealth(s.elapsedMs, s.framesDropped, s.fileBytes, s.fps, RawVideoRecorder.FPS,
+        val rate=activity.videoRecorder?.fps ?: activity.rawVideoFpsPref()
+        updateHealth(s.elapsedMs, s.framesDropped, s.fileBytes, s.fps, rate,
             s.queueDepth >= 4 || s.encodeMsAvg >
-                1000f / RawVideoRecorder.FPS * (activity.videoRecorder?.encodeWorkers ?: 1) ||
-                s.writeMsAvg > 1000f / RawVideoRecorder.FPS)
+                1000f / rate * (activity.videoRecorder?.encodeWorkers ?: 1) ||
+                s.writeMsAvg > 1000f / rate)
     }
 
     fun updateHealth(s: EncodedVideoRecorder.VideoStats) {

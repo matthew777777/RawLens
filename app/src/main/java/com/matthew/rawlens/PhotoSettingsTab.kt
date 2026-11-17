@@ -275,6 +275,8 @@ internal class PhotoSettingsTab(
                 .putBoolean(ChromaCleanup.KEY_FALSE_COLOR, resolved.chromaCleanup.falseColorSuppression)
                 .putFloat(ChromaCleanup.KEY_DEFRINGE, resolved.chromaCleanup.defringeStrength)
                 .putBoolean(ChromaCleanup.KEY_RAPIDRAW, resolved.chromaCleanup.rapidRawPreprocessing)
+                .putFloat(ChromaCleanup.KEY_RAPIDRAW_COLOR_NR, resolved.chromaCleanup.rapidRawColorNoiseReduction)
+                .putFloat(ChromaCleanup.KEY_RAPIDRAW_SHARPENING, resolved.chromaCleanup.rapidRawSharpening)
                 .putFloat(MainActivity.KEY_JPEG_AGX_PURITY, resolved.agxPurityBoost)
                 .putString(PhotoToneMapper.PREFERENCE_KEY, resolved.toneMapper.name)
                 .putString(AgxLook.PREFERENCE_KEY, resolved.agxLook.name)
@@ -494,7 +496,7 @@ internal class PhotoSettingsTab(
         kit.content.addView(kit.sectionDesc("Tone Mapper"))
         kit.content.addView(LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
-            for (mode in listOf(PhotoToneMapper.BASIC, PhotoToneMapper.AGX)) {
+            for (mode in PhotoToneMapper.entries) {
                 addView(Button(activity).apply {
                     text = mode.label
                     isAllCaps = false
