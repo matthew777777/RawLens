@@ -110,16 +110,30 @@ void MakeInput(const float* z, int H, int W, float noise_a, std::vector<float>* 
   });
 }
 
+// Colour only (default, 2026-11-18): the network's change minus its per-pixel mean over R, G, B, so the
+// pixel's brightness stays Lite's. v2 also boosts mid-fine luma texture on real bursts (+12 % energy on
+// sunlit foliage, phone tile): an oversharpened look. Its gain is colour (Kodak chroma 34.5 -> 38.6 dB
+// with or without the luma part; luma +0.8 dB only with it). LKRL_PRIOR_FULL=1 keeps the luma change.
+bool FullCorrection() {
+  static const bool full = std::getenv("LKRL_PRIOR_FULL") && std::atoi(std::getenv("LKRL_PRIOR_FULL")) != 0;
+  return full;
+}
+
 void WriteBack(const std::vector<float>& out, int H, int W, float* z, float* delta) {
   const size_t HW = size_t(H) * W;
+  const bool full = FullCorrection();
   ParallelRows(H, [&](int y0, int y1) {
-    for (size_t i = size_t(y0) * W; i < size_t(y1) * W; ++i)
+    for (size_t i = size_t(y0) * W; i < size_t(y1) * W; ++i) {
+      float d[3];
+      for (int c = 0; c < 3; ++c) { const float o = std::max(out[i * 3 + c], 0.0f); d[c] = o * o - z[size_t(c) * HW + i]; }
+      const float m = full ? 0.0f : (d[0] + d[1] + d[2]) * (1.0f / 3.0f);
       for (int c = 0; c < 3; ++c) {
-        const float o = std::max(out[i * 3 + c], 0.0f), v = o * o;
-        float& d = z[size_t(c) * HW + i];
-        if (delta) delta[size_t(c) * HW + i] = v - d;
-        d = v;
+        float& zc = z[size_t(c) * HW + i];
+        const float v = std::max(zc + d[c] - m, 0.0f);
+        if (delta) delta[size_t(c) * HW + i] = v - zc;
+        zc = v;
       }
+    }
   });
 }
 
@@ -286,6 +300,8 @@ bool PriorNpuAvailable() {
 #endif
 }
 
+bool PriorColourOnly() { return !FullCorrection(); }
+
 bool PriorPacked(std::vector<float>* wb, std::vector<PriorLayerInfo>* info) {
   const auto& L = FallbackLayers();
   if (L.empty()) return false;
@@ -315,6 +331,12 @@ bool PriorApply(float* z, int H, int W, float noise_a, float* delta, PriorStats*
   const auto& L = Layers();
   if (L.empty()) { *err = "prior weights missing"; return false; }
   std::vector<float> in, out(size_t(H) * W * 3);
+  // Diagnostics: LKRL_PRIOR_DUMP_PREFIX saves the FIRST tile's input / output / meta (NPU vs host check).
+  static std::atomic<bool> dumped{false};
+  const char* dpre = std::getenv("LKRL_PRIOR_DUMP_PREFIX");
+  const bool dump_now = dpre && *dpre && !dumped.exchange(true);
+  std::vector<float> z_in;
+  if (dump_now) z_in.assign(z, z + size_t(3) * H * W);
   MakeInput(z, H, W, noise_a, &in);
 #ifdef __ANDROID__
   const Compiled* c = Get(H, W, err);
@@ -344,6 +366,12 @@ bool PriorApply(float* z, int H, int W, float noise_a, float* delta, PriorStats*
   if (st) st->device = "cpu-reference";
 #endif
   WriteBack(out, H, W, z, delta);
+  if (dump_now) {
+    const std::string pre(dpre);
+    if (FILE* f = std::fopen((pre + "-in.f32").c_str(), "wb")) { std::fwrite(z_in.data(), 4, z_in.size(), f); std::fclose(f); }
+    if (FILE* f = std::fopen((pre + "-out.f32").c_str(), "wb")) { std::fwrite(z, 4, size_t(3) * H * W, f); std::fclose(f); }
+    if (FILE* f = std::fopen((pre + "-meta.txt").c_str(), "w")) { std::fprintf(f, "%d %d %.9g\n", H, W, noise_a); std::fclose(f); }
+  }
   if (const char* dp = std::getenv("LKRL_PRIOR_DUMP"))   // tests: corrected planar tile
     if (FILE* f = std::fopen(dp, "wb")) { std::fwrite(z, 4, size_t(3) * H * W, f); std::fclose(f); }
   if (st) { st->ran = true; st->ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }

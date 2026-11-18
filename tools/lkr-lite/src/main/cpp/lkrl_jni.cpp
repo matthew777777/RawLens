@@ -133,6 +133,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.longedge", v) > 0 && v[0]) setenv("LKRL_LONGEDGE", v, 0);
     // Prior device A/B: debug.lkr.priordev = NNAPI device name part ("mdla"), "none" = force the Vulkan fallback.
     if (__system_property_get("debug.lkr.priordev", v) > 0 && v[0]) setenv("LKRL_PRIOR_DEVICE", v, 0);
+    // Network check: debug.lkr.priordump = file prefix (first tile's input / output / meta).
+    if (__system_property_get("debug.lkr.priordump", v) > 0 && v[0]) setenv("LKRL_PRIOR_DUMP_PREFIX", v, 0);
     // A/B of the cooperative DCT prior: debug.lkr.dctold = 1 runs the previous one-block-per-invocation shaders.
     if (__system_property_get("debug.lkr.dctold", v) > 0 && v[0]) setenv("LKRL_DCT_OLD", v, 0);
     // A/B of the per-scale adjoint: debug.lkr.adjgen = 1 runs the generic (pc.s) adj build.

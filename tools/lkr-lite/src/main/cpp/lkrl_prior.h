@@ -33,5 +33,7 @@ bool PriorNpuAvailable();
 // {cin, cout, k, relu, weight offset, bias offset} (floats into wb).
 struct PriorLayerInfo { int cin, cout, k, relu, woff, boff; };
 bool PriorPacked(std::vector<float>* wb, std::vector<PriorLayerInfo>* info);
+// Colour-only correction (default): luma kept as Lite's. False with LKRL_PRIOR_FULL=1 (research).
+bool PriorColourOnly();
 
 }  // namespace lkrl

@@ -66,10 +66,12 @@ void main() {
   }
   int i = Y * pc.W + X;
   if (pc.mode == 2) {                 // last layer: + identity skip (sqrt z), square back, planar out
-    [[unroll]] for (int j = 0; j < 3; ++j) {
-      float o = max(acc[j] + sqrt(max(z[j * HW + i], 0.0)), 0.0);
-      z[j * HW + i] = o * o;
-    }
+    // Colour only unless pc.b == 1 (lkrl_prior.cpp WriteBack): the change minus its R, G, B mean.
+    vec3 zo = vec3(z[i], z[HW + i], z[2 * HW + i]), d;
+    [[unroll]] for (int j = 0; j < 3; ++j) { float o = max(acc[j] + sqrt(max(zo[j], 0.0)), 0.0); d[j] = o * o - zo[j]; }
+    if (pc.b == 0.0) d -= (d.x + d.y + d.z) * (1.0 / 3.0);
+    vec3 v = max(zo + d, vec3(0.0));
+    z[i] = v.x; z[HW + i] = v.y; z[2 * HW + i] = v.z;
     return;
   }
   [[unroll]] for (int j = 0; j < 8; j += 2) {

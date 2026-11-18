@@ -79,6 +79,9 @@ def main():
                 s = torch.full((1, 1, n, n), float(np.sqrt(max(na, 1e-6) * 0.18)))
                 with torch.no_grad(): o = (m(x, s)[0].clamp(min=0).numpy() ** 2).transpose(1, 2, 0)
                 res.setdefault((cond, nm), []).append(scores(o.astype(np.float64), g.astype(np.float64)))
+                # colour-only variant (the app's mode): the network's change minus its per-pixel mean (luma kept)
+                d = o - z; oc = np.maximum(z + d - d.mean(-1, keepdims=True), 0)
+                res.setdefault((cond, nm + '_col'), []).append(scores(oc.astype(np.float64), g.astype(np.float64)))
         print(f'{k + 1}/{len(files)}', flush=True)
     print(f"\n{'condition':8s} {'variant':14s} luma PSNR  chroma PSNR | band err luma  chroma")
     for (cond, nm), v in sorted(res.items()):

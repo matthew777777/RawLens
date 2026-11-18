@@ -944,6 +944,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         std::memcpy(wbB.map, pwb.data(), pwb.size() * 4);
         Push cq = q;
         cq.a = 100.0f * std::sqrt(std::max(prm.noise_a, 1e-6f) * 0.18f);
+        cq.b = PriorColourOnly() ? 0.0f : 1.0f;   // last layer: colour-only correction (prior_conv.comp)
         const uint32_t ggx = div_up(uint32_t(W), 16), ggy = div_up(uint32_t(H), 16);
         Buffer* in = &actA; Buffer* out = &actB;
         for (size_t li = 0; li < pinfo.size(); ++li) {
