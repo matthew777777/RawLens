@@ -164,24 +164,77 @@ private fun MainActivity.showRawFrameRateDialog(
     column.addView(TextView(this).apply {
         text = "RAW video frame rate"
         textSize = 20f
+        typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
         setTextColor(getColor(R.color.text_primary))
-        setPadding(dp(8), dp(8), dp(8), dp(12))
+        setPadding(dp(8), dp(8), dp(8), dp(16))
     })
     val choices = android.widget.LinearLayout(this).apply {
         orientation = android.widget.LinearLayout.VERTICAL
     }
     labels.forEachIndexed { index, label ->
-        choices.addView(android.widget.Button(this).apply {
-            text = if (index == selected) "● $label" else label
+        val active = index == selected
+        val row = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            minimumHeight = dp(60)
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            val shape = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(getColor(if (active) R.color.accent_soft else R.color.surface_container))
+                setStroke(dp(1), getColor(if (active) R.color.accent else R.color.outline))
+            }
+            background = android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(getColor(R.color.accent_soft)), shape, null)
+            isFocusable = true
+            contentDescription = label
+            isSelected = active
             setOnClickListener { onSelected(dialog, index) }
+        }
+        val copy = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+        }
+        copy.addView(TextView(this).apply {
+            text = label.substringBefore(" (")
+            textSize = 16f
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            setTextColor(getColor(if (active) R.color.accent else R.color.text_primary))
+        })
+        val detail = if (label == "Default") "Use camera default" else label.substringAfter(" (", "").removeSuffix(")")
+        if (detail.isNotEmpty()) copy.addView(TextView(this).apply {
+            text = detail
+            textSize = 12f
+            setTextColor(getColor(R.color.text_secondary))
+            setPadding(0, dp(3), 0, 0)
+        })
+        row.addView(copy, android.widget.LinearLayout.LayoutParams(0, -2, 1f))
+        row.addView(android.widget.RadioButton(this).apply {
+            isChecked = active
+            isClickable = false
+            isFocusable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            buttonTintList = android.content.res.ColorStateList.valueOf(
+                getColor(if (active) R.color.accent else R.color.text_muted))
+        }, android.widget.LinearLayout.LayoutParams(dp(40), dp(40)))
+        choices.addView(row, android.widget.LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(8)
         })
     }
-    column.addView(android.widget.ScrollView(this).apply { addView(choices) },
-        android.widget.LinearLayout.LayoutParams(-1, 0, 1f))
-    column.addView(android.widget.Button(this).apply {
+    column.addView(android.widget.ScrollView(this).apply {
+        isFillViewport = false
+        addView(choices)
+    }, android.widget.LinearLayout.LayoutParams(-1, 0, 1f))
+    column.addView(TextView(this).apply {
         text = "Cancel"
+        textSize = 14f
+        gravity = android.view.Gravity.CENTER
+        setTextColor(getColor(R.color.accent))
+        minimumHeight = dp(48)
+        isFocusable = true
+        val value = android.util.TypedValue()
+        theme.resolveAttribute(android.R.attr.selectableItemBackground, value, true)
+        setBackgroundResource(value.resourceId)
         setOnClickListener { dialog.dismiss() }
-    })
+    }, android.widget.LinearLayout.LayoutParams(-1, -2))
     root.addView(column, android.widget.FrameLayout.LayoutParams(-1, -1, android.view.Gravity.CENTER))
     dialog.setContentView(root)
     root.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
@@ -190,7 +243,7 @@ private fun MainActivity.showRawFrameRateDialog(
             val availableWidth = if (quarterTurn) root.height else root.width
             val availableHeight = if (quarterTurn) root.width else root.height
             val width = minOf(dp(380), availableWidth - dp(32)).coerceAtLeast(1)
-            val height = minOf(dp(460), availableHeight - dp(32)).coerceAtLeast(1)
+            val height = minOf(dp(124 + labels.size * 68), availableHeight - dp(32)).coerceAtLeast(1)
             column.rotation = controlRotationDegrees
             if (column.layoutParams.width != width || column.layoutParams.height != height) {
                 column.layoutParams = android.widget.FrameLayout.LayoutParams(width, height, android.view.Gravity.CENTER)

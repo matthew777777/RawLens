@@ -182,10 +182,9 @@ object HdrPlusDngWriter {
         require(cfa.values.all(Float::isFinite)) { "HDR+ DNG cannot contain NaN or infinity" }
 
         val fields = buildFields(cfa.pattern, metadata, provenance, compression)
-        // Lens-shading gain map (OpcodeList2), same as the single-frame writer: the merged
-        // CFA is the processing crop, so the map spans the whole image. Without it RAW
-        // developers show the uncorrected sensor vignette.
-        metadata.lensShadingMap?.takeUnless { metadata.lensShadingAlreadyApplied }?.let {
+        // Only uncorrected samples need a gain-map opcode. HDR+ preprocessing
+        // normally bakes it into the CFA; repeating it brightens corners twice.
+        metadata.lensShadingMap?.takeUnless { cfa.lensShadingApplied || metadata.lensShadingAlreadyApplied }?.let {
             val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
             val originY = (geometry?.sensorOriginY ?: 0) + (geometry?.processingCrop?.top ?: 0)
             fields.undefined(51009, TinyDngMetadata.gainMap(it, cfa.pattern,

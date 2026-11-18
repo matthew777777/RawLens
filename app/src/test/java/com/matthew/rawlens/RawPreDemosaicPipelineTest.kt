@@ -7,6 +7,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class RawPreDemosaicPipelineTest {
+    @Test fun correctedCfaIsNotShadedTwice() {
+        val input = cfa(2, 2, floatArrayOf(.1f, .2f, .3f, .4f))
+        val model = LensShadingModel(1, 1, floatArrayOf(2f, 2f, 2f, 2f), IntRectSnapshot(0, 0, 2, 2))
+        val once = LensShadingCorrector.apply(input, model)
+        val twice = LensShadingCorrector.apply(once.cfa.copy(), model)
+        assertEquals(true, once.cfa.lensShadingApplied)
+        assertEquals(once.cfa.values.toList(), twice.cfa.values.toList())
+        // Highlight detection still needs the corrected sensor saturation threshold.
+        assertEquals(2f, twice.saturationMap.levelAt(0, 0), EPSILON)
+    }
+
     @Test
     fun lensShadingUsesCfaChannelsBilinearInterpolationAndNoClamp() {
         val input = cfa(

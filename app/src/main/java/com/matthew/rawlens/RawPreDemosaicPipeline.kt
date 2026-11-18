@@ -100,7 +100,7 @@ object LensShadingCorrector {
                 model.gainAt(sensorX, sensorY, input.pattern.colorAt(x, y))
             }
         }
-        if (model != null && !model.alreadyApplied) {
+        if (model != null && !model.alreadyApplied && !input.lensShadingApplied) {
             // Row-sharded with the gain inlined (same gainAt values the
             // saturation map returns, without a virtual call per pixel).
             ShardWorkers.forEachShard(input.height) { y0, y1 ->
@@ -115,7 +115,8 @@ object LensShadingCorrector {
                 }
             }
         }
-        return LensShadingResult(input.copy(values = output), saturationMap)
+        return LensShadingResult(input.copy(values = output,
+            lensShadingApplied = input.lensShadingApplied || model != null), saturationMap)
     }
 }
 

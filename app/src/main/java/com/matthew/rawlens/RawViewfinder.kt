@@ -1208,8 +1208,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private fun snapshotLens(
         c: CameraCharacteristics, result: CaptureResult?, imageWidth: Int, imageHeight: Int
     ): VfLensSnapshot {
-        if (LapisRootSession.spec(c)?.metadataVerified == true)
-            return VfLensSnapshot(null, 1, 1, 0, 0, imageWidth, imageHeight, false, null, null)
+        val readout = LapisRootSession.spec(c)?.takeIf {
+            it.metadataVerified && it.width == imageWidth && it.height == imageHeight
+        }
         // SENSOR_INFO_LENS_SHADING_APPLIED only describes sensor-side correction.
         // A returned map still describes residual correction (as in the save path).
         // 1 Hz re-verify: skip the per-frame gain-copy + content hash while a
@@ -1223,7 +1224,11 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         ) {
             return cachedSnap
         }
-        val active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        // Verified root sessions return a residual map for the actual readout.
+        // Match the save path: span the complete buffer, including in-sensor
+        // crop modes, rather than stretching/cropping it using stale stock bounds.
+        val active = if (readout != null) Rect(0, 0, imageWidth, imageHeight)
+            else c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         val left = active?.left ?: 0
         val top = active?.top ?: 0
         val right = active?.right ?: imageWidth

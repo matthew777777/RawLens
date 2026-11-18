@@ -14,6 +14,28 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class HdrPlusDngWriterTest {
+    @Test fun gainOpcodeIsOnlyWrittenForUncorrectedSamples() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant1).thenReturn(21)
+        `when`(metadata.lensShadingMap).thenReturn(LensShadingSnapshot(1, 1,
+            ImmutableFloatValues(floatArrayOf(2f, 2f, 2f, 2f))))
+        val raw = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16) { .2f }, RawCrop(0, 0, 4, 4))
+        val corrected = LensShadingCorrector.apply(raw,
+            LensShadingModel(1, 1, floatArrayOf(2f, 2f, 2f, 2f), IntRectSnapshot(0, 0, 4, 4))).cfa
+        fun hasOpcode(cfa: UnpackedRawCfa): Boolean {
+            val bytes = ByteArrayOutputStream().also { HdrPlusDngWriter.write(it, cfa, metadata) }.toByteArray()
+            val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            val ifd = b.getInt(4)
+            val count = b.getShort(ifd).toInt() and 0xffff
+            return (0 until count).any { (b.getShort(ifd + 2 + it * 12).toInt() and 0xffff) == 51009 }
+        }
+        assertTrue(hasOpcode(raw))
+        assertEquals(false, hasOpcode(corrected))
+        assertEquals(.4f, corrected.values[0], 1e-6f)
+    }
+
     companion object {
         @BeforeClass @JvmStatic
         fun assumeHostDngLib() = HostDngLib.assumeAvailable()
