@@ -114,12 +114,12 @@ LK-R uses Lucas–Kanade alignment and reconstruction. Its viewfinder zoom contr
 
 The Merge tab provides:
 
-- **ISP preview during LK-R merge:** temporarily replaces the RAW viewfinder with the camera preview, pausing RAW scopes and peaking to reduce competition for the GPU.
-- **LK-R denoise: sliding DCT:** optional denoise during reconstruction; off by default.
+- **LK-R: Network:** colour-only cleanup after merging. Defaults on when an NPU is detected and off otherwise; saved choices are preserved. The GPU fallback adds processing time.
+- **LK-R shadow luma denoise:** optional additional shadow cleanup; off by default.
 - **LK-R reference: middle of the burst:** on by default, collects around the shutter press and chooses a reference near the middle. Turning it off uses pre-press frames and a recent reference.
 - **Show LK-R Lab (expert tuning):** exposes advanced reconstruction settings. These apply to subsequent live and offline LK-R merges. Use **Reset LK-R Lab to defaults** to remove overrides.
 
-The standalone LK-R Lite research tool is separate from the app's LK-R engine.
+The app and desktop launcher share the LK-R Lite engine under `tools/lkr-lite`.
 
 ### HDR+
 
@@ -215,7 +215,7 @@ Use **Choose recording folder** to record directly to a permitted phone folder o
 | DNG writer backend | Choose the platform writer or the available TinyDNG/fallback option. |
 | DNG compression | Optional lossless JPEG XL mosaic compression on supported output paths; older RAW editors may lack DNG 1.7 support. |
 | Pause camera while in Settings | Saves power by closing the camera behind Settings. Active recordings continue. |
-| ISP preview | Uses the camera's preview instead of the RAW-developed viewfinder. Its appearance can differ from the saved RAW development. |
+| Always use ISP viewfinder | Uses the camera preview instead of RAW viewfinder rendering, including for full-resolution capture. Requires a compatible RAW + preview stream; its appearance can differ from saved RAW development. |
 | Preview resolution and mode | Adjust monitoring cost and choose RAW, developed or format-following preview. |
 | Exposure overlay and RAW meter | Choose zebras/false colour and spot/average RAW readings. These aids do not change exposure. |
 | Focus peaking | Enable it and choose its overlay colour. |

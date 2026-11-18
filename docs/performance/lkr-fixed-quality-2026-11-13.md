@@ -128,8 +128,8 @@ camera-RGB transfer; no sharpening, denoising or resizing is applied to crops.
 
 Benchmark tools:
 
-* [Paired replay runner](../../tools/lkr-pipeline/host/lkr_perf_benchmark.py)
-* [Float comparison and crop generator](../../tools/lkr-pipeline/host/lkr_perf_compare.py)
+* [Paired replay runner](https://github.com/matthew777777/RawLens/blob/e6e2ba7d903cb8a429123cc18f99ad3d498d0e5f/tools/lkr-pipeline/host/lkr_perf_benchmark.py)
+* [Float comparison and crop generator](https://github.com/matthew777777/RawLens/blob/e6e2ba7d903cb8a429123cc18f99ad3d498d0e5f/tools/lkr-pipeline/host/lkr_perf_compare.py)
 
 Local frozen artifacts, binaries, source snapshot, all logs and images:
 `/tmp/rawlens-lkr-perf-20261113/`.

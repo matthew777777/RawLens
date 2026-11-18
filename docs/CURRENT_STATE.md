@@ -1,6 +1,6 @@
 # Current repository state
 
-This overview describes the source on `refactor/2.0` reviewed on 2026-11-14.
+This overview describes the source on `refactor/2.0` reviewed on 2026-11-18.
 The generated app version belongs in `app/version.properties`, release metadata
 and tags. It is intentionally not repeated in the README.
 
@@ -11,6 +11,10 @@ and tags. It is intentionally not repeated in the README.
 - **MFSR** uses `MfsrMerge` with KernelNet or Wronski reconstruction kernels;
   **LK-R** uses `LkrMerge` and `tools/lkr-lite` (LK-R Lite; it replaced `tools/lkr-pipeline` on 2026-11-14). HDR+ remains a separate option.
   Internal MFSR/LKR identifiers remain unchanged. Earlier releases used the display names KB-SR / LK-SR.
+- B&W capture offers Off, Detail and Clean, with Clean as the default; legacy
+  Auto preferences migrate to Clean. ACES 2.0 joins Basic, AgX and Sigmoid.
+- LK-R uses a colour-only learned network by default when an NPU is detected;
+  saved choices remain authoritative. Without an NPU it defaults off.
 - The default ZSL buffer is 16 frames (`MainActivity.DEFAULT_RAW_ZSL_FRAME_COUNT`).
   Saved preferences, available reader capacity and mode-specific limits still apply.
 - Settings has General, Photo, Video, Exposure, Burst, Merge, Denoise, Lenses,
@@ -21,9 +25,9 @@ and tags. It is intentionally not repeated in the README.
   resolution and viewfinder zoom are independent controls.
 - RAW development includes revised histogram-posterior white-balance fallback,
   two-radius chroma cleanup and lens-shading transport for root RAW / merged DNGs.
-- The RAW viewfinder can use an optional ISP SurfaceView route, including during
-  LK-R merges. This is an explicit preview tradeoff, not proof that every
-  manufacturer's ISP stream matches the RAW develop.
+- **Always use ISP viewfinder** is available under General → Viewfinder, including
+  for full-resolution capture on compatible cameras. The separate merge-only
+  ISP option was removed. ISP appearance can differ from the saved RAW develop.
 - RAW Video uses `.craw`, with optional temporal DCT denoise. Encoded Video uses
   MHC or Super pixel demosaic, offers saturation/vibrance controls and retains
   the selected demosaic through session fallbacks. Video RCD was removed;
@@ -42,8 +46,9 @@ and tags. It is intentionally not repeated in the README.
 
 Mobile MFSR optimizations, guide-based LK-R rejection and foliage experiments
 are recorded under [performance](performance/). Timings and image-quality numbers
-apply to the stated hardware, datasets and flags. Experimental RAW denoise and
-GALOSH comparison code does not imply a shipped GALOSH option.
+apply to the stated hardware, datasets and flags. The unused experimental `rawdn`
+denoiser and GALOSH comparison prototypes were removed; the
+[archive guide](refactor/README.md) identifies their Git revision.
 
 ## Build and validation
 
@@ -63,8 +68,9 @@ new APK, device, numerical-parity or performance test results.
 ## Reading the documentation
 
 The README, contribution guide, tools index and this overview describe current
-entry points. Dated audits, research plans, handoffs, benchmark results, session
-transcripts and release notes preserve evidence from their original revision.
+entry points. Dated audits, research plans, benchmark summaries and release notes
+preserve evidence from their original revision. Raw logs, media and obsolete session
+handoffs are available through the [archive guide](refactor/README.md).
 Their old defaults, pending tasks and version numbers are historical; consult
 this overview and the relevant implementation before treating them as current.
 Upstream README files, licenses, notices and provenance records retain their

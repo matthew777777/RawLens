@@ -38,6 +38,7 @@ See the [development guide](docs/DEVELOPMENT.md) for build options, architecture
 
 ## Documentation
 
+- [Documentation index](docs/README.md)
 - [Current repository state](docs/CURRENT_STATE.md)
 - [Desktop super-resolution CLI](tools/sr-pipeline/README.md) and [host tools](tools/README.md)
 - [Contributing](CONTRIBUTING.md)

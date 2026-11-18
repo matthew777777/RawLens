@@ -53,7 +53,7 @@ See the [README](../README.md) for a quick start and [current repository state](
 - RAW-capable lens discovery with verdicts from real use, and per-lens RAW size / packed RAW format selection
 - Lens profile ZIP export/import, including vendor keys and presets, DNG calibration overrides, PROGRAM profiles, virtual lenses, RAW size/format choices and saved lens selection; confirmed import replaces current profiles and reloads the app
 - Portrait viewfinder layout with rotation-aware controls
-- Optional ISP SurfaceView preview, including during LK-R merges; the camera pauses behind Settings
+- Optional **Always use ISP viewfinder** in General settings, including for full-resolution capture on compatible cameras; the camera pauses behind Settings
 
 ## RAW ZSL
 

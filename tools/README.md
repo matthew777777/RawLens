@@ -2,17 +2,31 @@
 
 > See [current repository state](../docs/CURRENT_STATE.md) for app integration, current merge names, build requirements and the scope of historical evidence.
 
-Host-side code: the MFSR desktop harness, capture-format checks, shader
-builders, and verification scripts and oracles. Everything here runs on
-Linux/macOS (Apple Silicon included) with no device unless noted. Numerical
+Build inputs, desktop launchers, capture-format checks and manual verification
+tools. Device probes and Android benchmarks require a connected phone; host
+tools state their platform dependencies in their own instructions. Numerical
 parity for MFSR is judged by the error envelopes in `sr-pipeline/PARITY.md`.
+
+## App build inputs
+
+These directories contain source or generators used by Gradle/CMake, even when
+they also provide standalone host tools. They are required for source builds.
+
+| Path | Build use |
+|---|---|
+| `sr-pipeline/`, `sr-vulkan/src/main/cpp/`, `lkr-lite/` | App MFSR and LK-R native engines, shader generation and shared JVM code. |
+| `photo-rcd/`, `rcd-baseline/fast-20261026/` | Photo RCD generators, pinned upstream source/licenses and shader input referenced by `app/build.gradle.kts`. |
+| `halide/` | Rebuilds the checked-in AOT filters used by the app. |
+| `mhc-highlights/embed_spirv.py` | Embeds the MHC green shader during the native build. |
+| `build_amaze_reference.py` | Generates the scalar AMaZE reference compiled by CMake. |
+| `build_dng_native.sh` | Builds the host DNG library for JVM tests. |
 
 ## Multi-frame super-resolution (start here)
 
 | Path | What |
 |---|---|
 | `sr-pipeline/` | Desktop JVM CLI for the MFSR engine (DNG burst directory in, `merged.dng` out; CPU or Vulkan backend). Wired into the build as `:tools:sr-pipeline`; [README](sr-pipeline/README.md) has run flags and tests. |
-| `lkr-lite/` | LK-SR engine (LK-R Lite) and full-frame Vulkan CLI; backs the app’s `LkrMerge` (liblkrpipeline.so). Replaced `lkr-pipeline/` on 2026-11-14 (archived outside the repo, `~/RawLens-archive/`). |
+| `lkr-lite/` | LK-R engine (LK-R Lite) and full-frame Vulkan CLI; backs the app’s `LkrMerge` (liblkrpipeline.so). Replaced `lkr-pipeline/` on 2026-11-14; the previous implementation remains in Git history. |
 | `sr-vulkan/src/main/cpp` | MFSR Vulkan sources compiled into the app NDK build by path (not a standalone Gradle project). |
 | `jamy_parity_oracle.py` | Independent NumPy transcription of the Jamy-L SR core; writes golden files (`python3 tools/jamy_parity_oracle.py --out <dir>`). |
 
@@ -69,3 +83,25 @@ licensed Adreno Offline Compiler installation.
 | Path | What |
 |---|---|
 | `vendor_release_smoke.py` | Black-box checks of the fully optimized release APK on a connected device; backs up and restores the lens profile. |
+
+## Other manual checks and generators
+
+| Path | Purpose |
+|---|---|
+| `aces2/` | ACES 2.0 LUT generation. |
+| `autofocus-probe/`, `lapis-profile/` | Device autofocus and supported-firmware sensor investigations. |
+| `capture-sharpening-parity/`, `chroma-cleanup-bench/`, `noise-model-validation/` | Numerical and quality checks for image processing. |
+| `direct-recording/` | Host `.craw` file-descriptor smoke check. |
+| `hdrplus-auto/`, `photo-rcd/`, `mhc-highlights/` | Host/device validation for HDR+ and demosaic paths. |
+| `preview-efficiency/`, `vf-precision/` | Preview performance, LUT and sensor-precision checks. |
+| `rapidraw-develop/`, `build_rtcs_shader.sh` | Development and capture-sharpening checks/builds. |
+| `render_user_guide.py` | Generates the printable user guide. |
+
+Standalone launchers and numerical oracles are often invoked manually, so a lack
+of app callers does not by itself make them unused. Test fixtures and upstream
+source/license files are inputs, not disposable output. The unused `rawdn`
+implementation and temporary-session LK-R scripts have been removed; see the
+[archive guide](../docs/refactor/README.md).
+
+Write new reports, compiler output, media and temporary models under ignored
+`build/` or `output/` directories. Keep concise findings and provenance in `docs/`.
