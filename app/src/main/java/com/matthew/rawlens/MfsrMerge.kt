@@ -684,6 +684,12 @@ internal object MfsrMerge {
                 // 2x zipper fix: R/B colour differences get a wider kernel than green.
                 chromaScale = tuning.chromaScale(scale.toFloat()),
                 icaIterations = tuning.icaIterations,
+                // KernelNet's continuous motion (regularized flow, smooth
+                // flow/robustness sampling, soft rejection) for Wronski too.
+                continuousMotion = true,
+                // KernelNet's wide gather, green detail path and green frame
+                // weights for Wronski's per-frame kernels too.
+                detailReconstruction = true,
                 // KernelNet (when selected): one kernel map from the reference
                 // frame, which on the device IS the full frame, so no
                 // separate full-frame copy; the net runs in sensor
@@ -702,7 +708,7 @@ internal object MfsrMerge {
                     )
                 }
             )
-            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=%s s3=%s zipperFix=%s".format(snr, fin.tileSize, settings.kernel, settings.s3, settings.zipperFix))
+            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=%s continuousMotion=on s3=%s zipperFix=%s".format(snr, fin.tileSize, settings.kernel, settings.s3, settings.zipperFix))
             fun asset(name: String): ByteArray =
                 context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
             val fft = asset("fft")
