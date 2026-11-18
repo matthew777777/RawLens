@@ -272,7 +272,13 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
               }
             }
           }
-          std::array<double, 6> q = LkAffine(lref, mov.data(), 40);
+          // Coarse LK iteration cap (2026-11-18): at full binned resolution noisy frames never reached the
+          // 1e-3 px stop and ran all 40 iterations (3 of 7 on IMG_20260919_184641_979), most of the coarse
+          // time; tile LK and the solver refine the motion afterwards. 12 (coarse levels converge in <= 11):
+          // Mac coarse 0.60 -> 0.34 s (8 frames), 1.87 -> 0.86 s (16); final image 74.5 dB vs 40 (noise grain
+          // only), other bursts bit-identical. LKRL_COARSE_IT / debug.lkr.coarseit = the old 40 for A/B.
+          static const int coarse_it = std::getenv("LKRL_COARSE_IT") ? std::atoi(std::getenv("LKRL_COARSE_IT")) : 12;
+          std::array<double, 6> q = LkAffine(lref, mov.data(), coarse_it);
           const int alignment_scale = prm.paper_parity ? 1 : bin;
           q[2] *= alignment_scale;
           q[5] *= alignment_scale;

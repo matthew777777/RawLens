@@ -132,6 +132,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.noprefetch", v) > 0 && v[0] == '1') setenv("LKRL_NO_PREFETCH", "1", 0);
     // A/B of the DCT look: debug.lkr.fb = 0 no DCT pass; debug.lkr.prior = 1 / 0 forces shadow-luma denoise on / off.
     if (__system_property_get("debug.lkr.fb", v) > 0 && v[0]) setenv("LKRL_FB", v, 0);
+    // A/B of the coarse LK iteration cap: debug.lkr.coarseit = 40 restores the old cap.
+    if (__system_property_get("debug.lkr.coarseit", v) > 0 && v[0]) setenv("LKRL_COARSE_IT", v, 0);
   }
 #endif
   const NoiseModelRef noise_model = g_noise_model;
