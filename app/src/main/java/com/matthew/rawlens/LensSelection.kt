@@ -59,7 +59,11 @@ import android.os.SystemClock
 
 // First-run and settings lens discovery and selection screens. Moved verbatim from MainActivity.
 
-internal fun MainActivity.showLensDiscovery(firstRun: Boolean) {
+/**
+ * @param retestAf re-runs the AF scan probe on every route, discarding saved
+ *   AF verdicts (the "Re-test autofocus" link).
+ */
+internal fun MainActivity.showLensDiscovery(firstRun: Boolean, retestAf: Boolean = false) {
     // First launch covers the whole camera UI (including the top bar)
     // with an opaque black overlay — a dialog window can't reliably do
     // that — while later invocations keep the floating progress dialog.
@@ -106,8 +110,37 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean) {
             .setCancelable(true)
             .show()
     }
-    val verdicts = runCatching { lensVerdictStore.snapshot() }.getOrDefault(LensVerdicts.EMPTY)
-    lensDiscovery.discover(verdicts) { lenses ->
+    val stored = runCatching { lensVerdictStore.snapshot() }.getOrDefault(LensVerdicts.EMPTY)
+    val verdicts = if (retestAf) stored.copy(af = emptyMap()) else stored
+    lensDiscovery.discover(verdicts) { discovered ->
+        // Active AF scan probe for routes never probed: characteristics lie
+        // both ways (AF state runs without the lens moving, or the lens moves
+        // with no AF state machine), so open each one and look.
+        val toProbe = discovered.filter {
+            it.kind != LensRouteKind.UNAVAILABLE && it.af == AfVerdict.UNKNOWN
+        }
+        val canProbe = toProbe.isNotEmpty() &&
+            checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val lenses = if (!canProbe) discovered else {
+            val stopped = java.util.concurrent.CountDownLatch(1)
+            var restart = false
+            runOnUiThread {
+                controllerIfReady?.let { restart = it.isRunning(); it.stop() }
+                progressDialog?.setMessage("Testing autofocus on ${toProbe.size} route(s)…\nPoint the camera at something with detail.")
+                stopped.countDown()
+            }
+            stopped.await()
+            if (retestAf) runCatching { lensVerdictStore.clearAf(toProbe.map { it.id }) }
+            val probe = AfScanProbe(this)
+            val results = toProbe.associate { lens ->
+                if (isFinishing || isDestroyed) return@associate lens.id to AfVerdict.UNKNOWN
+                val verdict = probe.probe(lens)
+                runCatching { lensVerdictStore.markAf(lens.id, verdict) }
+                lens.id to verdict
+            }
+            if (restart) runOnUiThread { if (!isFinishing && !isDestroyed) controller.start() }
+            discovered.map { lens -> results[lens.id]?.let { applyAfVerdict(lens, it) } ?: lens }
+        }
         runOnUiThread {
             if (isFinishing || isDestroyed) return@runOnUiThread
             progressDialog?.dismiss()
@@ -267,6 +300,23 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         setPadding(0, dp(2), 0, dp(10))
     }
     container.addView(copyReport, LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, wrapContent()
+    ))
+    // Set by whichever page variant is shown below, so the retest link can close it.
+    var closeSelection: () -> Unit = {}
+    val retestAf = TextView(this).apply {
+        text = "Re-test autofocus"
+        setTextColor(getColor(R.color.accent))
+        textSize = 12f
+        typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER
+        setPadding(0, 0, 0, dp(10))
+        setOnClickListener {
+            closeSelection()
+            showLensDiscovery(firstRun, retestAf = true)
+        }
+    }
+    container.addView(retestAf, LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT, wrapContent()
     ))
     copyReport.setOnClickListener {
@@ -624,6 +674,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
             )
         )
         root.requestFocus()
+        closeSelection = { (root.parent as? ViewGroup)?.removeView(root) }
         fun dismissPage() {
             (root.parent as? ViewGroup)?.removeView(root)
             // Used to showStatusBar() here: first install kept the
@@ -657,6 +708,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     // Later opens: a full-screen page like the rest of Settings (back arrow and title on
     // top, Cancel / Save pinned to the bottom) instead of a floating panel.
     val dialog = android.app.Dialog(this, R.style.Theme_RawLens)
+    closeSelection = { dialog.dismiss() }
     val backButton = TextView(this).apply {
         text = "←"
         textSize = 22f

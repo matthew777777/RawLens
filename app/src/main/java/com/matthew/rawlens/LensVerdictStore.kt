@@ -26,7 +26,9 @@ data class LensVerdicts(
      * whole settled session: usable, but colour comes from RawLens'
      * estimate, so the picker prefers another route to the same lens.
      */
-    val noHalAwb: Set<String> = emptySet()
+    val noHalAwb: Set<String> = emptySet(),
+    /** Active AF scan probe results keyed by route identity ([AfScanProbe]). */
+    val af: Map<String, AfVerdict> = emptyMap()
 ) {
     companion object {
         val EMPTY = LensVerdicts()
@@ -43,7 +45,29 @@ data class LensVerdicts(
 class LensVerdictStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun snapshot(): LensVerdicts = LensVerdicts(openableIds(), deadIds(), verifiedIds(), noHalAwbIds())
+    fun snapshot(): LensVerdicts = LensVerdicts(openableIds(), deadIds(), verifiedIds(), noHalAwbIds(), afVerdicts())
+
+    /** Stored as `routeId=VERDICT` strings. */
+    fun afVerdicts(): Map<String, AfVerdict> =
+        preferences.getStringSet(KEY_AF, emptySet()).orEmpty().mapNotNull { entry ->
+            val id = entry.substringBeforeLast('=', "")
+            val verdict = runCatching { AfVerdict.valueOf(entry.substringAfterLast('=')) }.getOrNull()
+            if (id.isEmpty() || verdict == null) null else id to verdict
+        }.toMap()
+
+    /** Forgets AF probe results so the next discovery re-probes those routes. */
+    fun clearAf(identities: Collection<String>) {
+        val next = afVerdicts() - identities.toSet()
+        preferences.edit().putStringSet(KEY_AF, next.map { "${it.key}=${it.value.name}" }.toSet()).apply()
+    }
+
+    /** Records an AF probe result; UNKNOWN keeps any earlier conclusive verdict. */
+    fun markAf(identity: String, verdict: AfVerdict) {
+        if (identity.isBlank() || verdict == AfVerdict.UNKNOWN) return
+        val next = afVerdicts() + (identity to verdict)
+        val entries = next.entries.take(MAX_IDS).map { "${it.key}=${it.value.name}" }.toSet()
+        preferences.edit().putStringSet(KEY_AF, entries).apply()
+    }
 
     fun noHalAwbIds(): Set<String> =
         preferences.getStringSet(KEY_NO_HAL_AWB, emptySet()).orEmpty().toSet()
@@ -115,6 +139,7 @@ class LensVerdictStore(context: Context) {
         const val KEY_DEAD = "dead_ids"
         const val KEY_VERIFIED = "verified_ids"
         const val KEY_NO_HAL_AWB = "no_hal_awb_ids"
+        const val KEY_AF = "af_verdicts"
         const val MAX_IDS = 64
     }
 }

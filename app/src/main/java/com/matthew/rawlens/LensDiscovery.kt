@@ -87,7 +87,9 @@ data class DiscoveredLens(
     /** Open-time verdict from real `openCamera` calls; UNKNOWN until opened. */
     val verdict: LensVerdict = LensVerdict.UNKNOWN,
     /** A settled session on this route got no AWB from the HAL ([LensVerdicts.noHalAwb]). */
-    val noHalAwb: Boolean = false
+    val noHalAwb: Boolean = false,
+    /** Active AF scan probe result ([AfScanProbe]); UNKNOWN until probed. */
+    val af: AfVerdict = AfVerdict.UNKNOWN
 )
 
 /** A picker section with a header and an explanatory subtitle. */
@@ -246,7 +248,7 @@ class LensDiscovery(context: Context) {
 
             Log.i(LOG_TAG, "Discovered RAW lenses: ${found.keys}")
             return found.values
-                .map { lens -> applyAwbVerdict(applyVerdict(lens, routeVerdict(lens.id, verdicts)), verdicts) }
+                .map { lens -> applyAfVerdict(applyAwbVerdict(applyVerdict(lens, routeVerdict(lens.id, verdicts)), verdicts), verdicts.af[lens.id] ?: AfVerdict.UNKNOWN) }
                 .sortedWith(compareBy<DiscoveredLens> { it.role == LensRole.FRONT }.thenBy { it.opticalMetric }.thenBy { it.id })
     }
 
@@ -613,6 +615,14 @@ private fun routePriority(kind: LensRouteKind): Int = when (kind) {
     LensRouteKind.UNAVAILABLE -> 3
 }
 
+/** Full AF first, manual-only next; unprobed sits between so it is never penalised. */
+private fun afPriority(af: AfVerdict): Int = when (af) {
+    AfVerdict.WORKING, AfVerdict.FIXED_FOCUS -> 0
+    AfVerdict.UNKNOWN -> 1
+    AfVerdict.PHYSICAL_ONLY -> 2
+    AfVerdict.LOGICAL_ONLY, AfVerdict.DEAD -> 3
+}
+
 private fun verdictPriority(verdict: LensVerdict): Int = when (verdict) {
     LensVerdict.VERIFIED -> 0
     LensVerdict.OPENABLE -> 1
@@ -628,11 +638,13 @@ private fun verdictPriority(verdict: LensVerdict): Int = when (verdict) {
 private fun healthPriority(lens: DiscoveredLens): Int = when {
     lens.verdict == LensVerdict.DEAD -> 3
     lens.noHalAwb -> 1
+    lens.af == AfVerdict.LOGICAL_ONLY || lens.af == AfVerdict.DEAD -> 1
     else -> 0
 }
 
 private val opticRouteOrder: Comparator<DiscoveredLens> =
     compareBy<DiscoveredLens> { healthPriority(it) }
+        .thenBy { afPriority(it.af) }
         .thenBy { verdictPriority(it.verdict) }
         .thenBy { routePriority(it.kind) }
         .thenBy { it.opticalMetric }
@@ -676,6 +688,16 @@ fun applyAwbVerdict(lens: DiscoveredLens, verdicts: LensVerdicts): DiscoveredLen
     ).filter { it !in lens.details }
     val details = (listOf(lens.details) + notes).filter { it.isNotBlank() }.joinToString(" · ")
     return lens.copy(noHalAwb = missingAwb, details = details)
+}
+
+/** Attaches an AF probe verdict, noting it in the picker details. */
+fun applyAfVerdict(lens: DiscoveredLens, verdict: AfVerdict): DiscoveredLens {
+    if (lens.kind == LensRouteKind.UNAVAILABLE) return lens
+    val cleaned = AfVerdict.entries.mapNotNull { it.note }
+        .fold(lens.details) { d, note -> d.replace(" · $note", "").replace(note, "") }
+    val note = verdict.note ?: return lens.copy(af = verdict, details = cleaned)
+    val details = listOf(cleaned, note).filter { it.isNotBlank() }.joinToString(" · ")
+    return lens.copy(af = verdict, details = details)
 }
 
 /** Attaches an open-time verdict to a lens, keeping the legacy label in sync. */
