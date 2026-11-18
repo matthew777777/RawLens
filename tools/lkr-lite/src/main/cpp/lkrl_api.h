@@ -13,6 +13,7 @@
 #include <functional>
 #include <string>
 #include <deque>
+#include <memory>
 #include <vector>
 
 #include "lkrl_gpu.h"
@@ -209,6 +210,13 @@ struct SolveStats {
 };
 constexpr int kDebugMaps = 5;
 
+// Two-phase tile solve (solveBegin / solveEnd): the GPU fit is done in Begin and the NPU prior (when
+// enabled) is started asynchronously, so the caller can fit its next tile on the GPU before End waits for
+// it and runs the finishing on this worker's GPU objects.
+struct PendingTile;
+struct PendingDeleter { void operator()(PendingTile* p) const; };
+using PendingPtr = std::unique_ptr<PendingTile, PendingDeleter>;
+
 class Solver {
  public:
   explicit Solver(Gpu* gpu);
@@ -220,6 +228,9 @@ class Solver {
   // only compared, not merged); p: K x 6 affine motions in/out; x_out: 3 x (s h) x (s w).
   bool solve(const float* frames, int K, int h, int w, float* p, const SolveParams& prm,
              const PriorFn& prior, std::vector<float>* x_out, SolveStats* st);
+  bool solveBegin(const float* frames, int K, int h, int w, float* p, const SolveParams& prm,
+                  const PriorFn& prior, PendingPtr* pend);
+  bool solveEnd(PendingPtr* pend, std::vector<float>* x_out, SolveStats* st);
 
  private:
   // LK-R Lite: the GPU work is LiteSolver; SolveParams fields it does not use are ignored.

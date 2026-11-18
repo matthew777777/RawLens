@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lkrl_full.h"
+#include "lkrl_prior.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -713,6 +714,49 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     };
     static const bool prefetch_env = std::getenv("LKRL_NO_PREFETCH") == nullptr;
     const bool prefetch = prefetch_env && !gpu_lk;   // the GPU LK would share this worker's queue
+    // Lag-1 tile pipeline (NPU prior): see solveBegin / solveEnd.
+    struct InFlight { size_t ji = 0; bool ok = false, live = false; PendingPtr pend; double solve_ms = 0, prep_ms = 0, load_ms = 0; std::vector<float> yk; };
+    const bool lag = PriorEnabled() && !std::getenv("LKRL_PRIOR_NOLAG");
+    InFlight inflight;
+    auto commit = [&](InFlight& f) -> bool {
+      f.live = false;
+      std::vector<float> x;
+      SolveStats ss;
+      const double te = now_ms();
+      const bool ok = f.ok && solver.solveEnd(&f.pend, &x, &ss);
+      const double solve_ms = f.solve_ms + (now_ms() - te);
+      Done done;
+      done.x.swap(x);
+      if (holdout) done.yk.swap(f.yk);
+      const double t_wait = now_ms();
+      std::unique_lock<std::mutex> l(mu);
+      // Back-pressure: every waiting result holds a tile image.
+      cv.wait(l, [&] { return failed || ticket == f.ji || pending.size() < 2 * gpus.size(); });
+      S.ms_wait += now_ms() - t_wait;
+      if (failed) return false;
+      if (!ok) { failed = true; fail_msg = "tile solve failed"; cv.notify_all(); return false; }
+      S.ms_gpu += ss.gpu_ms;
+      S.ms_solve += solve_ms;
+      S.ms_prep += f.prep_ms;
+      S.ms_load += f.load_ms;
+      S.ms_prior += ss.prior_ms;
+      S.ms_init += ss.init_ms;
+      S.ms_finish += ss.finish_ms;
+      S.prior_calls += ss.prior_calls;
+      ++S.tiles;
+      done.ss = std::move(ss);
+      pending.emplace(f.ji, std::move(done));
+      const double t_blend = now_ms();
+      while (!pending.empty() && pending.begin()->first == ticket) {
+        blend(ticket, pending.begin()->second);
+        pending.erase(pending.begin());
+        ++ticket;
+      }
+      S.ms_blend += now_ms() - t_blend;
+      cv.notify_all();
+      l.unlock();
+      return true;
+    };
     Prepared bufs[2];
     int cb = 0;
     { const size_t j0 = next.fetch_add(1); if (j0 < jobs.size()) prepare(j0, bufs[0]); }
@@ -773,45 +817,29 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
           std::fprintf(stderr, "block search: %zu/%zu blocks moved, max %.1f LR px\n", nz, field.size() / 2, mx);
         }
       }
+      // Two-phase solve: the GPU fit now; with the NPU prior on, this tile's prior runs while the worker
+      // fits its NEXT tile, and the tile is finished / blended one iteration later (lag 1).
       const double ts = now_ms();
-      const bool ok = solver.solve(tf.data(), K, n, n, p.data(), spt, prior, &x, &ss);
-      const double solve_ms = now_ms() - ts;
-      Done done;
-      done.x.swap(x);
-      if (holdout) done.yk.assign(tf.data() + size_t(K - 1) * n * n, tf.data() + size_t(K) * n * n);
-      const double t_wait = now_ms();
-      std::unique_lock<std::mutex> l(mu);
-      // Back-pressure: every waiting result holds a tile image.
-      cv.wait(l, [&] { return failed || ticket == ji || pending.size() < 2 * gpus.size(); });
-      S.ms_wait += now_ms() - t_wait;
-      if (failed) return;
-      if (!ok) { failed = true; fail_msg = "tile solve failed"; cv.notify_all(); return; }
-      S.ms_gpu += ss.gpu_ms;
-      S.ms_solve += solve_ms;
-      S.ms_prep += cur.prep_ms;
-      S.ms_load += cur.load_ms;
-      S.ms_prior += ss.prior_ms;
-      S.ms_init += ss.init_ms;
-      S.ms_finish += ss.finish_ms;
-      S.prior_calls += ss.prior_calls;
-      ++S.tiles;
-      done.ss = std::move(ss);
-      pending.emplace(ji, std::move(done));
-      const double t_blend = now_ms();
-      while (!pending.empty() && pending.begin()->first == ticket) {
-        blend(ticket, pending.begin()->second);
-        pending.erase(pending.begin());
-        ++ticket;
+      InFlight now_t;
+      now_t.ji = ji;
+      now_t.ok = solver.solveBegin(tf.data(), K, n, n, p.data(), spt, prior, &now_t.pend);
+      now_t.solve_ms = now_ms() - ts;
+      now_t.prep_ms = cur.prep_ms; now_t.load_ms = cur.load_ms;
+      if (holdout) now_t.yk.assign(tf.data() + size_t(K - 1) * n * n, tf.data() + size_t(K) * n * n);
+      now_t.live = true;
+      if (lag) {
+        if (inflight.live && !commit(inflight)) return;
+        inflight = std::move(now_t);
+      } else if (!commit(now_t)) {
+        return;
       }
-      S.ms_blend += now_ms() - t_blend;
-      cv.notify_all();
-      l.unlock();
       if (have_next) {
         if (prefetch) pre.join();
         else prepare(jn, bufs[cb ^ 1]);
       }
       cb ^= 1;
     }
+    if (inflight.live && !commit(inflight)) return;
     // Resolve names while this worker's Solver pipelines still exist. Profile
     // every worker; reporting just worker 1 misranks a full-frame tiled merge.
     const std::string report = wg->profileReport(), names = solver.profileNames();

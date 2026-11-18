@@ -23,6 +23,7 @@
 
 #include "lkrl_full.h"
 #include "lkrl_pack.h"
+#include "lkrl_prior.h"
 #include "lkrl_tuning.h"
 #include "lkrl_resample.h"
 #include "lkrl_sharpness.h"
@@ -124,6 +125,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.tilelk", v) > 0 && v[0] == '0') prm.tile_lk = false;
     // A/B of the colour-difference fit: debug.lkr.cdfit = D radius, -1 = the old independent fit (read once per process).
     if (__system_property_get("debug.lkr.cdfit", v) > 0 && v[0]) setenv("LKRL_CDFIT", v, 0);
+    // Learned post-fit prior on the NPU (research, opt-in): debug.lkr.prior=1 (read once per process).
+    if (__system_property_get("debug.lkr.prior", v) > 0 && v[0]) setenv("LKRL_PRIOR", v, 0);
     // A/B of the cooperative DCT prior: debug.lkr.dctold = 1 runs the previous one-block-per-invocation shaders.
     if (__system_property_get("debug.lkr.dctold", v) > 0 && v[0]) setenv("LKRL_DCT_OLD", v, 0);
     // A/B of the per-scale adjoint: debug.lkr.adjgen = 1 runs the generic (pc.s) adj build.
@@ -402,6 +405,15 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_matthew_rawlens_LkrBridge_nativePrew
     if (!gpu.ok()) return -1;
     lkrl::Solver solver(&gpu);   // creates all pipelines
     if (!solver.ok()) return -1;
+  }
+  {   // learned prior: compile for the NPU now (app tile 512 -> 512 px at 1x, 1024 px at 2x)
+    char v[PROP_VALUE_MAX] = {0};
+    if (__system_property_get("debug.lkr.prior", v) > 0 && v[0]) setenv("LKRL_PRIOR", v, 0);
+    if (lkrl::PriorEnabled()) {
+      std::string err;
+      for (int t : {512, 1024})
+        if (!lkrl::PriorPrewarm(t, t, &err)) { __android_log_print(ANDROID_LOG_WARN, "LkrLite", "prior prewarm %d: %s", t, err.c_str()); break; }
+    }
   }
   return jlong(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
 }

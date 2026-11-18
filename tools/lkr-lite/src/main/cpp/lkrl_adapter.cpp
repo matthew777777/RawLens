@@ -4,9 +4,11 @@
 // After the GPU solve it applies LK-R's no-prior finishing: x = z, FinishLook(z, x, noise_scale)
 // (Bayer notch, stronger where frames were rejected; clip halo; highlight desaturation).
 #include <chrono>
+#include <future>
 #include <cstdio>
 #include <cstdlib>
 
+#include "lkrl_prior.h"
 #include "lkrl_api.h"
 
 namespace lkrl {
@@ -21,11 +23,52 @@ Solver::Solver(Gpu* gpu) : gpu_(gpu), lite_(gpu) { ok_ = lite_.ok(); }
 Solver::~Solver() = default;
 std::string Solver::profileNames() const { return lite_.profileNames(); }
 
-bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const SolveParams& prm,
+struct PendingTile {
+  SolveParams prm;
+  std::vector<float> z, xd, nscale, delta;
+  bool dct = false, prior_ok = false, done_sync = false;
+  int H = 0, W = 0;
+  double t0 = 0.0;
+  SolveStats S;
+  std::vector<float> x_sync;   // finished in Begin (motion look reads the frames buffer)
+  std::future<void> prior;
+  PriorStats pst; std::string perr;
+};
+// Wait for the tile's NPU prior (if started) and apply its correction to the DCT-cleaned copy too.
+void waitPrior(PendingTile& T) {
+  if (!T.prior.valid()) return;
+  const double tw = now_ms();
+  T.prior.wait();
+  T.prior = std::future<void>();
+  const double waited = now_ms() - tw;
+  if (T.prior_ok) {
+    if (T.dct && T.xd.size() == T.z.size()) for (size_t i = 0; i < T.z.size(); ++i) T.xd[i] = std::max(T.xd[i] + T.delta[i], 0.0f);
+    if (std::getenv("LKRL_PRIOR_LOG")) std::fprintf(stderr, "lkr-lite prior: %dx%d on %s %.1f ms (waited %.1f ms)\n", T.W, T.H, T.pst.device.c_str(), T.pst.ms, waited);
+  } else {
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "lkr-lite prior skipped: %s\n", T.perr.c_str()); warned = true; }
+  }
+}
+
+void PendingDeleter::operator()(PendingTile* p) const {
+  if (p && p->prior.valid()) p->prior.wait();
+  delete p;
+}
+
+bool Solver::solve(const float* frames, int K, int h, int w, float* p, const SolveParams& prm,
                    const PriorFn& prior, std::vector<float>* x_out, SolveStats* st) {
+  PendingPtr pend;
+  if (!solveBegin(frames, K, h, w, p, prm, prior, &pend)) return false;
+  return solveEnd(&pend, x_out, st);
+}
+
+bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, const SolveParams& prm,
+                        const PriorFn& prior, PendingPtr* pend) {
   const double t0 = now_ms();
-  SolveStats local;
-  SolveStats& S = st ? *st : local;
+  pend->reset(new PendingTile);
+  PendingTile& T = **pend;
+  T.prm = prm; T.t0 = t0;
+  SolveStats& S = T.S;
   S = SolveStats{};
   if (prior || (prm.dct_prior && prm.dct_aperture > 0)) {
     std::fprintf(stderr, "lkr-lite: only the plain DCT prior is implemented\n");
@@ -110,10 +153,14 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
   S.prior_ms = ls.ms_prior;
   S.prior_calls = ls.prior_calls;
   const int H = prm.s * h, W = prm.s * w;
-  if (lp.dct) *x_out = std::move(xd); else *x_out = z;   // no prior: x = z (LK-R 'none')
+  // Learned post-fit prior (opt-in, LKRL_PRIOR=1 / debug.lkr.prior=1): corrects Lite's merged image before
+  // finishing, on the NPU only (lkrl_prior.cpp). Started asynchronously here: the caller fits its next
+  // tile on the GPU meanwhile, solveEnd waits. With the DCT cleanup, its output gets the same correction.
+  T.dct = lp.dct; T.H = H; T.W = W;
+  T.z = std::move(z); T.xd = std::move(xd); T.nscale = std::move(nscale);
   if (const char* dump = std::getenv("LKRL_DUMP_NS")) {   // diagnostics: noise map handed to FinishLook
     FILE* f = std::fopen(dump, "wb");
-    if (f) { std::fwrite(nscale.data(), 4, nscale.size(), f); std::fclose(f); }
+    if (f) { std::fwrite(T.nscale.data(), 4, T.nscale.size(), f); std::fclose(f); }
   }
   if (prm.debug_maps && wt.size() == size_t(K) * h * w) {   // plane 0 = effective frames, as LK-R
     S.dbg.assign(size_t(kDebugMaps) * H * W, 0.0f);
@@ -125,8 +172,33 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
         S.dbg[size_t(Y) * W + X] = eff;
       }
   }
+  if (PriorEnabled()) {
+    PendingTile* tp = &T;
+    if (tp->dct) tp->delta.assign(tp->z.size(), 0.0f);
+    tp->prior = std::async(std::launch::async, [tp]() {
+      tp->prior_ok = PriorApply(tp->z.data(), tp->H, tp->W, tp->prm.noise_a, tp->dct ? tp->delta.data() : nullptr, &tp->pst, &tp->perr);
+    });
+  }
+  if (msmooth) {   // motion look reads the frames buffer, which the caller reuses: do it now (before finishing)
+    waitPrior(T);
+    T.x_sync = T.dct ? T.xd : T.z;
+    MotionLook(frames, K, h, w, rr.data(), wt.data(), pv.data(), dloc.data(), prm, T.z.data(), T.x_sync.data());
+    T.done_sync = true;   // solveEnd: x = x_sync, then finishing
+  }
+  return true;
+}
+
+bool Solver::solveEnd(PendingPtr* pend, std::vector<float>* x_out, SolveStats* st) {
+  PendingTile& T = **pend;
+  const SolveParams& prm = T.prm;
+  SolveStats local;
+  SolveStats& S = st ? *st : local;
+  const int H = T.H, W = T.W;
+  waitPrior(T);
+  std::vector<float>& z = T.z;
+  if (T.done_sync) *x_out = std::move(T.x_sync);
+  else if (T.dct) *x_out = std::move(T.xd); else *x_out = z;   // no prior: x = z (LK-R 'none')
   const double tf = now_ms();
-  if (msmooth) MotionLook(frames, K, h, w, rr.data(), wt.data(), pv.data(), dloc.data(), prm, z.data(), x_out->data());
   // GPU finish for the default options (fallback_chroma / shadow stay on the CPU path); LKRL_FIN_CPU=1.
   static const bool fin_cpu = std::getenv("LKRL_FIN_CPU") != nullptr;
   bool fin_done = false;
@@ -134,12 +206,14 @@ bool Solver::solve(const float* frames, int Kall, int h, int w, float* p, const 
     LiteSolver::FinishArgs fa{{prm.wb[0], prm.wb[1], prm.wb[2]}, prm.clip, prm.grain, prm.equalize_strength,
                               prm.notch, prm.highlight_desat};
     std::string ferr;
-    fin_done = lite_.finish(z.data(), x_out, H, W, fa, nscale.empty() ? nullptr : &nscale, &ferr);
+    fin_done = lite_.finish(z.data(), x_out, H, W, fa, T.nscale.empty() ? nullptr : &T.nscale, &ferr);
     if (!fin_done) std::fprintf(stderr, "lkr-lite: gpu finish failed (%s), CPU path\n", ferr.c_str());
   }
-  if (!fin_done) FinishLook(z.data(), x_out->data(), H, W, prm, nscale.empty() ? nullptr : nscale.data(), nullptr);
-  S.finish_ms = now_ms() - tf;
-  S.total_ms = now_ms() - t0;
+  if (!fin_done) FinishLook(z.data(), x_out->data(), H, W, prm, T.nscale.empty() ? nullptr : T.nscale.data(), nullptr);
+  T.S.finish_ms = now_ms() - tf;
+  T.S.total_ms = now_ms() - T.t0;
+  S = std::move(T.S);
+  pend->reset();
   return true;
 }
 

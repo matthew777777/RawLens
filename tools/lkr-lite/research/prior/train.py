@@ -31,22 +31,52 @@ class Prior(nn.Module):
 
 def load_pairs(d):
     out = []
-    for f in sorted(glob.glob(os.path.join(d, 'pair_*.npz'))):
-        z = np.load(f)
-        # kept as float16 (8 GB Macs): sqrt + float32 per crop in batch()
-        x = z['x']; y = z['y']
-        s = np.float32(np.sqrt(float(z['noise']) * 0.18))   # noise sigma at mid grey (relative)
-        out.append((x, y, s))
+    files = sorted(f for dd in d.split(',') for f in glob.glob(os.path.join(dd, 'pair_*.npz')))   # comma-separated dirs
+    for f in files:
+        # Memory-mapped float16 caches (8 GB Macs): only the crops in use are read; sqrt + float32 per crop.
+        cx, cy, cn = f[:-4] + '.x.npy', f[:-4] + '.y.npy', f[:-4] + '.n.npy'
+        if not (os.path.exists(cx) and os.path.exists(cy) and os.path.exists(cn)):
+            z = np.load(f)
+            np.save(cx, z['x']); np.save(cy, z['y']); np.save(cn, np.float32(z['noise']))
+            del z
+        x = np.load(cx, mmap_mode='r'); y = np.load(cy, mmap_mode='r')
+        s = np.float32(np.sqrt(float(np.load(cn)) * 0.18))   # noise sigma at mid grey (relative)
+        hf = f[:-4] + '.h.npy'   # hard-patch mining map (add_hardness.py / gen_pairs.hardness)
+        h = np.load(hf) if os.path.exists(hf) else None
+        out.append((x, y, s, h))
     return out
 
 
-def batch(pairs, rng, n, p, dev):
+class HardIndex:
+    """Gharbi et al. 2016 hard-patch mining: cells sampled in proportion to Lite's reconstruction error
+    energy (luma + chroma), over all pairs."""
+    def __init__(self, pairs, cell=32):
+        self.cell = cell; keys, w = [], []
+        for pi, pr in enumerate(pairs):
+            h = pr[3]
+            if h is None: continue
+            e = (h[0] ** 2 + h[1] ** 2).ravel()
+            for ci in np.nonzero(e > 0)[0]: keys.append((pi, ci, h.shape[2])); w.append(e[ci])
+        w = np.array(w, np.float64); self.keys = keys; self.p = w / w.sum() if len(w) else None
+
+    def pick(self, rng):
+        pi, ci, nx = self.keys[rng.choice(len(self.keys), p=self.p)]
+        return pi, (ci // nx) * self.cell + self.cell // 2, (ci % nx) * self.cell + self.cell // 2
+
+
+def batch(pairs, rng, n, p, dev, hard=None, hard_frac=0.0):
     xs, ys, ss = [], [], []
     for _ in range(n):
-        x, y, s = pairs[rng.integers(len(pairs))]
-        H = x.shape[0]
-        # even offsets keep the Bayer / 2x lattice phase (the zipper is lattice-locked)
-        i = int(rng.integers(32, H - 32 - p) // 4 * 4); j = int(rng.integers(32, H - 32 - p) // 4 * 4)
+        if hard is not None and hard.p is not None and rng.random() < hard_frac:
+            pi, cy, cx = hard.pick(rng)
+            x, y, s, _ = pairs[pi]; H = x.shape[0]
+            jit = lambda c: int(np.clip(c - p // 2 + rng.integers(-p // 4, p // 4 + 1), 32, H - 32 - p))
+            i, j = jit(cy) // 4 * 4, jit(cx) // 4 * 4
+        else:
+            x, y, s, _ = pairs[rng.integers(len(pairs))]
+            H = x.shape[0]
+            # even offsets keep the Bayer / 2x lattice phase (the zipper is lattice-locked)
+            i = int(rng.integers(32, H - 32 - p) // 4 * 4); j = int(rng.integers(32, H - 32 - p) // 4 * 4)
         a = np.sqrt(np.clip(x[i:i + p, j:j + p].astype(np.float32), 0, None))
         b = np.sqrt(np.clip(y[i:i + p, j:j + p].astype(np.float32), 0, None))
         k = int(rng.integers(4)); a, b = np.rot90(a, k), np.rot90(b, k)
@@ -70,20 +100,25 @@ def main():
     ap.add_argument('--layers', type=int, default=6); ap.add_argument('--patch', type=int, default=128)
     ap.add_argument('--batch', type=int, default=16); ap.add_argument('--lr', type=float, default=5e-4)
     ap.add_argument('--val', type=int, default=10, help='pairs held out for validation')
+    ap.add_argument('--init', default=None, help='start from this checkpoint (fine-tune)')
+    ap.add_argument('--hard', type=float, default=0.0, help='share of crops from hard-patch mining (Gharbi 2016), e.g. 0.5')
     a = ap.parse_args()
     dev = 'mps' if torch.backends.mps.is_available() else 'cpu'
     pairs = load_pairs(a.pairs)
     val, tr = pairs[:a.val], pairs[a.val:]
     print(f'{len(tr)} train / {len(val)} val pairs, device {dev}')
     m = Prior(a.ch, a.layers).to(dev)
+    if a.init: m.load_state_dict(torch.load(a.init, map_location='cpu')['state']); print('init from', a.init)
     print('parameters', sum(p.numel() for p in m.parameters()))
     opt = torch.optim.Adam(m.parameters(), lr=a.lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, a.steps)
     rng = np.random.default_rng(0); vrng = np.random.default_rng(123)
     vb = [batch(val, vrng, 16, 256, dev) for _ in range(4)]
+    hidx = HardIndex(tr) if a.hard > 0 else None
+    if hidx is not None: print('hard-patch cells', len(hidx.keys))
     t0 = time.time()
     for it in range(1, a.steps + 1):
-        x, y, s = batch(tr, rng, a.batch, a.patch, dev)
+        x, y, s = batch(tr, rng, a.batch, a.patch, dev, hidx, a.hard)
         o = m(x, s)
         loss = F.l1_loss(o, y) + 2.0 * F.l1_loss(highpass(o), highpass(y))
         opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0); opt.step(); sched.step()
