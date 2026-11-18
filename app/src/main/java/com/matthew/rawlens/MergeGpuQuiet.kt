@@ -9,9 +9,6 @@ package com.matthew.rawlens
  */
 internal object MergeGpuQuiet {
     @Volatile var active = false
-    /** Settings toggle "ISP preview during LK-R merge"; the debug prop also forces it. */
-    @Volatile var duringMergeEnabled = false
-
 
     fun enabled(): Boolean = try {
         Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
@@ -19,7 +16,7 @@ internal object MergeGpuQuiet {
     } catch (_: Throwable) { false }
 
     inline fun <T> during(block: () -> T): T {
-        val on = duringMergeEnabled || enabled()
+        val on = enabled()
         if (on) { active = true; Log.i("LkrMerge", "merge_vf_quiet: VF GPU work paused for merge") }
         try { return block() } finally { if (on) active = false }
     }

@@ -182,18 +182,6 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc("Saves battery by closing the camera while Settings is open. Active recordings continue."))
-        content.addView(p.kit.settingsCheck("ISP preview (instead of RAW viewfinder)", ispPreviewAlways()).apply {
-            setOnCheckedChangeListener { _, checked ->
-                setIspPreviewSettings(checked, ispPreviewDuringMerge())
-                setStatus(if (checked) "ISP PREVIEW • ON" else "ISP PREVIEW • OFF")
-            }
-        })
-        content.addView(p.kit.sectionDesc(
-            "Shows the camera's own ISP preview (no noise reduction, no sharpening) instead of " +
-                "the RAW viewfinder: less GPU, battery and heat while framing, but not the RAW " +
-                "look. Some phones cannot run a preview stream together with RAW; they stay on " +
-                "the RAW viewfinder."
-        ))
         // GPU VF: selectable superpixel resolution (480/640 full-rate / 960 balanced / 1080 detail).
         content.addView(Button(this).apply {
             text = "Preview resolution: ${vfResolution}px"

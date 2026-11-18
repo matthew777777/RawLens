@@ -354,39 +354,6 @@ class RawCameraController(
     private var rawReaderHasZslBudget = true
     private var previewSurface: Surface? = null
     private var vfMergeQuiet = false
-    // ISP preview toggles (Settings -> Merge). The system preview stream goes to the
-    // ISP SurfaceView, which is shown instead of the RAW VF: always, or only during LK-R merges.
-    @Volatile private var ispPreviewAlways = false
-    @Volatile private var ispDisplayShown = false
-    var onIspDisplayChanged: ((Boolean) -> Unit)? = null
-    private fun ispPreviewWanted(): Boolean = ispPreviewAlways || MergeGpuQuiet.duringMergeEnabled
-
-    /** Shows the ISP preview while it is wanted and the session carries a preview stream. */
-    private fun refreshIspDisplay() {
-        val mergeQuiet = MergeGpuQuiet.active
-        val show = previewSurface != null &&
-            (ispPreviewAlways || (mergeQuiet && MergeGpuQuiet.duringMergeEnabled))
-        if (show != ispDisplayShown) {
-            ispDisplayShown = show
-            Log.i(LOG_TAG, "ISP preview display ${if (show) "ON" else "OFF"} (merge=$mergeQuiet)")
-            activeVf()?.setMonitoringSuspended(show || mergeQuiet)
-            onIspDisplayChanged?.invoke(show)
-        }
-    }
-
-    fun setIspPreview(always: Boolean, duringMerge: Boolean) {
-        if (!isOnCameraThread()) {
-            cameraHandler.post { setIspPreview(always, duringMerge) }
-            return
-        }
-        val wasWanted = ispPreviewWanted()
-        ispPreviewAlways = always
-        MergeGpuQuiet.duringMergeEnabled = duringMerge
-        refreshIspDisplay()
-        // The preview stream and its NR/edge-off request are session-level: rebuild only
-        // when the session's need for an ISP stream actually changed.
-        if (wasWanted != ispPreviewWanted() && camera != null) restartCameraForConfigurationChange()
-    }
     private var previewSize: Size? = null
     private var selectedCameraId: String? = null
     private var rawCameraIds: List<String> = emptyList()
@@ -1050,7 +1017,7 @@ class RawCameraController(
         // raw-only jump straight to the first preview combo; everyone else
         // starts raw-only (the probe below renders the verdict once).
         if (ladder.comboIndex == 0 &&
-            (ispPreviewRequestNeeded(selectedCameraId) || threeAPreviewWanted(selectedCameraId) || ispPreviewWanted())
+            (ispPreviewRequestNeeded(selectedCameraId) || threeAPreviewWanted(selectedCameraId))
         ) {
             SessionStreamSelection.firstPreviewComboIndex(combos).takeIf { it > 0 }?.let { ladder.comboIndex = it }
         }
@@ -1358,9 +1325,8 @@ class RawCameraController(
                 val mergeQuiet = MergeGpuQuiet.active
                 if (mergeQuiet != vfMergeQuiet) {
                     vfMergeQuiet = mergeQuiet
-                    activeVf()?.setMonitoringSuspended(mergeQuiet || ispDisplayShown)
+                    activeVf()?.setMonitoringSuspended(mergeQuiet)
                 }
-                refreshIspDisplay()
                 if (!mergeQuiet) {
                 characteristics?.let { publishRawScopeIfDue(image, it) }
                 // Focus peaking rides the same RAW VF stream at its own throttle,
@@ -1369,7 +1335,7 @@ class RawCameraController(
                 characteristics?.let { rawExposureAssist.offer(image, it, developFocusView, result = latestPreviewResult) }
                 // The dual-RAW worker owns these allocations through Vulkan completion;
                 // don't concurrently hand the same AHB to the viewfinder GPU context.
-                if (!activeDualRaw && !ispDisplayShown) characteristics?.let {
+                if (!activeDualRaw) characteristics?.let {
                     activeVf()?.apply {
                         setSensorLevels(dngMetadataOverrides(selectedCameraId))
                         offer(image, it, latestPreviewResult)
@@ -5353,12 +5319,6 @@ class RawCameraController(
                 // RGBA16F sidecar), so every repeating RAW request carries the map —
                 // not only the ZSL path.
                 if (includeRaw) requestLensShadingMap(this)
-                // ISP preview shown to the user: no ISP noise reduction / sharpening, so it
-                // stays close to what the RAW pipeline will produce. RAW targets are unaffected.
-                if (surface != null && ispPreviewWanted()) {
-                    set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
-                    set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
-                }
             }.build()
             // Keep motion telemetry available throughout preview for burst metadata.
             motionTracker.start(cameraHandler)

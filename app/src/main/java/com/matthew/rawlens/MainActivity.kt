@@ -687,7 +687,6 @@ class MainActivity : Activity() {
             },
             vendorKeysByKey = { key -> vendorKeyStore.get(key) }
         )
-        controller.onIspDisplayChanged = { show -> runOnUiThread { applyIspDisplay(show) } }
         controller.onVfRouteChanged = { isBgu ->
             runOnUiThread {
                 applyVfRoute(isBgu)
@@ -702,7 +701,6 @@ class MainActivity : Activity() {
         // The mode switcher owns the practical capture intent; Settings remain advanced defaults.
         controller.setCaptureExposureMode(captureExposureMode)
         controller.setZslHybridTopup(lensPreferences().getBoolean(KEY_ZSL_HYBRID_TOPUP, true))
-        applyIspPreviewSettings()
         controller.setCaptureFormat(captureFormat)
         controller.setJpegOutputSettings(jpegOutputSettings())
         controller.setRawExposureAssist(rawExposureSettings)
@@ -1377,7 +1375,7 @@ class MainActivity : Activity() {
         val root = panel.parent as View
         findViewById<View>(R.id.captureInfoRow).visibility = View.VISIBLE
         // ISP preview SurfaceView: always VISIBLE (its surface is a session output); the
-        // RAW/BGU VF media-overlay surfaces cover it unless an ISP preview toggle shows it.
+        // RAW/BGU VF media-overlay surfaces cover this compatibility stream.
         // Fill the exact viewport: letterboxing (fillViewport=false + 3:4) leaves a
         // black strip between the preview and the bottom panel on tall screens.
         // Both islands tuck over the preview by exactly their corner radius so
@@ -3548,32 +3546,11 @@ class MainActivity : Activity() {
 
     /** Shows exactly one VF surface: BGU or legacy, per the controller route. */
     private fun applyVfRoute(isBgu: Boolean) {
-        val hidden = ispDisplayShown
         findViewById<BguViewfinder>(R.id.bguViewfinder)?.visibility =
-            if (isBgu && !hidden) android.view.View.VISIBLE else android.view.View.GONE
+            if (isBgu) android.view.View.VISIBLE else android.view.View.GONE
         findViewById<RawViewfinder>(R.id.rawViewfinder)?.visibility =
-            if (isBgu || hidden) android.view.View.GONE else android.view.View.VISIBLE
+            if (isBgu) android.view.View.GONE else android.view.View.VISIBLE
     }
-
-    private var ispDisplayShown = false
-
-    /** ISP preview on screen: removing the RAW/BGU VF surface (media overlay) reveals the ISP SurfaceView below. */
-    private fun applyIspDisplay(show: Boolean) {
-        ispDisplayShown = show
-        applyVfRoute(controller.isBguActive())
-    }
-
-    internal fun ispPreviewAlways(): Boolean = lensPreferences().getBoolean(KEY_ISP_PREVIEW_ALWAYS, false)
-    internal fun ispPreviewDuringMerge(): Boolean = lensPreferences().getBoolean(KEY_ISP_PREVIEW_MERGE, false)
-
-    internal fun setIspPreviewSettings(always: Boolean, duringMerge: Boolean) {
-        lensPreferences().edit().putBoolean(KEY_ISP_PREVIEW_ALWAYS, always)
-            .putBoolean(KEY_ISP_PREVIEW_MERGE, duringMerge).apply()
-        applyIspPreviewSettings()
-    }
-
-    private fun applyIspPreviewSettings() =
-        controller.setIspPreview(ispPreviewAlways(), ispPreviewDuringMerge())
 
     /** Recording fan-out target: the same routed engine [applyVfRoute] shows. */
     private fun recorderViewfinder(isBgu: Boolean): VfEngine? =
@@ -4572,8 +4549,6 @@ class MainActivity : Activity() {
         const val KEY_BURST_FUSION_KEEP_SOURCE_BURST = "burst_fusion_keep_source_burst"
         // Future SR hook: KEY_RAW_SR_ENABLED / KEY_RAW_SR_DNG_MODE here.
         const val KEY_ZSL_HYBRID_TOPUP = "zsl_hybrid_topup"
-        const val KEY_ISP_PREVIEW_ALWAYS = "isp_preview_always"
-        const val KEY_ISP_PREVIEW_MERGE = "isp_preview_during_merge"
         const val KEY_DYNAMIC_EXPOSURE = "dynamic_exposure"
         const val KEY_DYNAMIC_EXPOSURE_BALANCE = "dynamic_exposure_balance"
         const val KEY_DYNAMIC_EXPOSURE_ISO_LIMIT = "dynamic_exposure_iso_limit"
