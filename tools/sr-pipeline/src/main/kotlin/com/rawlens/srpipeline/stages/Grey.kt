@@ -1,5 +1,7 @@
 package com.rawlens.srpipeline.stages
 
+import org.jtransforms.fft.DoubleFFT_1D
+
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -135,6 +137,11 @@ object Grey {
     }
 
     private fun fft2(re: DoubleArray, im: DoubleArray, h: Int, w: Int, inverse: Boolean) {
+        // Full sensor dimensions are usually mixed-radix. Reuse one plan
+        // per axis; the old O(n²) DFT made full-frame CPU studies impractical.
+        val rowPlan = if (w > 1 && w and (w - 1) != 0) DoubleFFT_1D(w.toLong()) else null
+        val colPlan = if (h > 1 && h and (h - 1) != 0) DoubleFFT_1D(h.toLong()) else null
+        val packed = DoubleArray(2 * maxOf(h, w))
         val tmpRe = DoubleArray(maxOf(h, w))
         val tmpIm = DoubleArray(maxOf(h, w))
         for (y in 0 until h) {
@@ -142,7 +149,7 @@ object Grey {
                 tmpRe[x] = re[y * w + x]
                 tmpIm[x] = im[y * w + x]
             }
-            fft1d(tmpRe, tmpIm, w, inverse)
+            fft1d(tmpRe, tmpIm, w, inverse, rowPlan, packed)
             for (x in 0 until w) {
                 re[y * w + x] = tmpRe[x]
                 im[y * w + x] = tmpIm[x]
@@ -153,7 +160,7 @@ object Grey {
                 tmpRe[y] = re[y * w + x]
                 tmpIm[y] = im[y * w + x]
             }
-            fft1d(tmpRe, tmpIm, h, inverse)
+            fft1d(tmpRe, tmpIm, h, inverse, colPlan, packed)
             for (y in 0 until h) {
                 re[y * w + x] = tmpRe[y]
                 im[y * w + x] = tmpIm[y]
@@ -180,10 +187,13 @@ object Grey {
         }
     }
 
-    private fun fft1d(re: DoubleArray, im: DoubleArray, n: Int, inverse: Boolean) {
+    private fun fft1d(re: DoubleArray, im: DoubleArray, n: Int, inverse: Boolean, plan: DoubleFFT_1D?, packed: DoubleArray) {
         if (n == 1) return
         if (n and (n - 1) != 0) {
-            dft1d(re, im, n, inverse)
+            requireNotNull(plan)
+            for (i in 0 until n) { packed[2*i] = re[i]; packed[2*i+1] = im[i] }
+            if (inverse) plan.complexInverse(packed, true) else plan.complexForward(packed)
+            for (i in 0 until n) { re[i] = packed[2*i]; im[i] = packed[2*i+1] }
             return
         }
         var j = 0
@@ -233,26 +243,4 @@ object Grey {
         }
     }
 
-    private fun dft1d(re: DoubleArray, im: DoubleArray, n: Int, inverse: Boolean) {
-        val srcRe = re.copyOfRange(0, n)
-        val srcIm = im.copyOfRange(0, n)
-        val sign = if (inverse) 1.0 else -1.0
-        for (k in 0 until n) {
-            var sr = 0.0
-            var si = 0.0
-            for (t in 0 until n) {
-                val ang = sign * 2.0 * PI * k * t / n
-                val c = cos(ang)
-                val s = sin(ang)
-                sr += srcRe[t] * c - srcIm[t] * s
-                si += srcRe[t] * s + srcIm[t] * c
-            }
-            if (inverse) {
-                sr /= n
-                si /= n
-            }
-            re[k] = sr
-            im[k] = si
-        }
-    }
 }

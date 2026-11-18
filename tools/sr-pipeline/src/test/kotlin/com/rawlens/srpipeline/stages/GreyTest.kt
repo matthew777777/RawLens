@@ -11,7 +11,7 @@ import org.junit.Test
  * backend) and through an equivalent numpy `fft2/fftshift/zero/ifftshift/
  * ifft2` implementation, which agree. The constant-image cases are
  * implementation-independent (DC survives the low-pass, so output must equal
- * input) and additionally cover the naive-DFT fallback on non-power-of-two
+ * input) and additionally cover the mixed-radix FFT on non-power-of-two
  * sizes.
  */
 class GreyTest {
@@ -57,6 +57,17 @@ class GreyTest {
         assertMatrixEquals(img6, Grey.fftLowpass(img6), 1e-6f)
         val img5 = Array(5) { FloatArray(5) { 0.42f } }
         assertMatrixEquals(img5, Grey.fftLowpass(img5), 1e-6f)
+    }
+
+    @Test
+    fun `mixed radix transform retains low waves and removes high waves`() {
+        val h=12; val w=20
+        fun low(y:Int,x:Int)=.4+.1*kotlin.math.cos(2*Math.PI*x/w)+.07*kotlin.math.sin(2*Math.PI*y/h)
+        val image=Array(h) { y -> FloatArray(w) { x ->
+            (low(y,x)+.05*kotlin.math.cos(18*Math.PI*x/w)+.03*kotlin.math.cos(10*Math.PI*y/h)).toFloat()
+        } }
+        val expected=Array(h) { y -> FloatArray(w) { x -> low(y,x).toFloat() } }
+        assertMatrixEquals(expected,Grey.fftLowpass(image),1e-6f)
     }
 
     @Test

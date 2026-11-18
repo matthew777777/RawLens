@@ -28,3 +28,7 @@
     public <init>(android.content.Context, android.util.AttributeSet);
     public <init>(android.content.Context, android.util.AttributeSet, int);
 }
+
+# JTransforms (sr-pipeline Grey/Fft) pulls in JLargeArrays, whose off-heap
+# arrays reference the JDK-only sun.misc.Cleaner; that path is never used here.
+-dontwarn sun.misc.Cleaner
