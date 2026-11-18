@@ -600,7 +600,7 @@ internal fun MainActivity.cycleQuickDLighting() {
     setStatus("D-LIGHTING • ${next.label.uppercase(Locale.US)}")
 }
 
-/** Off -> Auto -> Detail -> Clean; frozen per shot like every output choice. */
+/** Off -> Detail -> Clean; frozen per shot like every output choice. */
 internal fun MainActivity.cycleQuickMono() {
     if (isVideoMode) return
     val current = jpegOutputSettings()

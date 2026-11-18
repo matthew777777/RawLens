@@ -4409,7 +4409,7 @@ class MainActivity : Activity() {
             val mono = jpegOutputSettings().mono.mode
             visibility = if (isVideoMode) View.GONE else View.VISIBLE
             text = "B&W\n${mono.label.uppercase(Locale.US)}"
-            contentDescription = "Black and white ${mono.label}. Tap to cycle Off, Auto, Detail, Clean."
+            contentDescription = "Black and white ${mono.label}. Tap to cycle Off, Detail, Clean."
             setQuickTileState(this, mono.enabled)
         }
         applyMonoPreview()

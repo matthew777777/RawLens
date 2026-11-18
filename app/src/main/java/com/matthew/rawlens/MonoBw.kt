@@ -22,12 +22,11 @@ import kotlin.math.roundToInt
  *
  * DETAIL keeps full resolution (ratio-corrected flat mosaic, see
  * assets/spirv/mono.vk.glsl); CLEAN is rwmono `bin luma` (2x2 average,
- * half linear resolution, about 1 stop cleaner). AUTO picks per frame from the
- * noise measured on that frame ([MonoNoise]); no Camera2 noise profile is used.
+ * half linear resolution, about 1 stop cleaner). Clean is the default.
+ * Noise is measured on the frame ([MonoNoise]); no Camera2 noise profile is used.
  */
 enum class MonoMode(val label: String, val token: String) {
     OFF("Off", "COLOR"),
-    AUTO("Auto", "B&W A"),
     DETAIL("Detail", "B&W D"),
     CLEAN("Clean", "B&W C"),
     ;
@@ -41,14 +40,14 @@ enum class MonoMode(val label: String, val token: String) {
         const val KEY_KEEP_COLOR_DNG = "mono_keep_color_dng"
         // "DIRECT" = pre-rename name of CLEAN (2026-11-18).
         fun fromPreference(value: String?): MonoMode =
-            if (value == "DIRECT") CLEAN else entries.firstOrNull { it.name == value } ?: OFF
+            if (value == "DIRECT" || value == "AUTO") CLEAN else entries.firstOrNull { it.name == value } ?: CLEAN
         fun read(prefs: SharedPreferences): MonoMode = fromPreference(prefs.getString(PREFERENCE_KEY, null))
     }
 }
 
 /** Frozen-at-shutter B&W choice carried with [JpegOutputSettings]. */
 data class MonoSettings(
-    val mode: MonoMode = MonoMode.OFF,
+    val mode: MonoMode = MonoMode.CLEAN,
     /** Also save the normal colour (Bayer) DNG next to the B&W DNG. */
     val keepColorDng: Boolean = false,
 ) {
@@ -224,10 +223,7 @@ internal class MonoVulkan(
         val w = cfa.width; val h = cfa.height
         require(w >= 4 && h >= 4 && w % 2 == 0 && h % 2 == 0 && cfa.values.size == w * h)
         val noise = MonoNoise.estimate(cfa, balance)
-        val mode = when (requested) {
-            MonoMode.AUTO -> if (noise.prefersClean) MonoMode.CLEAN else MonoMode.DETAIL
-            else -> requested
-        }
+        val mode = requested
         val clean = mode == MonoMode.CLEAN
         val pipeline = pipelines[if (clean) 1 else 0]
         check(pipeline != 0L) { "Mono session is closed" }

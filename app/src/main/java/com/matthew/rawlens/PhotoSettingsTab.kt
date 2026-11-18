@@ -317,7 +317,7 @@ internal class PhotoSettingsTab(
                 }
             }
         })
-        kit.content.addView(kit.sectionDesc("Builds the picture straight from the sensor photosites, no demosaic (after rwmono). Detail: full resolution, colour checkerboard removed. Clean: 2x2 binned, half the width and height, about 1 stop cleaner. Auto: measures this frame's noise and picks Clean only when fine detail is below the noise. Single frame and HDR+; the viewfinder previews in B&W at no extra cost. DNG becomes a monochrome linear DNG."))
+        kit.content.addView(kit.sectionDesc("Builds the picture straight from the sensor photosites, no demosaic (after rwmono). Detail: full resolution, colour checkerboard removed. Clean: 2x2 binned, half the width and height, about 1 stop cleaner. Clean is the default. Single frame and HDR+; the viewfinder previews in B&W at no extra cost. DNG becomes a monochrome linear DNG."))
         kit.content.addView(SettingsSwitch(activity).apply {
             text = "B&W: also keep colour DNG"
             isChecked = currentJpegSettings.mono.keepColorDng
