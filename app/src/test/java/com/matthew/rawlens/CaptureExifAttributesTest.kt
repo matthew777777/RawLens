@@ -61,6 +61,8 @@ class CaptureExifAttributesTest {
         CaptureExifAttributes.writeTo(exif, metadata, 1_700_000_000_123L)
         verify(exif).setAttribute("ShutterSpeedValue", "-1/1")
         verify(exif).setAttribute("ExposureBiasValue", "-3/2")
+        verify(exif).setAttribute("CompositeImage", "2")
+        verify(exif).setAttribute("SourceImageNumberOfCompositeImage", "8,6")
         verify(exif).setAttribute("ExposureMode", "1")
         verify(exif).setAttribute("WhiteBalance", "0")
         verify(exif).setAttribute("SubSecTimeOriginal", "123")

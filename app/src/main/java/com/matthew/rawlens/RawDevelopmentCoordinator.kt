@@ -173,6 +173,22 @@ class RawDevelopmentCoordinator(context: Context) {
         }
     }
 
+    private var monoSession: MonoVulkan? = null
+
+    /** B&W session on the coordinator's Vulkan 1.0 device (shared with opposed). */
+    private fun monoSession(): MonoVulkan {
+        monoSession?.let { return it }
+        val cache = VulkanPipelineCache.file(appContext.cacheDir, VulkanPipelineCache.HOST_OPPOSED)
+        val handle = hlVkHandle ?: VulkanHub.openVulkan10().also {
+            it.loadPipelineCache(cache)
+            hlVkHandle = it
+        }
+        return MonoVulkan(handle, appContext.assets).also {
+            monoSession = it
+            handle.savePipelineCache(cache)
+        }
+    }
+
     /** Called on the serial save worker before capture; no CFA or large staging allocation. */
     fun prewarmHighlights() { runCatching { opposedSession() } }
 
@@ -827,6 +843,99 @@ class RawDevelopmentCoordinator(context: Context) {
         }
     }
 
+    /**
+     * B&W from a fresh RAW plane: unpack + pre-demosaic corrections (defects,
+     * lens shading) + optional opposed highlights, then the photosite mono
+     * pass. Never demosaics. Quad-Bayer is not supported (caller keeps colour).
+     */
+    fun monoFromRaw(
+        rawPlane: ByteBuffer, metadata: RawFrameMetadata, settings: RawDevelopmentSettings,
+        look: JpegOutputSettings, wantMono: Boolean, wantPacked: Boolean,
+    ): MonoFrame {
+        metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
+        val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
+            ?: throw UnsupportedOperationException("RAW buffer geometry is not proven")
+        val normalization = metadata.normalizationOrNull()
+            ?: throw UnsupportedOperationException("RAW black/white/CFA normalization metadata is invalid")
+        val rowStride = metadata.rawPlaneRowStride ?: throw UnsupportedOperationException("RAW row stride is missing")
+        val pixelStride = metadata.rawPlanePixelStride ?: throw UnsupportedOperationException("RAW pixel stride is missing")
+        val packedFormat = PackedRawFormat.ofInt(metadata.rawImageFormat)
+        val unpacked = if (packedFormat == null) {
+            RawSensorUnpacker.unpackNormalized(
+                rawPlane, RawPlaneLayout(metadata.imageWidth, metadata.imageHeight, rowStride, pixelStride,
+                    geometry.sensorOriginX, geometry.sensorOriginY),
+                normalization, geometry.processingCrop, ByteOrder.nativeOrder()
+            )
+        } else {
+            RawPackedUnpacker.unpackFrameNormalized(
+                rawPlane, metadata.imageWidth, metadata.imageHeight,
+                rowStride, pixelStride, metadata.rawImageFormat, normalization,
+                geometry.sensorOriginX, geometry.sensorOriginY,
+                geometry.processingCrop, ByteOrder.nativeOrder()
+            )
+        }
+        val cfa = requireNotNull(RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic).cfa)
+        return monoFromCfa(cfa, metadata, look, wantMono, wantPacked)
+    }
+
+    /** B&W from an already-corrected CFA (single-frame AI denoise or HDR+ merge). */
+    fun monoFromCfa(
+        cfa: UnpackedRawCfa, metadata: RawFrameMetadata, look: JpegOutputSettings,
+        wantMono: Boolean, wantPacked: Boolean, merged: Boolean = false,
+    ): MonoFrame {
+        require(!metadata.quadBayer) { "B&W photosite mode needs a 2x2 Bayer CFA" }
+        cfa.requireAmazeCompatible()
+        val neutral = SceneLinearColorProcessor.resolve(SceneLinearColorMetadata.from(metadata), 0.0)
+            .glslCameraWhiteNormalized()
+        val balance = FloatArray(3) { 1f / neutral[it] }
+        // Opposed keeps clipped skies gradated in luma exactly as in colour.
+        val opposed = look.hlReconstruction && (!merged || cfa.highlightClipping != null)
+        val source = reconstructBayer(cfa, opposed, metadata)
+        return monoSession().run(source, look.mono.mode, balance, neutral, wantMono, wantPacked)
+    }
+
+    /** Develops a [MonoFrame] through the normal ACEScg -> AgX/Basic -> JPEG tail. */
+    fun developMonoJpeg(
+        frame: MonoFrame, metadata: RawFrameMetadata, settings: RawDevelopmentSettings,
+        outputSettings: JpegOutputSettings, merged: Boolean = false,
+    ): DevelopedJpeg {
+        MemoryLeakDiagnostics.stillCapture()
+        val transform = monoTransform(frame, metadata, settings, merged)
+        val camera = requireNotNull(frame.packed) { "B&W develop needs the packed camera-linear plane" }
+        return amaze.transformCameraLinear(camera, frame.width, frame.height, transform.glslColumnMajorMatrix()) {
+            finishJpeg(it, outputSettings)
+        }
+    }
+
+    fun developMonoJxl(
+        frame: MonoFrame, metadata: RawFrameMetadata, settings: RawDevelopmentSettings,
+        look: JpegOutputSettings, jxl: JxlOutputSettings, merged: Boolean = false,
+    ): DevelopedJxl {
+        MemoryLeakDiagnostics.stillCapture()
+        val transform = monoTransform(frame, metadata, settings, merged)
+        val camera = requireNotNull(frame.packed) { "B&W develop needs the packed camera-linear plane" }
+        return amaze.transformCameraLinear(camera, frame.width, frame.height, transform.glslColumnMajorMatrix()) {
+            finishJxl(it, look, jxl)
+        }
+    }
+
+    private fun monoTransform(
+        frame: MonoFrame, metadata: RawFrameMetadata, settings: RawDevelopmentSettings, merged: Boolean,
+    ): ResolvedSceneLinearTransform {
+        // Same metering as the colour develop of the same CFA.
+        val correction = if (merged) {
+            resolveMergedAdaptive(frame.cfa, settings, adaptiveWorkspace)?.correctionEv?.let {
+                it * if (settings.hdrAdaptiveTuning != null) 1.0
+                else settings.adaptiveExposureStrength.coerceIn(0f, 1f).toDouble()
+            } ?: 0.0
+        } else if (settings.adaptiveExposureStrength > 0f) {
+            (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
+                AdaptiveDevelopmentExposure.analyze(frame.cfa, adaptiveWorkspace, settings.adaptiveExposureTuning)
+            }.correctionEv * settings.adaptiveExposureStrength.coerceIn(0f, 1f)
+        } else 0.0
+        return SceneLinearColorProcessor.resolve(SceneLinearColorMetadata.from(metadata), settings.exposureEv + correction)
+    }
+
     private fun finishJpeg(
         output: AmazeGpuOutput,
         outputSettings: JpegOutputSettings
@@ -1399,6 +1508,8 @@ class RawDevelopmentCoordinator(context: Context) {
         amaze.close()
         opposedSession?.close()
         opposedSession = null
+        monoSession?.close()
+        monoSession = null
         hlVkHandle?.close()
         hlVkHandle = null
         MemoryLeakDiagnostics.sample(

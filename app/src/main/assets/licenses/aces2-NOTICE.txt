@@ -1,0 +1,15 @@
+ACES 2.0 output transform lookup tables
+
+Generated with OpenColorIO 2.6.0 ACES 2.0 built-in output transforms.
+Source: https://github.com/AcademySoftwareFoundation/OpenColorIO/tree/v2.6.0
+Reference: https://github.com/aces-aswf/aces-core
+Documentation: https://docs.acescentral.com/system-components/output-transforms/
+
+ACES Project: Copyright Academy of Motion Picture Arts and Sciences.
+Licensed under Apache License, Version 2.0; see Apache-2.0.txt.
+OpenColorIO is distributed under the BSD 3-Clause License.
+
+RawLens changes: signed-log AP1 shaper, RGB8 LUT baking, trilinear CPU/GLES
+sampling, sRGB and Display P3 encoding. This is a 100 nit SDR LUT
+approximation, not an Academy-certified implementation. It does not
+apply the older ACES fitted curve used by the video recording profile.

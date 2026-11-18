@@ -1299,6 +1299,7 @@ class Gles31AmazeProcessor(
         }
 
         private inner class BoundProgram(private val id: Int) {
+            private var toneMode: Int? = null
             private val pendingSamplers = ArrayList<Pair<String, GlTexture>>(4)
 
             init {
@@ -1331,7 +1332,10 @@ class Gles31AmazeProcessor(
             fun ivec4(name: String, values: IntArray) =
                 GLES31.glUniform4i(location(name), values[0], values[1], values[2], values[3])
             fun float(name: String, value: Float) = GLES31.glUniform1f(location(name), value)
-            fun integer(name: String, value: Int) = GLES31.glUniform1i(location(name), value)
+            fun integer(name: String, value: Int) {
+                GLES31.glUniform1i(location(name), value)
+                if (name == "u_basic") toneMode = value
+            }
             fun vec4(name: String, values: FloatArray) =
                 GLES31.glUniform4f(location(name), values[0], values[1], values[2], values[3])
             fun vec3(name: String, values: FloatArray) =
@@ -1349,6 +1353,7 @@ class Gles31AmazeProcessor(
                     GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, texture.id)
                     GLES31.glUniform1i(location(name), unit)
                 }
+                toneMode?.let { programs.bindAces2(id, it) }
                 GLES31.glDispatchCompute(
                     ceilDiv(width, AmazePipelineContract.LOCAL_SIZE_X),
                     ceilDiv(height, AmazePipelineContract.LOCAL_SIZE_Y),
@@ -1368,6 +1373,8 @@ class Gles31AmazeProcessor(
     }
 
     internal class ProgramCache(private val context: Context, private val slicedDispatch: Boolean = false) : Closeable {
+        private val aces2 = Aces2Gl()
+        fun bindAces2(id: Int, mode: Int) = aces2.bind(id, mode)
         private val programs = LinkedHashMap<String, Int>()
         private val common by lazy { read("shaders/utils/import_amaze.glsl") }
         private val cleanupCommon by lazy { read("shaders/amaze/cleanup.glsl") }
@@ -1390,7 +1397,7 @@ class Gles31AmazeProcessor(
         }.also(GLES31::glUseProgram)
 
         private fun read(path: String): String =
-            context.assets.open(path).bufferedReader().use { it.readText().replace("// SIGMOID_FUNCTIONS", SigmoidDisplayTransform.glsl) }
+            context.assets.open(path).bufferedReader().use { it.readText().replace("// SIGMOID_FUNCTIONS", SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl) }
 
         private fun compile(source: String, name: String): Int {
             val shader = GLES31.glCreateShader(GLES31.GL_COMPUTE_SHADER)
@@ -1419,6 +1426,7 @@ class Gles31AmazeProcessor(
         }
 
         override fun close() {
+            aces2.close()
             programs.values.forEach {
                 GLES31.glDeleteProgram(it)
                 MemoryLeakDiagnostics.glProgramReleased()

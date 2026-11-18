@@ -285,6 +285,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     /** Latest zero-copy frame; superseded entries are closed, never queued. Guarded by [lock]. */
     private var gpuPending: GpuFrame? = null
     /** Sticky NEON fallback after repeated GPU failures; reset per session. */
+    /** Photo B&W preview: luma-folded colour matrices (see snapshotRenderState). */
+    @Volatile var monoPreview = false
     @Volatile private var gpuDisabledForSession = false
     /** GL-worker-only consecutive GPU failure count driving [gpuDisabledForSession]. */
     private var consecutiveGpuFailures = 0
@@ -526,6 +528,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var gpuPositionLoc = -1
     private var gpuUvLoc = -1
     private var gpuJpegLoc = -1
+    private val aces2 = Aces2Gl()
     private var gpuBasicToneLoc = -1
     private var gpuAgxPunchyLoc = -1
     private var gpuAgxContrastLoc = -1
@@ -1572,6 +1575,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             smoothCamToAces.copyInto(out.camToAces)
             smoothCamWhite.copyInto(out.camWhite)
         }
+        // B&W photo mode: project every matrix row onto luma so the existing
+        // shaders output grey. Zero extra GPU work (no pass, no branch).
+        if (monoPreview) {
+            foldLuma(out.matrix, LUMA_709)
+            foldLuma(out.camToAces, LUMA_AP1)
+        }
         // Snapshot the WYSIWYG render state with the frame so AgX slider moves
         // and RAW/JPEG switches never tear a frame in flight.
         out.jpeg = renderJpeg
@@ -1673,6 +1682,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         glUniform1i(jpegLoc, if (state.jpeg) 1 else 0)
         glUniform1f(exposureEvLoc, state.exposureEv)
         glUniform1i(basicToneLoc, state.basicTone)
+        aces2.bind(program, state.basicTone)
         glUniform1f(agxPunchyLoc, state.agxPunchy)
         glUniform1f(agxContrastLoc, state.agxContrast)
         glUniform1f(agxSaturationLoc, state.agxSaturation)
@@ -2131,6 +2141,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glUniform1i(gpuDisplayP3Loc, if (frame.displayP3) 1 else 0)
                     glUniform1i(gpuJpegLoc, if (frame.jpeg) 1 else 0)
                     glUniform1i(gpuBasicToneLoc, frame.basicTone)
+                    aces2.bind(gpuProgram, frame.basicTone)
                     glUniform1f(gpuAgxPunchyLoc, frame.agxPunchy)
                     glUniform1f(gpuAgxContrastLoc, frame.agxContrast)
                     glUniform1f(gpuAgxSaturationLoc, frame.agxSaturation)
@@ -2843,6 +2854,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     }
 
     private fun releaseGl() {
+        aces2.close()
         // Runs on the GL worker: release native Vulkan imports first, then our refs.
         vfHint.close()
         try {
@@ -2928,6 +2940,17 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             if (value.isFinite() && value >= 0f) value else 1f
 
         /** CCM elements may be negative (off-diagonals); only non-finite is rejected. */
+        private val LUMA_709 = floatArrayOf(0.2126f, 0.7152f, 0.0722f)
+        private val LUMA_AP1 = floatArrayOf(0.2722287f, 0.6740818f, 0.0536895f)
+
+        /** Column-major 3x3 [m] := 1 * lumaᵀ * m, in place: every output row becomes Y. */
+        internal fun foldLuma(m: FloatArray, luma: FloatArray) {
+            for (col in 0..2) {
+                val y = luma[0] * m[col * 3] + luma[1] * m[col * 3 + 1] + luma[2] * m[col * 3 + 2]
+                m[col * 3] = y; m[col * 3 + 1] = y; m[col * 3 + 2] = y
+            }
+        }
+
         internal fun sanitizeCcmElement(value: Float, identity: Float): Float =
             if (value.isFinite()) value else identity
 

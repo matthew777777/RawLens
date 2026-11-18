@@ -6,6 +6,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class JpegImageDescriptionTest {
+    @Test fun monochromeReportsActualModeAndRetainsMergeHistory() {
+        for (mode in listOf(MonoMode.DETAIL, MonoMode.CLEAN)) {
+            val text = jpegImageDescription(JpegOutputSettings(), CaptureFileNames.TYPE_HDRPLUS,
+                "HDR+ merge: 6 frames", outputWidth = 8160, outputHeight = 6120, monochromeMode = mode)
+            assertTrue(text.startsWith("HDR+ merge: 6 frames"))
+            assertTrue(text.contains("B&W ${mode.label}"))
+            assertTrue(text.contains("photosite monochrome, no demosaic"))
+            assertTrue(text.contains("Dimensions: 8160x6120"))
+            assertFalse(text.contains("Demosaic preference"))
+            assertFalse(text.contains("AMaZE"))
+        }
+    }
+
     @Test fun basicReportsItsOwnCurveAndActiveControlsWithoutAgxClaims() {
         val old = Locale.getDefault()
         try {

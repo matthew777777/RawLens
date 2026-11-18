@@ -387,6 +387,7 @@
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/ettrQuick" style="@style/QuickControlTile" android:text="ETTR\nOFF" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/resetTargetsQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="AF / AE\nRESET" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/lightQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LIGHT\nOFF" />
+            <com.matthew.rawlens.QuickControlTileView android:id="@+id/monoQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="B&amp;W\nOFF" />
         </LinearLayout>
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:baselineAligned="false">
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/hdrPlusQuick" style="@style/QuickControlTile" android:text="HDR+\nOFF" />

@@ -203,13 +203,27 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
                 )
             }
         )
+        // B&W photosite mode: one Vulkan pass on the merged CFA feeds both the
+        // monochrome DNG and the develop. Any failure keeps the colour path.
+        val mono = if (outputSettings.mono.enabled && !refMetadata.quadBayer) runCatching {
+            developer.monoFromCfa(effectiveMerged, refMetadata, outputSettings,
+                wantMono = outputFormat.includesDng, wantPacked = outputFormat.includesJpeg, merged = true)
+        }.onFailure { Log.w(LOG_TAG, "HDR+ B&W failed; saving colour", it) }.getOrNull() else null
+        try {
         if (outputFormat.includesDng) {
-            referenceDng = DngSaver(context).saveMerged(
-                effectiveMerged, refMetadata, captureTimeMillis, gps = captureGps,
-                displayName = CaptureFileNames.hdrPlusDng(captureTimeMillis),
-                sixteenBit = true, hdrPlusProvenance = provenance,
-                dngCompression = saveSettings.dngCompression
-            )
+            if (mono != null) {
+                referenceDng = MonoDngWriter.save(context, mono, refMetadata, captureTimeMillis, captureGps,
+                    CaptureFileNames.TYPE_HDRPLUS, HdrPlusDngWriter.provenanceBlock(provenance))
+            }
+            if (mono == null || outputSettings.mono.keepColorDng) {
+                val colorDng = DngSaver(context).saveMerged(
+                    effectiveMerged, refMetadata, captureTimeMillis, gps = captureGps,
+                    displayName = CaptureFileNames.hdrPlusDng(captureTimeMillis),
+                    sixteenBit = true, hdrPlusProvenance = provenance,
+                    dngCompression = saveSettings.dngCompression
+                )
+                if (referenceDng == null) referenceDng = colorDng
+            }
         }
         if (outputFormat.includesJpeg) {
             // The HDR+ average lives in the single-frame normalized domain, so the
@@ -217,7 +231,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             // itself (same highlight guards as single-frame). The DNG above stays
             // linear and dark; only this developed still lifts.
             if (developedFormat == DevelopedFormat.JXL) {
-                val developed = developer.developMergedJxl(effectiveMerged, refMetadata,
+                val developed = developMergedOrMonoJxl(mono, effectiveMerged, refMetadata,
                     RawDevelopmentSettings(
                         denoise = denoise,
                         exposureEv = 0.0,
@@ -234,7 +248,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
                 host.publishDevelopedJxlScope(developed)
                 host.reportSaveState(if (referenceDng != null) "HDR+ MERGED+DNG • JXL" else "HDR+ MERGED • JXL")
             } else {
-                val developed = developer.developMergedJpeg(effectiveMerged, refMetadata,
+                val developed = developMergedOrMonoJpeg(mono, effectiveMerged, refMetadata,
                     RawDevelopmentSettings(
                         denoise = denoise,
                         exposureEv = 0.0,
@@ -249,7 +263,8 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
                     JpegSaver(context).save(developed, refMetadata,
                         refResult, captureTimeMillis = captureTimeMillis,
                         typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = captureGps,
-                        description = HdrPlusDngWriter.provenanceBlock(provenance))
+                        description = HdrPlusDngWriter.provenanceBlock(provenance),
+                        monochromeMode = mono?.mode)
                     host.publishDevelopedScope(developed.bitmap)
                     host.reportSaveState(if (referenceDng != null) "HDR+ MERGED+DNG" else "HDR+ MERGED")
                 } finally {
@@ -260,7 +275,22 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
         } else {
             host.reportSaveState("HDR+ DNG SAVED")
         }
+        } finally {
+            mono?.close()
+        }
     }
+
+    private fun developMergedOrMonoJxl(
+        mono: MonoFrame?, cfa: UnpackedRawCfa, metadata: RawFrameMetadata, settings: RawDevelopmentSettings,
+        look: JpegOutputSettings, jxl: JxlOutputSettings,
+    ): DevelopedJxl = if (mono != null) host.developer().developMonoJxl(mono, metadata, settings, look, jxl, merged = true)
+        else host.developer().developMergedJxl(cfa, metadata, settings, look = look, jxl = jxl)
+
+    private fun developMergedOrMonoJpeg(
+        mono: MonoFrame?, cfa: UnpackedRawCfa, metadata: RawFrameMetadata, settings: RawDevelopmentSettings,
+        outputSettings: JpegOutputSettings,
+    ): DevelopedJpeg = if (mono != null) host.developer().developMonoJpeg(mono, metadata, settings, outputSettings, merged = true)
+        else host.developer().developMergedJpeg(cfa, metadata, settings, outputSettings)
 
     private companion object {
         const val LOG_TAG = "RawLensCamera"
@@ -336,7 +366,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
             // Same shutter / ZSL / save tail for both engines; only the merge differs.
             if (settings.engine == MfsrEngine.LKR)
                 MergeGpuQuiet.during { LkrMerge.mergeLive(context, ordered,
-                    LkrMerge.Settings(kernelNetDenoise = settings.lkrKernelNetDenoise, dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
+                    LkrMerge.Settings(kernelNetDenoise = settings.lkrKernelNetDenoise, network = settings.lkrNetwork, dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
                         zoom = settings.lkrZoom, fullRes = settings.lkrFullRes),
                     releaseInputs = host::releaseInputs) }
             else MfsrMerge.merge(context, ordered, settings)

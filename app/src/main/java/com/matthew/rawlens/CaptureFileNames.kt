@@ -31,6 +31,7 @@ object CaptureFileNames {
     const val TYPE_MFSR = "MFSR"
     const val TYPE_LKR = "LK-R"
     const val TYPE_BURST = "BURST"
+    const val TYPE_BW = "BW"
 
     private const val STEM_PATTERN = "yyyyMMdd_HHmmss_SSS"
 
@@ -75,6 +76,10 @@ object CaptureFileNames {
 
     /** HDR+ merged outputs: `IMG_<ts>_HDRPLUS.dng/jpg`. */
     fun hdrPlusDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDRPLUS, "dng")
+
+    /** B&W photosite DNG (monochrome LinearRaw): `IMG_<ts>_BW.dng`, `IMG_<ts>_HDRPLUS_BW.dng`. */
+    fun monoDng(captureTimeMillis: Long, type: String? = null): String =
+        fileName(captureTimeMillis, if (type == null) TYPE_BW else "${type}_$TYPE_BW", "dng")
 
     /** Linear RGB prime DNG from burst merge: `IMG_<ts>_LINEAR.dng`. */
     fun linearRgbDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_LINEAR, "dng")

@@ -600,6 +600,26 @@ internal fun MainActivity.cycleQuickDLighting() {
     setStatus("D-LIGHTING • ${next.label.uppercase(Locale.US)}")
 }
 
+/** Off -> Auto -> Detail -> Clean; frozen per shot like every output choice. */
+internal fun MainActivity.cycleQuickMono() {
+    if (isVideoMode) return
+    val current = jpegOutputSettings()
+    val next = current.mono.mode.next()
+    if (!controller.setJpegOutputSettings(current.copy(mono = current.mono.copy(mode = next)).resolvedForPlatform())) {
+        setStatus("SETTINGS AFTER SAVES")
+        return
+    }
+    lensPreferences().edit().putString(MonoMode.PREFERENCE_KEY, next.name).apply()
+    updateQuickControls()
+    setStatus(if (next.enabled) "B&W • ${next.label.uppercase(Locale.US)}" else "COLOR")
+}
+
+/** Photo viewfinder previews B&W by folding luma into its colour matrix (zero GPU cost). */
+internal fun MainActivity.applyMonoPreview() {
+    findViewById<RawViewfinder>(R.id.rawViewfinder)?.monoPreview =
+        !isVideoMode && jpegOutputSettings().mono.enabled
+}
+
 internal fun MainActivity.openWhiteBalanceControl() {
     showManualControl(ManualControl.WHITE_BALANCE)
 }

@@ -27,7 +27,8 @@ class JpegSaver(private val context: Context) {
              subfolder: String? = null,
              description: String? = null,
              sourceCamera: Pair<String?, String?>? = null,
-             onPublished: ((android.net.Uri) -> Unit)? = null): String {
+             onPublished: ((android.net.Uri) -> Unit)? = null,
+             monochromeMode: MonoMode? = null): String {
         val startedAt = SystemClock.elapsedRealtime()
         val bitmap = developed.bitmap
         val displayName = CaptureFileNames.fileName(captureTimeMillis, typeSuffix, "jpg")
@@ -105,7 +106,7 @@ class JpegSaver(private val context: Context) {
                         ExifInterface.TAG_IMAGE_DESCRIPTION,
                         jpegImageDescription(
                             developed.settings, typeSuffix, description, metadata,
-                            bitmap.width, bitmap.height, ultraHdrEncoded, encodedAt - insertedAt
+                            bitmap.width, bitmap.height, ultraHdrEncoded, encodedAt - insertedAt, monochromeMode
                         )
                     )
                     // A missing fix writes no GPS tags at all: an absent geotag

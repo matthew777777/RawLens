@@ -33,11 +33,12 @@ data class DevelopedJxl(
  */
 class Gles31JxlOutputProcessor(context: Context) {
     private val shaderSource = context.applicationContext.assets.open(SHADER).bufferedReader().use {
-        it.readText().replace("// SIGMOID_FUNCTIONS", SigmoidDisplayTransform.glsl)
+        it.readText().replace("// SIGMOID_FUNCTIONS", SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
     }.replace("binding = 1, rgba8", "binding = 1, rgba16f")
 
     // Invoked inside Gles31AmazeProcessor.process(), on its persistent writer
     // EGL context. Same per-context ownership discipline as the JPEG side.
+    private val aces2 = Aces2Gl()
     private var program = 0
     private var programThread: Thread? = null
     private var framebuffer = 0
@@ -107,6 +108,7 @@ class Gles31JxlOutputProcessor(context: Context) {
             // Shared AgX look: identical uniforms to the JPEG path so the
             // JXL still matches the JPEG look at 8-bit-equivalent settings.
             GLES31.glUniform1i(location(outputProgram, "u_basic"), resolvedLook.toneMapper.shaderMode)
+            aces2.bind(outputProgram, resolvedLook.toneMapper.shaderMode)
             GLES31.glUniform1f(location(outputProgram, "u_agx_purity_boost"), resolvedLook.agxPurityBoost)
             GLES31.glUniform1i(location(outputProgram, "u_agx_punchy"), if (resolvedLook.agxLook == AgxLook.PUNCHY) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_contrast"), resolvedLook.agxContrast)
@@ -155,6 +157,7 @@ class Gles31JxlOutputProcessor(context: Context) {
 
     /** Must be called while AMaZE's persistent EGL context is current on its worker thread. */
     fun close() {
+        aces2.close()
         if (program != 0) {
             check(programThread == Thread.currentThread()) {
                 "JXL output program must be closed by its owning worker thread"

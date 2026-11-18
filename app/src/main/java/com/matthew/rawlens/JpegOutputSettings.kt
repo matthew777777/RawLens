@@ -89,7 +89,9 @@ data class JpegOutputSettings(
      * darktable inpaint opposed on normalized Bayer data before demosaic.
      * Repairs clipped photosites; disable to compare with the measured CFA.
      */
-    val hlReconstruction: Boolean = true
+    val hlReconstruction: Boolean = true,
+    /** B&W photosite mode (after rwmono); OFF keeps the colour develop. */
+    val mono: MonoSettings = MonoSettings()
 ) {
     /**
      * Expand the existing AgX shadow range to restore middle grey after protection.

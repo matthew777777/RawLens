@@ -112,7 +112,8 @@ void main() {
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
     highp vec3 outputLinear;
     highp vec3 basicEncoded = vec3(0.0);
-    if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(ACESCG_TO_REC2020_D65 * sceneAcescg);
+    if (u_basic == 3) outputLinear = aces2_output(sceneAcescg, u_display_p3);
+    else if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(ACESCG_TO_REC2020_D65 * sceneAcescg);
     else if (u_basic == 1) {
         basicEncoded = basic_encoded(outputMatrix * (ACESCG_TO_REC2020_D65 * sceneAcescg));
         outputLinear = vec3(0.0);

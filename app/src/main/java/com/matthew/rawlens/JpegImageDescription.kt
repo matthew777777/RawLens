@@ -13,12 +13,14 @@ internal fun jpegImageDescription(
     outputWidth: Int? = null,
     outputHeight: Int? = null,
     ultraHdrEncoded: Boolean = settings.ultraHdr,
-    encodeMs: Long? = null
+    encodeMs: Long? = null,
+    monochromeMode: MonoMode? = null
 ): String = buildString {
     fun number(value: Number): String = String.format(Locale.US, "%.3f", value.toDouble())
     val rgbMerge = typeSuffix == CaptureFileNames.TYPE_MFSR || typeSuffix == CaptureFileNames.TYPE_LKR
-    val input = if (rgbMerge) "Merged linear camera RGB" else "RAW_SENSOR"
-    val tone = if (settings.toneMapper == PhotoToneMapper.SIGMOID) "Sigmoid" else if (settings.toneMapper == PhotoToneMapper.BASIC) "Basic" else "AgX ${settings.agxLook.label}"
+    val mono = monochromeMode?.takeIf { it != MonoMode.OFF }
+    val input = if (mono != null) "B&W ${mono.label} photosite luminance" else if (rgbMerge) "Merged linear camera RGB" else "RAW_SENSOR"
+    val tone = if (settings.toneMapper == PhotoToneMapper.ACES_2) "ACES 2.0" else if (settings.toneMapper == PhotoToneMapper.SIGMOID) "Sigmoid" else if (settings.toneMapper == PhotoToneMapper.BASIC) "Basic" else "AgX ${settings.agxLook.label}"
     val gamut = if (settings.displayP3) "Display P3" else "sRGB"
     if (!description.isNullOrBlank()) append(description.trimEnd()).append("\n\nJPEG DEVELOPMENT\n")
     else append("Captured with RawLens\nJPEG DEVELOPMENT\n")
@@ -29,6 +31,8 @@ internal fun jpegImageDescription(
     if (settings.toneMapper == PhotoToneMapper.BASIC) {
         append("- Basic response: sRGB transfer, brightness gamma 1.100, cubic contrast blend 0.750\n")
         append("- Highlight compression: ratio-preserving rational shoulder; knee 0.600, white limit 1.000, strength ${number(settings.highlightShoulder)}\n")
+    } else if (settings.toneMapper == PhotoToneMapper.ACES_2) {
+        append("- ACES 2.0: perceptual tone/chroma/gamut mapping, 100 nit SDR output, reference LUT\n")
     } else if (settings.toneMapper == PhotoToneMapper.SIGMOID) {
         append("- Sigmoid: contrast 1.5, skew 0, preserve hue 100%, Rec.2020 primaries\n")
     } else {
@@ -49,7 +53,8 @@ internal fun jpegImageDescription(
     else "- JPEG preprocessing: RapidRAW OFF\n")
     append("- Output: $gamut, 8-bit SDR base, sRGB transfer\n")
     if (outputWidth != null && outputHeight != null) append("- Dimensions: ${outputWidth}x${outputHeight}\n")
-    if (rgbMerge) append("- Input: reconstructed camera RGB; no additional demosaic\n")
+    if (mono != null) append("- B&W mode: ${mono.label}; photosite monochrome, no demosaic\n")
+    else if (rgbMerge) append("- Input: reconstructed camera RGB; no additional demosaic\n")
     else append("- Demosaic preference: ${settings.demosaic.label}; actual backend is not recorded (AMaZE fallback supported)\n")
     append("- JPEG quality: ${settings.jpegQuality}\n")
     append("- Chroma subsampling: ${settings.chromaSubsampling.label}\n")

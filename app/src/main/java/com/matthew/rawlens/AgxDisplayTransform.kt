@@ -55,6 +55,7 @@ object AgxDisplayTransform {
         settings: JpegOutputSettings
     ): FloatArray {
         require(acescg.size == 3 && acescg.all(Float::isFinite))
+        if (settings.toneMapper == PhotoToneMapper.ACES_2) return Aces2DisplayTransform.map(acescg, outputMatrix === REC2020_TO_DISPLAY_P3)
         val sceneRec2020 = map(ACESCG_TO_REC2020_D65, acescg)
         if (settings.toneMapper == PhotoToneMapper.SIGMOID) return map(outputMatrix, SigmoidDisplayTransform.map(sceneRec2020))
         if (settings.toneMapper == PhotoToneMapper.BASIC) {
@@ -149,6 +150,7 @@ object AgxDisplayTransform {
     fun scopeCurve(linear: Float, settings: JpegOutputSettings = JpegOutputSettings()): Float {
         val resolved = settings.resolvedForPlatform()
         if (!linear.isFinite()) return 0f
+        if (resolved.toneMapper == PhotoToneMapper.ACES_2) return srgbOetf(Aces2DisplayTransform.map(floatArrayOf(linear,linear,linear))[0])
         if (resolved.toneMapper == PhotoToneMapper.SIGMOID) return srgbOetf(SigmoidDisplayTransform.curve(linear))
         if (resolved.toneMapper == PhotoToneMapper.BASIC) return BasicDisplayTransform.encode(linear, resolved.highlightShoulder)
         val positive = max(0f, linear)

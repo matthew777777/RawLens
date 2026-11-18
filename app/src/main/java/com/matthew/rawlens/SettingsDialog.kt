@@ -239,6 +239,7 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
             currentTab = 1
             showJpegTab()
         }
+        override fun onMonoChanged(mono: MonoSettings) = this@showSettings.updateQuickControls()
     })
     val tabPages: List<() -> Unit> = listOf(
         { showGeneralTab() },

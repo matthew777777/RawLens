@@ -37,6 +37,8 @@ internal class PhotoSettingsTab(
         fun clearTabStatusViews()
         /** Rebuild this page in place (after a reset). */
         fun reshow()
+        /** B&W mode changed: refresh the viewfinder and quick controls. */
+        fun onMonoChanged(mono: MonoSettings) {}
     }
 
     private val activity get() = kit.activity
@@ -261,7 +263,7 @@ internal class PhotoSettingsTab(
         })
         }
         kit.content.addView(kit.sectionTitle("Photo output"))
-        kit.content.addView(kit.sectionDesc("Ultra HDR and Display P3 targets, JPEG quality and chroma, Basic / AgX tone mapping, adaptive exposure and highlight handling."))
+        kit.content.addView(kit.sectionDesc("Ultra HDR and Display P3 targets, JPEG quality and chroma, Basic / AgX / Sigmoid / ACES 2.0 tone mapping, adaptive exposure and highlight handling."))
         var currentJpegSettings = host.jpegOutputSettings()
         fun applyJpegOutputSettings(settings: JpegOutputSettings): Boolean {
             val resolved = settings.resolvedForPlatform()
@@ -298,9 +300,32 @@ internal class PhotoSettingsTab(
                 .putFloat(MainActivity.KEY_JPEG_HIGHLIGHT_SHOULDER, resolved.highlightShoulder)
                 .putBoolean(MainActivity.KEY_JPEG_HL_RECONSTRUCTION, resolved.hlReconstruction)
                 .putBoolean(HighlightReconstructionDefaults.APPLIED, true)
+                .putString(MonoMode.PREFERENCE_KEY, resolved.mono.mode.name)
+                .putBoolean(MonoMode.KEY_KEEP_COLOR_DNG, resolved.mono.keepColorDng)
                 .apply()
+            host.onMonoChanged(resolved.mono)
             return true
         }
+        kit.content.addView(kit.sectionTitle("Black & white"))
+        kit.content.addView(Button(activity).apply {
+            fun refresh() { text = "B&W: ${currentJpegSettings.mono.mode.label}" }
+            refresh()
+            setOnClickListener {
+                kit.chooseEnum("Black & white", currentJpegSettings.mono.mode, { it.label }) { next ->
+                    if (applyJpegOutputSettings(currentJpegSettings.copy(
+                            mono = currentJpegSettings.mono.copy(mode = next)))) refresh()
+                }
+            }
+        })
+        kit.content.addView(kit.sectionDesc("Builds the picture straight from the sensor photosites, no demosaic (after rwmono). Detail: full resolution, colour checkerboard removed. Clean: 2x2 binned, half the width and height, about 1 stop cleaner. Auto: measures this frame's noise and picks Clean only when fine detail is below the noise. Single frame and HDR+; the viewfinder previews in B&W at no extra cost. DNG becomes a monochrome linear DNG."))
+        kit.content.addView(SettingsSwitch(activity).apply {
+            text = "B&W: also keep colour DNG"
+            isChecked = currentJpegSettings.mono.keepColorDng
+            setOnCheckedChangeListener { _, checked ->
+                if (!applyJpegOutputSettings(currentJpegSettings.copy(
+                        mono = currentJpegSettings.mono.copy(keepColorDng = checked)))) isChecked = !checked
+            }
+        })
         kit.content.addView(Button(activity).apply {
             fun refresh() { text = "Active D-Lighting: ${currentJpegSettings.activeDLighting.label}" }
             refresh()
@@ -524,6 +549,9 @@ internal class PhotoSettingsTab(
                 })
             }
         })
+        if (currentJpegSettings.toneMapper == PhotoToneMapper.ACES_2) {
+            kit.content.addView(kit.sectionDesc("ACES 2.0 perceptual tone and gamut mapping. 100 nit SDR rendering for sRGB or Display P3."))
+        }
         val advancedLookStart = kit.content.childCount
         if (currentJpegSettings.toneMapper == PhotoToneMapper.AGX) {
             kit.content.addView(SettingsSwitch(activity).apply {

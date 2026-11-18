@@ -579,6 +579,14 @@ Tests passed: LapisRootProfileTest2,EncodedVideoProbeTest31,VideoCameraRouteTest
 
 Final FPS-label build passed and RawLens Redmi2.3.62/versionCode2362 installed successfully with adb-r-t-g. Installed package verified; original readout selection preserved, no active root lease, blank override,Enforcing. NoActivity launched.
 
+## 2026-11-18: 50 MP B&W Detail crash — JPEG readback ART heap OOM
+
+User log Downloads/logcat-20261118_082937_226 (1).txt. At08:38:10.545 monoDETAIL8160×6120 completed2102.8ms; BW DNG IMG_20261118_083807_521_BW.dng saved08:38:11.597. At08:38:13.800/853 ART refused199756819-byte allocation, Javaused459MB, heaplimit512MB. Fatal pool-5-thread-1 stack ByteBuffer.allocateDirect→aj.k:83→u20.w. Exact release mapping hash43516f171379f9a31021dab29d46a9d8a67683caa6cbe1211e5373e4eb826ff2 matches log; aj=Gles31JpegOutputProcessor,k:83 resolvesreadBitmap source250, the fullRGBA8 allocateDirect. Thus recorded app crash is JPEG readback allocation, not mono shader or DNG writer. Log ends at process death; persistent camera/provider failure afterward cannot be diagnosed from this app-only log.
+
+Fix: JPEG readBitmap uses HdrPlusVulkan.allocBuffer native staging, frees in finally after bitmapcopy and on GL/bitmap failures, removes full-photo base/gain readback caches. Bitmap is recycled if copying fails. RawFrameSaveJob catches JPEG OutOfMemoryError, reports JPEG failure while retaining existing DNG and letting normal RAW/mono/root lifecycle cleanup run. This prevents the recorded heap allocation failure path; native/GPU memory limits still apply.
+
+Added JpegReadbackMemoryDeviceTest: repeated GPU readback checks native outstanding bytes return to baseline; opt-in jpeg50MpMemory=true tests8160×6120 with a retained full CFA FloatArray. App and Android-test Kotlin compilation PASS (final3s); device tests NOT RUN. ADB devices empty, no phone-side settings/root/camera changes, no APK installed. Need reconnect for50MP B&W JPEG+DNG acceptance and camera recovery diagnostics.
+
 ### 2026-11-18: DCG14 preview residual shading
 
 Removed RawViewfinder.snapshotLens early identity return for metadataVerified root profiles. DCG14 now follows the existing HAL residual map -> RGBA16F gain texture -> preview shader correction, as ordinary RAW preview does. For verified matching readout dimensions use fullbuffer(0,0,width,height), matching LapisRootSession.normalized; this avoids a second ISZ crop or stale stockactive bounds on50MP. A missing/invalid map still usesidentity, and returned residualmaps are applied independently of sensor-side shading flags. Existing1Hzcache andGPU/NEON map paths retained. compileGithubDeviceTestKotlin and29 existingVfGpuImport/RawShadingCalibration unit tests PASS. Phone reconnected, normalapp2.3.96/code2398;ADBUID2000, so no liveDCG/root status claim. Releasebuild/install pending at this entry.

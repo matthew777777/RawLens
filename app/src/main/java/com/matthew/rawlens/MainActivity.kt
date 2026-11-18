@@ -866,6 +866,7 @@ class MainActivity : Activity() {
         }
         wireVideoQuickControls()
         findViewById<View>(R.id.dLightingQuick).setOnClickListener { cycleQuickDLighting() }
+        findViewById<View>(R.id.monoQuick).setOnClickListener { cycleQuickMono() }
         levelQuick.setOnClickListener { toggleLevel() }
         aeMeteringQuick.setOnClickListener { cycleAeMeteringMode() }
         hdrPlusQuick.setOnClickListener { toggleHdrPlus() }
@@ -3835,7 +3836,8 @@ class MainActivity : Activity() {
         highlightHeadroom = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_HEADROOM, 1f),
         highlightSoftHeadroom = lensPreferences().getFloat(KEY_JPEG_SKY_PROTECTION, 0.85f),
         highlightShoulder = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_SHOULDER, 1f),
-        hlReconstruction = HighlightReconstructionDefaults.read(lensPreferences())
+        hlReconstruction = HighlightReconstructionDefaults.read(lensPreferences()),
+        mono = MonoSettings.read(lensPreferences())
     ).resolvedForPlatform()
 
     /** JPEG XL container options (darktable parity); defaults resolve to 16-bit lossless. */
@@ -4403,6 +4405,14 @@ class MainActivity : Activity() {
             contentDescription = "Active D-Lighting ${lighting.label}. Tap to cycle Off, Low, Normal, High, Extra High."
             setQuickTileState(this, lighting != ActiveDLighting.OFF)
         }
+        findViewById<TextView>(R.id.monoQuick).apply {
+            val mono = jpegOutputSettings().mono.mode
+            visibility = if (isVideoMode) View.GONE else View.VISIBLE
+            text = "B&W\n${mono.label.uppercase(Locale.US)}"
+            contentDescription = "Black and white ${mono.label}. Tap to cycle Off, Auto, Detail, Clean."
+            setQuickTileState(this, mono.enabled)
+        }
+        applyMonoPreview()
         setQuickTileState(grid, gridEnabled)
         setQuickTileState(histogram, histogramEnabled)
         setQuickTileState(level, levelEnabled)
