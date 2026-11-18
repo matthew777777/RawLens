@@ -130,6 +130,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.adjgen", v) > 0 && v[0]) setenv("LKRL_ADJ_GENERIC", v, 0);
     // A/B of the tile-preparation prefetch: debug.lkr.noprefetch = 1 restores prepare-then-solve.
     if (__system_property_get("debug.lkr.noprefetch", v) > 0 && v[0] == '1') setenv("LKRL_NO_PREFETCH", "1", 0);
+    // A/B of the DCT look: debug.lkr.fb = 0 no DCT pass; debug.lkr.prior = 1 / 0 forces shadow-luma denoise on / off.
+    if (__system_property_get("debug.lkr.fb", v) > 0 && v[0]) setenv("LKRL_FB", v, 0);
   }
 #endif
   const NoiseModelRef noise_model = g_noise_model;
@@ -154,6 +156,12 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   }
   prm.s = s;
   prm.solve.dct_prior = dct;
+#ifdef __ANDROID__
+  {   // A/B: debug.lkr.prior = 1 / 0 forces the shadow-luma DCT denoise on / off
+    char pv[PROP_VALUE_MAX] = {0};
+    if (__system_property_get("debug.lkr.prior", pv) > 0 && pv[0]) prm.solve.dct_prior = pv[0] == '1';
+  }
+#endif
   prm.tile = tile;
   prm.overlap = overlap;
   prm.crop_x = crop[0];
