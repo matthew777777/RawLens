@@ -126,8 +126,9 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.tilelk", v) > 0 && v[0] == '0') prm.tile_lk = false;
     // A/B of the colour-difference fit: debug.lkr.cdfit = D radius, -1 = the old independent fit (read once per process).
     if (__system_property_get("debug.lkr.cdfit", v) > 0 && v[0]) setenv("LKRL_CDFIT", v, 0);
-    // Learned post-fit prior on the NPU (research, opt-in): debug.lkr.prior=1 (read once per process).
-    if (__system_property_get("debug.lkr.prior", v) > 0 && v[0]) setenv("LKRL_PRIOR", v, 0);
+    // Learned post-fit network A/B: debug.lkr.network = 1 / 0 overrides the app setting (read once per process).
+    // (debug.lkr.prior is the DCT shadow-luma switch below.)
+    if (__system_property_get("debug.lkr.network", v) > 0 && v[0]) setenv("LKRL_PRIOR", v, 0);
     // Long-straight-edge smoothing A/B (research): debug.lkr.longedge=1.
     if (__system_property_get("debug.lkr.longedge", v) > 0 && v[0]) setenv("LKRL_LONGEDGE", v, 0);
     // Prior device A/B: debug.lkr.priordev = NNAPI device name part ("mdla"), "none" = force the Vulkan fallback.
@@ -432,7 +433,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_matthew_rawlens_LkrBridge_nativePrew
   }
   {   // learned prior: compile for the NPU now (app tile 512 -> 512 px at 1x, 1024 px at 2x)
     char v[PROP_VALUE_MAX] = {0};
-    if (__system_property_get("debug.lkr.prior", v) > 0 && v[0]) setenv("LKRL_PRIOR", v, 0);
+    if (__system_property_get("debug.lkr.network", v) > 0 && v[0]) setenv("LKRL_PRIOR", v, 0);
     if (lkrl::PriorEnabled()) {
       std::string err;
       for (int t : {512, 1024})

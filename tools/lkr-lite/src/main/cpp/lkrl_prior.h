@@ -14,7 +14,7 @@ namespace lkrl {
 
 struct PriorStats { double ms = 0; bool ran = false; std::string device; };
 
-// App setting (Settings -> Merge -> "Network"); LKRL_PRIOR=0/1 (host) / debug.lkr.prior (Android, set
+// App setting (Settings -> Merge -> "Network"); LKRL_PRIOR=0/1 (host) / debug.lkr.network (Android, set
 // by the JNI layer as LKRL_PRIOR) override it for tests.
 void PriorSetEnabled(bool on);
 bool PriorEnabled();

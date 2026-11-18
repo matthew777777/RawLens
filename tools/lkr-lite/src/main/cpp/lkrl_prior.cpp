@@ -272,7 +272,7 @@ void PriorSetEnabled(bool on) { g_prior_setting.store(on ? 1 : 0); }
 
 bool PriorEnabled() {
   static const char* env = std::getenv("LKRL_PRIOR");
-  if (env && *env) return std::atoi(env) != 0;   // tests / debug.lkr.prior override the app setting
+  if (env && *env) return std::atoi(env) != 0;   // tests / debug.lkr.network override the app setting
   return g_prior_setting.load() == 1;
 }
 
