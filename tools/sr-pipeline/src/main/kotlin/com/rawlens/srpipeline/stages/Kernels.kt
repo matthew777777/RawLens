@@ -40,7 +40,7 @@ data class KernelParams(
     val kDenoise: Float = 1f,
     val dTh: Float = 0f,
     val dTr: Float = 1f,
-    val kStretch: Float = 4f,
+    val kStretch: Float = 3f,
     val kShrink: Float = 2f,
     val selection: SelectionLaw = SelectionLaw.LINEAR,
     val iso: Boolean = false,

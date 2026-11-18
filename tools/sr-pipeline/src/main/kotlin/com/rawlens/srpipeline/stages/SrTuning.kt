@@ -21,7 +21,7 @@ data class SrTuning(
     /** x Dtr (transition from denoise to detail). */
     val dTrScale: Float = 1f,
     /** Kernel stretch along edges (S.1 kstretch). */
-    val kStretch: Float = 4f,
+    val kStretch: Float = 3f,
     /** Kernel shrink across edges (S.1 kshrink). */
     val kShrink: Float = 2f,
     /** Minimum kernel std, px (C26 checker fix; 0 = paper). */
@@ -63,9 +63,13 @@ data class SrTuning(
      * reported burst, green unchanged). 1 = one kernel for all channels.
      */
     val chromaScale2x: Float = 1.5f,
+    /** R/B (colour-difference) kernel width relative to green at 1x; 1 = one kernel. */
+    val chromaScale1x: Float = 1f,
+    /** Merge frame equalization gamma (0 = Wronski weights, 1 = equal frames). */
+    val frameEqualize: Float = 0f,
 ) {
     /** R/B width factor for an output [scale]. */
-    fun chromaScale(scale: Float): Float = if (scale > 1f) chromaScale2x else 1f
+    fun chromaScale(scale: Float): Float = if (scale > 1f) chromaScale2x else chromaScale1x
 
     /** KernelNet floor for an output [scale]. */
     fun knFloor(scale: Float): Float = if (scale > 1f) knSigmaFloor2x else knSigmaFloor
