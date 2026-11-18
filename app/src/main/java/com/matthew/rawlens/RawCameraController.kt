@@ -3645,9 +3645,9 @@ class RawCameraController(
                     "intent=${request.get(CaptureRequest.CONTROL_CAPTURE_INTENT)} exposureNs=${request.get(CaptureRequest.SENSOR_EXPOSURE_TIME)}")
             }
             onState(if (frameCount == 1) "CAPTURING" else "BURST ×$frameCount")
-            // Serialized chains take frameCount × exposure instead of one pipeline
-            // burst: scale the timeout up from the 8s base (never down), so slow
-            // shutters degrade to a partial save instead of a false timeout.
+            // Budget the initial/burst deadline for the requested exposures.
+            // Serialized chains replace it with a per-frame watchdog when
+            // submitting each request, accounting for HAL scheduling delays.
             val bracketDurationMs = if (activeHdrBracket) requests.sumOf {
                 (it.get(CaptureRequest.SENSOR_EXPOSURE_TIME) ?: 0L) / 1_000_000L
             } else 0L
@@ -3730,6 +3730,20 @@ class RawCameraController(
         }
         cameraCaptureSequenceActive = true
         try {
+            // A serialized request can wait behind several repeating preview
+            // frames (Vivo: ~1s per still at a 201ms exposure). A deadline for
+            // the entire burst based on exposure alone expires while pairs are
+            // still arriving. Watch each submitted frame instead; only an
+            // exact forward pair advances this chain and renews the watchdog.
+            val tag = next.tag as? CaptureTag
+            if (tag != null) {
+                cancelCaptureTimeout()
+                scheduleCaptureTimeout(
+                    tag.captureId,
+                    (next.get(CaptureRequest.SENSOR_EXPOSURE_TIME)
+                        ?: lastExposureNanos).coerceAtLeast(0L) / 1_000_000L
+                )
+            }
             currentSession.capture(next, callback, cameraHandler)
             if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
                 val tag = next.tag as? CaptureTag
@@ -6854,6 +6868,8 @@ class RawCameraController(
     private fun scheduleCaptureTimeout(captureId: Int, exposureDurationMs: Long = 0L) {
         val timeout = Runnable {
             if (captureId == captureSequence.get() && captureInProgress.get()) {
+                Log.w(LOG_TAG, "Capture watchdog expired id=$captureId remaining=${activeFramesRemaining.get()} " +
+                    "pipelined=$activeBurstPipelined topup=$topupActive")
                 if (activeBurstPipelined) refusePipelinedBursts("capture timeout")
                 if (topupActive) {
                     Log.w(LOG_TAG, "Top-up capture timed out; saving partial burst")
