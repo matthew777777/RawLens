@@ -63,7 +63,8 @@ data class MfsrSettings(
     val lkrDctPrior: Boolean = false,
     /** Noise-gated PhotonCamera KernelNet post-denoise; daylight bypass, enabled by default. */
     val lkrKernelNetDenoise: Boolean = true,
-    /** LK-R: learned post-fit network (zipper / colour dots, keeps grain). Off by default (opt-in). */
+    /** LK-R: learned post-fit network (colour dots / colour zipper; colour only). Stored default: on with
+     *  an NPU (LkrBridge.nativeHasNpu); this constructor default only applies before settings load. */
     val lkrNetwork: Boolean = false,
     /**
      * LK-R: reference = sharpest of the middle three frames instead of the
@@ -138,8 +139,10 @@ data class MfsrSettings(
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,
             lkrDctPrior = values["lkr_dct_prior"] as? Boolean ?: false,
             lkrKernelNetDenoise = values["lkr_kernelnet_denoise"] as? Boolean ?: true,
-            // Off by default (2026-11-18: phone 1x renders looked oversharpened / odd grain; opt-in until resolved).
-            lkrNetwork = values["lkr_network"] as? Boolean ?: false,
+            // Default: on for phones with an NPU (nearly free there; colour-only since d1affb09, no luma
+            // sharpening), off otherwise (the Vulkan fallback costs GPU time). Caught here: LkrBridge's class
+            // init loads the native library (absent in JVM tests).
+            lkrNetwork = values["lkr_network"] as? Boolean ?: runCatching { LkrBridge.nativeHasNpu() }.getOrDefault(false),
             lkrMiddleReference = values["lkr_middle_reference"] as? Boolean ?: true,
             // Legacy FULL_2X (zoom and resolution in one value) splits into 1x + full res.
             lkrZoom = (LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1)
