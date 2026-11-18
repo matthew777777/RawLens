@@ -237,8 +237,7 @@ class PhotoAutoFocusTest {
     @Test fun abandonedAutoRetriesContinuousAndRequiresItsOwnStartFrame() {
         val oldRun = tap(); af.onStartFrame(oldRun, 100)
         result(100, CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN)
-        result(101, CaptureResult.CONTROL_AF_STATE_INACTIVE)
-        host.fire(PhotoAutoFocus.SCAN_TIMEOUT_MS)
+        result(101, CaptureResult.CONTROL_AF_STATE_INACTIVE) // retries at once, no timeout
         val continuous = CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
         assertEquals(continuous, af.requestedMode)
         assertTrue(af.scanning)
@@ -251,6 +250,20 @@ class PhotoAutoFocusTest {
         assertTrue(af.scanning)
         result(111, focused, continuous)
         assertEquals("FOCUS LOCKED", host.states.last())
+    }
+
+    @Test fun ignoredContinuousStartHoldsScannedPassiveFocusManually() {
+        val run = tap(); af.onStartFrame(run, 100)
+        result(100, CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN)
+        result(101, CaptureResult.CONTROL_AF_STATE_INACTIVE)
+        val continuous = CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        af.onStartFrame(host.triggers.last().second, 110)
+        af.onResult(110, continuous, CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN, 1f)
+        af.onResult(111, continuous, CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED, 2.5f)
+        assertEquals("FOCUS LOCKED", host.states.last())
+        assertEquals(2.5f, host.selectedFocusDistanceDiopters)
+        af.releaseToContinuous()
+        assertEquals(null, host.selectedFocusDistanceDiopters)
     }
 
     @Test fun continuousRetryIsBoundedAndPassiveFocusCannotFakeLock() {

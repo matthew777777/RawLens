@@ -5551,7 +5551,7 @@ class RawCameraController(
                 if (touchFocus.active) idleAfTrace.reset() else idleAfTrace.onResult(result)
                 publishDebugState(request, result)
                 touchFocus.onResult(result.frameNumber, result.get(CaptureResult.CONTROL_AF_MODE),
-                    result.get(CaptureResult.CONTROL_AF_STATE))
+                    result.get(CaptureResult.CONTROL_AF_STATE), result.get(CaptureResult.LENS_FOCUS_DISTANCE))
             }
 
             override fun onCaptureFailed(
@@ -6104,7 +6104,7 @@ class RawCameraController(
             }
             publishDebugState(request, result, force = true)
             touchFocus.onResult(result.frameNumber, result.get(CaptureResult.CONTROL_AF_MODE),
-                result.get(CaptureResult.CONTROL_AF_STATE))
+                result.get(CaptureResult.CONTROL_AF_STATE), result.get(CaptureResult.LENS_FOCUS_DISTANCE))
         }
     }
 

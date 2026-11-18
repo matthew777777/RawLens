@@ -50,10 +50,14 @@ internal class PhotoAutoFocus(private val host: Host) {
     private var timeout: Runnable? = null
     private var release: Runnable? = null
     private var lastState: Int? = null
+    /** True while a tap lock is held as a manual distance (HAL ignored the CONT_PICTURE START). */
+    private var manualHold = false
 
     /** Stream configuration does not reset 3A. Explicitly clear an inherited lock. */
     fun onSessionReady() {
         resetForStop()
+        // Tap regions are in the old session's coordinates; idle AF starts full-frame.
+        host.afRegion = null
         if (!host.canSendOneShot() || host.selectedFocusDistanceDiopters != null) return
         val mode = idleMode(host.afAvailableModes())
         if (tapMode(host.afAvailableModes()) == CONTROL_AF_MODE_OFF) return
@@ -158,10 +162,20 @@ internal class PhotoAutoFocus(private val host: Host) {
         if (commandRun == runId && scanning) finish(false)
     }
 
-    fun onResult(frame: Long, mode: Int?, state: Int?) {
+    fun onResult(frame: Long, mode: Int?, state: Int?, focusDiopters: Float? = null) {
         val first = startFrame ?: return
         if (!scanning || frame < first || frame <= lastFrame || mode != requestedMode) return
         lastFrame = frame
+        // Xiaomi 14 Ultra: AUTO goes ACTIVE_SCAN -> INACTIVE one frame after START (scan
+        // abandoned). Retry the continuous-picture lock now instead of after SCAN_TIMEOUT_MS.
+        if (state == CONTROL_AF_STATE_INACTIVE && lastState == CONTROL_AF_STATE_ACTIVE_SCAN) {
+            val stale = timeout
+            if (retryContinuousLock()) {
+                stale?.let(host.handler::removeCallbacks)
+                return
+            }
+        }
+        val previous = lastState
         if (state != lastState) {
             lastState = state
             Log.i(TAG, "Photo AF run=$runId frame=$frame ${Camera2Names.afStateName(state)}")
@@ -171,7 +185,29 @@ internal class PhotoAutoFocus(private val host: Host) {
         when (state) {
             CONTROL_AF_STATE_FOCUSED_LOCKED -> finish(true)
             CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> finish(false)
+            // Xiaomi 14 Ultra: CONT_PICTURE START can be ignored (stays passive). Its own
+            // PASSIVE_FOCUSED on the tap region is a real focus; hold that distance manually.
+            // Only after a scan seen since START: a stale PASSIVE_FOCUSED is the old subject.
+            CONTROL_AF_STATE_PASSIVE_FOCUSED ->
+                if (previous == CONTROL_AF_STATE_PASSIVE_SCAN && requestedMode == CONTROL_AF_MODE_CONTINUOUS_PICTURE ||
+                    requestedMode == CONTROL_AF_MODE_CONTINUOUS_VIDEO) holdManually(focusDiopters)
         }
+    }
+
+    private fun holdManually(focusDiopters: Float?) {
+        val d = focusDiopters?.takeIf { it.isFinite() && it >= 0f } ?: return
+        Log.i(TAG, "Photo AF run=$runId START ignored; holding PASSIVE_FOCUSED ${d}D manually")
+        manualHold = true
+        host.selectedFocusDistanceDiopters = d
+        host.updateRepeatingRequest()
+        finish(true)
+    }
+
+    /** Drops a fallback manual hold so idle/next tap AF runs again. */
+    private fun dropManualHold() {
+        if (!manualHold) return
+        manualHold = false
+        host.selectedFocusDistanceDiopters = null
     }
 
     private fun finish(sharp: Boolean) {
@@ -218,6 +254,7 @@ internal class PhotoAutoFocus(private val host: Host) {
             Log.w(TAG, "Photo AF release: ${failure.message}")
         } finally {
             clearState()
+            dropManualHold()
             host.afRegion = null
             host.onFocusLock(false, false, 0L)
             host.updateRepeatingRequest()
@@ -230,6 +267,7 @@ internal class PhotoAutoFocus(private val host: Host) {
     fun clearAeLock() { aeLockIndefinite = false }
 
     fun dropForManualFocus() {
+        manualHold = false // the user's own distance replaces ours
         cancelTimers()
         clearState()
         host.onFocusLock(false, false, 0L)
@@ -238,6 +276,7 @@ internal class PhotoAutoFocus(private val host: Host) {
     fun resetForStop() {
         cancelTimers()
         clearState()
+        dropManualHold()
     }
 
     private fun clearState() {
