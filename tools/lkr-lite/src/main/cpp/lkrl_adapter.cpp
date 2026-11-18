@@ -89,6 +89,7 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
   lp.robust_spread = prm.robust_spread;
   lp.guide = prm.guide_confidence;
   lp.guide_residual = prm.guide_residual;
+  lp.prior_gpu = PriorEnabled() && !PriorNpuAvailable();   // Network on, no NPU: Vulkan fallback in the solver
   lp.robust = prm.robust;
   lp.temporal_k = prm.temporal_k; lp.temporal_tau = prm.temporal_tau; lp.temporal_detail = prm.temporal_detail;
   lp.temporal_dark_wide = prm.temporal_dark_wide; lp.temporal_dark_level = prm.temporal_dark_level;
@@ -186,7 +187,7 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
         S.dbg[size_t(Y) * W + X] = eff;
       }
   }
-  if (PriorEnabled()) {
+  if (PriorEnabled() && PriorNpuAvailable()) {
     PendingTile* tp = &T;
     if (tp->dct) tp->delta.assign(tp->z.size(), 0.0f);
     tp->prior = std::async(std::launch::async, [tp]() {

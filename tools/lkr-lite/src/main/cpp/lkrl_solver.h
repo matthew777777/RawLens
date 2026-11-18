@@ -29,6 +29,7 @@ struct LiteParams {
   float guide = 2.0f;
   int guide_mode = 1;
   float guide_residual = 0.0f;   // > 0: w = min(guide, residual^a) (LK-R guide_residual)
+  bool prior_gpu = false;        // learned prior on the GPU (prior_conv.comp): Network on, no usable NPU
   // LK-R's exact weight chain (shaders/lkr, verbatim): temporal gate vs the reference-only image
   // (detail term, dark-wide window) x reference guide, min spread; recomputed per geometry.
   // Needs guide > 0 (LK-R --guide); false = Lite's own residual test (guide_mode).
@@ -112,7 +113,7 @@ class LiteSolver {
   Gpu* gpu_;
   bool ok_ = false;
   Pipeline resid_, werr_, wavg_, wminh_, wminv_, adj_, adj_s1_, adj_s2_, zupd_, jac_, jacblk_, solveblk_, gstats_, wguide_, wvalid_,
-      kresid_, ktdet_, kth_, kt_, ktv_, ktd_, kguide_, kminh_, kmin_, kdy_, kdu_, kdv_, kdyuv_, kdyo_, kduo_, kdvo_, knconv_, kndn_, hyb_, adjwg_, fin_, edgeshift_, cdupd_, le_tensor_, le_blur_, le_apply_;
+      kresid_, ktdet_, kth_, kt_, ktv_, ktd_, kguide_, kminh_, kmin_, kdy_, kdu_, kdv_, kdyuv_, kdyo_, kduo_, kdvo_, knconv_, kndn_, hyb_, adjwg_, fin_, edgeshift_, cdupd_, le_tensor_, le_blur_, le_apply_, prior_conv_;
 };
 
 }  // namespace lkrl

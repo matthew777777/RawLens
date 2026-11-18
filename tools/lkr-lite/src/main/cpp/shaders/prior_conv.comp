@@ -1,0 +1,80 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
+// SPDX-License-Identifier: Apache-2.0
+// Learned post-fit prior, Vulkan fallback (phones without a usable NPU; lkrl_prior.cpp is the NPU
+// path): one 3x3 conv layer of the folded network (export_nnapi.py: conv0 has the input centring /
+// sigma scale folded in, the last conv the 0.1 output scale; identity skip). One dispatch per layer.
+// Workgroup 16x16 pixels x 8 output channels (gl_WorkGroupID.z = channel group: 8 accumulators per
+// thread). Staged once per workgroup in shared memory: the input tile (+1 px halo, all channels, as
+// packed fp16 pairs: 15.5 KB) and this group's weights (6.9 KB). 3x3 taps unrolled; input channels two
+// at a time. Activations are fp16 NHWC padded to 24 channels.
+// Measured: Mac M1 109 ms / 1024 px tile; Mali-G615 phone ~1.5 s / tile (malioc: 49 regs, LS-bound).
+// Tried 2026-11-18 and slower on Mali: 4 px x 8 ch per thread with 8x8 groups + mediump accumulators
+// (64 regs = register cliff, LS cycles 42 -> 97; phone 60.8 -> 155.6 s GPU per zoom2 merge).
+// pc.mode: 0 = first layer (input: planar linear z -> sqrt, plus the 100 sigma channel = pc.a),
+//          1 = middle layer, 2 = last layer (+ identity skip of sqrt(z), squared back into z in place).
+// pc.K = cin, pc.LB = cout, pc.s = fused ReLU, pc.h = weight offset, pc.w = bias offset (floats).
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) buffer Z { float z[]; };            // planar 3 x H x W (modes 0, 2)
+layout(std430, binding = 1) readonly buffer AI { uint ai[]; };  // fp16 NHWC pairs, 24 channels
+layout(std430, binding = 2) writeonly buffer AO { uint ao[]; };
+layout(std430, binding = 3) readonly buffer WB { float wb[]; };  // OHWI weights + biases (all layers)
+const int CP = 24, CH = CP / 2;      // channels, channel pairs
+shared uint tile[18 * 18 * CH];
+shared vec2 wsh[8 * 9 * CH];         // [j][tap][pair] = weights of input channels 2p, 2p+1
+
+void main() {
+  ivec2 g0 = ivec2(gl_WorkGroupID.xy) * 16 - 1;
+  int lid = int(gl_LocalInvocationIndex), cin = pc.K, cout = pc.LB, co0 = int(gl_WorkGroupID.z) * 8;
+  int HW = pc.H * pc.W, npair = (cin + 1) / 2;
+  for (int k = lid; k < 18 * 18; k += 256) {
+    int ly = k / 18, lx = k - ly * 18, x = g0.x + lx, y = g0.y + ly;
+    bool in_img = x >= 0 && y >= 0 && x < pc.W && y < pc.H;
+    int i = y * pc.W + x;
+    if (pc.mode == 0) {
+      vec4 v = vec4(0.0);
+      if (in_img) v = vec4(sqrt(max(z[i], 0.0)), sqrt(max(z[HW + i], 0.0)), sqrt(max(z[2 * HW + i], 0.0)), pc.a);
+      tile[k * CH] = packHalf2x16(v.xy); tile[k * CH + 1] = packHalf2x16(v.zw);
+    } else {
+      for (int p = 0; p < npair; ++p) tile[k * CH + p] = in_img ? ai[i * CH + p] : 0u;
+    }
+  }
+  for (int k = lid; k < 8 * 9 * npair; k += 256) {
+    int j = k / (9 * npair), r = k - j * 9 * npair, tap = r / npair, p = r - tap * npair;
+    int co = co0 + j, c = 2 * p;
+    vec2 w = vec2(0.0);
+    if (co < cout) {
+      int base = pc.h + co * 9 * cin + tap * cin;
+      w = vec2(wb[base + c], c + 1 < cin ? wb[base + c + 1] : 0.0);
+    }
+    wsh[(j * 9 + tap) * CH + p] = w;
+  }
+  barrier();
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  if (X >= pc.W || Y >= pc.H) return;
+  int lx = int(gl_LocalInvocationID.x) + 1, ly = int(gl_LocalInvocationID.y) + 1;
+  float acc[8];
+  [[unroll]] for (int j = 0; j < 8; ++j) acc[j] = (co0 + j < cout) ? wb[pc.w + co0 + j] : 0.0;
+  [[unroll]] for (int tap = 0; tap < 9; ++tap) {
+    int tb = ((ly + tap / 3 - 1) * 18 + (lx + tap % 3 - 1)) * CH;
+    for (int p = 0; p < npair; ++p) {
+      vec2 v = unpackHalf2x16(tile[tb + p]);
+      [[unroll]] for (int j = 0; j < 8; ++j) acc[j] += dot(wsh[(j * 9 + tap) * CH + p], v);
+    }
+  }
+  int i = Y * pc.W + X;
+  if (pc.mode == 2) {                 // last layer: + identity skip (sqrt z), square back, planar out
+    [[unroll]] for (int j = 0; j < 3; ++j) {
+      float o = max(acc[j] + sqrt(max(z[j * HW + i], 0.0)), 0.0);
+      z[j * HW + i] = o * o;
+    }
+    return;
+  }
+  [[unroll]] for (int j = 0; j < 8; j += 2) {
+    vec2 v = vec2(acc[j], acc[j + 1]);
+    if (pc.s != 0) v = max(v, vec2(0.0));
+    if (co0 + j < cout) ao[i * CH + (co0 + j) / 2] = packHalf2x16(v);
+  }
+}

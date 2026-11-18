@@ -144,13 +144,29 @@ std::map<std::pair<int, int>, Compiled> g_cache;
 std::vector<std::vector<uint32_t>> g_dims;   // operand dimension storage (kept alive)
 std::vector<float> g_idw, g_idb;             // identity skip weights (kept alive: >128 B values are referenced)
 
+// NPU choice through NNAPI only (Android system API: nothing proprietary is bundled; the vendor's own
+// driver on the phone runs it). Default order: MediaTek MDLA, then Qualcomm Hexagon (qti-htp / qti-dsp;
+// older Snapdragons: qti-hta), then any other dedicated accelerator whose name is not a GPU / CPU.
+// LKRL_PRIOR_DEVICE (debug.lkr.priordev) forces a name part ("none" = no NPU: Vulkan fallback).
+// Build() still requires every op to be supported on that single device, so nothing splits to GPU / CPU.
 const ANeuralNetworksDevice* PickDevice(std::string* name) {
-  const char* want = std::getenv("LKRL_PRIOR_DEVICE"); if (!want) want = "mdla";
   uint32_t nd = 0; if (ANeuralNetworks_getDeviceCount(&nd) != ANEURALNETWORKS_NO_ERROR) return nullptr;
+  std::vector<std::pair<ANeuralNetworksDevice*, std::string>> devs;
   for (uint32_t i = 0; i < nd; ++i) {
     ANeuralNetworksDevice* d = nullptr; if (ANeuralNetworks_getDevice(i, &d) != ANEURALNETWORKS_NO_ERROR) continue;
     const char* n = nullptr; ANeuralNetworksDevice_getName(d, &n);
-    if (n && std::strstr(n, want)) { *name = n; return d; }
+    if (n) devs.emplace_back(d, n);
+  }
+  auto find = [&](const char* part) -> const ANeuralNetworksDevice* {
+    for (auto& [d, n] : devs) if (std::strstr(n.c_str(), part)) { *name = n; return d; }
+    return nullptr;
+  };
+  if (const char* want = std::getenv("LKRL_PRIOR_DEVICE")) return find(want);
+  for (const char* p : {"mdla", "qti-htp", "qti-dsp", "qti-hta"}) if (auto d = find(p)) return d;
+  for (auto& [d, n] : devs) {
+    int32_t type = 0; ANeuralNetworksDevice_getType(d, &type);
+    if (type == ANEURALNETWORKS_DEVICE_ACCELERATOR && !std::strstr(n.c_str(), "gpu") && !std::strstr(n.c_str(), "cpu") &&
+        !std::strstr(n.c_str(), "reference")) { *name = n; return d; }
   }
   return nullptr;
 }
@@ -159,7 +175,7 @@ bool Build(int H, int W, Compiled* out, std::string* err) {
   const auto& L = Layers();
   if (L.empty()) { *err = "prior weights missing"; return false; }
   std::string dname; const ANeuralNetworksDevice* dev = PickDevice(&dname);
-  if (!dev) { *err = "no NPU device (mdla) for the prior"; return false; }
+  if (!dev) { *err = "no NPU device (MDLA / Hexagon) for the prior"; return false; }
   ANeuralNetworksModel* m = nullptr;
   if (ANeuralNetworksModel_create(&m) != ANEURALNETWORKS_NO_ERROR) { *err = "model create"; return false; }
   uint32_t nop = 0; bool ok = true; int nOps = 0;
@@ -234,6 +250,30 @@ bool PriorEnabled() {
   static const char* env = std::getenv("LKRL_PRIOR");
   if (env && *env) return std::atoi(env) != 0;   // tests / debug.lkr.prior override the app setting
   return g_prior_setting.load() == 1;
+}
+
+bool PriorNpuAvailable() {
+#ifdef __ANDROID__
+  static const bool ok = [] { std::string n; return PickDevice(&n) != nullptr && !Layers().empty(); }();
+  return ok;
+#else
+  static const bool cpu = std::getenv("LKRL_PRIOR_CPU") && std::atoi(std::getenv("LKRL_PRIOR_CPU")) != 0;
+  return cpu && !Layers().empty();
+#endif
+}
+
+bool PriorPacked(std::vector<float>* wb, std::vector<PriorLayerInfo>* info) {
+  const auto& L = Layers();
+  if (L.empty()) return false;
+  wb->clear(); info->clear();
+  for (const Layer& l : L) {
+    PriorLayerInfo li{int(l.cin), int(l.cout), int(l.k), int(l.relu), int(wb->size()), 0};
+    wb->insert(wb->end(), l.w.begin(), l.w.end());
+    li.boff = int(wb->size());
+    wb->insert(wb->end(), l.b.begin(), l.b.end());
+    info->push_back(li);
+  }
+  return true;
 }
 
 bool PriorPrewarm(int H, int W, std::string* err) {
