@@ -78,7 +78,7 @@ def main():
     ap.add_argument('--w_grain', type=float, default=1.0); ap.add_argument('--real_per_step', type=int, default=4)
     a = ap.parse_args()
     dev = 'mps' if torch.backends.mps.is_available() else 'cpu'
-    ck = torch.load(a.init, map_location='cpu'); m = Prior(ck['ch'], ck['layers']); m.load_state_dict(ck['state']); m.to(dev)
+    ck = torch.load(a.init, map_location='cpu'); m = Prior(ck['ch'], ck['layers'], ck.get('cond', 1)); m.load_state_dict(ck['state']); m.to(dev)
     real = load_real(a.real, a.exclude.split(','))
     syn = load_pairs(a.syn); val, tr = syn[:10], syn[10:]
     print(f'{len(real)} real tiles (excluded: {a.exclude}), {len(tr)} synthetic pairs, device {dev}', flush=True)

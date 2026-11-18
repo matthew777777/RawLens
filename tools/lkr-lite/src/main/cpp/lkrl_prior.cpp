@@ -24,38 +24,62 @@
 #ifndef LKRL_PRIOR_DEFAULT_BIN
 #define LKRL_PRIOR_DEFAULT_BIN ""
 #endif
+#ifndef LKRL_PRIOR_FB_DEFAULT_BIN
+#define LKRL_PRIOR_FB_DEFAULT_BIN ""
+#endif
 
 namespace lkrl {
 namespace {
 
 struct Layer { uint32_t cin, cout, k, relu; std::vector<float> w, b; };   // w: OHWI (NNAPI CONV_2D filter)
 
+std::vector<uint8_t> ReadFile(const char* p) {
+  std::vector<uint8_t> raw;
+  if (FILE* f = p && *p ? std::fopen(p, "rb") : nullptr) {
+    std::fseek(f, 0, SEEK_END); raw.resize(size_t(std::ftell(f))); std::fseek(f, 0, SEEK_SET);
+    if (std::fread(raw.data(), 1, raw.size(), f) != raw.size()) raw.clear();
+    std::fclose(f);
+  }
+  return raw;
+}
+
+std::vector<Layer> ParseLayers(const std::vector<uint8_t>& raw) {
+  std::vector<Layer> out;
+  if (raw.size() < 4) return out;
+  size_t off = 0;
+  auto u32 = [&]() { uint32_t v = 0; if (off + 4 <= raw.size()) std::memcpy(&v, &raw[off], 4); off += 4; return v; };
+  out.resize(u32());
+  for (auto& l : out) {
+    l.cin = u32(); l.cout = u32(); l.k = u32(); l.relu = u32();
+    const size_t nw = size_t(l.cout) * l.k * l.k * l.cin;
+    if (off + (nw + l.cout) * 4 > raw.size()) return std::vector<Layer>();
+    l.w.resize(nw); std::memcpy(l.w.data(), &raw[off], nw * 4); off += nw * 4;
+    l.b.resize(l.cout); std::memcpy(l.b.data(), &raw[off], size_t(l.cout) * 4); off += size_t(l.cout) * 4;
+  }
+  return out;
+}
+
+// NPU network (prior_v2.bin).
 const std::vector<Layer>& Layers() {
   static const std::vector<Layer> L = [] {
-    std::vector<uint8_t> raw;
 #ifdef __ANDROID__
-    raw.assign(lkrl_prior_model, lkrl_prior_model + sizeof(lkrl_prior_model));
+    return ParseLayers(std::vector<uint8_t>(lkrl_prior_model, lkrl_prior_model + sizeof(lkrl_prior_model)));
 #else
-    const char* p = std::getenv("LKRL_PRIOR_BIN"); if (!p) p = LKRL_PRIOR_DEFAULT_BIN;
-    if (FILE* f = std::fopen(p, "rb")) {
-      std::fseek(f, 0, SEEK_END); raw.resize(size_t(std::ftell(f))); std::fseek(f, 0, SEEK_SET);
-      if (std::fread(raw.data(), 1, raw.size(), f) != raw.size()) raw.clear();
-      std::fclose(f);
-    }
+    const char* p = std::getenv("LKRL_PRIOR_BIN"); return ParseLayers(ReadFile(p ? p : LKRL_PRIOR_DEFAULT_BIN));
 #endif
-    std::vector<Layer> out;
-    if (raw.size() < 4) return out;
-    size_t off = 0;
-    auto u32 = [&]() { uint32_t v = 0; if (off + 4 <= raw.size()) std::memcpy(&v, &raw[off], 4); off += 4; return v; };
-    out.resize(u32());
-    for (auto& l : out) {
-      l.cin = u32(); l.cout = u32(); l.k = u32(); l.relu = u32();
-      const size_t nw = size_t(l.cout) * l.k * l.k * l.cin;
-      if (off + (nw + l.cout) * 4 > raw.size()) return std::vector<Layer>();
-      l.w.resize(nw); std::memcpy(l.w.data(), &raw[off], nw * 4); off += nw * 4;
-      l.b.resize(l.cout); std::memcpy(l.b.data(), &raw[off], size_t(l.cout) * 4); off += size_t(l.cout) * 4;
-    }
-    return out;
+  }();
+  return L;
+}
+
+// Vulkan-fallback network (prior_fb.bin: slimmer, same recipe; GPUs without an NPU). Missing -> NPU network.
+const std::vector<Layer>& FallbackLayers() {
+  static const std::vector<Layer> L = [] {
+#ifdef __ANDROID__
+    std::vector<Layer> l = ParseLayers(std::vector<uint8_t>(lkrl_prior_fb_model, lkrl_prior_fb_model + sizeof(lkrl_prior_fb_model)));
+#else
+    const char* p = std::getenv("LKRL_PRIOR_FB_BIN"); std::vector<Layer> l = ParseLayers(ReadFile(p ? p : LKRL_PRIOR_FB_DEFAULT_BIN));
+#endif
+    return l.empty() ? Layers() : l;
   }();
   return L;
 }
@@ -263,7 +287,7 @@ bool PriorNpuAvailable() {
 }
 
 bool PriorPacked(std::vector<float>* wb, std::vector<PriorLayerInfo>* info) {
-  const auto& L = Layers();
+  const auto& L = FallbackLayers();
   if (L.empty()) return false;
   wb->clear(); info->clear();
   for (const Layer& l : L) {

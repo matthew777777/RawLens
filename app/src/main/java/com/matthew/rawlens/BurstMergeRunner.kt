@@ -212,7 +212,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
     ): Completed {
         val captureId = take.lastModified()
         val merged = AdpfHint.boosted(appContext) { LkrMerge.mergeDecoded(appContext, frames,
-            LkrMerge.Settings(kernelNetDenoise = inputs.mfsr.lkrKernelNetDenoise, dctPrior = inputs.mfsr.lkrDctPrior, tuning = LkrTuning.overrides(appContext),
+            LkrMerge.Settings(kernelNetDenoise = inputs.mfsr.lkrKernelNetDenoise, network = inputs.mfsr.lkrNetwork, dctPrior = inputs.mfsr.lkrDctPrior, tuning = LkrTuning.overrides(appContext),
                 zoom = inputs.mfsr.lkrZoom, fullRes = inputs.mfsr.lkrFullRes)) }
             ?: throw IllegalStateException("LK-R merge failed")
         try {

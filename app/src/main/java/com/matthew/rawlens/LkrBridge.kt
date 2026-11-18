@@ -87,6 +87,13 @@ internal object LkrBridge {
     /** Per-merge switch; enabled strength is gated by the measured scene noise. */
     @JvmStatic external fun nativeSetKernelNetDenoise(enabled: Boolean)
 
+    /** Settings -> Merge -> "Network": learned post-fit prior (NPU: MediaTek MDLA / Qualcomm Hexagon via
+     *  NNAPI; no NPU: Vulkan fallback). */
+    @JvmStatic external fun nativeSetPrior(enabled: Boolean)
+
+    /** A usable NPU for the network (MDLA / Hexagon through NNAPI, every op on that one device). */
+    @JvmStatic external fun nativeHasNpu(): Boolean
+
     @JvmStatic external fun nativeSetCacheDir(dir: String)
 
     /** Builds every LK-R (LK-R Lite) pipeline into the persistent cache in [dir]; wall ms, -1 = no Vulkan. */

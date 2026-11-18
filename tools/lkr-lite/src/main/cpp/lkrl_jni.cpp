@@ -314,6 +314,11 @@ extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMe
 
 // Settings -> Merge -> "Network" (learned post-fit prior on the NPU). Turning it on compiles the NPU
 // model in the background so the next merge does not wait for it.
+// A usable NPU for the prior (MDLA / Hexagon through NNAPI): Settings -> Network defaults to this.
+extern "C" JNIEXPORT jboolean JNICALL Java_com_matthew_rawlens_LkrBridge_nativeHasNpu(JNIEnv*, jclass) {
+  return lkrl::PriorNpuAvailable() ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetPrior(JNIEnv*, jclass, jboolean enabled) {
   const bool on = enabled == JNI_TRUE;
   const bool was = lkrl::PriorEnabled();

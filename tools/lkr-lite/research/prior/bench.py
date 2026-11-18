@@ -51,7 +51,7 @@ def main():
     os.makedirs(work, exist_ok=True)
     nets = {}
     for mp in models:
-        ck = torch.load(mp, map_location='cpu'); m = Prior(ck['ch'], ck['layers']); m.load_state_dict(ck['state']); m.eval()
+        ck = torch.load(mp, map_location='cpu'); m = Prior(ck['ch'], ck['layers'], ck.get('cond', 1)); m.load_state_dict(ck['state']); m.eval()
         nets[os.path.basename(mp)[:-3]] = m
     res = {}
     files = sorted(glob.glob(os.path.join(imgs, '*.png')))

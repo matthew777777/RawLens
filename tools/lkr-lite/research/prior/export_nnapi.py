@@ -43,7 +43,7 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('model'); ap.add_argument('pairs'); ap.add_argument('out')
     ap.add_argument('--tile', type=int, default=256); a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    ck = torch.load(a.model, map_location='cpu'); m = Prior(ck['ch'], ck['layers']); m.load_state_dict(ck['state']); m.eval()
+    ck = torch.load(a.model, map_location='cpu'); m = Prior(ck['ch'], ck['layers'], ck.get('cond', 1)); m.load_state_dict(ck['state']); m.eval()
     L = folded_layers(m)
     t = crops(a.pairs, a.tile, 1, seed=99)[0]
     with torch.no_grad(): ref = Tile(m)(t)

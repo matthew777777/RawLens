@@ -46,7 +46,7 @@ def main():
     a = ap.parse_args()
     import litert_torch as ai_edge_torch
     ck = torch.load(a.model, map_location='cpu')
-    m = Prior(ck['ch'], ck['layers']); m.load_state_dict(ck['state']); m.eval()
+    m = Prior(ck['ch'], ck['layers'], ck.get('cond', 1)); m.load_state_dict(ck['state']); m.eval()
     tm = Tile(m).eval()
     sample = crops(a.pairs, a.tile, 1, seed=99)[0]
 

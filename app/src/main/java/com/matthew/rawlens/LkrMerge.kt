@@ -50,6 +50,8 @@ internal object LkrMerge {
         /** Regularise with the Vulkan sliding-DCT x-step; false = no prior. */
         val dctPrior: Boolean = false,
         val kernelNetDenoise: Boolean = true,
+        /** Learned post-fit network on the NPU (Settings -> Merge -> "Network"). */
+        val network: Boolean = false,
         /** Sensor sub-rectangle `[x, y, w, h]`, or null for full frame. */
         val crop: IntArray? = null,
         /** LK-R Lab overrides (Settings -> Merge), NaN = code default; null = all defaults. */
@@ -189,6 +191,7 @@ internal object LkrMerge {
             noiseSource?.let { WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), it) },
             noiseSource?.iso?.toFloat() ?: 0f)
         LkrBridge.nativeSetKernelNetDenoise(settings.kernelNetDenoise)
+        LkrBridge.nativeSetPrior(settings.network)
         val t0 = SystemClock.elapsedRealtime()
         // packedBits >= 0: frames from LkrBridge.nativeStage (tight rows, packed when > 0).
         val diagnostics = LkrMergeDiagnostics(context)

@@ -124,6 +124,19 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             "On by default. PhotonCamera-based KernelNet denoising increases in noisy, " +
                 "low-light scenes. Low-noise scenes skip it."
         ))
+        content.addView(settingsCheck("LK-R: Network", mfsrSettings.lkrNetwork).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.lkrNetwork &&
+                    !applyMfsrSettings(mfsrSettings.copy(lkrNetwork = checked))) {
+                    isChecked = mfsrSettings.lkrNetwork
+                }
+            }
+        })
+        content.addView(sectionDesc(
+            "A small learned network removes zipper and colour dots after the merge while keeping " +
+                "grain. Default on for phones with an NPU (MediaTek APU, Qualcomm Hexagon), where it is " +
+                "nearly free; elsewhere it runs on the GPU and adds time to each merge."
+        ))
         content.addView(settingsCheck("LK-R shadow luma denoise", mfsrSettings.lkrDctPrior).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrDctPrior &&

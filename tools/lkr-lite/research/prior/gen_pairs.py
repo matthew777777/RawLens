@@ -107,7 +107,8 @@ def main():
             if (g[c, c].max(-1) > 0.95).mean() > 0.002 or abs(k - 1) > 0.1 or fine > 0.25:
                 print(f'rejected pair (gain {k:.2f}, fine error {fine:.3f})'); continue   # clipped / misaligned
             y = g + (x - xc)   # truth + Lite's own grain
-            np.savez(dst, x=x.astype(np.float16), y=y.astype(np.float16), noise=np.float32(nl), hard=hardness(x, y))
+            np.savez(dst, x=x.astype(np.float16), y=y.astype(np.float16), c=g.astype(np.float16),   # c: clean truth (denoiser)
+                     noise=np.float32(nl), hard=hardness(x, y))
         n += 1
         if n % 10 == 0: print(n, flush=True)
 
