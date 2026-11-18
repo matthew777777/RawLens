@@ -134,8 +134,8 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
         })
         content.addView(sectionDesc(
             "A small learned network removes zipper and colour dots after the merge while keeping " +
-                "grain. Default on for phones with an NPU (MediaTek APU, Qualcomm Hexagon), where it is " +
-                "nearly free; elsewhere it runs on the GPU and adds time to each merge."
+                "grain. Off by default. Runs on the NPU when the phone has one (MediaTek APU, Qualcomm " +
+                "Hexagon), where it is nearly free; elsewhere on the GPU, adding time to each merge."
         ))
         content.addView(settingsCheck("LK-R shadow luma denoise", mfsrSettings.lkrDctPrior).apply {
             setOnCheckedChangeListener { _, checked ->
