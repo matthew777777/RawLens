@@ -65,7 +65,8 @@ class VfGpuImportTest {
         assertFalse(shader.contains("uniform highp vec4 u_invRange"))
         assertTrue(shader.contains("out vec4 fragColor"))
         assertFalse(shader.contains("gl_FragColor"))
-        assertFalse(shader.contains("texture2D"))
+        // The shared ACES 2 GLSL keeps a texture2D branch behind `#if __VERSION__ >= 300 ... #else` for ES 2.
+        assertFalse(shader.replace(Aces2DisplayTransform.glsl, "").contains("texture2D"))
     }
 
     @Test fun `both shaders keep color processing high precision with final dither`() {

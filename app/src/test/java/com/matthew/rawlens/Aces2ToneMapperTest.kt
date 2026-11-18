@@ -25,8 +25,9 @@ class Aces2ToneMapperTest {
                 val result = Aces2DisplayTransform.map(floatArrayOf(x,x,x), p3)
                 assertTrue(result.all { it.isFinite() && it in 0f..1f })
                 assertTrue(result[0] >= previous - 1e-6f)
-                assertEquals(result[0],result[1],.003f)
-                assertEquals(result[0],result[2],.003f)
+                // Neutral within one 8-bit LUT node step (nodes are UNORM8 sRGB-encoded; ~0.0045 linear near 0.2).
+                assertEquals(result[0],result[1],.005f)
+                assertEquals(result[0],result[2],.005f)
                 previous = result[0]
             }
         }
