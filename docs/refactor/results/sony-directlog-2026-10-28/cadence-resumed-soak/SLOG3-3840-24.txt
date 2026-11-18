@@ -1,8 +1,0 @@
-
-com.matthew.rawlens.DirectLogRecordDeviceTest:.
-
-Time: 45.066
-
-OK (1 test)
-
-

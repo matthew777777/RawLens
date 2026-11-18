@@ -125,8 +125,8 @@ pass. The unsupported black-box test was removed.
   enable it. Enabling the fused sampler would require a separate schedule
   performance task.
 
-RAW measurements: [current sweep](results/f14-f15-2026-10-26/raw-sweep.txt),
-[earlier sweep](results/f14-f15-2026-10-25/raw-sweep.txt).
+RAW measurements: [current sweep](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/f14-f15-2026-10-26/raw-sweep.txt),
+[earlier sweep](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/f14-f15-2026-10-25/raw-sweep.txt).
 
 ### Recording peaking
 
@@ -152,9 +152,9 @@ recorder, not an independent codec-resolution certification. The 4K run
 reported 95 over-budget camera cycles across the complete take; zero
 recording drops does not imply a sustained 30 fps guarantee.
 
-[1080p evidence](results/f14-f15-2026-10-26/direct-log-1080p24.txt),
-[1440p evidence](results/f14-f15-2026-10-26/direct-log-1440p30.txt),
-[4K evidence](results/f14-f15-2026-10-26/direct-log-4k30.txt).
+[1080p evidence](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/f14-f15-2026-10-26/direct-log-1080p24.txt),
+[1440p evidence](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/f14-f15-2026-10-26/direct-log-1440p30.txt),
+[4K evidence](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/f14-f15-2026-10-26/direct-log-4k30.txt).
 
 The 1080p scene produced four detections at 0.5 diopters and zero at 5
 in the recorded pull. This is a scene-dependent defocus observation, not a
@@ -179,7 +179,7 @@ controls. Manual 0.9 m focus showed green dots on window detail; the 0.1 m
 near endpoint visibly blurred the scene and retired the marks. AF reset
 cleared peaking. ETTR on/off controls remained functional with a live RAW
 preview. Private scene screenshots were inspected locally, not committed.
-[Smoke receipt and APK hash](results/f14-f15-2026-10-26/release-smoke.txt).
+[Smoke receipt and APK hash](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/f14-f15-2026-10-26/release-smoke.txt).
 
 ### Scope of closure
 

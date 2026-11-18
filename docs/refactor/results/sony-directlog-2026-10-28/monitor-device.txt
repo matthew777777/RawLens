@@ -1,8 +1,0 @@
-
-com.matthew.rawlens.DirectLogLutDeviceTest:..
-
-Time: 1.01
-
-OK (2 tests)
-
-

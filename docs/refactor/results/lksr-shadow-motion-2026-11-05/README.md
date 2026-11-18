@@ -28,7 +28,7 @@ records the initial motion/chroma pass, not the final settings.
   the brightest raw channel and spread two pixels into neighbours. A single
   clipped channel therefore neutralised orange even though green and blue
   retained information. The mask now requires all channels near clipping and
-  does not spread. The [stage comparison](sunset-root-cause.jpg) directly shows
+  does not spread. The [stage comparison](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/sunset-root-cause.jpg) directly shows
   orange before the old finishing step and white after it.
 
 The default app/desktop schedule is now **8 iterations, 4 FFDNet calls, prior
@@ -45,12 +45,12 @@ empirical validation on these scenes, not a universal convergence guarantee.
 All panels share exposure and white balance; they are camera-RGB diagnostic
 renders, not independently auto-toned previews.
 
-- [Heater shadows: colour and noise](grill-fixed.jpg)
-- [Sunset: orange retained](sunset-fixed.jpg)
-- [Grass](grass-new-fixed.jpg), [mountains](mountain-new-fixed.jpg),
-  [hair](hair-new-fixed.jpg)
-- Full-resolution motion checks: [trees](trees-final-compare.jpg),
-  [car](car-final-compare.jpg)
+- [Heater shadows: colour and noise](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/grill-fixed.jpg)
+- [Sunset: orange retained](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/sunset-fixed.jpg)
+- [Grass](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/grass-new-fixed.jpg), [mountains](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/mountain-new-fixed.jpg),
+  [hair](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/hair-new-fixed.jpg)
+- Full-resolution motion checks: [trees](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/trees-final-compare.jpg),
+  [car](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/car-final-compare.jpg)
 - [Verified final DNG paths, dimensions and timings](final-renders.json)
 
 `lkr_noise_check`, `lkr_robust_check`, `lkr_denoise_check` and `lkr_photo_check`
@@ -116,12 +116,12 @@ not PSNR or image quality. The maps are source-grid summaries; different source
 frames are not exactly the same spatial coordinates. Exact numbers and crop
 locations are in [metrics.json](metrics.json).
 
-- [Grass comparison](grass.jpg) / [maps](grass-maps.jpg)
-- [Mountain comparison](mountain.jpg) / [maps](mountain-maps.jpg)
-- [Hair comparison](hair.jpg) / [maps](hair-maps.jpg)
-- [Trees comparison](trees.jpg) / [maps](trees-maps.jpg)
-- [Car comparison](car.jpg) / [maps](car-maps.jpg)
-- [Hair: actual residual, signed mean, RMS and acceptance](hair-residual-maps.jpg)
+- [Grass comparison](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/grass.jpg) / [maps](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/grass-maps.jpg)
+- [Mountain comparison](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/mountain.jpg) / [maps](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/mountain-maps.jpg)
+- [Hair comparison](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/hair.jpg) / [maps](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/hair-maps.jpg)
+- [Trees comparison](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/trees.jpg) / [maps](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/trees-maps.jpg)
+- [Car comparison](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/car.jpg) / [maps](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/car-maps.jpg)
+- [Hair: actual residual, signed mean, RMS and acceptance](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/lksr-shadow-motion-2026-11-05/hair-residual-maps.jpg)
 
 The static scenes keep essentially all their prior frame support. The moving
 scenes reject more inconsistent samples; fine hair and foliage improve in the

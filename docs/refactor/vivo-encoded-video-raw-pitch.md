@@ -55,9 +55,9 @@ patterns. Fused versus separate P010 comparisons had zero code difference
 across BT.709, S-Log3, HLG, and ACES. These are synthetic headless GPU
 checks, not a before/after camera-recording or performance comparison.
 The device-test app and instrumentation APKs were installed preserving
-app data. Evidence: [suite](results/vivo-rcd-xiaomi-2026-10-31/gpu-suite.txt),
-[LUT test](results/vivo-rcd-xiaomi-2026-10-31/lut-test.txt), and
-[GPU parity output](results/vivo-rcd-xiaomi-2026-10-31/gpu-parity-logcat.txt).
+app data. Evidence: [suite](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-xiaomi-2026-10-31/gpu-suite.txt),
+[LUT test](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-xiaomi-2026-10-31/lut-test.txt), and
+[GPU parity output](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-xiaomi-2026-10-31/gpu-parity-logcat.txt).
 
 This is a correction of an addressing inconsistency, not a confirmed
 diagnosis of the Vivo recordings. Confirmation requires a new recording
@@ -103,9 +103,9 @@ Normal device-test APKs and a minified GitHub release built successfully.
 The existing Xiaomi installation has a different signing certificate;
 follow-up device checks use an isolated package to preserve its app/data.
 
-Evidence: [Vivo field log](results/vivo-rcd-plane-copy-2026-10-31/vivo-field-log.txt),
-[codec/probe tests](results/vivo-rcd-plane-copy-2026-10-31/LogVideoProbeTest.xml),
-[recorder tests](results/vivo-rcd-plane-copy-2026-10-31/DirectLogRecorderTest.xml).
+Evidence: [Vivo field log](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-plane-copy-2026-10-31/vivo-field-log.txt),
+[codec/probe tests](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-plane-copy-2026-10-31/LogVideoProbeTest.xml),
+[recorder tests](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-plane-copy-2026-10-31/DirectLogRecorderTest.xml).
 
 Follow-up Xiaomi validation on package `com.matthew.rawlens.vivocheck`,
 version 2.0.50: all 10 packed-RCD GPU tests passed with an identity LUT
@@ -129,7 +129,7 @@ Xiaomi app was installed. A separately installable arm64 test APK is
 available locally at `/tmp/RawLens-2.0.50-Vivo-check-arm64.apk` for the Vivo
 retest; it uses the same recording implementation with an isolated app ID.
 
-Device results: [GPU suite](results/vivo-rcd-plane-copy-2026-10-31/xiaomi-gpu-suite.txt),
-[GPU-writer recording](results/vivo-rcd-plane-copy-2026-10-31/xiaomi-gpu-writer-record.txt),
-[plane-copy recording](results/vivo-rcd-plane-copy-2026-10-31/xiaomi-plane-copy-record.txt),
+Device results: [GPU suite](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-plane-copy-2026-10-31/xiaomi-gpu-suite.txt),
+[GPU-writer recording](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-plane-copy-2026-10-31/xiaomi-gpu-writer-record.txt),
+[plane-copy recording](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-plane-copy-2026-10-31/xiaomi-plane-copy-record.txt),
 [MP4 metadata](results/vivo-rcd-plane-copy-2026-10-31/xiaomi-plane-copy-ffprobe.json).

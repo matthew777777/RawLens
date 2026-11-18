@@ -112,11 +112,11 @@ calibrated physical grey-card or colour-chart measurement. Small framing
 changes between separate modes remain possible; the ETTR old/new pair is
 identical by construction. The four final JPEGs were visually inspected.
 
-Evidence: [host tests](results/a6-2026-10-26/host-tests.txt),
-[instrumentation](results/a6-2026-10-26/instrumentation.txt),
-[paired report](results/a6-2026-10-26/paired-report.txt),
-[report assertions](results/a6-2026-10-26/verification.txt),
-[JPEG hashes](results/a6-2026-10-26/jpeg-sha256.txt).
+Evidence: [host tests](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/a6-2026-10-26/host-tests.txt),
+[instrumentation](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/a6-2026-10-26/instrumentation.txt),
+[paired report](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/a6-2026-10-26/paired-report.txt),
+[report assertions](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/a6-2026-10-26/verification.txt),
+[JPEG hashes](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/a6-2026-10-26/jpeg-sha256.txt).
 Full JPEGs: `/tmp/rawlens-a6-final/` (not committed).
 
 An earlier paired run also demonstrated why exact mode identity is not a

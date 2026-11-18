@@ -61,3 +61,13 @@ output/
 
 # Local agent worktrees are separate Git checkouts, not parent repository assets.
 /.claude/worktrees/
+
+# Raw diagnostic output belongs in build/ or output/, not historical documentation.
+/docs/refactor/results/**/*.log
+/docs/refactor/results/**/*.txt
+/docs/refactor/results/**/*.jsonl
+/docs/refactor/results/**/*.xml
+/docs/refactor/results/**/*.png
+/docs/refactor/results/**/*.jpg
+/docs/refactor/rcd-replacement/**/*.log
+/docs/refactor/rcd-replacement/recordings-*/

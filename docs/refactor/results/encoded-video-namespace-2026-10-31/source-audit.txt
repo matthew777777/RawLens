@@ -1,3 +1,0 @@
-Application/tooling source contents: 0 retired-name matches.
-Source/asset/test/tooling paths: 0 retired-name matches.
-Historical captured logs are preserved unchanged.

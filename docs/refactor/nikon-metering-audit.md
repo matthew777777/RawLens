@@ -160,9 +160,9 @@ acceptance. No grey-card calibration or comparable bright-scene result is
 claimed from either run. The owner requested another pause before the next
 stationary comparison.
 
-Evidence: [host results](results/h1-h2-2026-10-25/host-tests.txt),
-[passing dark-scene instrumentation](results/h1-h2-2026-10-25/dark-scene-instrumentation.txt),
-[excluded moving-scene measurements](results/h1-h2-2026-10-25/moving-scene-excluded.txt).
+Evidence: [host results](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/h1-h2-2026-10-25/host-tests.txt),
+[passing dark-scene instrumentation](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/h1-h2-2026-10-25/dark-scene-instrumentation.txt),
+[excluded moving-scene measurements](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/h1-h2-2026-10-25/moving-scene-excluded.txt).
 Dark-scene JPEGs: `/tmp/rawlens-h12-final/`; prepared-scene baseline:
 `/tmp/rawlens-h12-prepared-center.jpg`. Large comparison JPEGs are not bundled
 in the repository.
@@ -205,10 +205,10 @@ These historical H2-run ETTR JPEGs remained darker than PROGRAM. A6 was
 subsequently fixed and closed with a separate paired-image audit; these
 measurements predate that change.
 
-Evidence: [instrumentation](results/h1-h2-2026-10-26/instrumentation.txt),
-[raw capture report](results/h1-h2-2026-10-26/window-report.txt),
-[acceptance assertions and scope](results/h1-h2-2026-10-26/verification.txt),
-[JPEG hashes](results/h1-h2-2026-10-26/jpeg-sha256.txt).
+Evidence: [instrumentation](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/h1-h2-2026-10-26/instrumentation.txt),
+[raw capture report](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/h1-h2-2026-10-26/window-report.txt),
+[acceptance assertions and scope](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/h1-h2-2026-10-26/verification.txt),
+[JPEG hashes](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/h1-h2-2026-10-26/jpeg-sha256.txt).
 Full JPEGs remain at `/tmp/rawlens-h12-oct26-window/`, not in the repository.
 
 Remaining release-wide validation belongs to E22: multiple devices, whole-

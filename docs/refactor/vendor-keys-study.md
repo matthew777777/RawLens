@@ -148,7 +148,7 @@ characteristics remain calibration settings, never request writes.
   The initial combined build hit a lint FIR crash; a second was terminated.
   The isolated final unit and full-release builds both passed.
 
-The [durable result record](results/vendor-keys-release-2026-10-27.txt)
+The [durable result record](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vendor-keys-release-2026-10-27.txt)
 contains artifact identity, runtime events and test limits.
 
 Regression coverage includes synchronous/asynchronous vendor rejection,

@@ -69,5 +69,5 @@ Validation completed: the final isolated GitHub device-test build passed for bot
 native ABIs. Four device tests passed in 23.756 seconds: RawLens sample training,
 RAWR training without a sensor profile, stored-prior influence and replay
 suppression, and both algorithms plus fused/sequential sharpening consistency.
-See [device-tests.txt](results/noise-model-photon-2026-11-04/device-tests.txt).
+See [device-tests.txt](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/noise-model-photon-2026-11-04/device-tests.txt).
 The host persistence/invariant checks and all 396 comparative cases passed.

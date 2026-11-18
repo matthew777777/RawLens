@@ -82,9 +82,9 @@ Separately installable APK: `/tmp/RawLens-2.0.57-Vivo-RCD-compat-arm64.apk`,
 package `com.matthew.rawlens.vivocheck`. Its six shader binaries were checked
 against the generated files and its APK signature verified.
 
-Evidence: [no-LUT parity](results/vivo-rcd-portable-2026-10-31/portable-parity-no-lut.txt),
-[final 12 tests](results/vivo-rcd-portable-2026-10-31/portable-and-default-lut-tests.txt),
-[release build](results/vivo-rcd-portable-2026-10-31/release-build.txt).
+Evidence: [no-LUT parity](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-portable-2026-10-31/portable-parity-no-lut.txt),
+[final 12 tests](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-portable-2026-10-31/portable-and-default-lut-tests.txt),
+[release build](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/vivo-rcd-portable-2026-10-31/release-build.txt).
 
 Upstream references:
 [Vivo-tested video path](https://github.com/adityawarmanfw/rawr/blob/4c64cb1f5eb553bf61ca9a459c5a2c94964732e4/native/video_pipeline/README.md),

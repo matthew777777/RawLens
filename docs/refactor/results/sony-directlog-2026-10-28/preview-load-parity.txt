@@ -1,1 +1,0 @@
-Compared 129054 RGBA8 pixels across 15 cases; all bit-identical

@@ -79,7 +79,7 @@ rather than waiting for the continuously updating preview to become idle.
 Full enter/exit-video transitions also passed, including the video HUD and
 record-ready controls. Screenshots for both video formats were inspected;
 CRS and LOG remain horizontal. The lens row and bottom panel retain their
-original geometry; the small assist button sits beside the bottom viewfinder-engine switch. See [layout measurements](results/f1-f2-compact-ui-2026-10-26.txt).
+original geometry; the small assist button sits beside the bottom viewfinder-engine switch. See [layout measurements](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/results/f1-f2-compact-ui-2026-10-26.txt).
 
 ## Recording acceptance and performance work
 

@@ -1,1 +1,0 @@
-label=open-gate-step4 stopMs=472 graded=65 output=66

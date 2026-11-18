@@ -278,7 +278,7 @@ distinction when resuming.
 The user requested noting all work and continuing in Claude tomorrow. No active
 own build/test/recording/benchmark job was found at the stop. Current source,
 validated historical artifacts, failures and exact next steps are recorded in
-[claude-handoff-2026-11-02.md](claude-handoff-2026-11-02.md), with current hashes
+[claude-handoff-2026-11-02.md](https://github.com/matthew777777/RawLens/blob/16f1a03acc51a9246e905f1a5bbf320316f670e0/docs/refactor/rcd-replacement/claude-handoff-2026-11-02.md), with current hashes
 in handoff-state-2026-11-02.json. Full-source tile-local recording regressed; a
 large-frame bounded-VH shape test has an unresolved non-finite product failure.
 The queried-usage GPU image probe passed only its small native pixel test; the

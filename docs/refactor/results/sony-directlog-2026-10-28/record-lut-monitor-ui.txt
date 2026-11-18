@@ -1,8 +1,0 @@
-
-com.matthew.rawlens.DirectLogMonitorUiDeviceTest:.
-
-Time: 55.822
-
-OK (1 test)
-
-
