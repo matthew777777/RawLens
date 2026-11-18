@@ -210,6 +210,13 @@ public:
                    camToAces_(2, row) * camW.b;
         };
         Vec3 toAces{acesRow(0), acesRow(1), acesRow(2)};
+        // CameraToneBalance: same bounded RGB scale as the CPU/GLSL paths.
+        Expr peak = max(0.0f, max(toAces.r, max(toAces.g, toAces.b)));
+        Expr balanceT = clamp((peak - 0.18f) / 0.42f, 0.0f, 1.0f);
+        Expr balanceFade = 1.0f - balanceT * balanceT * (3.0f - 2.0f * balanceT);
+        Expr toe = 0.06f / (0.06f + peak);
+        Expr balanceGain = select(peak >= 0.6f, 1.0f, 1.0f + 3.0f * toe * toe * balanceFade);
+        toAces = Vec3{toAces.r * balanceGain, toAces.g * balanceGain, toAces.b * balanceGain};
         Vec3 rec = matVecConst(ACESCG_TO_REC2020, toAces);
         Vec3 scene{max(rec.r, 0.0f), max(rec.g, 0.0f), max(rec.b, 0.0f)};
         auto shoulder = [&](Expr s) {

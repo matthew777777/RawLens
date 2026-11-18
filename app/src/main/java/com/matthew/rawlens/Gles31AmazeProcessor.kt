@@ -1397,7 +1397,7 @@ class Gles31AmazeProcessor(
         }.also(GLES31::glUseProgram)
 
         private fun read(path: String): String =
-            context.assets.open(path).bufferedReader().use { it.readText().replace("// SIGMOID_FUNCTIONS", SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl) }
+            context.assets.open(path).bufferedReader().use { it.readText().replace("// SIGMOID_FUNCTIONS", CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl) }
 
         private fun compile(source: String, name: String): Int {
             val shader = GLES31.glCreateShader(GLES31.GL_COMPUTE_SHADER)

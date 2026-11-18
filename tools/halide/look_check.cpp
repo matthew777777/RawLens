@@ -152,6 +152,10 @@ static void refLook(const float q[4], int x, int y, const Buffer<float> &lensMap
                       (cam[2] + (p.white[2] - cam[2]) * wBlend) * eg};
     double aces[3], rec[3], scene[3], sh[3];
     matVecD(p.aces, camW, aces);
+    double peak = fmax(0.0, fmax(aces[0], fmax(aces[1], aces[2])));
+    double toe = .06 / (.06 + peak);
+    double gain = peak >= .6 ? 1.0 : 1.0 + 3.0 * toe * toe * (1.0 - smoothstepD(.18, .6, peak));
+    for (int i = 0; i < 3; ++i) aces[i] *= gain;
     matVecD(A2R, aces, rec);
     if (p.jpeg == 3) {
         double display[3];

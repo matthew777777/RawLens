@@ -109,17 +109,19 @@ void main() {
     cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
 
     highp vec3 sceneAcescg = u_camera_to_acescg * cameraRgb;
+    // Keep the unmodified scene tap for the HDR gain map.
+    highp vec3 balancedAcescg = camera_tone_balance(sceneAcescg);
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
     highp vec3 outputLinear;
     highp vec3 basicEncoded = vec3(0.0);
-    if (u_basic == 3) outputLinear = aces2_output(sceneAcescg, u_display_p3);
-    else if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(ACESCG_TO_REC2020_D65 * sceneAcescg);
+    if (u_basic == 3) outputLinear = aces2_output(balancedAcescg, u_display_p3);
+    else if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(ACESCG_TO_REC2020_D65 * balancedAcescg);
     else if (u_basic == 1) {
-        basicEncoded = basic_encoded(outputMatrix * (ACESCG_TO_REC2020_D65 * sceneAcescg));
+        basicEncoded = basic_encoded(outputMatrix * (ACESCG_TO_REC2020_D65 * balancedAcescg));
         outputLinear = vec3(0.0);
         if (u_write_gainmap != 0) outputLinear = basic_decode(basicEncoded);
     }
-    else outputLinear = compress_output_gamut(outputMatrix * agx_base(sceneAcescg));
+    else outputLinear = compress_output_gamut(outputMatrix * agx_base(balancedAcescg));
     highp vec3 baseLinear = clamp(outputLinear, 0.0, 1.0);
     highp vec3 encoded = (u_basic == 1) ? basicEncoded : srgb_oetf(baseLinear);
     highp vec3 dither = vec3(

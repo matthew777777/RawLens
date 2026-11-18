@@ -95,13 +95,23 @@ data class JpegOutputSettings(
 ) {
     /**
      * Expand the existing AgX shadow range to restore middle grey after protection.
-     * Solving (S' - b)/(S' + H) = S/(S + H) gives S' = S + b*(S+H)/H.
+     * Solve the normalized AgX grey anchor after the shared camera shadow lift.
      * This also lifts shadows more than highlights; no extra shader/pass or LUT.
      * Kept separate from the stored knob so repeated resolution is idempotent.
      */
-    val effectiveAgxShadowEv: Float get() = if (activeDLighting == ActiveDLighting.OFF) agxShadowEv else
-        (agxShadowEv + activeDLighting.protectionEv.toFloat() *
-            (agxShadowEv + agxHighlightEv) / agxHighlightEv.coerceAtLeast(3f)).coerceAtMost(18f)
+    val effectiveAgxShadowEv: Float get() {
+        if (activeDLighting == ActiveDLighting.OFF) return agxShadowEv
+        // Solve the original grey restoration after the camera toe. Its nonlinear
+        // lift already compensates part of capture protection; do not add it twice.
+        val grey = .18f * CameraToneBalance.gain(.18f)
+        val protectedGrey = (.18 * kotlin.math.exp(-activeDLighting.protectionEv * kotlin.math.ln(2.0))).toFloat()
+        val liftedProtected = protectedGrey * CameraToneBalance.gain(protectedGrey)
+        val logGrey = kotlin.math.ln((grey / .18f).toDouble()) / kotlin.math.ln(2.0)
+        val bias = kotlin.math.ln((grey / liftedProtected).toDouble()) / kotlin.math.ln(2.0)
+        val h = agxHighlightEv.coerceAtLeast(3f)
+        return (agxShadowEv + bias.toFloat() * (agxShadowEv + h) /
+            (h - logGrey.toFloat()).coerceAtLeast(.1f)).coerceAtMost(18f)
+    }
 
     /** Ultra HDR is an Android 14 (API 34) platform JPEG feature. */
     fun resolvedForPlatform(): JpegOutputSettings {

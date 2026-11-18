@@ -283,8 +283,9 @@ internal object VfGpuImport {
             " float whiteBlend = max(whiteB.r, max(whiteB.g, whiteB.b));" +
             " cam = mix(cam, u_cameraWhite, whiteBlend);" +
             " cam *= exp2(u_exposureEv);" +
-            " vec3 scene2020 = acesCgToRec2020() * (u_camToAces * cam);" +
-            " if (u_basic == 3) { vec3 se=srgbOetf(clamp(aces2_output(u_camToAces*cam,u_displayP3),0.0,1.0));" +
+            " vec3 balancedAces = camera_tone_balance(u_camToAces * cam);" +
+            " vec3 scene2020 = acesCgToRec2020() * balancedAces;" +
+            " if (u_basic == 3) { vec3 se=srgbOetf(clamp(aces2_output(balancedAces,u_displayP3),0.0,1.0));" +
             " @OUT@=vec4(se,1.0); return; }" +
             " if (u_basic == 2) { mat3 sm=rec2020ToSrgb(); if(u_displayP3!=0)sm=rec2020ToDisplayP3();" +
             " vec3 se=srgbOetf(clamp(sm*dt_sigmoid(scene2020),0.0,1.0));" +
@@ -461,7 +462,7 @@ internal object VfGpuImport {
             "varying VFHP vec2 tex; uniform VFHP sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             LENS_UNIFORMS_COMMON +
-            TONEMAP_HELPERS + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl +
+            TONEMAP_HELPERS + CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl +
             LENS_GAIN_ES1 +
             "void main() { vec4 b = texture2D(raw, tex); b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "gl_FragColor")
@@ -491,7 +492,7 @@ internal object VfGpuImport {
             "uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             "in highp vec2 tex; out vec4 fragColor;" +
-            TONEMAP_HELPERS + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl +
+            TONEMAP_HELPERS + CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl +
             LENS_GAIN_ES3 +
             // Runtime-specialized unpack: black/white for the exact RAW bit depth
             // (10/12/16-bit sensor modes all present as unpacked 16-bit codes) are

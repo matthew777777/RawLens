@@ -50,11 +50,12 @@ object AgxDisplayTransform {
             map(ACESCG_TO_REC2020_D65, acescg))
 
     private fun acescgToOutputLinear(
-        acescg: FloatArray,
+        inputAcescg: FloatArray,
         outputMatrix: FloatArray,
         settings: JpegOutputSettings
     ): FloatArray {
-        require(acescg.size == 3 && acescg.all(Float::isFinite))
+        require(inputAcescg.size == 3 && inputAcescg.all(Float::isFinite))
+        val acescg = CameraToneBalance.map(inputAcescg)
         if (settings.toneMapper == PhotoToneMapper.ACES_2) return Aces2DisplayTransform.map(acescg, outputMatrix === REC2020_TO_DISPLAY_P3)
         val sceneRec2020 = map(ACESCG_TO_REC2020_D65, acescg)
         if (settings.toneMapper == PhotoToneMapper.SIGMOID) return map(outputMatrix, SigmoidDisplayTransform.map(sceneRec2020))
@@ -147,9 +148,10 @@ object AgxDisplayTransform {
      *
      * Must stay in sync with the achromatic path above and agx_srgb8.glsl agx_base().
      */
-    fun scopeCurve(linear: Float, settings: JpegOutputSettings = JpegOutputSettings()): Float {
+    fun scopeCurve(inputLinear: Float, settings: JpegOutputSettings = JpegOutputSettings()): Float {
         val resolved = settings.resolvedForPlatform()
-        if (!linear.isFinite()) return 0f
+        if (!inputLinear.isFinite()) return 0f
+        val linear = inputLinear * CameraToneBalance.gain(inputLinear)
         if (resolved.toneMapper == PhotoToneMapper.ACES_2) return srgbOetf(Aces2DisplayTransform.map(floatArrayOf(linear,linear,linear))[0])
         if (resolved.toneMapper == PhotoToneMapper.SIGMOID) return srgbOetf(SigmoidDisplayTransform.curve(linear))
         if (resolved.toneMapper == PhotoToneMapper.BASIC) return BasicDisplayTransform.encode(linear, resolved.highlightShoulder)

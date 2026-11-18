@@ -33,7 +33,7 @@ data class DevelopedJxl(
  */
 class Gles31JxlOutputProcessor(context: Context) {
     private val shaderSource = context.applicationContext.assets.open(SHADER).bufferedReader().use {
-        it.readText().replace("// SIGMOID_FUNCTIONS", SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
+        it.readText().replace("// SIGMOID_FUNCTIONS", CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
     }.replace("binding = 1, rgba8", "binding = 1, rgba16f")
 
     // Invoked inside Gles31AmazeProcessor.process(), on its persistent writer

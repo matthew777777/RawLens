@@ -25,7 +25,7 @@ data class DevelopedJpeg(val bitmap: Bitmap, val settings: JpegOutputSettings, v
 class Gles31JpegOutputProcessor(context: Context) {
     private val cleanup = RapidRawDevelop(context.applicationContext)
     private val shaderSource = context.applicationContext.assets.open(SHADER).bufferedReader().use {
-        it.readText().replace("// SIGMOID_FUNCTIONS", SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
+        it.readText().replace("// SIGMOID_FUNCTIONS", CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
     }
     // This processor is invoked inside Gles31AmazeProcessor.process(), on its persistent writer
     // EGL context. Compile once per context instead of once per saved JPEG.
