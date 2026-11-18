@@ -20,6 +20,18 @@ Java_com_matthew_rawlens_VfRcd_initRcdNative(JNIEnv* env, jobject, jbyteArray sp
         destroyGrade(g);
         return VFVK_PIPELINE_FAILED;
     }
+    {
+        // Optional GPU timestamps (2 per mode); skipped if the queue has none.
+        uint32_t n = 0; vkGetPhysicalDeviceQueueFamilyProperties(g->gpu, &n, nullptr);
+        std::vector<VkQueueFamilyProperties> qp(n); vkGetPhysicalDeviceQueueFamilyProperties(g->gpu, &n, qp.data());
+        VkPhysicalDeviceProperties props; vkGetPhysicalDeviceProperties(g->gpu, &props);
+        g->rcdTsPeriodNs = props.limits.timestampPeriod;
+        if (g->rcdQueries == VK_NULL_HANDLE && g->queueFamily < n && qp[g->queueFamily].timestampValidBits > 0) {
+            VkQueryPoolCreateInfo qi{}; qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP; qi.queryCount = 8;
+            if (vkCreateQueryPool(g->device, &qi, nullptr, &g->rcdQueries) != VK_SUCCESS) g->rcdQueries = VK_NULL_HANDLE;
+        }
+    }
     LOGI("vf-vk: rcd demosaic pipeline ready");
     return VFVK_OK;
 }
@@ -199,6 +211,11 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
                       VK_IMAGE_LAYOUT_GENERAL,
                       VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
     }
+    const uint32_t tsBase = uint32_t(mode) * 2u;
+    if (g->rcdQueries != VK_NULL_HANDLE) {
+        vkCmdResetQueryPool(cmd, g->rcdQueries, tsBase, 2);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, g->rcdQueries, tsBase);
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->rcdPipelines[params.mode & 3]);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             g->rcdPipelineLayout, 0, 1, &modeSet, 0, nullptr);
@@ -208,6 +225,10 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     const uint32_t gx = (uint32_t)(params.dims[0] + blockWidth - 1) / blockWidth;
     const uint32_t gy = (uint32_t)(params.dims[1] + 7) / 8;
     vkCmdDispatch(cmd, gx, gy, 1);
+    if (g->rcdQueries != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g->rcdQueries, tsBase + 1u);
+        g->rcdQueryWritten[mode] = true;
+    }
     if (scrWrite) {
         layoutBarrier(cmd, scrImg.image,
                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
@@ -614,3 +635,23 @@ Java_com_matthew_rawlens_VfRcd_rcdFusedYuvSubmitNative(
     return fd;
 }
 
+
+// GPU ms of the last completed submit of each RCD mode (call after the
+// caller waited every mode's sync fd); -1 where unavailable.
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_matthew_rawlens_VfRcd_rcdTimingNative(JNIEnv* env, jobject) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    jfloat out[4] = {-1, -1, -1, -1};
+    if (g != nullptr && g->rcdQueries != VK_NULL_HANDLE) {
+        for (int m = 0; m < 4; ++m) {
+            if (!g->rcdQueryWritten[m]) continue;
+            uint64_t t[2];
+            if (vkGetQueryPoolResults(g->device, g->rcdQueries, uint32_t(m) * 2u, 2, sizeof(t), t, sizeof(uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+                out[m] = jfloat(double(t[1] - t[0]) * g->rcdTsPeriodNs * 1e-6);
+        }
+    }
+    jfloatArray arr = env->NewFloatArray(4);
+    if (arr) env->SetFloatArrayRegion(arr, 0, 4, out);
+    return arr;
+}

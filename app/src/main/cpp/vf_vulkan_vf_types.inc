@@ -459,6 +459,10 @@ struct Context {
     VkDescriptorSetLayout rcdSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout rcdPipelineLayout = VK_NULL_HANDLE;
     VkPipeline rcdPipelines[4] = {};
+    // GPU timestamps per RCD mode (start/end), read via VfRcd.rcdTimingNative.
+    VkQueryPool rcdQueries = VK_NULL_HANDLE;
+    bool rcdQueryWritten[4] = {false, false, false, false};
+    double rcdTsPeriodNs = 0.0;
     VkDescriptorPool rcdPool = VK_NULL_HANDLE;
     // Each slot owns a descriptor set per mode: modes are submitted without CPU waits.
     VkDescriptorSet rcdSets[12] = {};

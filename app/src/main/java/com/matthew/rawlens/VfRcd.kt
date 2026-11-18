@@ -85,6 +85,13 @@ internal object VfRcd {
     /** Create the RCD pipeline from SPIR-V bytes. Idempotent. */
     external fun initRcdNative(spv: ByteArray): Int
 
+    /**
+     * GPU milliseconds of the last completed submit of each mode (dirs,
+     * green, R/B at opposite, R/B at green); -1 where unavailable. Call
+     * after every mode's sync fd signalled (the JPEG path waits each).
+     */
+    external fun rcdTimingNative(): FloatArray
+
     /** Create the fused RCD-finalize + P010 grade pipeline. Idempotent. */
     external fun initRcdYuvNative(spv: ByteArray): Int
 
