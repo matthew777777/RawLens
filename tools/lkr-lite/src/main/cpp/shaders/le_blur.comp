@@ -1,0 +1,30 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Long-straight-edge smoothing, pass 2: separable binomial blur (radius pc.LB) of the structure tensor.
+// mode 0: rows (t -> u, tensor); mode 1: columns (u -> o) and eigen analysis: o = (along-edge unit
+// vector ex, ey; coherence; gradient energy sqrt(trace) / 64), packed as halves.
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer TI { uvec2 ti[]; };
+layout(std430, binding = 1) writeonly buffer TO { uvec2 to[]; };
+vec3 ld(int o) { uvec2 v = ti[o]; return vec3(unpackHalf2x16(v.x), unpackHalf2x16(v.y).x); }
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  if (X >= pc.W || Y >= pc.H) return;
+  int R = pc.LB;
+  vec3 s = vec3(0.0); float ws = 0.0;
+  for (int d = -R; d <= R; ++d) {
+    int xx = pc.mode == 0 ? clamp(X + d, 0, pc.W - 1) : X, yy = pc.mode == 0 ? Y : clamp(Y + d, 0, pc.H - 1);
+    float w = float(R + 1 - abs(d));
+    s += w * ld(yy * pc.W + xx); ws += w;
+  }
+  s /= ws;
+  if (pc.mode == 0) { to[Y * pc.W + X] = uvec2(packHalf2x16(s.xy), packHalf2x16(vec2(s.z, 0.0))); return; }
+  float jxx = s.x, jxy = s.y, jyy = s.z, tr = jxx + jyy;
+  float df = sqrt(max((jxx - jyy) * (jxx - jyy) + 4.0 * jxy * jxy, 0.0));
+  float coh = df / max(tr, 1e-12);
+  float th = 0.5 * atan(2.0 * jxy, jxx - jyy);       // gradient direction
+  vec2 e = vec2(-sin(th), cos(th));                   // along the edge
+  to[Y * pc.W + X] = uvec2(packHalf2x16(e), packHalf2x16(vec2(coh, sqrt(max(tr, 0.0)) * (1.0 / 64.0))));
+}

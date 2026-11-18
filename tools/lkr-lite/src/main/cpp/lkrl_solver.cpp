@@ -48,6 +48,15 @@ static const uint32_t edgeshift[] = {
 static const uint32_t cdupd[] = {
 #include "cdupd.inc"
 };
+static const uint32_t le_tensor[] = {
+#include "le_tensor.inc"
+};
+static const uint32_t le_blur[] = {
+#include "le_blur.inc"
+};
+static const uint32_t le_apply[] = {
+#include "le_apply.inc"
+};
 static const uint32_t jac[] = {
 #include "jac.inc"
 };
@@ -223,7 +232,7 @@ bool solve6(double A[6][6], double b[6], double x[6]) {   // Gaussian eliminatio
 LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   if (!gpu_ || !gpu_->ok()) return;
   LKRL_PIPE(resid, 6); LKRL_PIPE(werr, 3); LKRL_PIPE(wavg, 2); LKRL_PIPE(wminh, 3); LKRL_PIPE(wminv, 3);
-  LKRL_PIPE(adj, 7); LKRL_PIPE(adj_s1, 7); LKRL_PIPE(adj_s2, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 4); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 3);
+  LKRL_PIPE(adj, 7); LKRL_PIPE(adj_s1, 7); LKRL_PIPE(adj_s2, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 4); LKRL_PIPE(le_tensor, 2); LKRL_PIPE(le_blur, 2); LKRL_PIPE(le_apply, 3); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 3);
 #define LKRL_KPIPE(name, nb) name##_ = gpu_->pipeline(spv::name, sizeof(spv::name), nb, sizeof(KPush))
   LKRL_KPIPE(kresid, 5); LKRL_KPIPE(ktdet, 3); LKRL_KPIPE(kth, 5); LKRL_KPIPE(kt, 6); LKRL_KPIPE(ktv, 8);
   LKRL_KPIPE(ktd, 8); LKRL_KPIPE(kguide, 6); LKRL_KPIPE(kminh, 3); LKRL_KPIPE(kmin, 5);
@@ -240,7 +249,7 @@ LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   adjwg_ = gpu_->pipeline(spv::adj_wg, sizeof(spv::adj_wg), 7, sizeof(Push));
   fin_ = gpu_->pipeline(spv::fin, sizeof(spv::fin), 7, 64);
   ok_ = true;
-  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_})
+  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_, &le_tensor_, &le_blur_, &le_apply_})
     ok_ = ok_ && q->pipe != VK_NULL_HANDLE;
 }
 
@@ -254,7 +263,7 @@ std::string LiteSolver::profileNames() const {
       {&ktdet_, "lkr_weight_tdet"}, {&kth_, "lkr_weight_th"}, {&kt_, "lkr_weight_t"}, {&ktv_, "lkr_weight_tv"},
       {&ktd_, "lkr_weight_td"}, {&kguide_, "lkr_weight_guide"}, {&kminh_, "lkr_weight_minh"}, {&kmin_, "lkr_weight_min"},
       {&kdy_, "dct_y"}, {&kdu_, "dct_u"}, {&kdv_, "dct_v"}, {&kdyo_, "dct_y_old"}, {&kduo_, "dct_u_old"}, {&kdvo_, "dct_v_old"}, {&kdyuv_, "dct_yuv"}, {&knconv_, "kn_conv"},
-      {&kndn_, "kn_dn"}, {&hyb_, "hyb"}, {&adjwg_, "adj_wg"}, {&fin_, "fin"}, {&edgeshift_, "edgeshift"}, {&cdupd_, "cdupd"}};
+      {&kndn_, "kn_dn"}, {&hyb_, "hyb"}, {&adjwg_, "adj_wg"}, {&fin_, "fin"}, {&edgeshift_, "edgeshift"}, {&cdupd_, "cdupd"}, {&le_tensor_, "le_tensor"}, {&le_blur_, "le_blur"}, {&le_apply_, "le_apply"}};
   for (const auto& n : names) {
     std::snprintf(b, sizeof(b), "%s%s=%p", out.empty() ? "" : " ", n.second, static_cast<const void*>(n.first));
     out += b;
@@ -266,7 +275,7 @@ LiteSolver::~LiteSolver() {
   if (!gpu_ || !gpu_->ok()) return;
   for (Entry& e : cache_) gpu_->free(e.buf);
   for (Entry& e : fcache_) gpu_->free(e.buf);
-  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_}) gpu_->destroy(*q);
+  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &knconv_, &kndn_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_, &le_tensor_, &le_blur_, &le_apply_}) gpu_->destroy(*q);
 }
 
 bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<float>& p, std::vector<float>& dloc,
@@ -898,6 +907,28 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     gpu_->dispatch(hyb_, sh, &hp, div_up(uint32_t(W), 16), div_up(uint32_t(H), 16));
     hp.mode = 1;
     gpu_->dispatch(hyb_, sh, &hp, div_up(uint32_t(W), 16), div_up(uint32_t(H), 16));
+    // Long-straight-edge smoothing (le_*.comp, 2026-11-18): removes the dotting
+    // on long straight thin lines (pole highlights) that AMaZE does not have; grass / leaves / rock texture
+    // fail its straightness test and are untouched. Thresholds: LKRL_LE_K (edge vs noise), _COH, _TOL, _R.
+    // Default ON since 2026-11-18 (full 2x car burst: 0.35 % of pixels changed, all on long straight
+    // structure: poles, rails, road lines, car body lines; foliage / road / rocks 0.000-0.003 %, detail
+    // equal; pole dotting -45 %; ~9 ms GPU per 1024 px tile on Mali-G615). LKRL_LONGEDGE=0 turns it off.
+    static const bool le_on = !std::getenv("LKRL_LONGEDGE") || std::atoi(std::getenv("LKRL_LONGEDGE")) != 0;
+    if (le_on) {
+      auto envf = [](const char* n, float d) { const char* v = std::getenv(n); return v ? float(std::atof(v)) : d; };
+      const size_t HWs = size_t(H) * W;
+      Buffer &leT = buf(HWs * 8), &leU = buf(HWs * 8), &leZ = buf(nHR * 4);
+      Push lq = q; lq.a = prm.noise_a / 3.0f; lq.b = prm.noise_b / 3.0f;   // luma = mean of 3 planes
+      lq.LB = 4;
+      const uint32_t ggx = div_up(uint32_t(W), 16), ggy = div_up(uint32_t(H), 16);
+      gpu_->dispatch(le_tensor_, gpu_->set(le_tensor_, {&hybO, &leT}), &lq, ggx, ggy);
+      lq.mode = 0; gpu_->dispatch(le_blur_, gpu_->set(le_blur_, {&leT, &leU}), &lq, ggx, ggy);
+      lq.mode = 1; gpu_->dispatch(le_blur_, gpu_->set(le_blur_, {&leU, &leT}), &lq, ggx, ggy);
+      lq.clip = envf("LKRL_LE_K", 4.0f); lq.robk = envf("LKRL_LE_COH", 0.8f);
+      lq.tau = std::cos(envf("LKRL_LE_TOL", 0.12f)); lq.LB = int(envf("LKRL_LE_R", 16.0f)); lq.rpow = envf("LKRL_LE_SIG", 1.5f);
+      gpu_->copy(hybO, leZ, nHR * 4);   // le_apply reads the copy, writes only qualifying pixels in place
+      gpu_->dispatch(le_apply_, gpu_->set(le_apply_, {&leZ, &leT, &hybO}), &lq, ggx, ggy);
+    }
     if (!trace_prefix.empty()) {
       if (!submit()) return fail("trace hybrid submit");
       trace("hybrid.f32",hybO.map,nHR*4);

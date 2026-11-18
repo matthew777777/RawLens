@@ -1,0 +1,33 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Long-straight-edge smoothing, pass 1 (AMaZE-like prior: a long straight edge is smooth along its
+// length; removes the merge's dotting on thin lines such as pole highlights; 2026-11-18).
+// Per HR pixel: Scharr gradient of luma (mean of the 3 planes) -> structure tensor (jxx, jxy, jyy),
+// stored as 3 halves in a uvec2. Luma of the 18 x 18 tile (incl. 1 px halo) is loaded once into
+// shared memory (malioc: 27 global loads per pixel -> ~3.8; load/store-bound pass).
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) writeonly buffer T { uvec2 t[]; };
+shared float sl[18][18];
+void main() {
+  ivec2 g0 = ivec2(gl_WorkGroupID.xy) * 16 - 1;
+  int lid = int(gl_LocalInvocationIndex), HW = pc.H * pc.W;
+  for (int k = lid; k < 18 * 18; k += 256) {
+    int ly = k / 18, lx = k - ly * 18;
+    int x = clamp(g0.x + lx, 0, pc.W - 1), y = clamp(g0.y + ly, 0, pc.H - 1), o = y * pc.W + x;
+    sl[ly][lx] = (z[o] + z[HW + o] + z[2 * HW + o]) * (1.0 / 3.0);
+  }
+  barrier();
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  if (X >= pc.W || Y >= pc.H) return;
+  int lx = int(gl_LocalInvocationID.x) + 1, ly = int(gl_LocalInvocationID.y) + 1;
+  float a = sl[ly - 1][lx - 1], b = sl[ly - 1][lx], c = sl[ly - 1][lx + 1];
+  float d = sl[ly][lx - 1], f = sl[ly][lx + 1];
+  float g = sl[ly + 1][lx - 1], h = sl[ly + 1][lx], i = sl[ly + 1][lx + 1];
+  float gx = (3.0 * (c - a) + 10.0 * (f - d) + 3.0 * (i - g)) * (1.0 / 32.0);
+  float gy = (3.0 * (g - a) + 10.0 * (h - b) + 3.0 * (i - c)) * (1.0 / 32.0);
+  const float S = 64.0;   // scale before fp16 (squared gradients of [0,1] luma are tiny)
+  t[Y * pc.W + X] = uvec2(packHalf2x16(vec2(gx * gx, gx * gy) * S * S), packHalf2x16(vec2(gy * gy * S * S, 0.0)));
+}

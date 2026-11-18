@@ -12,7 +12,9 @@ namespace lkrl {
 
 struct PriorStats { double ms = 0; bool ran = false; std::string device; };
 
-// Enabled by LKRL_PRIOR=1 (host) / debug.lkr.prior=1 (Android, set by the JNI layer as LKRL_PRIOR).
+// App setting (Settings -> Merge -> "Network"); LKRL_PRIOR=0/1 (host) / debug.lkr.prior (Android, set
+// by the JNI layer as LKRL_PRIOR) override it for tests.
+void PriorSetEnabled(bool on);
 bool PriorEnabled();
 // Build and compile the model for an H x W tile now (camera open), so the first merge does not pay it.
 bool PriorPrewarm(int H, int W, std::string* err);

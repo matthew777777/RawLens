@@ -31,7 +31,9 @@ class Prior(nn.Module):
 
 def load_pairs(d):
     out = []
-    files = sorted(f for dd in d.split(',') for f in glob.glob(os.path.join(dd, 'pair_*.npz')))   # comma-separated dirs
+    # comma-separated dirs; a pair is its .npz or (after cleanup) its memory-mapped .x.npy / .y.npy / .n.npy
+    files = sorted({f[:-len('.x.npy')] + '.npz' if f.endswith('.x.npy') else f for dd in d.split(',')
+                    for f in glob.glob(os.path.join(dd, 'pair_*.npz')) + glob.glob(os.path.join(dd, 'pair_*.x.npy'))})
     for f in files:
         # Memory-mapped float16 caches (8 GB Macs): only the crops in use are read; sqrt + float32 per crop.
         cx, cy, cn = f[:-4] + '.x.npy', f[:-4] + '.y.npy', f[:-4] + '.n.npy'

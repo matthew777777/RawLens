@@ -2,6 +2,7 @@
 #include "lkrl_prior.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -60,25 +61,42 @@ const std::vector<Layer>& Layers() {
 }
 
 // NHWC input: sqrt of the image (ch 0-2) + 100 * sigma (ch 3), sigma = sqrt(0.18 a) (training convention).
+// Rows split over hardware threads (the conversion was single-threaded: ~20-40 ms per 1024 px tile,
+// time each tile also held its NPU turn for).
+template <class F> void ParallelRows(int H, F f) {
+  const int nt = std::max(1, std::min(int(std::thread::hardware_concurrency()), 8));
+  std::vector<std::thread> th;
+  for (int t = 1; t < nt; ++t) th.emplace_back(f, H * t / nt, H * (t + 1) / nt);
+  f(0, H / nt);
+  for (auto& x : th) x.join();
+}
+
 void MakeInput(const float* z, int H, int W, float noise_a, std::vector<float>* in) {
   const size_t HW = size_t(H) * W;
   const float s100 = 100.0f * std::sqrt(std::max(noise_a, 1e-6f) * 0.18f);
   in->resize(HW * 4);
-  for (size_t i = 0; i < HW; ++i) {
-    for (int c = 0; c < 3; ++c) (*in)[i * 4 + c] = std::sqrt(std::max(z[size_t(c) * HW + i], 0.0f));
-    (*in)[i * 4 + 3] = s100;
-  }
+  float* o = in->data();
+  ParallelRows(H, [&](int y0, int y1) {
+    for (size_t i = size_t(y0) * W; i < size_t(y1) * W; ++i) {
+      o[i * 4 + 0] = std::sqrt(std::max(z[i], 0.0f));
+      o[i * 4 + 1] = std::sqrt(std::max(z[HW + i], 0.0f));
+      o[i * 4 + 2] = std::sqrt(std::max(z[2 * HW + i], 0.0f));
+      o[i * 4 + 3] = s100;
+    }
+  });
 }
 
 void WriteBack(const std::vector<float>& out, int H, int W, float* z, float* delta) {
   const size_t HW = size_t(H) * W;
-  for (size_t i = 0; i < HW; ++i)
-    for (int c = 0; c < 3; ++c) {
-      const float o = std::max(out[i * 3 + c], 0.0f), v = o * o;
-      float& d = z[size_t(c) * HW + i];
-      if (delta) delta[size_t(c) * HW + i] = v - d;
-      d = v;
-    }
+  ParallelRows(H, [&](int y0, int y1) {
+    for (size_t i = size_t(y0) * W; i < size_t(y1) * W; ++i)
+      for (int c = 0; c < 3; ++c) {
+        const float o = std::max(out[i * 3 + c], 0.0f), v = o * o;
+        float& d = z[size_t(c) * HW + i];
+        if (delta) delta[size_t(c) * HW + i] = v - d;
+        d = v;
+      }
+  });
 }
 
 #ifndef __ANDROID__
@@ -208,9 +226,14 @@ const Compiled* Get(int H, int W, std::string* err) {
 
 }  // namespace
 
+namespace { std::atomic<int> g_prior_setting{-1}; }   // -1: not set by the app (use LKRL_PRIOR)
+
+void PriorSetEnabled(bool on) { g_prior_setting.store(on ? 1 : 0); }
+
 bool PriorEnabled() {
-  static const bool on = std::getenv("LKRL_PRIOR") && std::atoi(std::getenv("LKRL_PRIOR")) != 0;
-  return on;
+  static const char* env = std::getenv("LKRL_PRIOR");
+  if (env && *env) return std::atoi(env) != 0;   // tests / debug.lkr.prior override the app setting
+  return g_prior_setting.load() == 1;
 }
 
 bool PriorPrewarm(int H, int W, std::string* err) {

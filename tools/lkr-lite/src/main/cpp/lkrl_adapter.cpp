@@ -148,6 +148,20 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
     return false;
   }
   std::copy(pv.begin(), pv.end(), p);
+  // Self-supervised training data (research/prior/selfsup): in holdout mode with tracing, also save the
+  // held-out frame's raw tile and its motion to the reference (front-end affine + 16 px block offsets),
+  // so the merged image can be re-sampled at that frame's positions and Bayer pattern.
+  if (prm.holdout && !prm.debug_prefix.empty() && Kall > K) {
+    auto dump = [&](const char* tag, const void* d, size_t bytes) {
+      if (FILE* f = std::fopen((prm.debug_prefix + "-" + tag).c_str(), "wb")) { std::fwrite(d, 1, bytes, f); std::fclose(f); }
+    };
+    dump("holdout-raw.f32", frames + size_t(K) * h * w, size_t(h) * w * 4);
+    dump("holdout-affine.f32", p + size_t(K) * 6, 6 * 4);
+    const int nbh = ((w + 15) / 16) * ((h + 15) / 16);
+    if (prm.local_init && prm.local_block == 16) dump("holdout-local.f32", prm.local_init + size_t(K) * nbh * 2, size_t(nbh) * 2 * 4);
+    const int32_t meta[4] = {h, w, prm.s, prm.local_init ? 16 : 0};
+    dump("holdout-meta.i32", meta, sizeof(meta));
+  }
   S.gpu_ms = ls.ms_total - ls.ms_host;
   S.submits = ls.submits;
   S.prior_ms = ls.ms_prior;

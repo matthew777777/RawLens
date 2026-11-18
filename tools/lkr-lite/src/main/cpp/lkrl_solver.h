@@ -112,7 +112,7 @@ class LiteSolver {
   Gpu* gpu_;
   bool ok_ = false;
   Pipeline resid_, werr_, wavg_, wminh_, wminv_, adj_, adj_s1_, adj_s2_, zupd_, jac_, jacblk_, solveblk_, gstats_, wguide_, wvalid_,
-      kresid_, ktdet_, kth_, kt_, ktv_, ktd_, kguide_, kminh_, kmin_, kdy_, kdu_, kdv_, kdyuv_, kdyo_, kduo_, kdvo_, knconv_, kndn_, hyb_, adjwg_, fin_, edgeshift_, cdupd_;
+      kresid_, ktdet_, kth_, kt_, ktv_, ktd_, kguide_, kminh_, kmin_, kdy_, kdu_, kdv_, kdyuv_, kdyo_, kduo_, kdvo_, knconv_, kndn_, hyb_, adjwg_, fin_, edgeshift_, cdupd_, le_tensor_, le_blur_, le_apply_;
 };
 
 }  // namespace lkrl

@@ -1,0 +1,43 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
+// SPDX-License-Identifier: Apache-2.0
+// Long-straight-edge smoothing, pass 3. Reads a COPY of the merged image (z) and writes only the
+// qualifying pixels into the merged image (zo, in place otherwise untouched). A pixel qualifies when
+// its edge is strong vs the noise (gradient energy > pc.clip x sigma(L), sigma from a L + b), coherent
+// (> pc.robk) and STRAIGHT over +-pc.LB px: every probe every 2 px along the edge keeps the direction
+// (|cos| > pc.tau) and coherence. Grass / leaves / rock texture fail and are not touched.
+// Qualifying pixels: 9-tap Gaussian (sigma pc.rpow px) along the edge only, one plane at a time.
+// Loops are not unrolled: < 1 % of pixels get past the tests (AOC: 975 -> fewer instructions;
+// malioc: 64 work registers -> fewer, so the early-exit path keeps full occupancy).
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer O { uvec2 o[]; };
+layout(std430, binding = 2) writeonly buffer ZO { float zo[]; };
+vec4 E(ivec2 p) { p = clamp(p, ivec2(0), ivec2(pc.W - 1, pc.H - 1)); uvec2 v = o[p.y * pc.W + p.x]; return vec4(unpackHalf2x16(v.x), unpackHalf2x16(v.y)); }
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  if (X >= pc.W || Y >= pc.H) return;
+  vec4 e0 = E(ivec2(X, Y));
+  if (e0.z <= pc.robk) return;                          // most pixels: one 8-byte load
+  int HW = pc.H * pc.W, i = Y * pc.W + X;
+  float l = max((z[i] + z[HW + i] + z[2 * HW + i]) * (1.0 / 3.0), 0.0);
+  if (e0.w <= pc.clip * sqrt(max(pc.a * l + pc.b, 1e-12))) return;
+  vec2 ev = e0.xy, p = vec2(float(X), float(Y));
+  [[dont_unroll]] for (int d = 2; d <= pc.LB; d += 2) {
+    vec4 p1 = E(ivec2(round(p + float(d) * ev))), p2 = E(ivec2(round(p - float(d) * ev)));
+    if (abs(dot(p1.xy, ev)) <= pc.tau || abs(dot(p2.xy, ev)) <= pc.tau || p1.z <= pc.robk || p2.z <= pc.robk) return;
+  }
+  float inv2s2 = 0.5 / max(pc.rpow * pc.rpow, 1e-6);
+  [[dont_unroll]] for (int c = 0; c < 3; ++c) {
+    int b = c * HW; float acc = 0.0, ws = 0.0;
+    [[dont_unroll]] for (int t = -4; t <= 4; ++t) {
+      vec2 q = clamp(p + float(t) * ev, vec2(0.0), vec2(float(pc.W - 1), float(pc.H - 1)) - 1e-3);
+      ivec2 q0 = ivec2(floor(q)); vec2 f = q - vec2(q0); int k = b + q0.y * pc.W + q0.x;
+      float w = exp(-float(t * t) * inv2s2);
+      acc += w * mix(mix(z[k], z[k + 1], f.x), mix(z[k + pc.W], z[k + pc.W + 1], f.x), f.y); ws += w;
+    }
+    zo[b + i] = acc / ws;
+  }
+}

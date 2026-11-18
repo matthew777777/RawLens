@@ -33,6 +33,7 @@
 
 #ifdef __ANDROID__
 #include <android/log.h>
+#include <thread>
 #include <sys/system_properties.h>
 #define LKR_PLATFORM_LOG(text) __android_log_write(ANDROID_LOG_INFO, "RawLensLkr", text)
 #else
@@ -127,6 +128,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.cdfit", v) > 0 && v[0]) setenv("LKRL_CDFIT", v, 0);
     // Learned post-fit prior on the NPU (research, opt-in): debug.lkr.prior=1 (read once per process).
     if (__system_property_get("debug.lkr.prior", v) > 0 && v[0]) setenv("LKRL_PRIOR", v, 0);
+    // Long-straight-edge smoothing A/B (research): debug.lkr.longedge=1.
+    if (__system_property_get("debug.lkr.longedge", v) > 0 && v[0]) setenv("LKRL_LONGEDGE", v, 0);
     // A/B of the cooperative DCT prior: debug.lkr.dctold = 1 runs the previous one-block-per-invocation shaders.
     if (__system_property_get("debug.lkr.dctold", v) > 0 && v[0]) setenv("LKRL_DCT_OLD", v, 0);
     // A/B of the per-scale adjoint: debug.lkr.adjgen = 1 runs the generic (pc.s) adj build.
@@ -305,6 +308,20 @@ extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMe
     jint out_w, jint out_h) {
   return Merge(env, frames, w, h, row_stride_px, cfa, black, white, wb, s, tile, overlap, crop, dct, stats, tuning, out_w,
                out_h);
+}
+
+// Settings -> Merge -> "Network" (learned post-fit prior on the NPU). Turning it on compiles the NPU
+// model in the background so the next merge does not wait for it.
+extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetPrior(JNIEnv*, jclass, jboolean enabled) {
+  const bool on = enabled == JNI_TRUE;
+  const bool was = lkrl::PriorEnabled();
+  lkrl::PriorSetEnabled(on);
+  if (on && !was)
+    std::thread([] {
+      std::string err;
+      for (int t : {1024, 512})
+        if (!lkrl::PriorPrewarm(t, t, &err)) { __android_log_print(ANDROID_LOG_WARN, "LkrPrior", "prewarm %d: %s", t, err.c_str()); break; }
+    }).detach();
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetKernelNetDenoise(
