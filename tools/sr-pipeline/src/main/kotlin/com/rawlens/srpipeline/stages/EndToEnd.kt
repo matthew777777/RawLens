@@ -79,6 +79,26 @@ data class PipelineConfig(
      * Vulkan bayer path only.
      */
     val kernelNet: KernelNetConfig? = null,
+    /**
+     * KernelNet's continuous motion handling for the Wronski kernels too:
+     * regularized finest-grid flow, B-spline flow / strength sampling,
+     * bilinear robustness lookup and soft motion-membership rejection.
+     * Always on with [kernelNet]; false keeps Wronski IPOL-exact.
+     */
+    val continuousMotion: Boolean = false,
+    /**
+     * KernelNet's reconstruction details for Wronski's per-frame kernels
+     * (Vulkan bayer path): 7x7 faded gather, separate green detail
+     * reconstruction and green frame weights (with [colourDiff]).
+     * Always on with [kernelNet]; false keeps Wronski IPOL-exact.
+     */
+    val detailReconstruction: Boolean = false,
+    /** Opt-in pooled polynomial green / colour-difference fitting (CPU prototype). */
+    val organicReconstruction: Boolean = false,
+    /** Mobile separable polynomial equivalent-kernel path; Vulkan only. */
+    val mobilePolynomial: Boolean = false,
+    /** Per-frame merge weight equalization gamma (0 = Wronski; 1 = equal frames, full temporal averaging). */
+    val frameEqualize: Float = 0f,
     /** See [AlignLoopConfig.edgeExtendFlow]; false = Python-exact. */
     val edgeExtendFlow: Boolean = true,
     /**
@@ -147,6 +167,9 @@ object EndToEnd {
         alignFrame: ((frameGrey: Array<FloatArray>) -> Array<Array<FloatArray>>)? = null,
     ): Array<Array<FloatArray>> {
         requireRectImage(reference, "reference")
+        require(!config.organicReconstruction || (config.bayer && config.colourDiff?.let { it.size == 2 && it.all { g -> g.isFinite() && g > 0f } } == true)) {
+            "polynomial reconstruction requires Bayer and valid white-balanced colour differences"
+        }
         require(config.factors.size == config.tileSizes.size) {
             "factors and tileSizes must match level counts " +
                 "(got ${config.factors.size} vs ${config.tileSizes.size})"
@@ -178,7 +201,16 @@ object EndToEnd {
         val onesR = Array(reference.size) { FloatArray(reference[0].size) { 1f } }
         val cd = config.colourDiff?.takeIf { config.bayer }
         fun splatIn(f: Array<FloatArray>) = if (cd == null) f else ColourDiff.toRows(f, cd[0], cd[1])
-        merge(splatIn(reference), zeroFlow, frameKernels(reference, config), onesR, num, den, config.bayer, config.scale, tile)
+        val organic = if (config.organicReconstruction) PolynomialReconstruction(outW, outH, config.scale, tile, config.kernelAlpha.average().toFloat(), config.kernelBeta.average().toFloat()) else null
+        val lumaWeights = LumaFrameWeights.forBurst(comparisons.size + 1, config.grainRetention)
+        var frameIndex = 0
+        fun reconstruct(frame: Array<FloatArray>, flow: Array<Array<FloatArray>>, r: Array<FloatArray>) {
+            val splat = splatIn(frame)
+            merge(splat, flow, frameKernels(frame, config), r, num, den, config.bayer, config.scale, tile)
+            organic?.add(splat, flow, r, lumaWeights[frameIndex])
+            frameIndex++
+        }
+        reconstruct(reference, zeroFlow, onesR)
 
         // 4. Per comparison frame (decoded just in time).
         for (frameThunk in comparisons) {
@@ -194,11 +226,12 @@ object EndToEnd {
             } else {
                 Array(frame.size) { FloatArray(frame[0].size) { 1f } }
             }
-            merge(splatIn(frame), flow, frameKernels(frame, config), robustness, num, den, config.bayer, config.scale, tile)
+            reconstruct(frame, flow, robustness)
         }
 
         // 5. Normalise in place.
         divide(num, den)
+        organic?.finish(num)
         if (cd != null) ColourDiff.reconstruct(num, cd[0], cd[1])
         return num
     }

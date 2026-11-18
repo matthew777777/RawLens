@@ -101,6 +101,7 @@ CLI flags (see `Main.kt` usage text):
 | `--lut PATH\|auto` | no | noise LUT `.npz`, or `auto` to simulate it in-process; enables noise correction |
 | `--kernel wronski\|kernelnet` | no | reconstruction kernel (`--kn-scale F`, `--kn-cap F` tune KernelNet) |
 | `--kn-floor F` | no | override the base KernelNet width floor (including reference support); positive and no greater than `--kn-cap` |
+| `--continuous-motion on\|off` | no | Wronski: KernelNet's regularized flow, smooth flow/robustness sampling and soft motion rejection (default off = IPOL parity; the app uses on; always on with KernelNet) |
 | `--s3 on\|off` | no | supplement S.3 high-frequency artefact rejection |
 | `--s1 F --s2 F`, `--kernel-gat on\|off` | no | IPOL-vs-paper A/B parameters |
 | `--noise-ab a,b` | no | explicit normalized noise variance model `a*signal+b`, overriding tags/estimation |
@@ -123,3 +124,27 @@ Run the tests:
   `minSdk`/`compileSdk`, camera, or UI code.
 - No new repositories or version catalogs: dependencies stay inline literals
   per current repo convention; repo-wide repos stay locked.
+
+## Experimental organic reconstruction (CPU study)
+
+`--reconstruction organic --backend cpu --kernel wronski` selects a new
+pooled local polynomial reconstruction. Green fits a regularized quadratic
+surface to the accepted burst samples; white-balanced colour differences fit
+local planes with luminance and colour range gates. It targets sample-density
+bias and texture smoothing in ordinary kernel averaging. Low temporal support
+retains the conventional merge. This is a CPU prototype, not a validated Vulkan
+upgrade or an assurance that painting/bleeding artefacts are eliminated.
+Use 512-pixel sensor crops first; the extra moment buffers are expensive at full
+resolution. Existing parity/default reconstruction remains `legacy`.
+
+```bash
+tools/sr-pipeline/run.sh \
+  --in "$HOME/Downloads/hdrplus_subset/IMG_20210228_133623" \
+  --out "$HOME/Downloads/IMG_20210228_133623_organic_crop" \
+  --backend cpu --kernel wronski --scale 1 --tune app \
+  --reconstruction organic --crop 1536,1536,512,512
+```
+
+Repeated `--tune` flags compose; later duplicate keys win. `--tune app` resets
+the earlier overrides. For example, `--tune kStretch=2.5 --tune kShrink=2`
+is equivalent to `--tune kStretch=2.5,kShrink=2`.

@@ -1,0 +1,84 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Mobile separable polynomial equivalent kernels. The covariance binding
+// holds the 257x8 phase LUT; no per-output normal matrices or extra images.
+// Same resident ABI as merge_splat. alpha=noise slope, robustness=noise floor,
+// beta=uniform temporal green weight. Input is (WB R-G, G, WB B-G) RGGB.
+layout(local_size_x = 128) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode; uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set=0,binding=0) readonly buffer Frame { float frame[]; };
+layout(set=0,binding=1) readonly buffer Flow { vec2 flow[]; };
+layout(set=0,binding=2) readonly buffer Table { float lut[]; };
+layout(set=0,binding=3) readonly buffer Rob { float rob[]; };
+layout(set=0,binding=4) buffer Num { float num[]; };
+layout(set=0,binding=5) buffer Den { float den[]; };
+
+vec4 spline(float t) {
+  float u=1.-t;
+  return vec4(u*u*u,4.-6.*t*t+3.*t*t*t,1.+3.*t+3.*t*t-3.*t*t*t,t*t*t)/6.;
+}
+float at(ivec2 s) {
+  ivec2 parity=s&1;
+  s=clamp(s,parity,ivec2(p.width,p.height)-2+parity);
+  return frame[uint(s.y)*p.width+uint(s.x)];
+}
+float green(vec2 pos) {
+  vec2 q=vec2(pos.x+pos.y-2.,pos.x-pos.y-1.)*.5;
+  ivec2 centre=ivec2(floor(q+.5));
+  vec2 phase=(q-vec2(centre)+.5)*256.;
+  uvec2 bin=min(uvec2(phase),uvec2(255));vec2 t=phase-vec2(bin);
+  float wx[5],wy[5];
+  for(uint k=0u;k<5u;++k) {
+    wx[k]=mix(lut[bin.x*8u+k],lut[(bin.x+1u)*8u+k],t.x);
+    wy[k]=mix(lut[bin.y*8u+k],lut[(bin.y+1u)*8u+k],t.y);
+  }
+  float value=0.,lo=3.402823e38,hi=-3.402823e38;
+  for(int j=-2;j<=2;++j) for(int i=-2;i<=2;++i) {
+    int u=centre.x+i,v=centre.y+j;
+    float c=at(ivec2(u+v+1,u-v));
+    value+=wx[i+2]*wy[j+2]*c;lo=min(lo,c);hi=max(hi,c);
+  }
+  return clamp(value,lo,hi);
+}
+float colourAt(ivec2 s,int parity) { return at(2*s+parity); }
+float colour(vec2 pos,int parity,float g) {
+  vec2 q=(pos-.5-float(parity))*.5;
+  ivec2 base=ivec2(floor(q));vec2 t=fract(q);
+  float anchor=mix(mix(colourAt(base,parity),colourAt(base+ivec2(1,0),parity),t.x),
+                   mix(colourAt(base+ivec2(0,1),parity),colourAt(base+1,parity),t.x),t.y);
+  float variance=max(.0004,64.*max(0.,p.alpha*max(g,0.)+p.robustness));
+  ivec2 centre=ivec2(floor(q+.5));float value=0.,weight=0.;
+  for(int j=-1;j<=1;++j) for(int i=-1;i<=1;++i) {
+    ivec2 s=centre+ivec2(i,j);vec2 d=2.*(vec2(s)-q);
+    float c=colourAt(s,parity),dc=c-anchor;
+    vec2 fade=1.-smoothstep(vec2(2.),vec2(3.),abs(d));
+    float w=exp(-.5*(dot(d,d)/(1.35*1.35)+dc*dc/variance))*fade.x*fade.y;
+    value+=w*c;weight+=w;
+  }
+  return weight>1e-10 ? value/weight : anchor;
+}
+void main() {
+  uint id=gl_GlobalInvocationID.x;if(id>=p.pixelCount) return;
+  vec2 pos=(vec2(id%p.pad[2],id/p.pad[2])+.5)/p.scale;
+  uint nx=p.pad[1];int ny=int((p.height+p.tileSize-1u)/p.tileSize);
+  vec2 grid=pos/float(p.tileSize)-.5;ivec2 base=ivec2(floor(grid));
+  vec4 wx=spline(fract(grid.x)),wy=spline(fract(grid.y));vec2 f=vec2(0.);
+  for(int y=0;y<4;++y) for(int x=0;x<4;++x) {
+    ivec2 b=clamp(base+ivec2(x-1,y-1),ivec2(0),ivec2(int(nx)-1,ny-1));
+    f+=wx[x]*wy[y]*flow[uint(b.y)*nx+uint(b.x)];
+  }
+  vec2 q=clamp(pos*.5-.5,vec2(0.),vec2(p.width/2u-1u,p.height/2u-1u));
+  uvec2 a=uvec2(q),b=min(a+1u,uvec2(p.width/2u-1u,p.height/2u-1u));vec2 t=fract(q);uint rw=p.width/2u;
+  float r=mix(mix(rob[a.y*rw+a.x],rob[a.y*rw+b.x],t.x),mix(rob[b.y*rw+a.x],rob[b.y*rw+b.x],t.x),t.y);
+  pos+=f;
+  if(r<=0. || any(lessThan(pos,vec2(0.))) || any(greaterThanEqual(pos,vec2(p.width,p.height)))) return;
+  float g=green(pos);
+  float red=colour(pos,0,g),blue=colour(pos,1,g);
+  vec3 w=r*vec3(1.,p.beta,1.);vec3 value=vec3(red,g,blue)*w;
+  for(uint ch=0u;ch<3u;++ch) { num[id*3u+ch]+=value[ch];den[id*3u+ch]+=w[ch]; }
+}

@@ -55,6 +55,7 @@ object VulkanPipeline {
         val divide: ByteArray,
         val robust: ByteArray,
         val mergeSplat: ByteArray,
+        val mergePolynomial: ByteArray? = null,
         /** fft.comp for on-device FFT lowpass grey (cf. [SrpBridge.greyFft]). */
         val fft: ByteArray,
         /** corr.comp for the resident grey interleave (cf. [SrpBridge.nativeGreyFftRes]). */
@@ -216,8 +217,10 @@ object VulkanPipeline {
         alignSpirvs: AlignGpu.Spirvs,
         spirvs: Spirvs,
         output: ByteBuffer? = null,
+        /** Optional diagnostic/cache tap: borrowed colour-difference samples and reference-grid weights. */
+        frameObserver: ((ByteBuffer, Array<Array<FloatArray>>, ByteBuffer) -> Unit)? = null,
     ): ByteBuffer = SrpBridge.NativeFloats().use { scratch ->
-        runScoped(reference, comparisons, config, handle, alignSpirvs, spirvs, output, scratch)
+        runScoped(reference, comparisons, config, handle, alignSpirvs, spirvs, output, scratch, frameObserver)
     }
 
     private fun runScoped(
@@ -229,8 +232,13 @@ object VulkanPipeline {
         spirvs: Spirvs,
         output: ByteBuffer?,
         scratch: SrpBridge.NativeFloats,
+        frameObserver: ((ByteBuffer, Array<Array<FloatArray>>, ByteBuffer) -> Unit)?,
     ): ByteBuffer {
         require(handle != 0L) { "VulkanPipeline: null context handle" }
+        require(!config.organicReconstruction) { "pooled polynomial reconstruction is currently a CPU prototype" }
+        require(!config.mobilePolynomial || (config.bayer && config.colourDiff != null && config.kernelNet == null && spirvs.mergePolynomial != null)) {
+            "mobile polynomial requires Bayer colour differences, Wronski and its dedicated shader"
+        }
         val greenFrameWeights = LumaFrameWeights.forBurst(comparisons.size+1, config.grainRetention)
         var mergeFrameIndex = 0
         // Decode the reference first: its shape sizes all run scratch.
@@ -336,16 +344,20 @@ object VulkanPipeline {
         // kerngrad, which exact-size residents cannot express).
         val frameRes = SrpBridge.createResident(handle, (w * h).toLong())
         require(frameRes != 0L) { "VulkanPipeline: resident frame alloc failed" }
-        val kernPreRes = SrpBridge.createResident(handle, (w * h).toLong())
-        require(kernPreRes != 0L) { "VulkanPipeline: resident kernPre alloc failed" }
-        val kernGreyRes = SrpBridge.createResident(handle, (gw * gh).toLong())
-        require(kernGreyRes != 0L) { "VulkanPipeline: resident kernGrey alloc failed" }
-        val kernGradsRes = SrpBridge.createResident(handle, ((gw - 1) * (gh - 1) * 2).toLong())
-        require(kernGradsRes != 0L) { "VulkanPipeline: resident kernGrads alloc failed" }
-        val kernCovRes = SrpBridge.createResident(handle, (gw * gh * 4).toLong())
-        require(kernCovRes != 0L) { "VulkanPipeline: resident kernCov alloc failed" }
+        val kernPreRes = if (config.mobilePolynomial) 0L else SrpBridge.createResident(handle, (w * h).toLong())
+        require(config.mobilePolynomial || kernPreRes != 0L) { "VulkanPipeline: resident kernPre alloc failed" }
+        val kernGreyRes = if (config.mobilePolynomial) 0L else SrpBridge.createResident(handle, (gw * gh).toLong())
+        require(config.mobilePolynomial || kernGreyRes != 0L) { "VulkanPipeline: resident kernGrey alloc failed" }
+        val kernGradsRes = if (config.mobilePolynomial) 0L else SrpBridge.createResident(handle, ((gw - 1) * (gh - 1) * 2).toLong())
+        require(config.mobilePolynomial || kernGradsRes != 0L) { "VulkanPipeline: resident kernGrads alloc failed" }
+        val kernCovRes = if (config.mobilePolynomial) 0L else SrpBridge.createResident(handle, (gw * gh * 4).toLong())
+        require(config.mobilePolynomial || kernCovRes != 0L) { "VulkanPipeline: resident kernCov alloc failed" }
         // KernelNet covariances (one map for the whole burst), 0 = Wronski.
         var knCovRes = 0L
+        val polynomialLutRes = if(config.mobilePolynomial) SrpBridge.createResident(handle,MobilePolynomial.table.size.toLong()).also { r ->
+            require(r != 0L) { "polynomial LUT allocation failed" }
+            checkRc("polynomial LUT",SrpBridge.uploadResident(handle,r,pack(MobilePolynomial.table),MobilePolynomial.table.size.toLong()))
+        } else 0L
         // 1. Ref phase (own scope): grey rows, init host temporaries
         // and the decoded frame all die here, before the loop. The ref
         // grey packs through a temp (dies with the block): the shared
@@ -580,26 +592,32 @@ object VulkanPipeline {
                 // KernelNet: the one reference map (computed below, before
                 // the ref merge) replaces the per-frame kernel chain; mode
                 // bit 1 makes the merge read it on the reference grid.
-                val covRes = if (knCovRes != 0L) knCovRes else frameKernelsGpuRes()
+                val covRes = if(config.mobilePolynomial) polynomialLutRes else if (knCovRes != 0L) knCovRes else frameKernelsGpuRes()
                 // Mode bits: 1 = grey, 2 = reference kernels, 4 = reference
-                // frame, 8 = detail reconstruction. Keep legacy Wronski mode.
+                // frame, 8 = detail reconstruction, 16 = continuous motion
+                // (B-spline flow + bilinear robustness). Keep legacy Wronski mode.
                 // Separate green detail is safe when R/B are colour
                 // differences. Independent raw channels retain legacy widths.
-                val mergeMode = if (knCovRes != 0L)
-                    2 or (if (reference) 4 else 0) or (if (config.colourDiff != null) 8 else 0)
-                    else 0
+                val mergeMode = if(config.mobilePolynomial) 16 else if (knCovRes != 0L)
+                    2 or (if (reference) 4 else 0) or (if (config.colourDiff != null) 8 else 0) or 16
+                    else (if (config.continuousMotion) 16 else 0) or
+                        // 32: Wronski kernels with KernelNet's wide gather + detail green.
+                        (if (config.detailReconstruction) 32 or (if (reference) 4 else 0) or
+                            (if (config.colourDiff != null) 8 else 0) else 0)
                 // Z1: kernels and robustness above read the original frame;
                 // only the splat reads the colour-difference frame (ColourDiff).
                 config.colourDiff?.let { cd ->
                     timed("colourDiffUpload") { checkRc("colourDiffUpload", SrpBridge.uploadResident(handle, frameRes,
                         ColourDiff.packInto(frame, frameBuf, cd[0], cd[1]), (w * h).toLong())) }
                 }
+                frameObserver?.invoke(frameBuf, flow, rBuf)
                 timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.nativeMergeSplatFrameRes(handle, frameRes,
                     packInto(mergeFlowFlat, mergeFlow), covRes, rBuf, numRes, denRes,
-                    spirvs.mergeSplat, w, h, outW, outH, gw * gh * 4, gw * gh, tile,
+                    (if(config.mobilePolynomial) spirvs.mergePolynomial!! else spirvs.mergeSplat), w, h, outW, outH, (if(config.mobilePolynomial) MobilePolynomial.table.size else gw * gh * 4), gw * gh, tile,
                     config.scale, mergeMode, ftx, fty,
-                    if (config.colourDiff != null) config.chromaScale else 1f,
-                    if (knCovRes != 0L && config.colourDiff != null) greenFrameWeights[mergeFrameIndex++] else 1f)) }
+                    if(config.mobilePolynomial) config.kernelAlpha.average().toFloat() else if (config.colourDiff != null) config.chromaScale else 1f,
+                    if ((knCovRes != 0L || config.mobilePolynomial || config.detailReconstruction) && config.colourDiff != null) greenFrameWeights[mergeFrameIndex++] else 1f,
+                    if(config.mobilePolynomial) config.kernelBeta.average().toFloat() else config.frameEqualize)) }
             }
         }
 
@@ -609,7 +627,8 @@ object VulkanPipeline {
         // the frame from its resident, so upload it once here (the
         // loop frames upload in the grey leg instead).
         val finest = pinnedInit.levels.last()
-        val motionField = if (config.kernelNet != null) {
+        val continuousMotion = config.kernelNet != null || config.continuousMotion || config.mobilePolynomial
+        val motionField = if (continuousMotion) {
             val count = finest.nTx * finest.nTy * 4
             val packed = FloatArray(count)
             if (finest.hessRes != 0L) {
@@ -752,7 +771,7 @@ object VulkanPipeline {
                         spirvs.robust, w, h, tile, lutN,
                         // Bit 0: noise correction; bit 1: use the same continuous
                         // motion field as KernelNet reconstruction (Wronski: off).
-                        (if (config.robustnessParams.noiseCorrection) 1 else 0) or (if (config.kernelNet != null) 2 else 0),
+                        (if (config.robustnessParams.noiseCorrection) 1 else 0) or (if (continuousMotion) 2 else 0),
                         java.lang.Float.floatToIntBits(config.robustnessParams.t), ftx, fty,
                         hfRes, java.lang.Float.floatToIntBits(rp.s1))) }
                 }
@@ -827,6 +846,7 @@ object VulkanPipeline {
             SrpBridge.freeResident(handle, kernGradsRes)
             SrpBridge.freeResident(handle, kernCovRes)
             if (knCovRes != 0L) SrpBridge.freeResident(handle, knCovRes)
+            if (polynomialLutRes != 0L) SrpBridge.freeResident(handle, polynomialLutRes)
             if (hfRes != 0L) SrpBridge.freeResident(handle, hfRes)
             SrpBridge.freeResident(handle, sRes)
         }

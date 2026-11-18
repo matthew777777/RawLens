@@ -10,7 +10,10 @@
 // invocation per HR pixel (atomic-free by construction, as on CPU where each
 // HR pixel is owned by exactly one prange task).
 // Push overlay: pad[1] = nTilesX, pad[2] = hrW, pad[3] = refKernels,
-// pad[4] = reference frame, pad[5] = detail reconstruction.
+// pad[4] = reference frame, pad[5] = detail reconstruction,
+// pad[6] = continuous motion (B-spline flow, bilinear robustness),
+// pad[7] = wide faded gather + detail green for per-frame (Wronski) kernels,
+// robustness = frame equalization gamma (0 = Wronski weights).
 // width/height = LR size; scale, tileSize, mode as usual.
 layout(local_size_x = 256) in;
 
@@ -101,7 +104,7 @@ void main() {
   uint px = uint(lr_x / float(tileSize));
   uint py = uint(lr_y / float(tileSize));
   vec2 F = align_[py * nTilesX + px];
-  if (p.pad[3] == 1u) {
+  if (p.pad[6] != 0u) {
     vec2 g = vec2(lr_x, lr_y) / float(tileSize) - 0.5;
     ivec2 base = ivec2(floor(g));
     vec4 wx = flowWeights(fract(g.x)), wy = flowWeights(fract(g.y));
@@ -116,7 +119,7 @@ void main() {
 
   // Guide-grid robustness: continuous KernelNet sampling or reference-port lookup.
   float local_r;
-  if (bayer && p.pad[3] == 1u) {
+  if (bayer && p.pad[6] != 0u) {
     // Same reference-grid guide centres as the rejection stage. The old
     // floor-then-truncate lookup both shifted and stair-stepped this map.
     vec2 q = clamp(vec2(lr_x,lr_y)*0.5-0.5, vec2(0), vec2(lrW/2u-1u,lrH/2u-1u));
@@ -191,10 +194,13 @@ void main() {
   // widened colour differences) need more support. Fade only the outer
   // ring of a 7x7 gather, making entering/leaving weights continuously zero.
   // The original Jamy-L/Wronski gather stays 3x3.
-  int radius = refKernels ? 3 : 1;
+  // pad[7] gives Wronski's per-frame kernels the same wide faded gather and
+  // detail-green path as the KernelNet map (kernels stay at mov position).
+  bool wideGather = refKernels || p.pad[7] != 0u;
+  int radius = wideGather ? 3 : 1;
   // A non-unit green weight opts the reference into the same continuous
   // reconstruction as comparisons; this retains its original fine texture.
-  bool detailGreen = bayer && refKernels && p.pad[5] != 0u &&
+  bool detailGreen = bayer && wideGather && p.pad[5] != 0u &&
                      (p.pad[4] == 0u || p.beta != 1.0);
   // With detailGreen the green taps are skipped: visit only the R/B sites
   // of each row (j parity == row parity in RGGB), same taps in the same
@@ -216,7 +222,7 @@ void main() {
       z = max(z, 0.0);
       if (bayer && ch != 1u) z *= chromaInv;
       float w = exp(-0.5 * z);
-      if (refKernels) {
+      if (wideGather) {
         w *= (1.0 - smoothstep(2.5, 3.5, abs(dx))) *
              (1.0 - smoothstep(2.5, 3.5, abs(dy)));
       }
@@ -231,6 +237,20 @@ void main() {
     float weight = 3.14159265359*sqrt(max(det,0.0))*local_r*p.beta;
     val.g = weight*interpolateGreen(vec2(mov_x,mov_y));
     acc.g = weight;
+  }
+  // Frame equalization (gamma > 0): a narrow kernel lets whichever frame has
+  // the nearest sample dominate, so frames stop averaging and Wronski needs
+  // wide (blurring) kernels to denoise. Rescale this frame's total weight
+  // from local_r*S to local_r*S^(1-gamma): gamma = 1 weighs every frame
+  // equally (full temporal averaging) while the kernel keeps its shape.
+  if (p.robustness > 0.0) {
+    for (uint ch = 0u; ch < nch; ch++) {
+      if (acc[ch] > 0.0 && local_r > 0.0) {
+        float s = acc[ch] / local_r;
+        float f = pow(max(s, 1e-6), -p.robustness);
+        val[ch] *= f; acc[ch] *= f;
+      }
+    }
   }
   for (uint ch = 0u; ch < nch; ch++) {
     num_[id * 3u + ch] += val[ch];

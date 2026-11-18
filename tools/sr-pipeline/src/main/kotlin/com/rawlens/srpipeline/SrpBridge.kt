@@ -610,6 +610,8 @@ object SrpBridge {
         chromaScale: Float = 1f,
         /** Uniform temporal luma weight; non-unit reference uses continuous green reconstruction. */
         greenFrameWeight: Float = 1f,
+        /** Per-frame weight equalization gamma: 0 = Wronski weights, 1 = every frame weighs the same. */
+        frameEqualize: Float = 0f,
     ): Int
 
     /**

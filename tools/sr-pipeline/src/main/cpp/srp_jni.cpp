@@ -2456,14 +2456,15 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeMergeSplatFra
     jobject flow_buffer, jlong cov_res, jobject r_buffer, jlong num_res,
     jlong den_res, jbyteArray spirv, jint lr_w, jint lr_h, jint hr_w,
     jint hr_h, jint cov_count, jint r_count, jint tile_size, jfloat scale,
-    jint mode, jint ftx, jint fty, jfloat chroma_scale, jfloat green_frame_weight) {
+    jint mode, jint ftx, jint fty, jfloat chroma_scale, jfloat green_frame_weight,
+    jfloat frame_equalize) {
   VkDevice device = VK_NULL_HANDLE;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   srp::Context* ctx = CorrContext(handle, &device, &physical);
   if (ctx == nullptr || flow_buffer == nullptr || r_buffer == nullptr ||
       spirv == nullptr || lr_w <= 0 || lr_h <= 0 || hr_w <= 0 || hr_h <= 0 ||
       cov_count <= 0 || r_count <= 0 || tile_size <= 0 || scale <= 0 ||
-      mode < 0 || mode > 15 || ftx <= 0 || fty <= 0 ||
+      mode < 0 || mode > 63 || ftx <= 0 || fty <= 0 ||
       !std::isfinite(green_frame_weight) || green_frame_weight < 0) {
     return static_cast<jint>(srp::Status::kInitFailed);
   }
@@ -2530,7 +2531,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeMergeSplatFra
         static_cast<uint32_t>(mode & 1), static_cast<uint32_t>(ftx),
         static_cast<uint32_t>(fty), module,
         static_cast<uint32_t>(mode >> 1), chroma_scale > 0.0f ? chroma_scale : 1.0f,
-        green_frame_weight);
+        green_frame_weight, frame_equalize);
   }
   for (int i = 0; i < 2; ++i) {
     if (vks[i] != VK_NULL_HANDLE) vkDestroyBuffer(device, vks[i], nullptr);

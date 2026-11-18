@@ -34,7 +34,7 @@ cmake -S "$module_dir/host" -B "$native_dir" -DCMAKE_BUILD_TYPE=Release \
     "-DSRP_JAVA_HOME=$JAVA_HOME"
 # Only build the CLI's library and shader targets, not the proof executables.
 targets=(srpipeline_jni)
-for shader in merge_accumulate gat align corr fft ica demosaic grad kernels divide robustness merge_splat kernelnet grey_fft corr_direct ica_wg; do
+for shader in merge_accumulate gat align corr fft ica demosaic grad kernels divide robustness merge_splat merge_polynomial kernelnet grey_fft corr_direct ica_wg; do
     targets+=("srp_${shader}_spv")
 done
 cmake --build "$native_dir" --parallel 8 --target "${targets[@]}"
