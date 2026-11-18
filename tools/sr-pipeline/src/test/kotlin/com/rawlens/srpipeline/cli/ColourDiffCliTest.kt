@@ -51,7 +51,9 @@ class ColourDiffCliTest {
     }
 
     @Test fun `reference backend defaults and invalid neutral are unchanged`() {
-        assertNull(colourDiffGains(plan().copy(kernel="wronski"),doubleArrayOf(.5,1.0,.625)))
+        // Wronski follows the app (--tune app is the default); --tune ipol is the IPOL reference.
+        assertNotNull(colourDiffGains(plan().copy(kernel="wronski"),doubleArrayOf(.5,1.0,.625)))
+        assertNull(colourDiffGains(plan("--tune","ipol").copy(kernel="wronski"),doubleArrayOf(.5,1.0,.625)))
         assertNull(colourDiffGains(plan().copy(backend="cpu"),doubleArrayOf(.5,1.0,.625)))
         for(n in listOf(null,doubleArrayOf(0.0,1.0,1.0),doubleArrayOf(Double.NaN,1.0,1.0),doubleArrayOf(1.0)))
             assertNull(colourDiffGains(plan(),n))

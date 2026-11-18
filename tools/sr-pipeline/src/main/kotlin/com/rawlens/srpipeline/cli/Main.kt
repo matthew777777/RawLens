@@ -53,9 +53,11 @@ internal data class Plan(
     /** Own noise model var = a x + b (normalised raw) replacing the DNG/Camera2 NoiseProfile; null = profile. */
     val noiseAb: DoubleArray? = null,
     /** KernelNet's continuous motion handling for Wronski (always on with KernelNet). */
-    val continuousMotion: Boolean = false,
+    val continuousMotion: Boolean = true,
+    /** KernelNet's wide gather + detail green + frame weights for Wronski kernels (app: on). */
+    val detailReconstruction: Boolean = true,
     /** App tuning (`SrTuning`, "k=v,..."): app-parity kernels/robustness/colour diff; null = IPOL CLI defaults. */
-    val tune: String? = null,
+    val tune: String? = "app",
     val organicReconstruction: Boolean = false,
     val tiledPolynomial: Boolean = false,
     val mobilePolynomial: Boolean = false,
@@ -82,11 +84,15 @@ private fun usage(): String = """
                      uniform sensor-grain retention for Vulkan KernelNet colour differences, 0..1
                      (default 1: six evenly spaced luma frames; 0: average all frames)
       --continuous-motion on|off
-                     KernelNet's continuous motion handling for Wronski (default off = IPOL parity; the app uses on)
+                     KernelNet's continuous motion handling for Wronski (default on, as the app; off = IPOL parity)
+      --detail-reconstruction on|off
+                     KernelNet's wide gather, green detail path and frame weights for Wronski kernels
+                     (default on, as the app; off = IPOL parity)
       --reconstruction legacy|organic
                      organic: experimental CPU Wronski with pooled local polynomial reconstruction
-      --tune app|k=v,...
-                     app tuning (SrTuning): app kernels, robustness and colour difference; keys kDetailScale kDenoiseScale
+      --tune app|ipol|k=v,...
+                     default app: app tuning (SrTuning), app kernels, robustness and colour difference;
+                     ipol: IPOL CLI defaults (no colour difference); overrides on app tuning, keys kDetailScale kDenoiseScale
                      dThScale dTrScale kStretch kShrink kMin t s1 s2 mt chromaScale1x chromaScale2x frameEqualize
       --noise-ab a,b own noise model var = a*x + b (normalised raw) instead of the DNG/Camera2 NoiseProfile
       --heap-budget-mb N
@@ -134,8 +140,9 @@ internal fun parseArgs(args: Array<String>): Plan {
     var colourDiffDisabled = false
     var grainRetention = PipelineConfig.DEFAULT_GRAIN_RETENTION
     var noiseAb: DoubleArray? = null
-    var continuousMotion = false
-    var tune: String? = null
+    var continuousMotion = true
+    var detailReconstruction = true
+    var tune: String? = "app"
     var organicReconstruction = false
     var tiledPolynomial = false
     var mobilePolynomial = false
@@ -247,13 +254,17 @@ internal fun parseArgs(args: Array<String>): Plan {
                 i++
             }
             "--tune" -> {
-                val next = args.getOrNull(++i) ?: fail("--tune requires app (defaults) or k=v,...")
-                tune = if (next == "app" || tune == null || tune == "app") next else "$tune,$next"
-                parseTune(tune)
+                val next = args.getOrNull(++i) ?: fail("--tune requires app (defaults), ipol or k=v,...")
+                tune = if (next == "ipol") null else if (next == "app" || tune == null || tune == "app") next else "$tune,$next"
+                tune?.let { parseTune(it) }
                 i++
             }
             "--continuous-motion" -> {
                 continuousMotion = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--continuous-motion requires on|off") }
+                i++
+            }
+            "--detail-reconstruction" -> {
+                detailReconstruction = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--detail-reconstruction requires on|off") }
                 i++
             }
             "--kernel-gat" -> {
@@ -319,6 +330,7 @@ internal fun parseArgs(args: Array<String>): Plan {
         grainRetention = grainRetention,
         noiseAb = noiseAb,
         continuousMotion = continuousMotion,
+        detailReconstruction = detailReconstruction,
         tune = tune,
         organicReconstruction = organicReconstruction,
         tiledPolynomial = tiledPolynomial,
@@ -496,6 +508,7 @@ private fun merge(plan: Plan) {
         sigmaSqCurve = curves?.sigmaSq ?: floatArrayOf(0f, 0f),
         dSqCurve = curves?.dSq ?: floatArrayOf(0f, 0f),
         continuousMotion = plan.continuousMotion,
+        detailReconstruction = plan.detailReconstruction,
         organicReconstruction = plan.organicReconstruction,
         mobilePolynomial = plan.mobilePolynomial,
         frameEqualize = tuning?.frameEqualize ?: 0f,
