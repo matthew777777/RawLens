@@ -62,6 +62,10 @@ internal data class Plan(
     val lateralCa: Boolean = true,
     /** Ghost mask opening + growth (app: on). */
     val ghostGrow: Boolean = true,
+    /** Blurry-frame weight exponent, 0 = off (app: 1). */
+    val blurGamma: Float = 1f,
+    /** Per-burst black pedestal (app: on). */
+    val blackPedestal: Boolean = true,
     /** App tuning (`SrTuning`, "k=v,..."): app-parity kernels/robustness/colour diff; null = IPOL CLI defaults. */
     val tune: String? = "app",
     val organicReconstruction: Boolean = false,
@@ -91,6 +95,9 @@ private fun usage(): String = """
                      (default 1: six evenly spaced luma frames; 0: average all frames)
       --continuous-motion on|off
                      KernelNet's continuous motion handling for Wronski (default on, as the app; off = IPOL parity)
+      --blur-gamma G     down-weight blurry frames by (detail energy / reference)^G, 0 = off (default 1, as the app)
+      --black-pedestal on|off
+                     subtract the neutral black floor measured on the reference (default on, as the app)
       --ghost-grow on|off
                      grow coherent motion rejection past the motion smoothing, drop speckles (default on, as the app)
       --lateral-ca on|off
@@ -157,6 +164,8 @@ internal fun parseArgs(args: Array<String>): Plan {
     var noiseEvening = true
     var lateralCa = true
     var ghostGrow = true
+    var blurGamma = 1f
+    var blackPedestal = true
     var tune: String? = "app"
     var organicReconstruction = false
     var tiledPolynomial = false
@@ -278,6 +287,14 @@ internal fun parseArgs(args: Array<String>): Plan {
                 continuousMotion = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--continuous-motion requires on|off") }
                 i++
             }
+            "--blur-gamma" -> {
+                blurGamma = args.getOrNull(++i)?.toFloatOrNull()?.takeIf { it >= 0f } ?: fail("--blur-gamma requires a number >= 0")
+                i++
+            }
+            "--black-pedestal" -> {
+                blackPedestal = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--black-pedestal requires on|off") }
+                i++
+            }
             "--ghost-grow" -> {
                 ghostGrow = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--ghost-grow requires on|off") }
                 i++
@@ -361,6 +378,8 @@ internal fun parseArgs(args: Array<String>): Plan {
         noiseEvening = noiseEvening,
         lateralCa = lateralCa,
         ghostGrow = ghostGrow,
+        blurGamma = blurGamma,
+        blackPedestal = blackPedestal,
         tune = tune,
         organicReconstruction = organicReconstruction,
         tiledPolynomial = tiledPolynomial,
@@ -542,6 +561,8 @@ private fun merge(plan: Plan) {
         noiseEvening = plan.noiseEvening,
         lateralCa = plan.lateralCa,
         ghostGrow = plan.ghostGrow,
+        blurGamma = plan.blurGamma,
+        blackPedestal = plan.blackPedestal,
         organicReconstruction = plan.organicReconstruction,
         mobilePolynomial = plan.mobilePolynomial,
         frameEqualize = tuning?.frameEqualize ?: 0f,

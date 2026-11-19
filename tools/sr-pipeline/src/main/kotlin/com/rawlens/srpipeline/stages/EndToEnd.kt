@@ -114,6 +114,18 @@ data class PipelineConfig(
      * bayer robustness path only.
      */
     val ghostGrow: Boolean = false,
+    /**
+     * Blurry-frame weighting: each comparison frame's robustness is scaled by
+     * min(1, E/E_ref)^gamma, E = noise-corrected green detail energy
+     * (FrameSharpness). 0 = off. Vulkan bayer path.
+     */
+    val blurGamma: Float = 0f,
+    /**
+     * Per-burst black pedestal (BlackPedestal): subtract the neutral floor the
+     * reference frame's darkest blocks show above the metadata black, from
+     * the merged output. Vulkan bayer path with [colourDiff].
+     */
+    val blackPedestal: Boolean = false,
     /** Opt-in pooled polynomial green / colour-difference fitting (CPU prototype). */
     val organicReconstruction: Boolean = false,
     /** Mobile separable polynomial equivalent-kernel path; Vulkan only. */

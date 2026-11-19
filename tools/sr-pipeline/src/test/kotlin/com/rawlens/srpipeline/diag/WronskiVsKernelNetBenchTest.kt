@@ -52,7 +52,7 @@ class WronskiVsKernelNetBenchTest {
             noiseAcc = spv("noise_acc"), noiseEven = spv("noise_even"))
     }
 
-    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, WRONSKI_GHOST, KERNELNET, CM_ONLY, DETAIL_ONLY }
+    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, WRONSKI_GHOST, WRONSKI_BLUR, KERNELNET, CM_ONLY, DETAIL_ONLY }
 
     private fun cfg(k: Kernel, fin: BurstConfig.Final, a: DoubleArray, b: DoubleArray, scale: Float): PipelineConfig {
         val tuning = SrTuning()
@@ -69,9 +69,10 @@ class WronskiVsKernelNetBenchTest {
             chromaScale = tuning.chromaScale(scale),
             icaIterations = tuning.icaIterations,
             continuousMotion = k != Kernel.WRONSKI_IPOL && k != Kernel.DETAIL_ONLY,
-            detailReconstruction = k == Kernel.WRONSKI_NEW || k == Kernel.WRONSKI_EVEN || k == Kernel.WRONSKI_GHOST || k == Kernel.DETAIL_ONLY,
-            noiseEvening = k == Kernel.WRONSKI_EVEN || k == Kernel.WRONSKI_GHOST,
-            ghostGrow = k == Kernel.WRONSKI_GHOST,
+            detailReconstruction = k in setOf(Kernel.WRONSKI_NEW, Kernel.WRONSKI_EVEN, Kernel.WRONSKI_GHOST, Kernel.WRONSKI_BLUR, Kernel.DETAIL_ONLY),
+            noiseEvening = k in setOf(Kernel.WRONSKI_EVEN, Kernel.WRONSKI_GHOST, Kernel.WRONSKI_BLUR),
+            ghostGrow = k == Kernel.WRONSKI_GHOST || k == Kernel.WRONSKI_BLUR,
+            blurGamma = if (k == Kernel.WRONSKI_BLUR) (System.getenv("BENCH_BLUR_GAMMA")?.toFloatOrNull() ?: 2f) else 0f,
             kernelNet = if (k != Kernel.KERNELNET) null else KernelNetConfig(
                 weights = KernelNet.bundledWeights(), sigma = KernelNet.sigma(al, be),
                 sigmaScale = tuning.knSigmaScale, sigmaCap = tuning.knSigmaCap, sigmaFloor = tuning.knFloor(scale)),
@@ -92,14 +93,20 @@ class WronskiVsKernelNetBenchTest {
     private val cx = 330.0; private val cy = 330.0; private val discR = 35.0
 
     private fun frameWithMotion(t: Sr2xTruthTest, sx: Double, sy: Double, mx: Double, my: Double,
-                                a: Double, b: Double, seed: Long): Array<FloatArray> {
+                                a: Double, b: Double, seed: Long, blurLen: Double = 0.0): Array<FloatArray> {
         val rng = java.util.Random(seed)
+        // blurLen > 0: camera motion blur along (1, 0.4), 9 taps over the length.
+        val taps = if (blurLen > 0) 9 else 1
         return Array(t.n) { y -> FloatArray(t.n) { x ->
-            val u = x - sx; val v = y - sy
-            val inside = hypot(u - mx - cx, v - my - cy) < discR
-            // The disc carries a different texture (scene mirrored) so a
-            // misaligned merge ghosts visibly.
-            val s = if (inside) 0.75 - 0.6 * (t.box(2 * cx - (u - mx), v - my) - 0.42) else t.box(u, v)
+            var s = 0.0
+            for (k in 0 until taps) {
+                val o = if (taps == 1) 0.0 else blurLen * (k / (taps - 1.0) - 0.5)
+                val u = x - sx + o; val v = y - sy + 0.4 * o
+                val inside = hypot(u - mx - cx, v - my - cy) < discR
+                // The disc carries a different texture (scene mirrored) so a
+                // misaligned merge ghosts visibly.
+                s += (if (inside) 0.75 - 0.6 * (t.box(2 * cx - (u - mx), v - my) - 0.42) else t.box(u, v)) / taps
+            }
             val g = t.gains[(y and 1) * 2 + (x and 1)]
             val vv = (s * g).coerceIn(0.0, 1.0)
             (vv + if (a > 0) rng.nextGaussian() * sqrt(a * vv + b) else 0.0).toFloat()
@@ -153,15 +160,17 @@ class WronskiVsKernelNetBenchTest {
             // BENCH_SCENES=motion / BENCH_LEVELS=clean / BENCH_KERNELS=WRONSKI_NEW,WRONSKI_EVEN narrow a run.
             val sceneSel = System.getenv("BENCH_SCENES")?.split(',')?.toSet()
             val kernelSel = System.getenv("BENCH_KERNELS")?.split(',')?.toSet()
-            for (scene in listOf("static", "motion").filter { sceneSel == null || it in sceneSel })
+            // "blur" (opt-in): static scene, frames 2 and 5 with 6 px camera motion blur.
+            for (scene in listOf("static", "motion", "blur").filter { if (sceneSel == null) it != "blur" else it in sceneSel })
             for ((label, ab) in listOf("clean" to (0.0 to 0.0), "iso100" to (1e-4 to 1e-6), "dim" to (8e-4 to 2e-5))
                 .filter { l -> System.getenv("BENCH_LEVELS")?.split(',')?.contains(l.first) ?: true }) {
                 val (a0, b0) = ab
                 val rng = java.util.Random(5)
                 val shifts = listOf(0.0 to 0.0) + List(7) { (rng.nextDouble() * 6 - 3) to (rng.nextDouble() * 6 - 3) }
-                val motion = List(8) { k -> if (scene == "static") 0.0 to 0.0 else (k * 4.0) to (k * -2.5) }
+                val motion = List(8) { k -> if (scene != "motion") 0.0 to 0.0 else (k * 4.0) to (k * -2.5) }
                 val frames = shifts.indices.map { k ->
-                    frameWithMotion(t, shifts[k].first, shifts[k].second, motion[k].first, motion[k].second, a0, b0, 100L + k) }
+                    frameWithMotion(t, shifts[k].first, shifts[k].second, motion[k].first, motion[k].second, a0, b0, 100L + k,
+                        if (scene == "blur" && (k == 2 || k == 5)) 6.0 else 0.0) }
                 val al = DoubleArray(4) { maxOf(a0, 1e-6) }; val be = DoubleArray(4) { maxOf(b0, 1e-8) }
                 val fin = BurstConfig.finalize(BurstConfig.estimateSnr(frames[0], al, be))
                 for (scale in listOf(1, 2)) {

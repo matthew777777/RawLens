@@ -70,11 +70,19 @@ DngStatus DngWriteLinearRgb16(const char* path, uint32_t width,
   planar.size = sizeof(chunky);
   tags.push_back(planar);
 
+  // Merged shadows are noise around a small positive value; clamping the
+  // negative half at 0 lifts every dark mean, the single-sample R and B more
+  // than the averaged greens, which white balance (R x2.2, B x1.6) turns
+  // magenta when shadows are pushed (hdrplus 133623). A BlackLevel pedestal
+  // keeps excursions down to -kDngBlack / (65535 - kDngBlack) = -3.2 % of white
+  // so raw editors average the noise unbiased after subtracting the black.
+  constexpr float kScale = 65535.0f - static_cast<float>(kDngBlack);
   std::vector<uint16_t> u16(static_cast<size_t>(count) * 3);
   for (size_t i = 0; i < u16.size(); ++i) {
     const float x = rgb[i];
-    const float clamped = std::min(std::max(x, 0.0f), 1.0f);
-    u16[i] = static_cast<uint16_t>(std::lround(clamped * 65535.0f));
+    float v = static_cast<float>(kDngBlack) + (std::isnan(x) ? 0.0f : x) * kScale;
+    v = std::min(std::max(v, 0.0f), 65535.0f);
+    u16[i] = static_cast<uint16_t>(std::lround(v));
   }
 
   tinydng_error ctx_error{};
@@ -86,11 +94,11 @@ DngStatus DngWriteLinearRgb16(const char* path, uint32_t width,
   }
 
   // DNG tags (raw editors such as RawTherapee/Darktable refuse files
-  // without them): DNGVersion 1.4 default, zero black, full-scale white,
+  // without them): DNGVersion 1.4 default, kDngBlack black, full-scale white,
   // and the camera profile (`color`, else identity matrix + neutral white
   // under D65 describing uncalibrated camera-native RGB).
   tinydng_raw_info raw{};
-  raw.black_level[0] = raw.black_level[1] = raw.black_level[2] = 0;
+  raw.black_level[0] = raw.black_level[1] = raw.black_level[2] = kDngBlack;
   raw.black_level_present = 1;
   raw.white_level[0] = 65535;
   raw.white_level_present = 1;

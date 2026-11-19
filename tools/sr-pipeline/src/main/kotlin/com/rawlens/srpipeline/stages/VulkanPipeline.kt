@@ -360,6 +360,7 @@ object VulkanPipeline {
         var evenFrames = 0
         var evenSumG = 0.0
         var evenSumG2 = 0.0
+        var pedestal = 0f
         // Supplement S.3 map (reference guide grid), 0 = off.
         var hfRes = 0L
         // Perf slice (a): upload-once frame + kernels chain scratch,
@@ -727,6 +728,16 @@ object VulkanPipeline {
                 for (t in temps) SrpBridge.freeResident(handle, t)
             }
         }
+        // Blurry-frame weighting: reference detail energy (green noise model).
+        val sharpA = (config.kernelAlpha[1] + config.kernelAlpha[3]) / 2f
+        val sharpB = (config.kernelBeta[1] + config.kernelBeta[3]) / 2f
+        pedestal = if (config.blackPedestal && config.bayer && config.colourDiff != null)
+            timed("blackPedestal") { BlackPedestal.estimate(refBox!!, config.kernelAlpha, config.kernelBeta) }.also {
+                println("sr-pipeline black pedestal %.5f (R %.5f G %.5f B %.5f, se %.6f, %d blocks, neutral %b)".format(
+                    it.pedestal, it.r, it.g, it.b, it.sigma, it.blocks, it.neutral))
+            }.pedestal else 0f
+        val refEnergy = if (config.blurGamma > 0f && config.bayer)
+            timed("sharpness") { FrameSharpness.energy(refBox!!, sharpA, sharpB) } else 0.0
         mergeFrame(refBox!!, zeroFlow, packInto(onesR, mergeRDirect), reference = true)
         refBox = null
         // Memory-tight: the ref phase's garbage (ref CFA, init pack
@@ -845,6 +856,15 @@ object VulkanPipeline {
                         .also { b -> mergeFlowFlat.forEach { b.putFloat(it) } }.array())
                 System.err.println("SRP_R frame $idx mean ${"%.3f".format(r.average())} rejected(<0.1) ${"%.1f".format(100.0 * r.count { it < 0.1f } / n)}%")
             }
+            if (refEnergy > 0.0) {
+                val e = timed("sharpness") { FrameSharpness.energy(frame, sharpA, sharpB) }
+                val wBlur = FrameSharpness.weight(e, refEnergy, config.blurGamma)
+                println("sr-pipeline frame sharpness %.3f of reference -> weight %.3f".format(e / refEnergy, wBlur))
+                if (wBlur < 1f) {
+                    val fb = rBuf.duplicate().order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
+                    for (i in 0 until rSize0) fb.put(i, fb.get(i) * wBlur)
+                }
+            }
             mergeFrame(frame, flow, rBuf)
         }
         try {
@@ -921,6 +941,10 @@ object VulkanPipeline {
         config.colourDiff?.takeIf { config.bayer }?.let { cd ->
             timed("colourDiffReconstruct") { ColourDiff.reconstruct(outBuf.asFloatBuffer(), total / 3, cd[0], cd[1]) }
             outBuf.rewind()
+            if (pedestal > 0f) {
+                timed("blackPedestal") { BlackPedestal.apply(outBuf.asFloatBuffer(), total, pedestal) }
+                outBuf.rewind()
+            }
         }
         dumpClock()
         return outBuf

@@ -696,6 +696,10 @@ internal object MfsrMerge {
                 lateralCa = true,
                 // Ghost mask: drop rejection speckles, grow motion blobs.
                 ghostGrow = true,
+                // Down-weight blurry frames (detail energy vs the reference).
+                blurGamma = 1f,
+                // Subtract a neutral black floor above the metadata black.
+                blackPedestal = true,
                 // KernelNet (when selected): one kernel map from the reference
                 // frame, which on the device IS the full frame, so no
                 // separate full-frame copy; the net runs in sensor

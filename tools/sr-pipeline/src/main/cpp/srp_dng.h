@@ -44,12 +44,15 @@ struct DngField {
 
 // Writes row-major chunky float32 RGB in [0,1] as an uncompressed 16-bit
 // linear-RGB DNG (PhotometricInterpretation = 34892 (LinearRaw), one strip, DNGVersion 1.4 +
-// black/white level + color tags via as_dng). Quantizes with clamp +
-// round-to-nearest: u16 = round(clamp(x,0,1) * 65535).
+// black/white level + color tags via as_dng). Quantizes with a black
+// pedestal so shadow noise below 0 survives (see srp_dng.cpp):
+// u16 = round(clamp(kDngBlack + x * (65535 - kDngBlack), 0, 65535)),
+// BlackLevel = kDngBlack, WhiteLevel = 65535.
 // `fields`/`field_count` carry optional extra TIFF tags (may be null/0;
 // e.g. Make/Model passthrough). `color` overrides the default identity
 // profile (may be null for defaults).
 // On failure returns != kOk and, when `error` is non-null, a message.
+constexpr uint32_t kDngBlack = 2048;
 DngStatus DngWriteLinearRgb16(const char* path, uint32_t width,
                               uint32_t height, const float* rgb,
                               const DngField* fields, size_t field_count,
