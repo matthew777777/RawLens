@@ -52,7 +52,7 @@ class WronskiVsKernelNetBenchTest {
             noiseAcc = spv("noise_acc"), noiseEven = spv("noise_even"))
     }
 
-    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, KERNELNET }
+    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, WRONSKI_GHOST, KERNELNET, CM_ONLY, DETAIL_ONLY }
 
     private fun cfg(k: Kernel, fin: BurstConfig.Final, a: DoubleArray, b: DoubleArray, scale: Float): PipelineConfig {
         val tuning = SrTuning()
@@ -68,9 +68,10 @@ class WronskiVsKernelNetBenchTest {
             colourDiff = floatArrayOf(1f, 1f),
             chromaScale = tuning.chromaScale(scale),
             icaIterations = tuning.icaIterations,
-            continuousMotion = k != Kernel.WRONSKI_IPOL,
-            detailReconstruction = k == Kernel.WRONSKI_NEW || k == Kernel.WRONSKI_EVEN,
-            noiseEvening = k == Kernel.WRONSKI_EVEN,
+            continuousMotion = k != Kernel.WRONSKI_IPOL && k != Kernel.DETAIL_ONLY,
+            detailReconstruction = k == Kernel.WRONSKI_NEW || k == Kernel.WRONSKI_EVEN || k == Kernel.WRONSKI_GHOST || k == Kernel.DETAIL_ONLY,
+            noiseEvening = k == Kernel.WRONSKI_EVEN || k == Kernel.WRONSKI_GHOST,
+            ghostGrow = k == Kernel.WRONSKI_GHOST,
             kernelNet = if (k != Kernel.KERNELNET) null else KernelNetConfig(
                 weights = KernelNet.bundledWeights(), sigma = KernelNet.sigma(al, be),
                 sigmaScale = tuning.knSigmaScale, sigmaCap = tuning.knSigmaCap, sigmaFloor = tuning.knFloor(scale)),
@@ -149,7 +150,12 @@ class WronskiVsKernelNetBenchTest {
         try {
             val t = Sr2xTruthTest()
             val truths = mapOf(1 to truthWithDisc(t, 1), 2 to truthWithDisc(t, 2))
-            for (scene in listOf("static", "motion")) for ((label, ab) in listOf("clean" to (0.0 to 0.0), "iso100" to (1e-4 to 1e-6), "dim" to (8e-4 to 2e-5))) {
+            // BENCH_SCENES=motion / BENCH_LEVELS=clean / BENCH_KERNELS=WRONSKI_NEW,WRONSKI_EVEN narrow a run.
+            val sceneSel = System.getenv("BENCH_SCENES")?.split(',')?.toSet()
+            val kernelSel = System.getenv("BENCH_KERNELS")?.split(',')?.toSet()
+            for (scene in listOf("static", "motion").filter { sceneSel == null || it in sceneSel })
+            for ((label, ab) in listOf("clean" to (0.0 to 0.0), "iso100" to (1e-4 to 1e-6), "dim" to (8e-4 to 2e-5))
+                .filter { l -> System.getenv("BENCH_LEVELS")?.split(',')?.contains(l.first) ?: true }) {
                 val (a0, b0) = ab
                 val rng = java.util.Random(5)
                 val shifts = listOf(0.0 to 0.0) + List(7) { (rng.nextDouble() * 6 - 3) to (rng.nextDouble() * 6 - 3) }
@@ -162,12 +168,33 @@ class WronskiVsKernelNetBenchTest {
                     val truth = truths[scale]!!
                     val m = 24 * scale
                     val sweptMax = hypot(7 * 4.0, 7 * 2.5) + discR + 4
-                    for (k in Kernel.values()) {
+                    for (k in Kernel.values().filter { if (kernelSel == null) it != Kernel.CM_ONLY && it != Kernel.DETAIL_ONLY else it.name in kernelSel }) {
                         val img = run(handle, frames, cfg(k, fin, al, be, scale.toFloat()))
                         val all = psnr(img, truth) { y, x -> y in m until img.size - m && x in m until img.size - m }
                         val swept = psnr(img, truth) { y, x ->
                             val u = (x + 0.5) / scale - 0.5; val v = (y + 0.5) / scale - 0.5
                             hypot(u - cx - 14, v - cy + 9) < sweptMax }
+                        // Split the swept area: inside the reference disc (single-frame
+                        // reconstruction, truth = disc) vs the trail the disc left in the
+                        // other frames (truth = background: ghost leakage). p99 catches
+                        // localized ghosts the mean hides.
+                        fun distTrail(u: Double, v: Double): Double {
+                            var best = Double.MAX_VALUE
+                            for (j in 1..7) best = minOf(best, hypot(u - cx - 4.0 * j, v - cy + 2.5 * j))
+                            return best
+                        }
+                        val discSel = { y: Int, x: Int -> val u = (x + 0.5) / scale - 0.5; val v = (y + 0.5) / scale - 0.5
+                            hypot(u - cx, v - cy) < discR - 3 }
+                        val trailSel = { y: Int, x: Int -> val u = (x + 0.5) / scale - 0.5; val v = (y + 0.5) / scale - 0.5
+                            hypot(u - cx, v - cy) > discR + 3 && distTrail(u, v) < discR + 4 }
+                        val discP = psnr(img, truth, discSel)
+                        val trailP = psnr(img, truth, trailSel)
+                        val trailP99 = run {
+                            val e = ArrayList<Double>()
+                            for (y in img.indices) for (x in img[0].indices) if (trailSel(y, x))
+                                e.add((0..2).maxOf { kotlin.math.abs((img[y][x][it] - truth[y][x][it]).toDouble()) })
+                            e.sort(); if (e.isEmpty()) 0.0 else e[(e.size * 0.99).toInt()]
+                        }
                         // Flat noise: the lower-left 60x60 region has little texture energy
                         val flat = run {
                             var s = 0.0; var c = 0
@@ -175,8 +202,8 @@ class WronskiVsKernelNetBenchTest {
                                 val d = (img[y][x][1] - truth[y][x][1]).toDouble(); s += d * d; c++ }
                             sqrt(s / c)
                         }
-                        println("BENCH %-6s %-6s %dx %-9s PSNR %6.2f  detail %6.2f  swept %6.2f  flatErr %.5f".format(
-                            scene, label, scale, k, all, detail(img, truth), swept, flat))
+                        println("BENCH %-6s %-6s %dx %-12s PSNR %6.2f  detail %6.2f  swept %6.2f  disc %6.2f  trail %6.2f  trailP99 %.4f  flatErr %.5f".format(
+                            scene, label, scale, k, all, detail(img, truth), swept, discP, trailP, trailP99, flat))
                     }
                 }
             }

@@ -1000,7 +1000,7 @@ namespace {
 // One robustness.comp dispatch over the fixed 7-slot binding order
 // (A,B,C,D,E,S,LUT). `ex[0]` selects the op, `ex[3..12]` carry the
 // op's pad extras (W/H ride pad[1..2); unused slots take `dummy.
-Status RobDispatch(Context* ctx, const uint32_t ex[13], uint32_t W,
+Status RobDispatch(Context* ctx, const uint32_t ex[15], uint32_t W,
                    uint32_t H, uint32_t grid, VkBuffer a, VkBuffer b,
                    VkBuffer c, VkBuffer d, VkBuffer e, VkBuffer s,
                    VkBuffer lut, VkShaderModule mod, uint32_t continuous_flow = 0) {
@@ -1012,6 +1012,7 @@ Status RobDispatch(Context* ctx, const uint32_t ex[13], uint32_t W,
   push.pad[1] = W;
   push.pad[2] = H;
   for (int k = 3; k < 13; ++k) push.pad[k] = ex[k];
+  push.pad[15] = ex[14];
   VkBuffer buffers[7] = {a, b, c, d, e, s, lut};
   return DispatchStorageCompute(ctx, buffers, 7, &push, sizeof(push),
                                 kRobustLocalSize, grid, mod);
@@ -1043,7 +1044,7 @@ Status SrpRobustInitGpu(Context* ctx, uint32_t width, uint32_t height,
     return Status::kDispatchFailed;
   }
 
-  uint32_t ex[13] = {};
+  uint32_t ex[15] = {};
   Status status;
   // op 0 guide: A=frame -> D=guide(3n).
   ex[0] = 0;
@@ -1073,7 +1074,8 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
                            uint32_t lut_n, uint32_t noise_correction,
                            uint32_t t_bits, uint32_t ftx, uint32_t fty,
                            VkShaderModule shader_module, VkBuffer hf_buffer,
-                           uint32_t s1_bits) {
+                           uint32_t s1_bits, uint32_t ghost_a_bits,
+                           uint32_t ghost_b_bits) {
   if (ctx == nullptr || width < 2 || height < 2 || tile_size < 2 ||
       lut_n == 0 || ftx == 0 || fty == 0 || comp_buffer == VK_NULL_HANDLE ||
       means_buffer == VK_NULL_HANDLE || vars_buffer == VK_NULL_HANDLE ||
@@ -1106,7 +1108,7 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
     return Status::kDispatchFailed;
   }
 
-  uint32_t ex[13] = {};
+  uint32_t ex[15] = {};
   Status status = Status::kOk;
   // op 0 guide on the compared frame.
   ex[0] = 0;
@@ -1159,13 +1161,43 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
     ex[7] = 0;
     ex[8] = 0;
   }
-  // op 5 local min into the caller buffer.
+  // Ghost mask (noise_correction bit 2) on s = 1 - r inside motion tiles:
+  // a 7x7 box mean seeds coherent blobs (speckles average away, holes in
+  // real motion do not),
+  // then a max dilation by the seed half width plus half a flow tile grows
+  // them past the continuous-motion smoothing. d/sg are free after op 4.
+  const bool ghost_grow = ((noise_correction >> 2u) & 1u) != 0u;
+  if (status == Status::kOk && ghost_grow) {
+    constexpr uint32_t kGhostErode = 3;  // 7x7 seed window (guide px)
+    const uint32_t dilate = kGhostErode + (tile_size / 2u > 0u ? tile_size / 2u : 1u);
+    struct Pass { uint32_t axis, hw, isMax, fromR; VkBuffer in, out; };
+    // Pass 1 reads op 3's d (frame-vs-ref squared difference of local
+    // means) for the visibility weight, so it writes sg; the result ends in d.
+    const Pass passes[4] = {{0, kGhostErode, 0, 1, r, sg}, {1, kGhostErode, 0, 0, sg, d},
+                            {0, dilate, 1, 2, d, sg}, {1, dilate, 1, 0, sg, d}};
+    for (const Pass& ps : passes) {
+      if (status != Status::kOk) break;
+      uint32_t gx[15] = {};
+      gx[0] = 10; gx[3] = ps.axis; gx[4] = ps.hw; gx[5] = ps.isMax; gx[6] = ps.fromR;
+      // Seed only inside motion tiles (S == s1): see robustness.comp op 10.
+      const bool first = ps.fromR == 1u;
+      if (first) {
+        gx[7] = 1; gx[8] = s1_bits; gx[9] = ghost_a_bits; gx[10] = ghost_b_bits;
+        gx[11] = ftx; gx[12] = tile_half;
+      }
+      status = RobDispatch(ctx, gx, gw, gh, n, ps.in, first ? d : dummy,
+                           first ? means_buffer : dummy, ps.out,
+                           dummy, s_buffer, dummy, shader_module);
+    }
+  }
+  // op 5 local min into the caller buffer (capped by the ghost mask).
   if (status == Status::kOk) {
     ex[0] = 5;
     ex[4] = 0;
     ex[6] = 0;
     ex[11] = 0;
-    status = RobDispatch(ctx, ex, gw, gh, n, r, dummy, dummy, out_buffer,
+    ex[14] = ghost_grow ? 1u : 0u;
+    status = RobDispatch(ctx, ex, gw, gh, n, r, ghost_grow ? d : dummy, dummy, out_buffer,
                          dummy, dummy, dummy, shader_module);
   }
   arena.freeAll();
@@ -1185,7 +1217,7 @@ Status SrpRobustHfGpu(Context* ctx, uint32_t width, uint32_t height,
   const uint32_t gw = width / 2, gh = height / 2;
   const uint32_t n = gw * gh;
   auto bits = [](float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; };
-  uint32_t ex[13] = {};
+  uint32_t ex[15] = {};
   ex[0] = 9;
   ex[3] = 3;
   ex[4] = bits(rho);
@@ -1217,7 +1249,7 @@ Status SrpSmapGpu(Context* ctx, uint32_t ntx, uint32_t nty,
     arena.freeAll();
     return Status::kDispatchFailed;
   }
-  uint32_t ex[13] = {};
+  uint32_t ex[15] = {};
   ex[0] = 6;
   ex[7] = mt_bits;
   ex[8] = s1_bits;

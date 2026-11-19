@@ -555,7 +555,11 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
                            uint32_t t_bits, uint32_t ftx, uint32_t fty,
                            VkShaderModule shader_module,
                            VkBuffer hf_buffer = VK_NULL_HANDLE,
-                           uint32_t s1_bits = 0);
+                           uint32_t s1_bits = 0,
+                           // Ghost-mask visibility (noise_correction bit 2):
+                           // float bits of a', b' with merged noise variance
+                           // a' * brightness + b'; both 0 = no visibility gate.
+                           uint32_t ghost_a_bits = 0, uint32_t ghost_b_bits = 0);
 Status SrpSmapGpu(Context* ctx, uint32_t ntx, uint32_t nty,
                   VkBuffer flow_buffer, VkBuffer s_buffer, uint32_t mt_bits,
                   uint32_t s1_bits, uint32_t s2_bits,

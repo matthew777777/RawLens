@@ -574,6 +574,12 @@ object SrpBridge {
         hfRes: Long,
         /** Float bits of s1 (the M > Mt strength the S map holds there). */
         s1Bits: Int,
+        /**
+         * Ghost-mask visibility (noiseCorrection bit 2): float bits of a', b'
+         * with merged noise variance a' * brightness + b'; 0, 0 = no gate.
+         */
+        ghostABits: Int,
+        ghostBBits: Int,
     ): Int
 
     /**

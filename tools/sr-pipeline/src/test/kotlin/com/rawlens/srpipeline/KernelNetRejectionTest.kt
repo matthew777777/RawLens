@@ -56,7 +56,7 @@ class KernelNetRejectionTest {
                 assertEquals(0,SrpBridge.nativeRobustComputeFrameRes(handle,resident(raw),resident(means),
                     resident(FloatArray(n*3) { .0004f }),pack(flow),pack(floatArrayOf(.1f,.1f,.1f,.1f)),
                     resident(strengths),output,File(spv).readBytes(),w,h,16,2,2,
-                    0f.toRawBits(),nx,ny,if(s3) resident(FloatArray(n) { 1f }) else 0L,.15f.toRawBits()))
+                    0f.toRawBits(),nx,ny,if(s3) resident(FloatArray(n) { 1f }) else 0L,.15f.toRawBits(),0,0))
                 val r=output.asFloatBuffer()
                 for(y in 6 until gh-6) for(x in 6 until gw-6) {
                     var expected=1.0
@@ -74,7 +74,7 @@ class KernelNetRejectionTest {
             assertEquals(0,SrpBridge.nativeRobustComputeFrameRes(handle,resident(raw),resident(means),
                 resident(FloatArray(n*3) { .0004f }),pack(flow),pack(floatArrayOf(.1f,.1f,.1f,.1f)),
                 resident(FloatArray(nx*ny) { .15f }),rejected,File(spv).readBytes(),w,h,16,2,2,
-                0f.toRawBits(),nx,ny,resident(FloatArray(n) { 1f }),.15f.toRawBits()))
+                0f.toRawBits(),nx,ny,resident(FloatArray(n) { 1f }),.15f.toRawBits(),0,0))
             val rejectValues=rejected.asFloatBuffer()
             for(i in 0 until n) assertEquals("full S3 rejection",0f,rejectValues.get(i),1e-6f)
         } finally { SrpBridge.nativeDestroy(handle) }

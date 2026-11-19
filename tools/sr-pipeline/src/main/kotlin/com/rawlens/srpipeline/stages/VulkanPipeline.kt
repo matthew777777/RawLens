@@ -49,6 +49,16 @@ object VulkanPipeline {
     /** noise_even.comp range kernel width, in merged-noise sigmas. */
     const val NOISE_EVEN_RANGE = 2f
 
+    /**
+     * Ghost-mask visibility scale K: a frame's rejection seeds mask growth with
+     * weight d / (d + K (a L + b) / N), d = its squared local-mean difference to
+     * the reference. Calibrated on WronskiVsKernelNetBenchTest motion scenes:
+     * K 1 / 10 / 100 -> clean trail 57.8 / 57.7 / 57.0 dB (53.5 ungrown), iso100
+     * 43.6 / 43.7 / 43.9 and dim 35.3 / 35.5 / 36.0 (44.0 / 36.0 ungrown):
+     * at 100 noisy bursts keep their noise while clean ones lose the ghost.
+     */
+    const val GHOST_VISIBILITY = 100f
+
 
     /** Stage modules beyond the align loop's own [AlignGpu.Spirvs]. */
     data class Spirvs(
@@ -661,6 +671,11 @@ object VulkanPipeline {
         // loop frames upload in the grey leg instead).
         val finest = pinnedInit.levels.last()
         val continuousMotion = config.kernelNet != null || config.continuousMotion || config.mobilePolynomial
+        // Ghost-mask visibility: merged noise variance (a L + b) / N of the
+        // green-ish guide, scaled by GHOST_VISIBILITY (see the constant).
+        val ghostFrames = greenFrameWeights.size.coerceAtLeast(1)
+        val ghostA = if (config.ghostGrow) GHOST_VISIBILITY * (config.kernelAlpha[1] + config.kernelAlpha[3]) / 2f / ghostFrames else 0f
+        val ghostB = if (config.ghostGrow) GHOST_VISIBILITY * (config.kernelBeta[1] + config.kernelBeta[3]) / 2f / ghostFrames else 0f
         val motionField = if (continuousMotion) {
             val count = finest.nTx * finest.nTy * 4
             val packed = FloatArray(count)
@@ -804,9 +819,12 @@ object VulkanPipeline {
                         spirvs.robust, w, h, tile, lutN,
                         // Bit 0: noise correction; bit 1: use the same continuous
                         // motion field as KernelNet reconstruction (Wronski: off).
-                        (if (config.robustnessParams.noiseCorrection) 1 else 0) or (if (continuousMotion) 2 else 0),
+                        (if (config.robustnessParams.noiseCorrection) 1 else 0) or (if (continuousMotion) 2 else 0) or
+                            // Bit 2: ghost mask (opening + growth past the motion smoothing).
+                            (if (config.ghostGrow) 4 else 0),
                         java.lang.Float.floatToIntBits(config.robustnessParams.t), ftx, fty,
-                        hfRes, java.lang.Float.floatToIntBits(rp.s1))) }
+                        hfRes, java.lang.Float.floatToIntBits(rp.s1),
+                        java.lang.Float.floatToRawIntBits(ghostA), java.lang.Float.floatToRawIntBits(ghostB))) }
                 }
                 mergeRDirect
             } else {

@@ -60,6 +60,8 @@ internal data class Plan(
     val noiseEvening: Boolean = true,
     /** Lateral chromatic aberration correction (app: on). */
     val lateralCa: Boolean = true,
+    /** Ghost mask opening + growth (app: on). */
+    val ghostGrow: Boolean = true,
     /** App tuning (`SrTuning`, "k=v,..."): app-parity kernels/robustness/colour diff; null = IPOL CLI defaults. */
     val tune: String? = "app",
     val organicReconstruction: Boolean = false,
@@ -89,6 +91,8 @@ private fun usage(): String = """
                      (default 1: six evenly spaced luma frames; 0: average all frames)
       --continuous-motion on|off
                      KernelNet's continuous motion handling for Wronski (default on, as the app; off = IPOL parity)
+      --ghost-grow on|off
+                     grow coherent motion rejection past the motion smoothing, drop speckles (default on, as the app)
       --lateral-ca on|off
                      correct lateral chromatic aberration fitted on the merged image (default on, as the app)
       --noise-evening on|off
@@ -152,6 +156,7 @@ internal fun parseArgs(args: Array<String>): Plan {
     var detailReconstruction = true
     var noiseEvening = true
     var lateralCa = true
+    var ghostGrow = true
     var tune: String? = "app"
     var organicReconstruction = false
     var tiledPolynomial = false
@@ -273,6 +278,10 @@ internal fun parseArgs(args: Array<String>): Plan {
                 continuousMotion = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--continuous-motion requires on|off") }
                 i++
             }
+            "--ghost-grow" -> {
+                ghostGrow = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--ghost-grow requires on|off") }
+                i++
+            }
             "--lateral-ca" -> {
                 lateralCa = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--lateral-ca requires on|off") }
                 i++
@@ -351,6 +360,7 @@ internal fun parseArgs(args: Array<String>): Plan {
         detailReconstruction = detailReconstruction,
         noiseEvening = noiseEvening,
         lateralCa = lateralCa,
+        ghostGrow = ghostGrow,
         tune = tune,
         organicReconstruction = organicReconstruction,
         tiledPolynomial = tiledPolynomial,
@@ -531,6 +541,7 @@ private fun merge(plan: Plan) {
         detailReconstruction = plan.detailReconstruction,
         noiseEvening = plan.noiseEvening,
         lateralCa = plan.lateralCa,
+        ghostGrow = plan.ghostGrow,
         organicReconstruction = plan.organicReconstruction,
         mobilePolynomial = plan.mobilePolynomial,
         frameEqualize = tuning?.frameEqualize ?: 0f,

@@ -2350,7 +2350,8 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeRobustCompute
     jlong means_res, jlong vars_res, jobject flow_buffer,
     jobject lut_buffer, jlong s_res, jobject out_buffer, jbyteArray spirv,
     jint width, jint height, jint tile_size, jint lut_n, jint noise_correction,
-    jint t_bits, jint ftx, jint fty, jlong hf_res, jint s1_bits) {
+    jint t_bits, jint ftx, jint fty, jlong hf_res, jint s1_bits,
+    jint ghost_a_bits, jint ghost_b_bits) {
   VkDevice device = VK_NULL_HANDLE;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   srp::Context* ctx = CorrContext(handle, &device, &physical);
@@ -2428,7 +2429,8 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeRobustCompute
         static_cast<uint32_t>(noise_correction),
         static_cast<uint32_t>(t_bits), static_cast<uint32_t>(ftx),
         static_cast<uint32_t>(fty), module,
-        hf_vk, static_cast<uint32_t>(s1_bits));
+        hf_vk, static_cast<uint32_t>(s1_bits),
+        static_cast<uint32_t>(ghost_a_bits), static_cast<uint32_t>(ghost_b_bits));
     if (status == srp::Status::kOk) {
       void* mapped = nullptr;
       if (vkMapMemory(device, mems[2], 0, static_cast<VkDeviceSize>(n) * 4, 0,

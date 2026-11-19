@@ -106,6 +106,14 @@ data class PipelineConfig(
      * Vulkan bayer path with [colourDiff] only.
      */
     val lateralCa: Boolean = false,
+    /**
+     * Ghost mask: morphological opening of each frame's rejection (drops
+     * isolated false rejections), grown by half a flow tile past the
+     * continuous-motion smoothing, then capping robustness. Fixes the trail
+     * leak continuous motion adds (synthetic trail 53.5 -> ~60 dB). Vulkan
+     * bayer robustness path only.
+     */
+    val ghostGrow: Boolean = false,
     /** Opt-in pooled polynomial green / colour-difference fitting (CPU prototype). */
     val organicReconstruction: Boolean = false,
     /** Mobile separable polynomial equivalent-kernel path; Vulkan only. */

@@ -11,7 +11,7 @@
 // ties-to-even rounding as CUDA __nv_llrint (C9a), first-minimum-free threshold).
 //
 // Push overlay: pad[0]=op (0 guide,1 stats,2 warp,3 dsigma,4 thresh,5 min,
-//   6 smap, 7 accum, 9 S.3 hf map) pad[1]=W pad[2]=H (op grid), pad[3]=nc,
+//   6 smap, 7 accum, 9 S.3 hf map, 10 ghost-mask morphology) pad[1]=W pad[2]=H (op grid), pad[3]=nc,
 //   pad[4]=tileHalf, pad[5]=lutN, pad[6..9]=t,Mt,s1,s2 bits,
 //   pad[10]=noiseCorrection, pad[11]=nTilesX (warp/thresh),
 //   pad[12]=fullW (guide op), pad[13]=continuous KernelNet field (warp/thresh).
@@ -283,6 +283,57 @@ void main() {
       noise += (a * lin + b) / (4.0 * lin);
     }
     D_[i] = (after / max(before, 1e-12) < rho && before > K * noise) ? 1.0 : 0.0;
+  } else if (op == 10u) {
+    // --- ghost-mask morphology, one separable 1-D pass ---
+    // pad[3] = axis (0 x, 1 y), pad[4] = half width, pad[5] = 0 mean / 1 max,
+    // pad[6] = 1: input is robustness r, read as rejection strength 1 - r;
+    //          2: input is a box mean of s, ramped to a blob seed.
+    // pad[7] = 1 (with pad[6] = 1): gate s by motion-tile membership
+    // (S map == s1 bits pad[8], tiles pad[12] guide px, pad[11] per row):
+    // only blobs where the flow field varies seed growth. Static false
+    // rejections (aliasing on uniform flow) are not grown: the leak this
+    // fixes comes from smoothing the flow across motion boundaries.
+    // pad[9]/pad[10] (with pad[6] = 1) = a', b' bits: weight s by ghost
+    // visibility d / (d + a' L + b'), d = this frame's squared difference
+    // of local means vs the reference (B, op 3), L = reference brightness
+    // (C = ref means). Where a ghost would sit below the merged noise,
+    // growing the rejection costs more noise than the leak it removes.
+    // Box mean then max on s = 1 - r drops isolated false rejections (noise,
+    // aliasing: a lone pixel averages to ~1/49) while tolerating holes inside
+    // real motion blobs, and grows those blobs past the smoothing of the
+    // continuous motion field (B-spline flow, bilinear r lookups).
+    uint y = i / W;
+    uint x = i % W;
+    int hw = int(p.pad[4]);
+    bool isMax = p.pad[5] != 0u;
+    bool fromR = p.pad[6] == 1u;
+    bool ramp = p.pad[6] == 2u;
+    float m = 0.0;
+    for (int k = -hw; k <= hw; k++) {
+      uint xx = p.pad[3] == 0u ? uint(clampInt(int(x) + k, 0, int(W) - 1)) : x;
+      uint yy = p.pad[3] == 0u ? y : uint(clampInt(int(y) + k, 0, int(H) - 1));
+      float v = A_[yy * W + xx];
+      if (fromR) {
+        v = isnan(v) ? 1.0 : clamp(1.0 - v, 0.0, 1.0);
+        if (p.pad[7] != 0u) {
+          uint tsz = max(p.pad[12], 1u);
+          if (S_[(yy / tsz) * p.pad[11] + xx / tsz] != uintBitsToFloat(p.pad[8])) v = 0.0;
+        }
+        float ga = uintBitsToFloat(p.pad[9]), gb = uintBitsToFloat(p.pad[10]);
+        if (v > 0.0 && (ga > 0.0 || gb > 0.0)) {
+          uint j = yy * W + xx, plane = W * H;
+          float L = clamp((C_[j] + C_[plane + j] + C_[2u * plane + j]) / 3.0, 0.0, 1.0);
+          float dd = B_[j];
+          dd = isnan(dd) ? 0.0 : max(dd, 0.0);
+          v *= dd / (dd + ga * L + gb + 1e-20);
+        }
+      }
+      // Seed: blob when at least half the window rejects; linear ramp
+      // 0.25 -> 0 .. 0.75 -> 1 keeps the mask continuous.
+      if (ramp) v = clamp(2.0 * v - 0.5, 0.0, 1.0);
+      m = isMax ? max(m, v) : m + v;
+    }
+    D_[i] = isMax ? m : m / float(2 * hw + 1);
   } else if (op == 7u) {
     // --- debug accumulated-robustness: D = A + B, one invocation per
     // pixel (replaces host utils.add). A single correctly-rounded add per
@@ -290,6 +341,7 @@ void main() {
     D_[i] = A_[i] + B_[i];
   } else {
     // --- cpu_compute_local_min: 5x5 clamped minimum ---
+    // pad[15] = 1: also cap by the grown ghost mask in B (op 10): 1 - B.
     uint y = i / W;
     uint x = i % W;
     float m = 1.0 / 0.0;
@@ -300,6 +352,7 @@ void main() {
         m = min(m, A_[yy * W + xx]);
       }
     }
+    if (p.pad[15] != 0u) m = min(m, 1.0 - B_[i]);
     D_[i] = m;
   }
 }

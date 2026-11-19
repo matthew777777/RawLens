@@ -694,6 +694,8 @@ internal object MfsrMerge {
                 noiseEvening = true,
                 // Lateral CA fitted on the merged image, warped when visible.
                 lateralCa = true,
+                // Ghost mask: drop rejection speckles, grow motion blobs.
+                ghostGrow = true,
                 // KernelNet (when selected): one kernel map from the reference
                 // frame, which on the device IS the full frame, so no
                 // separate full-frame copy; the net runs in sensor
