@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // BGU viewfinder: the low-resolution "operator". Evaluates the full VF look on
+// Highlight compression adapted from Khronos PBR Neutral (2024 The Khronos Group, Inc.; Apache-2.0).
 // one low-res quad texel: WB gains + CCM + Reinhard + gamma in RAW mode, or
 // the calibrated camera-to-ACEScg + AgX + gamut + sRGB OETF chain in JPEG mode.
 //
@@ -310,15 +311,18 @@ public:
         Vec3 basicDisplay{select(displayP3_ != 0, basicP3.r, basicSrgb.r),
                           select(displayP3_ != 0, basicP3.g, basicSrgb.g),
                           select(displayP3_ != 0, basicP3.b, basicSrgb.b)};
+        // Same photographic adaptation as BasicDisplayTransform (no PBR toe).
+        basicDisplay = Vec3{max(basicDisplay.r, 0.0f), max(basicDisplay.g, 0.0f), max(basicDisplay.b, 0.0f)};
         Expr basicPeak = max(basicDisplay.r, max(basicDisplay.g, basicDisplay.b));
-        Expr t = max(basicPeak - 0.6f, 0.0f);
-        Expr basicCompressed = 0.6f + t / (1.0f + t / 0.4f);
-        Expr basicScale = select(basicPeak > 0.6f,
-            lerp(1.0f, basicCompressed / max(basicPeak, 1e-6f), clamp(highlightShoulder_, 0.0f, 1.0f)), 1.0f);
+        Expr knee = 0.76f - 0.16f * clamp(highlightShoulder_, 0.0f, 1.0f);
+        Expr d = 1.0f - knee;
+        Expr mapped = 1.0f - d * (d / (max(basicPeak, knee) + d - knee));
+        Expr scale = mapped / max(basicPeak, 1e-6f);
+        Expr white = 1.0f - 1.0f / (1.0f + 0.15f * (basicPeak - mapped));
         auto basicChannel = [&](Expr srgb, Expr p3) {
-            Expr linear = clamp(select(displayP3_ != 0, p3, srgb) * basicScale, 0.0f, 1.0f);
-            Expr x = pow(srgbOetfCh(linear), 1.0f / 1.1f);
-            return 0.25f * x + 0.75f * x * x * (3.0f - 2.0f * x);
+            Expr linear = max(select(displayP3_ != 0, p3, srgb), 0.0f);
+            Expr compressed = lerp(linear * scale, mapped, white);
+            return srgbOetfCh(clamp(select(basicPeak > knee, compressed, linear), 0.0f, 1.0f));
         };
         enc = Vec3{select(jpeg_ == 3, basicChannel(basicSrgb.r, basicP3.r), enc.r),
                    select(jpeg_ == 3, basicChannel(basicSrgb.g, basicP3.g), enc.g),

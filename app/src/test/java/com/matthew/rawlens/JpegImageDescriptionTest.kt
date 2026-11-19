@@ -29,8 +29,8 @@ class JpegImageDescriptionTest {
             val text = jpegImageDescription(settings, null, null, outputWidth = 4080, outputHeight = 3060)
             assertTrue(text.contains("RAW_SENSOR -> ACEScg -> Basic -> Display P3"))
             assertFalse(text.contains("AgX"))
-            for (field in listOf("PARAMETERS", "DEVELOPMENT SETTINGS", "brightness gamma 1.100",
-                "cubic contrast blend 0.750", "strength 0.750", "Dimensions: 4080x3060",
+            for (field in listOf("PARAMETERS", "DEVELOPMENT SETTINGS", "Neutral v2",
+                "linear midtones", "strength 0.750", "Dimensions: 4080x3060",
                 "JPEG quality: 92", "Demosaic preference", "False-color suppression", "Purple defringe")) {
                 assertTrue(field, text.contains(field))
             }

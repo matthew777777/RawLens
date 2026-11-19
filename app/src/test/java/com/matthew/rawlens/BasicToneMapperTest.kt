@@ -16,9 +16,9 @@ class BasicToneMapperTest {
             previous = encoded
         }
         assertEquals(0f, BasicDisplayTransform.encode(-1f), 0f)
-        assertEquals(1f, BasicDisplayTransform.encode(16f), 1e-6f)
-        // Independent double precision values for the Basic RAW response.
-        assertEquals(0.49308327f, BasicDisplayTransform.encode(0.18f), 1e-5f)
+        assertTrue(BasicDisplayTransform.encode(16f) < 1f)
+        // Midtones are now ordinary photographic linear light plus the sRGB transfer.
+        assertEquals(0.46135613f, BasicDisplayTransform.encode(0.18f), 1e-5f)
     }
 
     @Test fun switchingDoesNotLoseAgxTuningAndBasicIgnoresIt() {
@@ -35,29 +35,48 @@ class BasicToneMapperTest {
         assertEquals(PhotoToneMapper.BASIC, PhotoToneMapper.fromPreference("BASIC"))
     }
 
-    @Test fun shoulderPreservesMidsAndHighlightGradationWithoutChangingRgbRatios() {
-        for (n in floatArrayOf(0f, .01f, .18f, .6f)) {
-            assertEquals(BasicDisplayTransform.encode(n), BasicDisplayTransform.encode(n, 1f), 0f)
+    @Test fun shoulderPreservesMidsAndHighlightGradationAtEveryStrength() {
+        for (strength in floatArrayOf(0f, .25f, .5f, 1f)) {
+            for (n in floatArrayOf(0f, .01f, .18f, .6f))
+                assertEquals(AgxDisplayTransform.srgbOetf(n), BasicDisplayTransform.encode(n, strength), 1e-6f)
+            var previous = 0f
+            for (n in floatArrayOf(.6f, .8f, 1f, 1.5f, 2f, 4f, 16f, 64f)) {
+                val mapped = BasicDisplayTransform.encode(n, strength)
+                assertTrue(mapped > previous)
+                assertTrue(mapped < 1f)
+                previous = mapped
+            }
         }
-        var previous = 0f
-        for (n in floatArrayOf(.6f, .8f, 1f, 1.5f, 2f, 4f, 16f)) {
-            val mapped = BasicDisplayTransform.encode(n, 1f)
-            assertTrue(mapped > previous)
-            assertTrue(mapped < 1f)
-            previous = mapped
-        }
-        val encoded = BasicDisplayTransform.encodeRgb(floatArrayOf(2f, 1f, .5f), 1f)
-        // The shoulder applies one RGB scale before the existing per-channel
-        // Basic display curve (the latter deliberately changes display saturation).
-        val scale = (.6f + 1.4f / (1f + 1.4f / .4f)) / 2f
-        assertArrayEquals(floatArrayOf(2f, 1f, .5f).map {
-            BasicDisplayTransform.encode(it * scale, 0f)
-        }.toFloatArray(), encoded, 1e-6f)
-        assertEquals(1f, BasicDisplayTransform.encode(2f, 0f), 1e-6f)
-        // The sky guard stays at the user's sensor-linear setting, not a
-        // brighter target bought by the new display shoulder.
         assertEquals(AdaptiveExposureTuning.fromOutputSettings(basic.copy(highlightShoulder = 0f)),
             AdaptiveExposureTuning.fromOutputSettings(basic.copy(highlightShoulder = 1f)))
+    }
+
+    @Test fun highlightsKeepHueOrderingAndApproachWhiteSmoothly() {
+        var previousChroma = 1f
+        for (ev in 0..12) {
+            val exposure = Math.scalb(1f, ev)
+            val encoded = BasicDisplayTransform.encodeRgb(floatArrayOf(1f, .5f, .25f).map { it * exposure }.toFloatArray(), 1f)
+            val rgb = encoded.map { BasicDisplayTransform.decode(it) }
+            assertTrue(rgb[0] >= rgb[1] && rgb[1] >= rgb[2])
+            // Affine compression toward white preserves the middle channel's hue position.
+            assertEquals(1f / 3f, (rgb[1] - rgb[2]) / (rgb[0] - rgb[2]), 3e-3f)
+            val chroma = (rgb[0] - rgb[2]) / rgb[0]
+            assertTrue(chroma < previousChroma)
+            previousChroma = chroma
+        }
+        for (rgb in listOf(floatArrayOf(0f, 0f, 0f), floatArrayOf(-1f, .2f, 2f), floatArrayOf(65504f, 0f, 0f))) {
+            assertTrue(BasicDisplayTransform.encodeRgb(rgb, 1f).all { it.isFinite() && it in 0f..1f })
+        }
+    }
+
+    @Test fun kneeIsContinuousInValueAndSlope() {
+        for (strength in floatArrayOf(0f, .5f, 1f)) {
+            val k = .76f - .16f * strength
+            fun linear(x: Float) = BasicDisplayTransform.decode(BasicDisplayTransform.encode(x, strength))
+            val h = .001f
+            assertEquals(k, linear(k), 2e-6f)
+            assertEquals(1f, (linear(k + h) - linear(k - h)) / (2f * h), .01f)
+        }
     }
 
     @Test fun meterAndScopeUseBasicWithoutAgxShoulder() {

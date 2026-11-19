@@ -39,10 +39,10 @@ data class JpegOutputSettings(
      */
     val highlightSoftHeadroom: Float = 0.85f,
     /**
-     * Highlight shoulder strength: 0 bypasses compression, 1 is full strength.
+     * Highlight shoulder strength: 0..1. AgX: bypass to full strength.
      * AgX uses a per-channel exponential shoulder (knee 0.9, scale 0.8).
-     * Basic uses one RGB scale from a rational shoulder (knee 0.6, white limit 1),
-     * preserving channel ratios before its display curve. Default 1.
+     * Basic Neutral varies the compression knee from 0.76 to 0.6 with a smooth
+     * path to white; compression stays enabled at zero. Default 1.
      */
     val highlightShoulder: Float = 1f,
     /** Camera shadow lift, with near-black protection; zero bypasses it. */

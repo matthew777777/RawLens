@@ -1,3 +1,6 @@
+> Superseded for Basic on 2026-11-18 by [Basic Neutral v2](basic-neutral-replacement.md).
+> The material below records the previous implementation and historical validation.
+
 # Basic / AgX photo tone mapping
 
 Photo output offers a two-button **Basic | AgX** selector. The per-lens preference

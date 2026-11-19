@@ -79,7 +79,7 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
             text = "Open-source notices (RAW assist, ETTR, PROGRAM, ACES)"
             setOnClickListener {
                 val notices = listOf("raw-exposure-NOTICE.txt", "GPL-2.0.txt", "Apache-2.0.txt",
-                    "BSD-2-Clause-libcamera.txt", "bakinglab-aces.txt", "aces2-NOTICE.txt", "AGPL-3.0-RapidRAW.txt")
+                    "BSD-2-Clause-libcamera.txt", "bakinglab-aces.txt", "aces2-NOTICE.txt", "khronos-neutral-NOTICE.txt", "AGPL-3.0-RapidRAW.txt")
                     .joinToString("\n\n") { name -> assets.open("licenses/$name").bufferedReader().use { it.readText() } }
                 RawLensDialogBuilder(this@showAboutSettings).setTitle("Open-source licences").asPage()
                     .setMessage(notices).setPositiveButton("Close", null).show()

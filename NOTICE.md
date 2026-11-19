@@ -401,3 +401,10 @@ smoothing and margin easing with a whole-take L1 path optimization
 (`StabPathSolver.kt`, after Grundmann, Kwatra & Essa, CVPR 2011) and adds
 self-calibration (`StabCalib.kt`, after Karpenko et al., 2011). No VidUltra source
 file is copied. Reviewed at commit `25674ef`.
+
+## Basic Neutral v2
+
+Highlight compression adapted from KhronosGroup/ToneMapping, copyright 2024 The
+Khronos Group, Inc., Apache-2.0. Reference and modifications are documented in
+`docs/rendering/basic-neutral-replacement.md`; bundled notice and license in
+`app/src/main/assets/licenses/khronos-neutral-NOTICE.txt` and `Apache-2.0.txt`.

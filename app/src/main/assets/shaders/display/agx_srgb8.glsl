@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 RawLens contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Highlight compression adapted from Khronos PBR Neutral (2024 The Khronos Group, Inc.; Apache-2.0).
 
 #ifndef RAPIDRAW_OUTPUT_FUSED
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -169,16 +170,19 @@ highp vec3 srgb_oetf(highp vec3 linear) {
 
 // SIGMOID_FUNCTIONS
 
-// Basic RAW display curve with an optional ratio-preserving highlight shoulder.
+// Photographic neutral: Khronos highlight compression, without the PBR shadow offset.
 highp vec3 basic_encoded(highp vec3 scene) {
+    scene = max(scene, vec3(0.0));
     highp float peak = max(scene.r, max(scene.g, scene.b));
-    if (peak > 0.6 && u_highlight_shoulder > 0.0) {
-        highp float t = peak - 0.6;
-        highp float compressed = 0.6 + t / (1.0 + t / 0.4);
-        scene *= mix(1.0, compressed / peak, clamp(u_highlight_shoulder, 0.0, 1.0));
+    highp float knee = 0.76 - 0.16 * clamp(u_highlight_shoulder, 0.0, 1.0);
+    if (peak > knee) {
+        highp float d = 1.0 - knee;
+        highp float mapped = 1.0 - d * (d / (peak + d - knee));
+        scene *= mapped / peak;
+        highp float white = 1.0 - 1.0 / (1.0 + 0.15 * (peak - mapped));
+        scene = mix(scene, vec3(mapped), white);
     }
-    highp vec3 x = pow(srgb_oetf(clamp(scene, 0.0, 1.0)), vec3(1.0 / 1.1));
-    return 0.25 * x + 0.75 * x * x * (3.0 - 2.0 * x);
+    return srgb_oetf(clamp(scene, 0.0, 1.0));
 }
 highp vec3 basic_decode(highp vec3 encoded) {
     return mix(pow((encoded + 0.055) / 1.055, vec3(2.4)),

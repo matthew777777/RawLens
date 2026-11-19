@@ -1,0 +1,10 @@
+Basic Neutral v2 highlight compression derives from Khronos PBR Neutral.
+Copyright 2024 The Khronos Group, Inc.
+Licensed under the Apache License, Version 2.0 (see Apache-2.0.txt).
+https://github.com/KhronosGroup/ToneMapping
+Reference revision: 180b1a7bddec33f73fe41712a2963cc3ad8e5547
+File: PBR_Neutral/pbrNeutral.glsl
+
+RawLens modifications (2026): omitted rendering-specific Fresnel shadow offset,
+parameterized highlight knee, photographic output-primary integration, CPU/GLSL/
+Halide implementations. This is not the unmodified Khronos PBR Neutral operator.

@@ -29,8 +29,8 @@ internal fun jpegImageDescription(
     append("\n\nPARAMETERS\n")
     append("- Tone mapper: ${settings.toneMapper.label}\n")
     if (settings.toneMapper == PhotoToneMapper.BASIC) {
-        append("- Basic response: sRGB transfer, brightness gamma 1.100, cubic contrast blend 0.750\n")
-        append("- Highlight compression: ratio-preserving rational shoulder; knee 0.600, white limit 1.000, strength ${number(settings.highlightShoulder)}\n")
+        append("- Basic response: Neutral v2, linear midtones, sRGB transfer\n")
+        append("- Highlight compression: Khronos-derived rational shoulder and path to white; knee 0.760..0.600, white limit 1.000, strength ${number(settings.highlightShoulder)}\n")
     } else if (settings.toneMapper == PhotoToneMapper.ACES_2) {
         append("- ACES 2.0: perceptual tone/chroma/gamut mapping, 100 nit SDR output, reference LUT\n")
     } else if (settings.toneMapper == PhotoToneMapper.SIGMOID) {
