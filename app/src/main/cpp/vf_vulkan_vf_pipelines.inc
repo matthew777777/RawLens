@@ -212,6 +212,20 @@ bool createPipeline(Context* ctx, const uint32_t* code, size_t words) {    VkSha
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->pipelineLayout;
     VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->pipeline);
+    if (r == VK_SUCCESS) {
+        // The linear superpixel shader retains its general path by default.
+        // Other compatible modules ignore the unused specialization ID.
+        VkBool32 aligned = VK_TRUE;
+        VkSpecializationMapEntry entry{0, 0, sizeof(aligned)};
+        VkSpecializationInfo specialization{1, &entry, sizeof(aligned), &aligned};
+        pipeInfo.stage.pSpecializationInfo = &specialization;
+        VkResult ar = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1,
+                                               &pipeInfo, nullptr, &ctx->alignedPipeline);
+        if (ar != VK_SUCCESS) {
+            ctx->alignedPipeline = VK_NULL_HANDLE;
+            LOGW("vf-vk: aligned pipeline unavailable %d; general path retained", ar);
+        }
+    }
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: compute pipeline failed %d", r);

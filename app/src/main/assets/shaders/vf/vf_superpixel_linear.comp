@@ -2,9 +2,13 @@
 // High precision live VF variant. Q6 black/white levels are retained, but
 // sensor codes are normalized directly to RGBA16F without the byte LUT.
 // Lens shading, WB, CCM and tonemapping run after this export in GL/BGU.
+// ALIGNED_WORDS specializes adjacent Bayer pairs to two uint reads per quad.
+// The native caller checks even x origin, step and pitch; generic stays exact.
 // Regenerate: glslangValidator -V --target-env vulkan1.1 <source> -o <name>.spv
 #version 450
 layout(local_size_x = 8, local_size_y = 8) in;
+// Native selects this pipeline only for even origin, step and row pitch.
+layout(constant_id = 0) const bool ALIGNED_WORDS = false;
 
 // Byte-exact buffer view of the sensor plane: the driver reports a padded
 // rowPitch (4096) for image imports of a packed 4080-pixel buffer, so images
@@ -47,6 +51,16 @@ float fetchLinear(ivec2 q, int ch) {
     return clamp(float(num) / float(floatBitsToInt(p.u_invRange[ch])), 0.0, 1.0);
 }
 
+uint siteCode(uint top, uint bottom, int ch) {
+    uint word = (ch & 2) == 0 ? top : bottom;
+    return (word >> (uint(ch & 1) * 16u)) & 65535u;
+}
+
+float normalizeCode(uint code, int ch) {
+    int num = int(code) * 64 - floatBitsToInt(p.u_black[ch]);
+    return clamp(float(num) / float(floatBitsToInt(p.u_invRange[ch])), 0.0, 1.0);
+}
+
 // Lens-shading gains (R, Gr, Gb, B) for one quad, one hardware-
 // bilinear texture fetch at the quad origin (intra-quad variation is
 // negligible — the map is ~17x17 over the sensor; the GL viewfinder
@@ -73,8 +87,19 @@ void main() {
     ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(ij, p.u_frameSize))) return;
     ivec2 q = p.u_quadBase + ij * p.u_step;
-    vec4 b = vec4(fetchLinear(q, p.u_chans.x), fetchLinear(q, p.u_chans.y),
-                  fetchLinear(q, p.u_chans.z), fetchLinear(q, p.u_chans.w));
+    vec4 b;
+    if (ALIGNED_WORDS) {
+        uint row = uint(q.y) * uint(p.u_pitch) + uint(q.x);
+        uint top = codes[row >> 1u];
+        uint bottom = codes[(row + uint(p.u_pitch)) >> 1u];
+        b = vec4(normalizeCode(siteCode(top, bottom, p.u_chans.x), p.u_chans.x),
+                 normalizeCode(siteCode(top, bottom, p.u_chans.y), p.u_chans.y),
+                 normalizeCode(siteCode(top, bottom, p.u_chans.z), p.u_chans.z),
+                 normalizeCode(siteCode(top, bottom, p.u_chans.w), p.u_chans.w));
+    } else {
+        b = vec4(fetchLinear(q, p.u_chans.x), fetchLinear(q, p.u_chans.y),
+                 fetchLinear(q, p.u_chans.z), fetchLinear(q, p.u_chans.w));
+    }
     if (p.u_shadeDims.z != 0) {
         b *= shadeQuad(q, p.u_chans);
     }

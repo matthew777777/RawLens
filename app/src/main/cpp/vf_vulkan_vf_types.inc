@@ -308,6 +308,7 @@ struct Context {
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipeline alignedPipeline = VK_NULL_HANDLE; // SpecId 0: two packed Bayer words
     // Encoded Video f16 superpixel variant (same bindings + push block, so the
     // shared set layout and recorder descriptor sets are reused as-is; only
     // the shader module (rgba16f store) differs). Viewfinder keeps `pipeline`.

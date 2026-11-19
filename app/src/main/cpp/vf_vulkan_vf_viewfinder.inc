@@ -84,6 +84,7 @@ static void destroyContext(Context* ctx) {
     if (ctx->fence != VK_NULL_HANDLE) vkDestroyFence(ctx->device, ctx->fence, nullptr);
     if (ctx->commandPool != VK_NULL_HANDLE)
         vkDestroyCommandPool(ctx->device, ctx->commandPool, nullptr);
+    if (ctx->alignedPipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->alignedPipeline, nullptr);
     if (ctx->pipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->pipeline, nullptr);
     if (ctx->f16Pipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->f16Pipeline, nullptr);
     if (ctx->pipelineLayout != VK_NULL_HANDLE)
@@ -468,7 +469,12 @@ static int dispatchSuperpixel(std::unique_lock<std::mutex>& vkGuard, const Super
                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                   VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                   VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
-    vkCmdBindPipeline(g->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, g->pipeline);
+    // Every sampled x is even and both rows start on a packed-word boundary.
+    // Odd origins, steps or pitches keep the general per-site fetches.
+    const bool alignedWords = ((params.quadBase[0] | params.step | params.pitch) & 1) == 0;
+    const VkPipeline pipeline = alignedWords && g->alignedPipeline != VK_NULL_HANDLE
+        ? g->alignedPipeline : g->pipeline;
+    vkCmdBindPipeline(g->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(g->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                             g->pipelineLayout, 0, 1, &g->descriptorSet, 0, nullptr);
     vkCmdPushConstants(g->commandBuffer, g->pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,

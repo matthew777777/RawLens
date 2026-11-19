@@ -120,3 +120,19 @@ python3 tools/rapidraw-develop/malioc.py --core Mali-G615 \
 ```
 
 Arm reference: https://developer.arm.com/Tools%20and%20Software/Mali%20Offline%20Compiler
+
+## RAW superpixel A/B harness
+
+`parity/superpixel_parity.cpp` compares the original and candidate RGBA16F
+buffer superpixel modules, including native-equivalent `ALIGNED_WORDS`
+specialization selection. The source header contains host/Android build
+commands. It exercises CFA layouts, alignment, pitches, sample steps, levels,
+and lens shading, then reports interleaved single-dispatch GPU timestamps.
+
+For concurrent headless testing, `--bench-only --unshaded-only --variant 0`
+(or `1`) `--hz 30 --seconds 60 --raw16 PATH` uses tight 4080x3060 RAW16 data
+at a paced offer rate. SIGINT prints timing summaries and exits cleanly.
+Wall latency includes queue completion and query retrieval; it does not
+measure actual displayed viewfinder FPS. See
+[the 2026-11-18 investigation](../../docs/performance/lkr-viewfinder-contention.md)
+for before/after reports and the rejected command-batching experiment.
