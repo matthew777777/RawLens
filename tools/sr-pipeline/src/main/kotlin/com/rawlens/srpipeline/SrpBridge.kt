@@ -164,6 +164,26 @@ object SrpBridge {
     external fun nativeFreeResident(handle: Long, resident: Long): Int
 
     /**
+     * Generic resident dispatch: binds `res[i]` (validated for >= `minFloats[i]`
+     * floats) at bindings 0..n-1, pushes the 32-word HmsrPush block `push`
+     * (bit patterns; floats via [java.lang.Float.floatToRawIntBits]) and runs
+     * `groups` groups of `localSize`. Returns the `srp::Status` ordinal.
+     */
+    @JvmStatic
+    external fun nativeDispatchRes(
+        handle: Long, spirv: ByteArray, res: LongArray, minFloats: LongArray,
+        push: IntArray, localSize: Int, groups: Int,
+    ): Int
+
+    /** [nativeDispatchRes] with a grid-stride group count for `items` invocations (cap 65535). */
+    fun dispatchRes(handle: Long, spirv: ByteArray, res: LongArray, minFloats: LongArray,
+                    push: IntArray, items: Long, localSize: Int = 256): Int {
+        require(res.size == minFloats.size && push.size == 32 && items > 0)
+        val groups = minOf(65535L, (items + localSize - 1) / localSize).toInt()
+        return nativeDispatchRes(handle, spirv, res, minFloats, push, localSize, groups)
+    }
+
+    /**
      * Downloads `count` floats from a resident buffer into `outBuffer`.
      * Returns the `srp::Status` ordinal (0 = ok).
      */

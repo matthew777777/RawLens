@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Per-frame accumulation for noise_even.comp on the guide grid:
+//   acc += (g r, (g r)^2, r, r^2)
+// r = this frame's robustness, g = its luma (green) frame weight (p.beta).
+// p.pixelCount = guide pixels, p.mode 1 = first frame. Buffers: 0 = r (1 float/px), 1 = acc (vec4/px).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer R { float r_[]; };
+layout(set = 0, binding = 1) buffer Acc { vec4 acc_[]; };
+
+void main() {
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount;
+       id += gl_NumWorkGroups.x * gl_WorkGroupSize.x) {
+    float r = r_[id];
+    if (!(r > 0.0)) r = 0.0;  // NaN / negative -> rejected
+    float gr = p.beta * r;
+    vec4 v = vec4(gr, gr * gr, r, r * r);
+    // p.mode 1 (first frame) initializes instead of accumulating.
+    acc_[id] = p.mode == 1u ? v : acc_[id] + v;
+  }
+}

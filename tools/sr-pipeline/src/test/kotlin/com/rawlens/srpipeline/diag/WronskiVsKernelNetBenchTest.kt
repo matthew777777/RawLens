@@ -48,10 +48,11 @@ class WronskiVsKernelNetBenchTest {
         VulkanPipeline.Spirvs(gat = spv("gat"), grad = spv("grad"), kernels = spv("kernels"),
             divide = spv("divide"), robust = spv("robustness"), mergeSplat = spv("merge_splat"),
             fft = spv("fft"), corr = spv("corr"), greyFft = spv("grey_fft"), greyFir = spv("grey_fir"),
-            pyrDown = spv("pyr_down"), kernelNet = spv("kernelnet"))
+            pyrDown = spv("pyr_down"), kernelNet = spv("kernelnet"),
+            noiseAcc = spv("noise_acc"), noiseEven = spv("noise_even"))
     }
 
-    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, KERNELNET }
+    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, KERNELNET }
 
     private fun cfg(k: Kernel, fin: BurstConfig.Final, a: DoubleArray, b: DoubleArray, scale: Float): PipelineConfig {
         val tuning = SrTuning()
@@ -68,7 +69,8 @@ class WronskiVsKernelNetBenchTest {
             chromaScale = tuning.chromaScale(scale),
             icaIterations = tuning.icaIterations,
             continuousMotion = k != Kernel.WRONSKI_IPOL,
-            detailReconstruction = k == Kernel.WRONSKI_NEW,
+            detailReconstruction = k == Kernel.WRONSKI_NEW || k == Kernel.WRONSKI_EVEN,
+            noiseEvening = k == Kernel.WRONSKI_EVEN,
             kernelNet = if (k != Kernel.KERNELNET) null else KernelNetConfig(
                 weights = KernelNet.bundledWeights(), sigma = KernelNet.sigma(al, be),
                 sigmaScale = tuning.knSigmaScale, sigmaCap = tuning.knSigmaCap, sigmaFloor = tuning.knFloor(scale)),

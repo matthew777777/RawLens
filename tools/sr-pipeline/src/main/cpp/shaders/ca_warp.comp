@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Lateral chromatic aberration correction on the merged output, in the
+// colour-difference domain (ch1 = G, ch0 = wbR - G, ch2 = wbB - G).
+// True R(p) = observed R(c + (p - c)(1 + kR)) (LateralCa.kt); with
+// R = ch0 + ch1:  ch0'(p) = ch0(q) + ch1(q) - ch1(p). Same for B / kB.
+// Coordinates: output px (x, y) -> raw (x + .5) / scale; c = raw centre.
+//
+// Push: width/height = output size, pixelCount, scale, alpha = kR, beta = kB,
+// pad[0] = raw width, pad[1] = raw height.
+// Buffers: 0 = in (3 floats/px), 1 = out (3 floats/px).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer In { float in_[]; };
+layout(set = 0, binding = 1) writeonly buffer Out { float out_[]; };
+
+// Bilinear sample of (ch c) + ch1 at output-space position q (clamped).
+float sampleSum(vec2 q, uint c) {
+  vec2 m = vec2(float(p.width - 1u), float(p.height - 1u));
+  q = clamp(q, vec2(0.0), m);
+  uvec2 lo = uvec2(q);
+  uvec2 hi = min(lo + 1u, uvec2(p.width - 1u, p.height - 1u));
+  vec2 f = q - vec2(lo);
+  uint i00 = (lo.y * p.width + lo.x) * 3u, i01 = (lo.y * p.width + hi.x) * 3u;
+  uint i10 = (hi.y * p.width + lo.x) * 3u, i11 = (hi.y * p.width + hi.x) * 3u;
+  float v00 = in_[i00 + c] + in_[i00 + 1u], v01 = in_[i01 + c] + in_[i01 + 1u];
+  float v10 = in_[i10 + c] + in_[i10 + 1u], v11 = in_[i11 + c] + in_[i11 + 1u];
+  return mix(mix(v00, v01, f.x), mix(v10, v11, f.x), f.y);
+}
+
+void main() {
+  vec2 c = 0.5 * vec2(float(p.pad[0]), float(p.pad[1]));
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount;
+       id += gl_NumWorkGroups.x * gl_WorkGroupSize.x) {
+    uint y = id / p.width, x = id % p.width;
+    vec3 v = vec3(in_[id * 3u], in_[id * 3u + 1u], in_[id * 3u + 2u]);
+    vec2 raw = (vec2(float(x), float(y)) + 0.5) / p.scale - c;
+    vec2 qR = (c + raw * (1.0 + p.alpha)) * p.scale - 0.5;
+    vec2 qB = (c + raw * (1.0 + p.beta)) * p.scale - 0.5;
+    float r = p.alpha != 0.0 ? sampleSum(qR, 0u) - v.y : v.x;
+    float b = p.beta != 0.0 ? sampleSum(qB, 2u) - v.y : v.z;
+    // Keep NaN/inf pixels (and their neighbours' poison) out of the warp.
+    if (isnan(r) || isinf(r)) r = v.x;
+    if (isnan(b) || isinf(b)) b = v.z;
+    out_[id * 3u] = r; out_[id * 3u + 1u] = v.y; out_[id * 3u + 2u] = b;
+  }
+}

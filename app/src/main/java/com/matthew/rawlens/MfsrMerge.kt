@@ -690,6 +690,10 @@ internal object MfsrMerge {
                 // KernelNet's wide gather, green detail path and green frame
                 // weights for Wronski's per-frame kernels too.
                 detailReconstruction = true,
+                // Even noise where motion rejection kept fewer frames.
+                noiseEvening = true,
+                // Lateral CA fitted on the merged image, warped when visible.
+                lateralCa = true,
                 // KernelNet (when selected): one kernel map from the reference
                 // frame, which on the device IS the full frame, so no
                 // separate full-frame copy; the net runs in sensor
@@ -738,6 +742,9 @@ internal object MfsrMerge {
                     fft = fft, corr = asset("corr"), greyFft = asset("grey_fft"), greyFir = asset("grey_fir"),
                     // Resident grey + GPU moving pyramid (perf 2026-11-14).
                     pyrDown = asset("pyr_down"),
+                    noiseAcc = asset("noise_acc"),
+                    noiseEven = asset("noise_even"),
+                    caWarp = asset("ca_warp"),
                     kernelNet = if (settings.kernel == MfsrKernel.KERNELNET) asset("kernelnet") else null
                 ),
                 output = nativeOut

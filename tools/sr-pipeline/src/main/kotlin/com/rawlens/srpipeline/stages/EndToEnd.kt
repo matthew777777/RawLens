@@ -93,6 +93,19 @@ data class PipelineConfig(
      * Always on with [kernelNet]; false keeps Wronski IPOL-exact.
      */
     val detailReconstruction: Boolean = false,
+    /**
+     * Even out merged noise where motion rejection left fewer effective
+     * frames (noise_even.comp): green-guided smoothing blended to the noise
+     * of a fully accepted pixel under the same frame weights. Vulkan bayer
+     * path with [colourDiff] only; false = plain merge.
+     */
+    val noiseEvening: Boolean = false,
+    /**
+     * Lateral chromatic aberration: radial R/B scale fitted on the merged
+     * output's edges (LateralCa), corrected by ca_warp.comp when visible.
+     * Vulkan bayer path with [colourDiff] only.
+     */
+    val lateralCa: Boolean = false,
     /** Opt-in pooled polynomial green / colour-difference fitting (CPU prototype). */
     val organicReconstruction: Boolean = false,
     /** Mobile separable polynomial equivalent-kernel path; Vulkan only. */

@@ -56,6 +56,10 @@ internal data class Plan(
     val continuousMotion: Boolean = true,
     /** KernelNet's wide gather + detail green + frame weights for Wronski kernels (app: on). */
     val detailReconstruction: Boolean = true,
+    /** Even out merged noise where motion rejection kept fewer frames (app: on). */
+    val noiseEvening: Boolean = true,
+    /** Lateral chromatic aberration correction (app: on). */
+    val lateralCa: Boolean = true,
     /** App tuning (`SrTuning`, "k=v,..."): app-parity kernels/robustness/colour diff; null = IPOL CLI defaults. */
     val tune: String? = "app",
     val organicReconstruction: Boolean = false,
@@ -85,6 +89,10 @@ private fun usage(): String = """
                      (default 1: six evenly spaced luma frames; 0: average all frames)
       --continuous-motion on|off
                      KernelNet's continuous motion handling for Wronski (default on, as the app; off = IPOL parity)
+      --lateral-ca on|off
+                     correct lateral chromatic aberration fitted on the merged image (default on, as the app)
+      --noise-evening on|off
+                     even out merged noise where motion rejection kept fewer frames (default on, as the app)
       --detail-reconstruction on|off
                      KernelNet's wide gather, green detail path and frame weights for Wronski kernels
                      (default on, as the app; off = IPOL parity)
@@ -142,6 +150,8 @@ internal fun parseArgs(args: Array<String>): Plan {
     var noiseAb: DoubleArray? = null
     var continuousMotion = true
     var detailReconstruction = true
+    var noiseEvening = true
+    var lateralCa = true
     var tune: String? = "app"
     var organicReconstruction = false
     var tiledPolynomial = false
@@ -263,6 +273,14 @@ internal fun parseArgs(args: Array<String>): Plan {
                 continuousMotion = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--continuous-motion requires on|off") }
                 i++
             }
+            "--lateral-ca" -> {
+                lateralCa = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--lateral-ca requires on|off") }
+                i++
+            }
+            "--noise-evening" -> {
+                noiseEvening = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--noise-evening requires on|off") }
+                i++
+            }
             "--detail-reconstruction" -> {
                 detailReconstruction = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--detail-reconstruction requires on|off") }
                 i++
@@ -331,6 +349,8 @@ internal fun parseArgs(args: Array<String>): Plan {
         noiseAb = noiseAb,
         continuousMotion = continuousMotion,
         detailReconstruction = detailReconstruction,
+        noiseEvening = noiseEvening,
+        lateralCa = lateralCa,
         tune = tune,
         organicReconstruction = organicReconstruction,
         tiledPolynomial = tiledPolynomial,
@@ -509,6 +529,8 @@ private fun merge(plan: Plan) {
         dSqCurve = curves?.dSq ?: floatArrayOf(0f, 0f),
         continuousMotion = plan.continuousMotion,
         detailReconstruction = plan.detailReconstruction,
+        noiseEvening = plan.noiseEvening,
+        lateralCa = plan.lateralCa,
         organicReconstruction = plan.organicReconstruction,
         mobilePolynomial = plan.mobilePolynomial,
         frameEqualize = tuning?.frameEqualize ?: 0f,
@@ -587,6 +609,9 @@ private fun merge(plan: Plan) {
                         corr = spv(dir, "corr"),
                         kernelNet = if (plan.kernel == "kernelnet") spv(dir, "kernelnet") else null,
                         greyFft = if (System.getenv("SRP_LEGACY_FFT") == "1") null else spv(dir, "grey_fft"),
+                        noiseAcc = if (plan.noiseEvening) spv(dir, "noise_acc") else null,
+                        noiseEven = if (plan.noiseEvening) spv(dir, "noise_even") else null,
+                        caWarp = if (plan.lateralCa) spv(dir, "ca_warp") else null,
                     ),
                     frameObserver = cache?.let { c -> { f, flow, r -> c.record(f,flow,r) } },
                 )

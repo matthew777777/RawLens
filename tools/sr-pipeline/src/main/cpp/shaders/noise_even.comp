@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Noise evening after the merge divide (colour-difference domain: ch1 = green,
+// ch0/ch2 = wb*R - G_hat, wb*B - G_hat). Where motion rejection left fewer
+// effective frames than a fully accepted pixel, the merged noise is higher
+// and looks patchy. Per output pixel, from the guide-grid accumulators
+//   acc = (S1L, S2L, S1C, S2C) = (sum g r, sum (g r)^2, sum r, sum r^2)
+// (g = luma frame weight, r = robustness), the effective frame counts are
+// NeffL = S1L^2/S2L and NeffC = S1C^2/S2C. k = full/Neff >= 1 is the
+// variance excess over a fully accepted pixel under the same weights (grain
+// retention included). A green-guided cross-bilateral smooth is blended in by
+// alpha chosen so the residual variance falls by k: with n = effective tap
+// count of the filter, var(mix(x, s, a))/var(x) = (1-a)^2 (1 - 1/n) + 1/n.
+// Fully accepted pixels (k ~ 1) are copied untouched, which is most pixels.
+//
+// Push: width/height = output size, pixelCount, scale = merge scale,
+// pad[0] = guideW, pad[1] = guideH, pad[2] = fullL bits, pad[3] = fullC bits,
+// pad[4] = noise a bits, pad[5] = noise b bits (green, normalized raw),
+// pad[6] = radius (output px, <= 6), pad[7] = range scale bits.
+// Buffers: 0 = in (num after divide, 3 floats/px), 1 = out (3 floats/px),
+// 2 = acc (4 floats per guide px).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer In { float in_[]; };
+layout(set = 0, binding = 1) writeonly buffer Out { float out_[]; };
+layout(set = 0, binding = 2) readonly buffer Acc { vec4 acc_[]; };
+
+vec4 accAt(vec2 q, uint gw, uint gh) {
+  q = clamp(q, vec2(0.0), vec2(float(gw - 1u), float(gh - 1u)));
+  uvec2 lo = uvec2(q);
+  uvec2 hi = min(lo + 1u, uvec2(gw - 1u, gh - 1u));
+  vec2 f = q - vec2(lo);
+  return mix(mix(acc_[lo.y * gw + lo.x], acc_[lo.y * gw + hi.x], f.x),
+             mix(acc_[hi.y * gw + lo.x], acc_[hi.y * gw + hi.x], f.x), f.y);
+}
+
+float blendFor(float k, float n) {
+  if (k <= 1.0 || n <= 1.0) return 0.0;
+  float t = (1.0 / k - 1.0 / n) / (1.0 - 1.0 / n);
+  return 1.0 - sqrt(clamp(t, 0.0, 1.0));
+}
+
+void main() {
+  uint W = p.width, H = p.height;
+  uint gw = p.pad[0], gh = p.pad[1];
+  float fullL = uintBitsToFloat(p.pad[2]);
+  float fullC = uintBitsToFloat(p.pad[3]);
+  float na = uintBitsToFloat(p.pad[4]);
+  float nb = uintBitsToFloat(p.pad[5]);
+  int R = int(p.pad[6]);
+  float rangeScale = uintBitsToFloat(p.pad[7]);
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount;
+       id += gl_NumWorkGroups.x * gl_WorkGroupSize.x) {
+    vec3 c = vec3(in_[id * 3u], in_[id * 3u + 1u], in_[id * 3u + 2u]);
+    uint y = id / W, x = id % W;
+    // Output pixel centre on the guide grid (half-rate bayer grid, offset).
+    vec2 lr = (vec2(float(x), float(y)) + 0.5) / p.scale;
+    vec4 a = accAt(lr * 0.5 - 0.5, gw, gh);
+    float neffL = a.y > 0.0 ? a.x * a.x / a.y : 0.0;
+    float neffC = a.w > 0.0 ? a.z * a.z / a.w : 0.0;
+    float kL = neffL > 0.0 ? clamp(fullL / neffL, 1.0, 64.0) : 1.0;
+    float kC = neffC > 0.0 ? clamp(fullC / neffC, 1.0, 64.0) : 1.0;
+    bool finite = !(any(isnan(c)) || any(isinf(c)));
+    if (!finite || (kL < 1.05 && kC < 1.05)) {
+      out_[id * 3u] = c.x; out_[id * 3u + 1u] = c.y; out_[id * 3u + 2u] = c.z;
+      continue;
+    }
+    // Merged green noise at this pixel: single-frame (a G + b) over NeffL.
+    float var1 = max(na * max(c.y, 0.0) + nb, 1e-12);
+    float sigmaR = rangeScale * sqrt(var1 / max(neffL, 1.0));
+    float invR = 1.0 / (2.0 * sigmaR * sigmaR);
+    float invS = 1.0 / (2.0 * (0.5 * float(R)) * (0.5 * float(R)));
+    vec3 s = vec3(0.0);
+    float sw = 0.0, sw2 = 0.0;
+    for (int dy = -R; dy <= R; ++dy) {
+      int yy = clamp(int(y) + dy, 0, int(H) - 1);
+      for (int dx = -R; dx <= R; ++dx) {
+        int xx = clamp(int(x) + dx, 0, int(W) - 1);
+        uint j = uint(yy) * W + uint(xx);
+        vec3 v = vec3(in_[j * 3u], in_[j * 3u + 1u], in_[j * 3u + 2u]);
+        if (any(isnan(v)) || any(isinf(v))) continue;
+        float dg = v.y - c.y;
+        float w = exp(-float(dx * dx + dy * dy) * invS - dg * dg * invR);
+        s += w * v; sw += w; sw2 += w * w;
+      }
+    }
+    s /= max(sw, 1e-20);
+    float n = sw * sw / max(sw2, 1e-20);
+    float aL = blendFor(kL, n);
+    float aC = blendFor(kC, n);
+    vec3 o = vec3(mix(c.x, s.x, aC), mix(c.y, s.y, aL), mix(c.z, s.z, aC));
+    out_[id * 3u] = o.x; out_[id * 3u + 1u] = o.y; out_[id * 3u + 2u] = o.z;
+  }
+}

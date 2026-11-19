@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "srp_context.h"
+#include "srp_dispatch.h"
 #include "srp_dng.h"
 #include "srp_pipeline.h"
 
@@ -3341,4 +3342,46 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeFr
     JNIEnv* env, jclass /*cls*/, jobject buffer) {
   if (buffer == nullptr) return;
   std::free(env->GetDirectBufferAddress(buffer));
+}
+
+// Generic resident dispatch for small stages (noise evening, CA, ghost,
+// deconvolution): binds `res[i]` (each validated for >= `min_floats[i]`
+// floats) at bindings 0..n-1, pushes the 32-word HmsrPush block `push`, and
+// dispatches `groups` groups of `local_size`. The shader grid-strides.
+extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeDispatchRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jbyteArray spirv, jlongArray res,
+    jlongArray min_floats, jintArray push, jint local_size, jint groups) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || spirv == nullptr || res == nullptr || min_floats == nullptr ||
+      push == nullptr || local_size <= 0 || groups <= 0 || groups > 65535) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize n = env->GetArrayLength(res);
+  if (n <= 0 || n > static_cast<jsize>(srp::kMaxStorageBuffers) ||
+      env->GetArrayLength(min_floats) != n || env->GetArrayLength(push) != 32) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  std::vector<jlong> handles(static_cast<size_t>(n)), mins(static_cast<size_t>(n));
+  env->GetLongArrayRegion(res, 0, n, handles.data());
+  env->GetLongArrayRegion(min_floats, 0, n, mins.data());
+  std::vector<VkBuffer> bufs(static_cast<size_t>(n), VK_NULL_HANDLE);
+  for (jsize i = 0; i < n; ++i) {
+    if (mins[i] < 0 || srp::SrpResidentBuffer(ctx, handles[i], static_cast<size_t>(mins[i]),
+                                              &bufs[static_cast<size_t>(i)]) != srp::Status::kOk) {
+      return static_cast<jint>(srp::Status::kInitFailed);
+    }
+  }
+  jint words[32];
+  env->GetIntArrayRegion(push, 0, 32, words);
+  const jsize len = env->GetArrayLength(spirv);
+  if (len <= 0 || len % 4 != 0) return static_cast<jint>(srp::Status::kInitFailed);
+  std::vector<uint8_t> bytes(static_cast<size_t>(len));
+  env->GetByteArrayRegion(spirv, 0, len, reinterpret_cast<jbyte*>(bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) return static_cast<jint>(srp::Status::kInitFailed);
+  VkShaderModule module = srp::SrpInternModule(ctx, bytes.data(), bytes.size());
+  if (module == VK_NULL_HANDLE) return static_cast<jint>(srp::Status::kDispatchFailed);
+  return static_cast<jint>(srp::SrpDispatchGroups(ctx, bufs.data(), static_cast<uint32_t>(n),
+      words, sizeof(words), static_cast<uint32_t>(local_size), static_cast<uint32_t>(groups), module));
 }

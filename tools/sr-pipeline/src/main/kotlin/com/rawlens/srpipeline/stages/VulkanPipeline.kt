@@ -46,6 +46,9 @@ import java.nio.ByteBuffer
  * no 150 MB row copy on top of the download).
  */
 object VulkanPipeline {
+    /** noise_even.comp range kernel width, in merged-noise sigmas. */
+    const val NOISE_EVEN_RANGE = 2f
+
 
     /** Stage modules beyond the align loop's own [AlignGpu.Spirvs]. */
     data class Spirvs(
@@ -75,6 +78,11 @@ object VulkanPipeline {
          * Null keeps the host pyramid.
          */
         val pyrDown: ByteArray? = null,
+        /** noise_acc.comp + noise_even.comp: required for [PipelineConfig.noiseEvening]. */
+        val noiseAcc: ByteArray? = null,
+        val noiseEven: ByteArray? = null,
+        /** ca_warp.comp: required for [PipelineConfig.lateralCa]. */
+        val caWarp: ByteArray? = null,
     )
 
     /** Last KernelNet (s1, s2, rho) map of this process, for parity dumps: 3 x mapH x mapW. */
@@ -332,6 +340,16 @@ object VulkanPipeline {
         require(numRes != 0L) { "VulkanPipeline: resident num alloc failed" }
         val denRes = SrpBridge.createResident(handle, total.toLong())
         require(denRes != 0L) { "VulkanPipeline: resident den alloc failed" }
+        // Noise evening (guide grid): per-frame robustness upload + vec4
+        // accumulators (sum g r, sum (g r)^2, sum r, sum r^2).
+        val evening = config.noiseEvening && config.bayer && config.colourDiff != null &&
+            spirvs.noiseAcc != null && spirvs.noiseEven != null
+        val evenRRes = if (evening) SrpBridge.createResident(handle, (gw * gh).toLong()) else 0L
+        val evenAccRes = if (evening) SrpBridge.createResident(handle, (4L * gw * gh)) else 0L
+        if (evening) require(evenRRes != 0L && evenAccRes != 0L) { "VulkanPipeline: noise evening alloc failed" }
+        var evenFrames = 0
+        var evenSumG = 0.0
+        var evenSumG2 = 0.0
         // Supplement S.3 map (reference guide grid), 0 = off.
         var hfRes = 0L
         // Perf slice (a): upload-once frame + kernels chain scratch,
@@ -611,13 +629,28 @@ object VulkanPipeline {
                         ColourDiff.packInto(frame, frameBuf, cd[0], cd[1]), (w * h).toLong())) }
                 }
                 frameObserver?.invoke(frameBuf, flow, rBuf)
+                val greenW = if ((knCovRes != 0L || config.mobilePolynomial || config.detailReconstruction) && config.colourDiff != null)
+                    greenFrameWeights[mergeFrameIndex++] else 1f
                 timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.nativeMergeSplatFrameRes(handle, frameRes,
                     packInto(mergeFlowFlat, mergeFlow), covRes, rBuf, numRes, denRes,
                     (if(config.mobilePolynomial) spirvs.mergePolynomial!! else spirvs.mergeSplat), w, h, outW, outH, (if(config.mobilePolynomial) MobilePolynomial.table.size else gw * gh * 4), gw * gh, tile,
                     config.scale, mergeMode, ftx, fty,
                     if(config.mobilePolynomial) config.kernelAlpha.average().toFloat() else if (config.colourDiff != null) config.chromaScale else 1f,
-                    if ((knCovRes != 0L || config.mobilePolynomial || config.detailReconstruction) && config.colourDiff != null) greenFrameWeights[mergeFrameIndex++] else 1f,
+                    greenW,
                     if(config.mobilePolynomial) config.kernelBeta.average().toFloat() else config.frameEqualize)) }
+                if (evening) {
+                    // Same r and green weight the splat just used, on the guide grid.
+                    rBuf.rewind()
+                    checkRc("noiseAccUpload", SrpBridge.uploadResident(handle, evenRRes, rBuf, (gw * gh).toLong()))
+                    rBuf.rewind()
+                    val push = IntArray(32)
+                    push[2] = gw * gh
+                    push[8] = java.lang.Float.floatToRawIntBits(greenW)
+                    push[10] = if (evenFrames == 0) 1 else 0
+                    timed("noiseAcc") { checkRc("noiseAcc", SrpBridge.dispatchRes(handle, spirvs.noiseAcc!!,
+                        longArrayOf(evenRRes, evenAccRes), longArrayOf((gw * gh).toLong(), 4L * gw * gh), push, (gw * gh).toLong())) }
+                    evenFrames++; evenSumG += greenW; evenSumG2 += greenW.toDouble() * greenW
+                }
             }
         }
 
@@ -822,12 +855,51 @@ object VulkanPipeline {
         AlignGpu.freeLevelScratch(pinnedInit)
         System.gc()
         timed("divide") { checkRc("divide", SrpBridge.divideRes(handle, numRes, denRes, spirvs.divide, total)) }
+        // Noise evening: num (divided) -> den (free after the divide).
+        val evenRes = if (evening && evenFrames > 1 && evenSumG2 > 0.0) {
+            val push = IntArray(32)
+            push[0] = outW; push[1] = outH; push[2] = outW * outH
+            push[6] = java.lang.Float.floatToRawIntBits(config.scale)
+            push[11] = gw; push[12] = gh
+            push[13] = java.lang.Float.floatToRawIntBits((evenSumG * evenSumG / evenSumG2).toFloat())
+            push[14] = java.lang.Float.floatToRawIntBits(evenFrames.toFloat())
+            push[15] = java.lang.Float.floatToRawIntBits((config.kernelAlpha[1] + config.kernelAlpha[3]) / 2f)
+            push[16] = java.lang.Float.floatToRawIntBits((config.kernelBeta[1] + config.kernelBeta[3]) / 2f)
+            push[17] = kotlin.math.round(2f * config.scale).toInt().coerceIn(2, 6)
+            push[18] = java.lang.Float.floatToRawIntBits(NOISE_EVEN_RANGE)
+            timed("noiseEven") { checkRc("noiseEven", SrpBridge.dispatchRes(handle, spirvs.noiseEven!!,
+                longArrayOf(numRes, denRes, evenAccRes), longArrayOf(total.toLong(), total.toLong(), 4L * gw * gh),
+                push, (outW * outH).toLong())) }
+            denRes
+        } else numRes
         val outBuf = output?.also {
             require(it.capacity() >= total * java.lang.Float.BYTES) { "VulkanPipeline: output buffer too small" }
             it.clear()
         } ?: SrpBridge.directFloats(total)
-        timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, numRes, outBuf, total.toLong())) }
+        timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, evenRes, outBuf, total.toLong())) }
         outBuf.rewind()
+        // Lateral CA: fit on the merged (co-sited) colour-difference output;
+        // warp on the GPU copy and download again only when it is visible.
+        if (config.lateralCa && config.bayer && config.colourDiff != null && spirvs.caWarp != null) {
+            val ca = timed("lateralCaFit") { LateralCa.estimate(outBuf.asFloatBuffer(), outW, outH, config.scale) }
+            val shift = ca.cornerShift(outW, outH)
+            println("sr-pipeline lateralCa kR=%.6f kB=%.6f nccR=%.3f nccB=%.3f points=%d cornerShift=%.2fpx".format(
+                ca.kR, ca.kB, ca.nccR, ca.nccB, ca.points, shift))
+            if (shift >= LateralCa.MIN_CORNER_SHIFT_PX) {
+            val dst = if (evenRes == numRes) denRes else numRes
+            val push = IntArray(32)
+            push[0] = outW; push[1] = outH; push[2] = outW * outH
+            push[6] = java.lang.Float.floatToRawIntBits(config.scale)
+            push[7] = java.lang.Float.floatToRawIntBits(ca.kR)
+            push[8] = java.lang.Float.floatToRawIntBits(ca.kB)
+            push[11] = w; push[12] = h
+            timed("caWarp") { checkRc("caWarp", SrpBridge.dispatchRes(handle, spirvs.caWarp!!,
+                longArrayOf(evenRes, dst), longArrayOf(total.toLong(), total.toLong()), push, (outW * outH).toLong())) }
+            outBuf.clear()
+            timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, dst, outBuf, total.toLong())) }
+            outBuf.rewind()
+            }
+        }
         config.colourDiff?.takeIf { config.bayer }?.let { cd ->
             timed("colourDiffReconstruct") { ColourDiff.reconstruct(outBuf.asFloatBuffer(), total / 3, cd[0], cd[1]) }
             outBuf.rewind()
@@ -840,6 +912,8 @@ object VulkanPipeline {
             SrpBridge.freeResident(handle, varsRes)
             SrpBridge.freeResident(handle, numRes)
             SrpBridge.freeResident(handle, denRes)
+            if (evenRRes != 0L) SrpBridge.freeResident(handle, evenRRes)
+            if (evenAccRes != 0L) SrpBridge.freeResident(handle, evenAccRes)
             SrpBridge.freeResident(handle, frameRes)
             SrpBridge.freeResident(handle, kernPreRes)
             SrpBridge.freeResident(handle, kernGreyRes)
