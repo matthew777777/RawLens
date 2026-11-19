@@ -740,9 +740,10 @@ object AlignGpu {
     internal fun pickFlow(
         lvl: GpuLevelInit, mov: MovLevel, cands: FloatArray, k: Int,
         win: Int, stride: Int, origin: Int, step: Int, handle: Long, spirv: ByteArray,
+        transfer: IntArray? = null, transferF: FloatArray? = null,
     ): Array<Array<FloatArray>> {
         val nT = lvl.nTy * lvl.nTx
-        require(cands.size == nT * k * 2 && k in 1..4) { "pickFlow: ${cands.size} floats for $nT tiles x $k" }
+        require((transfer != null || cands.size == nT * k * 2) && k in 1..4) { "pickFlow: ${cands.size} floats for $nT tiles x $k" }
         require(lvl.refRes != 0L) { "pickFlow needs the pinned reference level" }
         val n = mov.w.toLong() * mov.h
         val sc = lvl.scratch
@@ -755,20 +756,31 @@ object AlignGpu {
                 val fb = b.asFloatBuffer(); for (row in mov.rows) fb.put(row)
                 require(SrpBridge.uploadResident(handle, r, b, n) == 0) { "pickFlow: moving upload failed" }
             }
-            val candRes = sc.resident(handle, "pickCand$k", cands.size.toLong())
-            val cb = ptime("pickPack") { sc.direct("pickCand$k", cands.size).also { it.asFloatBuffer().put(cands) } }
+            val candRes = sc.resident(handle, "pickCand$k${if (transfer != null) "t" else ""}", cands.size.toLong())
+            val cb = ptime("pickPack") { sc.direct("pickCand$k${if (transfer != null) "t" else ""}", cands.size).also { it.asFloatBuffer().put(cands) } }
             require(ptime("pickUpload") { SrpBridge.uploadResident(handle, candRes, cb, cands.size.toLong()) } == 0) { "pickFlow: upload failed" }
             val outRes = sc.resident(handle, "pickOut", nT * 2L)
             val push = IntArray(32)
             push[0] = mov.w; push[1] = mov.h; push[3] = nT
             push[11] = lvl.nTx; push[12] = k; push[13] = win; push[14] = stride; push[15] = origin; push[16] = step
+            if (transfer != null && transferF != null) {
+                // mode 1: [sx, sy, tc] and [factor, first parent centre, parent spacing].
+                push[17] = 1; push[18] = transfer[0]; push[19] = transfer[1]; push[20] = transfer[2]
+                push[6] = java.lang.Float.floatToRawIntBits(transferF[0])
+                push[7] = java.lang.Float.floatToRawIntBits(transferF[1])
+                push[8] = java.lang.Float.floatToRawIntBits(transferF[2])
+            }
             val rc = ptime("pickDispatch.L${lvl.nTx}") { SrpBridge.nativeDispatchRes(handle, spirv, longArrayOf(lvl.refRes, movRes, candRes, outRes),
                 longArrayOf(n, n, cands.size.toLong(), nT * 2L), push, 64, minOf(nT, 65535)) }
             require(rc == 0) { "flow_pick failed with status $rc" }
             val ob = sc.direct("pickOut", nT * 2)
             require(ptime("pickDownload") { SrpBridge.downloadResident(handle, outRes, ob, nT * 2L) } == 0) { "pickFlow: download failed" }
             val fb = ob.asFloatBuffer()
-            return ptime("pickUnpack") { Array(lvl.nTy) { Array(lvl.nTx) { floatArrayOf(fb.get(), fb.get()) } } }
+            return ptime("pickUnpack") {
+                val flat = sc.floats("pickOut", nT * 2).also { fb.get(it) }
+                val nx = lvl.nTx
+                Array(lvl.nTy) { y -> Array(nx) { x -> val i = (y * nx + x) * 2; floatArrayOf(flat[i], flat[i + 1]) } }
+            }
         } finally {
             if (tmpMov != 0L) SrpBridge.freeResident(handle, tmpMov)
         }
@@ -792,33 +804,17 @@ object AlignGpu {
         val r = if (f == 1) 0 else Resample.pyramidKernel(f, config.binomialPyramid).size / 2
         val sy = src.size; val sx = src[0].size
         val c0 = f * (ts * 0.5 - 0.5) + r + 0.5   // first parent centre, level-c continuous px
-        val spacing = (f * ts).toDouble()
-        fun pick(t: Int, n: Int): IntArray {
-            val u = (t * tc + tc * 0.5 - c0) / spacing
-            val left = kotlin.math.floor(u).toInt()
-            val near = kotlin.math.floor(u + 0.5).toInt()
-            val other = if (near == left) left + 1 else left
-            return intArrayOf(near.coerceIn(0, n - 1), other.coerceIn(0, n - 1))
+        // Candidates are built in flow_pick.comp (mode 1) from the parent flow.
+        val parent = lvl.scratch.floats("transferParent", sy * sx * 2)
+        ptime("transferCands") {
+            var o = 0
+            for (row in src) for (v in row) { parent[o++] = v[0]; parent[o++] = v[1] }
         }
-        val xs = Array(lvl.nTx) { pick(it, sx) }
-        val ys = Array(lvl.nTy) { pick(it, sy) }
-        val nx = lvl.nTx
-        val cands = lvl.scratch.floats("transferCands", lvl.nTy * nx * 6)
-        ptime("transferCands") { java.util.stream.IntStream.range(0, lvl.nTy).parallel().forEach { ty ->
-            val ny = ys[ty][0]; val oy = ys[ty][1]
-            var o = ty * nx * 6
-            for (tx in 0 until nx) {
-                val a = src[ny][xs[tx][0]]; val b = src[ny][xs[tx][1]]; val c = src[oy][xs[tx][0]]
-                cands[o] = a[0] * f; cands[o + 1] = a[1] * f
-                cands[o + 2] = b[0] * f; cands[o + 3] = b[1] * f
-                cands[o + 4] = c[0] * f; cands[o + 5] = c[1] * f
-                o += 6
-            }
-        } }
         // Level 0 is the full-res grey, half-band filtered (FIR7): scoring every
         // 2nd px in each direction gives the same pick for a quarter of the reads.
         val step = if (c == 0 && tc >= 16) 2 else 1
-        return pickFlow(lvl, mov, cands, 3, tc, tc, 0, step, handle, spirv)
+        return pickFlow(lvl, mov, parent, 3, tc, tc, 0, step, handle, spirv,
+            intArrayOf(sx, sy, tc), floatArrayOf(f.toFloat(), c0.toFloat(), (f * ts).toFloat()))
     }
 
     /** 3x3 median of each flow component separately (repeat edge), cf. hmfsr flow_median.cpp. */

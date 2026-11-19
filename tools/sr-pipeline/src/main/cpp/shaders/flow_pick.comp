@@ -12,8 +12,14 @@
 //
 // push: width/height = level size, tileCount = nTy * nTx,
 //   pad[0] = nTx, pad[1] = K (1..4), pad[2] = win, pad[3] = stride,
-//   pad[4] = origin (signed), pad[5] = step.
-// Buffers: 0 = ref level, 1 = moving level, 2 = candidates (tile, k, xy),
+//   pad[4] = origin (signed), pad[5] = step, pad[6] = mode.
+// mode 0: buffer 2 = candidates (tile, k, xy).
+// mode 1 (level hand-off, AlignGpu.transferFlow): buffer 2 = the parent level's
+//   flow (pad[7] x pad[8] tiles, xy); K = 3 candidates built here: parent
+//   nearest the tile centre, its horizontal and vertical neighbour on the
+//   side the centre leans to, times scale (= level factor). Tile centre
+//   t * pad[9] + pad[9] / 2 maps to parent coordinate u = (centre - alpha) / beta.
+// Buffers: 0 = ref level, 1 = moving level, 2 = candidates or parent flow,
 //   3 = out flow (tile, xy).
 // One workgroup of 64 per tile (grid-stride over tiles).
 layout(local_size_x = 64) in;
@@ -34,6 +40,24 @@ layout(set = 0, binding = 3) writeonly buffer Out { float out_[]; };
 const uint KMAX = 4u;
 shared float s_cost[KMAX][64];
 
+// Parent index pair (nearest, other) along one axis for target tile t.
+ivec2 parentPair(uint t, uint n) {
+  const float tc = float(p.pad[9]);
+  const float u = (float(t) * tc + 0.5 * tc - p.alpha) / p.beta;
+  const int left = int(floor(u)), nr = int(floor(u + 0.5));
+  const int other = nr == left ? left + 1 : left;
+  return clamp(ivec2(nr, other), ivec2(0), ivec2(int(n) - 1));
+}
+
+vec2 candidate(uint t, uint k, uint K) {
+  if (p.pad[6] == 0u) return vec2(cand_[(t * K + k) * 2u], cand_[(t * K + k) * 2u + 1u]);
+  const uint sx = p.pad[7], sy = p.pad[8];
+  const ivec2 px = parentPair(t % p.pad[0], sx), py = parentPair(t / p.pad[0], sy);
+  const int cx = k == 1u ? px.y : px.x, cy = k == 2u ? py.y : py.x;
+  const uint i = (uint(cy) * sx + uint(cx)) * 2u;
+  return vec2(cand_[i], cand_[i + 1u]) * p.scale;
+}
+
 void main() {
   const uint lid = gl_LocalInvocationID.x;
   const uint nTx = p.pad[0], K = min(p.pad[1], KMAX), win = p.pad[2];
@@ -47,7 +71,7 @@ void main() {
     ivec2 d[KMAX];
     float acc[KMAX];
     for (uint k = 0u; k < KMAX; ++k) {
-      if (k < K) d[k] = ivec2(round(vec2(cand_[(t * K + k) * 2u], cand_[(t * K + k) * 2u + 1u])));
+      if (k < K) d[k] = ivec2(round(candidate(t, k, K)));
       else d[k] = ivec2(0);
       acc[k] = 0.0;
     }
@@ -70,8 +94,9 @@ void main() {
     if (lid == 0u) {
       uint best = 0u;
       for (uint k = 1u; k < K; ++k) if (s_cost[k][0] < s_cost[best][0]) best = k;
-      out_[t * 2u] = cand_[(t * K + best) * 2u];
-      out_[t * 2u + 1u] = cand_[(t * K + best) * 2u + 1u];
+      const vec2 v = candidate(t, best, K);
+      out_[t * 2u] = v.x;
+      out_[t * 2u + 1u] = v.y;
     }
     barrier();
   }
