@@ -127,11 +127,16 @@ class SrpPipelineFullresDeviceTest {
             val srpScale = args.getString("rawlensSrpScale")?.toFloatOrNull() ?: 1f
             val snr = BurstConfig.estimateSnr(refBox!!, alpha, beta)
             val fin = BurstConfig.finalize(snr)
-            val factors = listOf(1, 2, 4, 4)
-            BurstConfig.sanitize(1f, fin.tileSize, factors, fin.tileSizes, h, w)
+            // -e rawlensSrpAlignV2 true: alignment v2 (binomial pyramid, candidate hand-off, flow median).
+            val alignV2 = args.getString("rawlensSrpAlignV2") == "true"
+            val levels = if (alignV2) BurstConfig.alignV2Levels(fin.tileSize, h, w)
+                else BurstConfig.AlignLevels(listOf(1, 2, 4, 4), fin.tileSizes, List(4) { if (it == 0) 1 else 4 })
+            val factors = levels.factors
+            BurstConfig.sanitize(1f, fin.tileSize, factors, levels.tileSizes, h, w)
             val config = PipelineConfig(
                 // -e rawlensSrpScale 2: 2x super-resolution output (default 1).
-                scale = srpScale, bayer = true, factors = factors, tileSizes = fin.tileSizes,
+                scale = srpScale, bayer = true, factors = factors, tileSizes = levels.tileSizes,
+                searchRadii = levels.searchRadii, alignV2 = alignV2,
                 // -e rawlensSrpGrey FIR7|FIR11|FIR15 (mobile FIR grey) or FFT (default).
                 greyMethod = args.getString("rawlensSrpGrey") ?: "FFT",
                 kernelParams = KernelParams(
@@ -178,7 +183,8 @@ class SrpPipelineFullresDeviceTest {
                     // -e rawlensSrpAlignWg true: workgroup-per-tile L1 search.
                     alignWg = if (args.getString("rawlensSrpAlignWg") == "true") assetBytes("align_wg") else null,
                     argminWg = if (args.getString("rawlensSrpArgminWg") == "true") assetBytes("corr_argmin_wg") else null,
-                    l2Fused = if (args.getString("rawlensSrpL2Fused") == "true") assetBytes("corr_l2_fused") else null),
+                    l2Fused = if (args.getString("rawlensSrpL2Fused") == "true") assetBytes("corr_l2_fused") else null,
+                    flowPick = if (alignV2) assetBytes("flow_pick") else null),
                 VulkanPipeline.Spirvs(
                     gat = assetBytes("gat"), grad = assetBytes("grad"),
                     kernels = assetBytes("kernels"), divide = assetBytes("divide"),

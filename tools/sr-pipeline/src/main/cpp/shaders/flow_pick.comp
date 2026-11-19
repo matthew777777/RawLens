@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Alignment v2 candidate pick (hmfsr b71c534 flow_transfer.cpp, generalised).
+// For every tile of a pyramid level, K candidate flows (level px) are scored by
+// the L1 distance between the reference window and the moving window shifted
+// by the candidate rounded to whole pixels (integer sampling is only a proxy
+// for scoring the sub-pixel candidates, as upstream), and the cheapest one is
+// written out unchanged. Ties keep the lower candidate index.
+//
+// Window of tile (tx, ty): x0 = tx * stride - origin, sampled every `step` px,
+// `win` px wide/high; reads clamp to the level (repeat edge).
+//
+// push: width/height = level size, tileCount = nTy * nTx,
+//   pad[0] = nTx, pad[1] = K (1..4), pad[2] = win, pad[3] = stride,
+//   pad[4] = origin (signed), pad[5] = step.
+// Buffers: 0 = ref level, 1 = moving level, 2 = candidates (tile, k, xy),
+//   3 = out flow (tile, xy).
+// One workgroup of 64 per tile (grid-stride over tiles).
+layout(local_size_x = 64) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer Ref { float ref_[]; };
+layout(set = 0, binding = 1) readonly buffer Mov { float mov_[]; };
+layout(set = 0, binding = 2) readonly buffer Cand { float cand_[]; };
+layout(set = 0, binding = 3) writeonly buffer Out { float out_[]; };
+
+const uint KMAX = 4u;
+shared float s_cost[KMAX][64];
+
+void main() {
+  const uint lid = gl_LocalInvocationID.x;
+  const uint nTx = p.pad[0], K = min(p.pad[1], KMAX), win = p.pad[2];
+  const uint stride = p.pad[3], step = max(p.pad[5], 1u);
+  const int origin = int(p.pad[4]);
+  const int W = int(p.width), H = int(p.height);
+  const uint n1 = (win + step - 1u) / step, n = n1 * n1;
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    const int x0 = int((t % nTx) * stride) - origin;
+    const int y0 = int((t / nTx) * stride) - origin;
+    ivec2 d[KMAX];
+    float acc[KMAX];
+    for (uint k = 0u; k < KMAX; ++k) {
+      if (k < K) d[k] = ivec2(round(vec2(cand_[(t * K + k) * 2u], cand_[(t * K + k) * 2u + 1u])));
+      else d[k] = ivec2(0);
+      acc[k] = 0.0;
+    }
+    for (uint i = lid; i < n; i += 64u) {
+      const int x = x0 + int((i % n1) * step), y = y0 + int((i / n1) * step);
+      const float r = ref_[clamp(y, 0, H - 1) * W + clamp(x, 0, W - 1)];
+      for (uint k = 0u; k < KMAX; ++k) {
+        if (k >= K) break;
+        const int mx = clamp(x + d[k].x, 0, W - 1), my = clamp(y + d[k].y, 0, H - 1);
+        acc[k] += abs(r - mov_[my * W + mx]);
+      }
+    }
+    for (uint k = 0u; k < KMAX; ++k) s_cost[k][lid] = acc[k];
+    barrier();
+    for (uint s = 32u; s > 0u; s >>= 1u) {
+      if (lid < s)
+        for (uint k = 0u; k < KMAX; ++k) s_cost[k][lid] += s_cost[k][lid + s];
+      barrier();
+    }
+    if (lid == 0u) {
+      uint best = 0u;
+      for (uint k = 1u; k < K; ++k) if (s_cost[k][0] < s_cost[best][0]) best = k;
+      out_[t * 2u] = cand_[(t * K + best) * 2u];
+      out_[t * 2u + 1u] = cand_[(t * K + best) * 2u + 1u];
+    }
+    barrier();
+  }
+}

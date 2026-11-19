@@ -126,6 +126,15 @@ data class PipelineConfig(
      * the merged output. Vulkan bayer path with [colourDiff].
      */
     val blackPedestal: Boolean = false,
+    /**
+     * Alignment v2 (hmfsr b71c534 port): binomial pyramid, parent-candidate
+     * flow hand-off and a 3x3 median of the final flow
+     * ([AlignLoopConfig.binomialPyramid] / flowTransfer / flowMedian). The
+     * caller supplies the v2 levels ([BurstConfig.alignV2Levels]). The hand-off
+     * needs [AlignGpu.Spirvs.flowPick]; without it [upscaleLvl] is used.
+     * SRP_ALIGN2_OFF=binomial,transfer,median drops parts (A/B).
+     */
+    val alignV2: Boolean = false,
     /** Opt-in pooled polynomial green / colour-difference fitting (CPU prototype). */
     val organicReconstruction: Boolean = false,
     /** Mobile separable polynomial equivalent-kernel path; Vulkan only. */
@@ -162,6 +171,9 @@ object EndToEnd {
      * default (`1` finest, `4` elsewhere); metrics default to `L1` finest
      * then `L2`, cf. `config.alignment.block_matching.metrics`.
      */
+    private val align2Off: Set<String> =
+        System.getenv("SRP_ALIGN2_OFF")?.split(',')?.map { it.trim() }?.toSet() ?: emptySet()
+
     fun loopConfig(config: PipelineConfig): AlignLoopConfig {
         val nLevels = config.factors.size
         val radii = config.searchRadii
@@ -178,6 +190,9 @@ object EndToEnd {
             flowUpscaleMode = config.flowUpscaleMode,
             preprocessing = config.alignmentPreprocessing,
             edgeExtendFlow = config.edgeExtendFlow,
+            binomialPyramid = config.alignV2 && "binomial" !in align2Off,
+            flowTransfer = config.alignV2 && "transfer" !in align2Off,
+            flowMedian = config.alignV2 && "median" !in align2Off,
         )
     }
 

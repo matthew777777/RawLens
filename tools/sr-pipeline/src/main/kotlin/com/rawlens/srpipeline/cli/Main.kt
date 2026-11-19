@@ -66,6 +66,10 @@ internal data class Plan(
     val blurGamma: Float = 1f,
     /** Per-burst black pedestal (app: on). */
     val blackPedestal: Boolean = true,
+    /** Alignment v2 (binomial pyramid, candidate hand-off, overlap + median); app: off. */
+    val alignV2: Boolean = false,
+    /** Alignment grey: FFT (IPOL) or FIR7 (app, resident GPU pyramid). */
+    val grey: String = "FFT",
     /** App tuning (`SrTuning`, "k=v,..."): app-parity kernels/robustness/colour diff; null = IPOL CLI defaults. */
     val tune: String? = "app",
     val organicReconstruction: Boolean = false,
@@ -98,6 +102,8 @@ private fun usage(): String = """
       --blur-gamma G     down-weight blurry frames by (detail energy / reference)^G, 0 = off (default 1, as the app)
       --black-pedestal on|off
                      subtract the neutral black floor measured on the reference (default on, as the app)
+      --align v1|v2     alignment v2: binomial pyramid, candidate hand-off, flow median (default v1)
+      --grey FFT|FIR7            alignment grey (FIR7 = app, resident GPU pyramid; default FFT)
       --ghost-grow on|off
                      grow coherent motion rejection past the motion smoothing, drop speckles (default on, as the app)
       --lateral-ca on|off
@@ -166,6 +172,8 @@ internal fun parseArgs(args: Array<String>): Plan {
     var ghostGrow = true
     var blurGamma = 1f
     var blackPedestal = true
+    var alignV2 = false
+    var grey = "FFT"
     var tune: String? = "app"
     var organicReconstruction = false
     var tiledPolynomial = false
@@ -291,6 +299,15 @@ internal fun parseArgs(args: Array<String>): Plan {
                 blurGamma = args.getOrNull(++i)?.toFloatOrNull()?.takeIf { it >= 0f } ?: fail("--blur-gamma requires a number >= 0")
                 i++
             }
+            "--align" -> {
+                alignV2 = when (args.getOrNull(++i)) { "v1" -> false; "v2" -> true; else -> fail("--align requires v1|v2") }
+                i++
+            }
+            "--grey" -> {
+                grey = args.getOrNull(++i)?.uppercase()?.takeIf { it in setOf("FFT", "FIR7", "FIR11", "FIR15") }
+                    ?: fail("--grey requires FFT|FIR7|FIR11|FIR15")
+                i++
+            }
             "--black-pedestal" -> {
                 blackPedestal = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--black-pedestal requires on|off") }
                 i++
@@ -380,6 +397,8 @@ internal fun parseArgs(args: Array<String>): Plan {
         ghostGrow = ghostGrow,
         blurGamma = blurGamma,
         blackPedestal = blackPedestal,
+        alignV2 = alignV2,
+        grey = grey,
         tune = tune,
         organicReconstruction = organicReconstruction,
         tiledPolynomial = tiledPolynomial,
@@ -523,8 +542,10 @@ private fun merge(plan: Plan) {
     // the parity burst) changed tile size and every kernel parameter.
     val snr = BurstConfig.estimateSnr(fullRef, alpha, beta)
     val fin = BurstConfig.finalize(snr)
-    val factors = listOf(1, 2, 4, 4)
-    BurstConfig.sanitize(plan.scale, fin.tileSize, factors, fin.tileSizes, h, w)
+    val levels = if (plan.alignV2) BurstConfig.alignV2Levels(fin.tileSize, h, w)
+        else BurstConfig.AlignLevels(listOf(1, 2, 4, 4), fin.tileSizes, List(4) { if (it == 0) 1 else 4 })
+    val factors = levels.factors
+    BurstConfig.sanitize(plan.scale, fin.tileSize, factors, levels.tileSizes, h, w)
     val profile = SrpBridge.readDngColorProfile(refPath.toString())
     val colourDiff = colourDiffGains(plan, profile.neutral)
     val tuning = plan.tune?.let { parseTune(it) }
@@ -538,7 +559,10 @@ private fun merge(plan: Plan) {
         scale = plan.scale,
         bayer = true,
         factors = factors,
-        tileSizes = fin.tileSizes,
+        tileSizes = levels.tileSizes,
+        searchRadii = levels.searchRadii,
+        greyMethod = plan.grey,
+        alignV2 = plan.alignV2,
         kernelParams = tuning?.kernelParams(fin) ?: KernelParams(
             kDetail = fin.kDetail.toFloat(),
             kDenoise = fin.kDenoise.toFloat(),
@@ -628,6 +652,7 @@ private fun merge(plan: Plan) {
                         // SRP_LEGACY_FFT=1: the Bluestein FFT paths (A/B checks).
                         corrDirect = if (System.getenv("SRP_LEGACY_FFT") == "1") null else spv(dir, "corr_direct"),
                         icaWg = if (System.getenv("SRP_LEGACY_ICA") == "1") null else spv(dir, "ica_wg"),
+                        flowPick = if (plan.alignV2) spv(dir, "flow_pick") else null,
                     ),
                     VulkanPipeline.Spirvs(
                         gat = spv(dir, "gat"),
@@ -644,6 +669,8 @@ private fun merge(plan: Plan) {
                         noiseAcc = if (plan.noiseEvening) spv(dir, "noise_acc") else null,
                         noiseEven = if (plan.noiseEvening) spv(dir, "noise_even") else null,
                         caWarp = if (plan.lateralCa) spv(dir, "ca_warp") else null,
+                        greyFir = if (plan.grey.startsWith("FIR")) spv(dir, "grey_fir") else null,
+                        pyrDown = if (plan.grey.startsWith("FIR")) spv(dir, "pyr_down") else null,
                     ),
                     frameObserver = cache?.let { c -> { f, flow, r -> c.record(f,flow,r) } },
                 )

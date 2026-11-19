@@ -271,6 +271,25 @@ data class AlignLoopConfig(
      * border band; see [Resample.upscaleLvl]). False = Python-exact.
      */
     val edgeExtendFlow: Boolean = true,
+    /** [Resample.pyramidKernel] binomial taps instead of the sampled gaussian (alignment v2). */
+    val binomialPyramid: Boolean = false,
+    /**
+     * Alignment v2 level hand-off (hmfsr b71c534 `transfer_flow`): each finer
+     * tile takes the best of three parent flows (nearest parent, its
+     * horizontal and its vertical neighbour) by L1 cost on its own pixels,
+     * instead of [upscaleLvl]'s interpolation. GPU resident path only
+     * (flow_pick.comp, [AlignGpu.Spirvs.flowPick]).
+     */
+    val flowTransfer: Boolean = false,
+    /**
+     * Alignment v2 final pass: 3x3 median of the finest flow per component
+     * (hmfsr flow_median.cpp). hmfsr's re-pick on an overlapping 16/8 grid was
+     * tried as a 5-candidate L1 pick over a 2T window: +0.1 dB clean but it
+     * cost 0.3 dB detail at 2x iso100 (the whole-pixel cost proxy swaps
+     * sub-pixel flows in noise), and the median alone did better on motion
+     * (bench trail 57.4 -> 60.0 dB vs 58.9 with the pick), so it is not used.
+     */
+    val flowMedian: Boolean = false,
 )
 
 private fun requireAlignLoopConfig(config: AlignLoopConfig, name: String) {
@@ -286,6 +305,9 @@ private fun requireAlignLoopConfig(config: AlignLoopConfig, name: String) {
     require(config.searchRadii.all { it >= 0 }) { "$name.searchRadii must be >= 0 (got ${config.searchRadii})" }
     require(config.tileSize >= 1) { "$name.tileSize must be >= 1 (got ${config.tileSize})" }
     require(config.nIter >= 0) { "$name.nIter must be >= 0 (got ${config.nIter})" }
+    require(!config.binomialPyramid || config.factors.all { it and (it - 1) == 0 }) {
+        "$name.binomialPyramid needs power-of-two factors (got ${config.factors})"
+    }
 }
 
 /**

@@ -44,19 +44,41 @@ object Resample {
     }
 
     /**
+     * Pyramid lowpass for `factor`: the sampled gaussian (sigma f/2, radius 2f)
+     * of the IPOL port, or with [binomial] the cascade of [1 2 1]/4 per factor
+     * of two that hmfsr b71c534 (Halide alignment) builds its pyramid with,
+     * written as one valid-convolution kernel of 2f-1 taps (f=2: [1 2 1]/4,
+     * f=4: [1 2 3 4 3 2 1]/16). Exact in float: all weights are k/f^2.
+     */
+    fun pyramidKernel(factor: Int, binomial: Boolean = false): FloatArray {
+        require(factor >= 2) { "pyramid kernel needs factor >= 2 (got $factor)" }
+        if (!binomial) return gaussianKernel1d(factor * 0.5, (4 * factor * 0.5 + 0.5).toInt())
+        require(factor and (factor - 1) == 0) { "binomial pyramid needs a power-of-two factor (got $factor)" }
+        var k = doubleArrayOf(1.0)
+        var dil = 1
+        while (dil < factor) {
+            // k * [1, 0.., 2, 0.., 1] with taps dil apart, then the next octave.
+            val out = DoubleArray(k.size + 2 * dil)
+            for (i in k.indices) { out[i] += k[i]; out[i + dil] += 2 * k[i]; out[i + 2 * dil] += k[i] }
+            k = out
+            dil *= 2
+        }
+        val sum = k.sum()
+        return FloatArray(k.size) { (k[it] / sum).toFloat() }
+    }
+
+    /**
      * Gaussian downsampling by `factor`, cf. `downsample(th_img,
      * 'gaussian', factor)`. Factor 1 returns a copy (Python returns the
      * tensor itself; a copy preserves the no-aliasing Kotlin convention).
      */
-    fun downsample(image: Array<FloatArray>, factor: Int): Array<FloatArray> {
+    fun downsample(image: Array<FloatArray>, factor: Int, binomial: Boolean = false): Array<FloatArray> {
         requireRectImage(image, "image")
         require(factor >= 1) { "factor must be >= 1 (got $factor)" }
         val h = image.size
         val w = image[0].size
         if (factor == 1) return Array(h) { y -> image[y].copyOf() }
-        val sigma = factor * 0.5
-        val radius = (4 * factor * 0.5 + 0.5).toInt()
-        val kernel = gaussianKernel1d(sigma, radius)
+        val kernel = pyramidKernel(factor, binomial)
         val k = kernel.size
         require(h >= k && w >= k) {
             "image ${h}x$w is smaller than the gaussian kernel $k (factor $factor)"
@@ -64,7 +86,7 @@ object Resample {
         val h2 = (h - k + 1) / factor
         val w2 = (w - k + 1) / factor
         val out = Array(h2) { FloatArray(w2) }
-        downsampleInto(image, factor, out)
+        downsampleInto(image, factor, out, binomial = binomial)
         return out
     }
 
@@ -91,6 +113,7 @@ object Resample {
         out: Array<FloatArray>,
         padH: Int = 0,
         padW: Int = 0,
+        binomial: Boolean = false,
     ) {
         requireRectImage(image, "image")
         require(factor >= 1) { "factor must be >= 1 (got $factor)" }
@@ -110,9 +133,7 @@ object Resample {
             }
             return
         }
-        val sigma = factor * 0.5
-        val radius = (4 * factor * 0.5 + 0.5).toInt()
-        val kernel = gaussianKernel1d(sigma, radius)
+        val kernel = pyramidKernel(factor, binomial)
         val k = kernel.size
         require(H >= k && W >= k) {
             "padded image ${H}x$W is smaller than the gaussian kernel $k (factor $factor)"
@@ -157,13 +178,14 @@ object Resample {
         image: Array<FloatArray>,
         factors: List<Int>,
         preprocessing: String? = null,
+        binomial: Boolean = false,
     ): List<Array<FloatArray>> {
         requireRectImage(image, "image")
         require(factors.isNotEmpty()) { "factors must be non-empty" }
         var level = if (preprocessing != null) Grad.preprocess(image, preprocessing) else image
         val fineToCoarse = mutableListOf<Array<FloatArray>>()
         for (factor in factors) {
-            level = downsample(level, factor)
+            level = downsample(level, factor, binomial)
             fineToCoarse.add(level)
         }
         return fineToCoarse.reversed()
@@ -179,7 +201,7 @@ object Resample {
      * per call — production configs leave it null (Python mirror),
      * keeping the hot path garbage-free.
      */
-    fun pyramidShapes(h: Int, w: Int, factors: List<Int>): List<Pair<Int, Int>> {
+    fun pyramidShapes(h: Int, w: Int, factors: List<Int>, binomial: Boolean = false): List<Pair<Int, Int>> {
         require(factors.isNotEmpty()) { "factors must be non-empty" }
         // Coarse-first level shapes, mirroring buildGaussianPyramid's
         // dim math exactly (factor 1 keeps dims; otherwise (d-k+1)/f
@@ -189,8 +211,7 @@ object Resample {
         var (ch, cw) = h to w
         for (f in factors) {
             if (f != 1) {
-                val radius = (4 * f * 0.5 + 0.5).toInt()
-                val k = gaussianKernel1d(f * 0.5, radius).size
+                val k = pyramidKernel(f, binomial).size
                 ch = (ch - k + 1) / f
                 cw = (cw - k + 1) / f
             }
@@ -218,6 +239,7 @@ object Resample {
         factors: List<Int>,
         preprocessing: String?,
         levels: MutableList<Array<FloatArray>>,
+        binomial: Boolean = false,
     ) {
         requireRectImage(image, "image")
         require(factors.isNotEmpty()) { "factors must be non-empty" }
@@ -240,7 +262,7 @@ object Resample {
             // Pyramid levels shrink monotonically, so the holder slot for
             // this depth (addressed coarse-first below) always fits.
             val slot = levels[levels.size - 1 - i]
-            downsampleInto(level, factor, slot, ph, pw)
+            downsampleInto(level, factor, slot, ph, pw, binomial)
             ph = 0
             pw = 0
             fineToCoarse.add(slot)

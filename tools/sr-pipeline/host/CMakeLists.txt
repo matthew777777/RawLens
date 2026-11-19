@@ -94,6 +94,7 @@ srp_spv(ica_wg)
 srp_spv(noise_even)
 srp_spv(noise_acc)
 srp_spv(ca_warp)
+srp_spv(flow_pick)
 
 add_executable(srp_proof_dispatch proof_dispatch.cpp)
 target_link_libraries(srp_proof_dispatch PRIVATE srp_core)

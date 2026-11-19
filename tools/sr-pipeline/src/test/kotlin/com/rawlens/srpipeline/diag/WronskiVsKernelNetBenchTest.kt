@@ -42,6 +42,7 @@ class WronskiVsKernelNetBenchTest {
             align = spv("align"), corr = spv("corr"), fft = spv("fft"), ica = spv("ica"),
             corrDirect = spv("corr_direct"), icaWg = spv("ica_wg"),
             alignWg = spv("align_wg"), argminWg = spv("corr_argmin_wg"), l2Fused = spv("corr_l2_fused"),
+            flowPick = File(spvDir, "flow_pick.spv").takeIf { it.exists() }?.readBytes(),
         )
     }
     private val stageSpv by lazy {
@@ -52,15 +53,19 @@ class WronskiVsKernelNetBenchTest {
             noiseAcc = spv("noise_acc"), noiseEven = spv("noise_even"))
     }
 
-    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, WRONSKI_GHOST, WRONSKI_BLUR, KERNELNET, CM_ONLY, DETAIL_ONLY }
+    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, WRONSKI_GHOST, WRONSKI_BLUR, WRONSKI_ALIGN2, KERNELNET, CM_ONLY, DETAIL_ONLY }
 
     private fun cfg(k: Kernel, fin: BurstConfig.Final, a: DoubleArray, b: DoubleArray, scale: Float): PipelineConfig {
         val tuning = SrTuning()
         val al = FloatArray(4) { a[it].toFloat() }; val be = FloatArray(4) { b[it].toFloat() }
+        val v2 = k == Kernel.WRONSKI_ALIGN2
+        val lv = if (v2) BurstConfig.alignV2Levels(16, 512, 512) else null
+        val all = setOf(Kernel.WRONSKI_BLUR, Kernel.WRONSKI_ALIGN2)
         return PipelineConfig(
             scale = scale, bayer = true, greyMethod = "FIR7",
             // 512 px truth is too small for 32/64 px tiles (as Sr2xTruthTest).
-            factors = listOf(1, 2, 4, 4), tileSizes = listOf(16, 16, 16, 8),
+            factors = lv?.factors ?: listOf(1, 2, 4, 4), tileSizes = lv?.tileSizes ?: listOf(16, 16, 16, 8),
+            searchRadii = lv?.searchRadii, alignV2 = v2,
             kernelParams = tuning.kernelParams(fin), kernelPreprocessing = "gat",
             kernelAlpha = al, kernelBeta = be,
             robustnessParams = tuning.robustnessParams(haveNoiseLut = false, s3 = false), robustnessEnabled = true,
@@ -69,10 +74,10 @@ class WronskiVsKernelNetBenchTest {
             chromaScale = tuning.chromaScale(scale),
             icaIterations = tuning.icaIterations,
             continuousMotion = k != Kernel.WRONSKI_IPOL && k != Kernel.DETAIL_ONLY,
-            detailReconstruction = k in setOf(Kernel.WRONSKI_NEW, Kernel.WRONSKI_EVEN, Kernel.WRONSKI_GHOST, Kernel.WRONSKI_BLUR, Kernel.DETAIL_ONLY),
-            noiseEvening = k in setOf(Kernel.WRONSKI_EVEN, Kernel.WRONSKI_GHOST, Kernel.WRONSKI_BLUR),
-            ghostGrow = k == Kernel.WRONSKI_GHOST || k == Kernel.WRONSKI_BLUR,
-            blurGamma = if (k == Kernel.WRONSKI_BLUR) (System.getenv("BENCH_BLUR_GAMMA")?.toFloatOrNull() ?: 2f) else 0f,
+            detailReconstruction = k in setOf(Kernel.WRONSKI_NEW, Kernel.WRONSKI_EVEN, Kernel.WRONSKI_GHOST, Kernel.WRONSKI_BLUR, Kernel.WRONSKI_ALIGN2, Kernel.DETAIL_ONLY),
+            noiseEvening = k in setOf(Kernel.WRONSKI_EVEN, Kernel.WRONSKI_GHOST) || k in all,
+            ghostGrow = k == Kernel.WRONSKI_GHOST || k in all,
+            blurGamma = if (k in all) (System.getenv("BENCH_BLUR_GAMMA")?.toFloatOrNull() ?: 1f) else 0f,
             kernelNet = if (k != Kernel.KERNELNET) null else KernelNetConfig(
                 weights = KernelNet.bundledWeights(), sigma = KernelNet.sigma(al, be),
                 sigmaScale = tuning.knSigmaScale, sigmaCap = tuning.knSigmaCap, sigmaFloor = tuning.knFloor(scale)),

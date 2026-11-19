@@ -103,6 +103,33 @@ object BurstConfig {
         )
     }
 
+    /** Fine-to-coarse alignment pyramid plan: factors, tile sizes, search radii. */
+    data class AlignLevels(val factors: List<Int>, val tileSizes: List<Int>, val searchRadii: List<Int>)
+
+    /**
+     * Alignment v2 levels (hmfsr b71c534 on top of our full-res level 0):
+     * hmfsr aligns a half-res grey over factors [2,4,4,4] with radii [1,3,3,3,3]
+     * and tiles min(T, 64 / prod(r+1)) >= 8. Our level 0 is the full-res FIR
+     * grey (flow in raw px, tile T = the merge's tile), so the plan is that
+     * pyramid behind one extra factor-2 step: factors (1,2,2,4,4,4), radii
+     * (1,1,3,3,3,3), tiles (T, T, T, min(T,16), 8, 8). Coarse levels that hold
+     * no whole tile on the padded binomial pyramid (crops) are dropped.
+     */
+    fun alignV2Levels(baseTileSize: Int, h: Int, w: Int): AlignLevels {
+        val t = baseTileSize
+        var factors = listOf(1, 2, 2, 4, 4, 4)
+        var tiles = listOf(t, t, t, minOf(t, 16), 8, 8)
+        var radii = listOf(1, 1, 3, 3, 3, 3)
+        val ph = t * ((h + t - 1) / t)
+        val pw = t * ((w + t - 1) / t)
+        while (factors.size > 2) {
+            val shapes = Resample.pyramidShapes(ph, pw, factors, binomial = true).reversed()
+            if (shapes.indices.all { shapes[it].first >= tiles[it] && shapes[it].second >= tiles[it] }) break
+            factors = factors.dropLast(1); tiles = tiles.dropLast(1); radii = radii.dropLast(1)
+        }
+        return AlignLevels(factors, tiles, radii)
+    }
+
     /**
      * `sanitize_config` shape leg: scale >= 1, then the padded image
      * (`ts*ceil(im/ts)` with the base tile size) must tile every

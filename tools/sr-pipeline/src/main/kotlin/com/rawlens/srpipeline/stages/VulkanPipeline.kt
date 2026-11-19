@@ -766,7 +766,7 @@ object VulkanPipeline {
                 val ts = loop.tileSize
                 AlignGpu.ResidentPyramid(handle, h, w,
                     if (h % ts == 0) 0 else ts - h % ts, if (w % ts == 0) 0 else ts - w % ts,
-                    loop.factors, spirvs.pyrDown)
+                    loop.factors, spirvs.pyrDown, loop.binomialPyramid)
             } else null
         var frameNo = 0
         // One frame end to end (own scope): the decoded frame, pyramid,
