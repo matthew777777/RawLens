@@ -29,6 +29,17 @@ class AlignV2Test {
         assertEquals(1f, m[1][1][0], 0f)
     }
 
+    @Test fun medianMatchesSort() {
+        val rng = java.util.Random(3)
+        val flow = Array(7) { Array(9) { floatArrayOf(rng.nextFloat(), rng.nextFloat()) } }
+        val m = AlignGpu.median3x3(flow)
+        for (y in 0 until 7) for (x in 0 until 9) for (c in 0..1) {
+            val v = ArrayList<Float>()
+            for (j in -1..1) for (i in -1..1) v.add(flow[(y + j).coerceIn(0, 6)][(x + i).coerceIn(0, 8)][c])
+            assertEquals(v.sorted()[4], m[y][x][c], 0f)
+        }
+    }
+
     @Test fun levelsTrimForCrops() {
         val full = BurstConfig.alignV2Levels(16, 3024, 4032)
         assertEquals(listOf(1, 2, 2, 4, 4, 4), full.factors)

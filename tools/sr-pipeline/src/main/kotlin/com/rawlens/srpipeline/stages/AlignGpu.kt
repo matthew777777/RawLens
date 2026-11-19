@@ -163,6 +163,25 @@ object AlignGpu {
     class LevelScratch {
         private val floats = HashMap<String, FloatArray>()
         private val directs = HashMap<String, ByteBuffer>()
+        private val residents = HashMap<String, Long>()
+
+        /**
+         * Reusable device resident of exactly `n` floats (allocated once per
+         * run: Mali buffer allocation is ~ms per call). Freed by
+         * [freeResidents] ([freeLevelSpectra]).
+         */
+        fun resident(handle: Long, key: String, n: Long): Long {
+            residents[key]?.let { return it }
+            val r = SrpBridge.createResident(handle, n)
+            require(r != 0L) { "scratch resident alloc of $n floats failed ($key)" }
+            residents[key] = r
+            return r
+        }
+
+        fun freeResidents(handle: Long) {
+            for (r in residents.values) SrpBridge.freeResident(handle, r)
+            residents.clear()
+        }
 
         /** Reusable FloatArray of exactly `n` floats. */
         fun floats(key: String, n: Int): FloatArray {
@@ -514,6 +533,7 @@ object AlignGpu {
             if (lvl.gradXRes != 0L) SrpBridge.freeResident(handle, lvl.gradXRes)
             if (lvl.gradYRes != 0L) SrpBridge.freeResident(handle, lvl.gradYRes)
             if (lvl.hessRes != 0L) SrpBridge.freeResident(handle, lvl.hessRes)
+            lvl.scratch.freeResidents(handle)
         }
     }
 
@@ -725,32 +745,32 @@ object AlignGpu {
         require(cands.size == nT * k * 2 && k in 1..4) { "pickFlow: ${cands.size} floats for $nT tiles x $k" }
         require(lvl.refRes != 0L) { "pickFlow needs the pinned reference level" }
         val n = mov.w.toLong() * mov.h
-        val owned = ArrayList<Long>(3)
-        fun alloc(c: Long) = SrpBridge.createResident(handle, c).also {
-            require(it != 0L) { "pickFlow: resident alloc of $c floats failed" }; owned.add(it)
-        }
+        val sc = lvl.scratch
+        var tmpMov = 0L
         try {
-            val movRes = if (mov.res != 0L) mov.res else alloc(n).also { r ->
+            val movRes = if (mov.res != 0L) mov.res else SrpBridge.createResident(handle, n).also { r ->
+                require(r != 0L) { "pickFlow: moving alloc failed" }
+                tmpMov = r
                 val b = SrpBridge.directFloats(n.toInt())
                 val fb = b.asFloatBuffer(); for (row in mov.rows) fb.put(row)
                 require(SrpBridge.uploadResident(handle, r, b, n) == 0) { "pickFlow: moving upload failed" }
             }
-            val candRes = alloc(cands.size.toLong())
-            val cb = SrpBridge.directFloats(cands.size).also { it.asFloatBuffer().put(cands) }
-            require(SrpBridge.uploadResident(handle, candRes, cb, cands.size.toLong()) == 0) { "pickFlow: upload failed" }
-            val outRes = alloc(nT * 2L)
+            val candRes = sc.resident(handle, "pickCand$k", cands.size.toLong())
+            val cb = ptime("pickPack") { sc.direct("pickCand$k", cands.size).also { it.asFloatBuffer().put(cands) } }
+            require(ptime("pickUpload") { SrpBridge.uploadResident(handle, candRes, cb, cands.size.toLong()) } == 0) { "pickFlow: upload failed" }
+            val outRes = sc.resident(handle, "pickOut", nT * 2L)
             val push = IntArray(32)
             push[0] = mov.w; push[1] = mov.h; push[3] = nT
             push[11] = lvl.nTx; push[12] = k; push[13] = win; push[14] = stride; push[15] = origin; push[16] = step
-            val rc = SrpBridge.nativeDispatchRes(handle, spirv, longArrayOf(lvl.refRes, movRes, candRes, outRes),
-                longArrayOf(n, n, cands.size.toLong(), nT * 2L), push, 64, minOf(nT, 65535))
+            val rc = ptime("pickDispatch.L${lvl.nTx}") { SrpBridge.nativeDispatchRes(handle, spirv, longArrayOf(lvl.refRes, movRes, candRes, outRes),
+                longArrayOf(n, n, cands.size.toLong(), nT * 2L), push, 64, minOf(nT, 65535)) }
             require(rc == 0) { "flow_pick failed with status $rc" }
-            val ob = SrpBridge.directFloats(nT * 2)
-            require(SrpBridge.downloadResident(handle, outRes, ob, nT * 2L) == 0) { "pickFlow: download failed" }
+            val ob = sc.direct("pickOut", nT * 2)
+            require(ptime("pickDownload") { SrpBridge.downloadResident(handle, outRes, ob, nT * 2L) } == 0) { "pickFlow: download failed" }
             val fb = ob.asFloatBuffer()
-            return Array(lvl.nTy) { Array(lvl.nTx) { floatArrayOf(fb.get(), fb.get()) } }
+            return ptime("pickUnpack") { Array(lvl.nTy) { Array(lvl.nTx) { floatArrayOf(fb.get(), fb.get()) } } }
         } finally {
-            for (r in owned) SrpBridge.freeResident(handle, r)
+            if (tmpMov != 0L) SrpBridge.freeResident(handle, tmpMov)
         }
     }
 
@@ -782,27 +802,51 @@ object AlignGpu {
         }
         val xs = Array(lvl.nTx) { pick(it, sx) }
         val ys = Array(lvl.nTy) { pick(it, sy) }
-        val cands = FloatArray(lvl.nTy * lvl.nTx * 6)
-        var o = 0
-        for (ty in 0 until lvl.nTy) for (tx in 0 until lvl.nTx) {
-            val (nx, ox) = xs[tx].let { it[0] to it[1] }
-            val (ny, oy) = ys[ty].let { it[0] to it[1] }
-            for ((cx, cy) in arrayOf(nx to ny, ox to ny, nx to oy)) {
-                cands[o++] = src[cy][cx][0] * f; cands[o++] = src[cy][cx][1] * f
+        val nx = lvl.nTx
+        val cands = lvl.scratch.floats("transferCands", lvl.nTy * nx * 6)
+        ptime("transferCands") { java.util.stream.IntStream.range(0, lvl.nTy).parallel().forEach { ty ->
+            val ny = ys[ty][0]; val oy = ys[ty][1]
+            var o = ty * nx * 6
+            for (tx in 0 until nx) {
+                val a = src[ny][xs[tx][0]]; val b = src[ny][xs[tx][1]]; val c = src[oy][xs[tx][0]]
+                cands[o] = a[0] * f; cands[o + 1] = a[1] * f
+                cands[o + 2] = b[0] * f; cands[o + 3] = b[1] * f
+                cands[o + 4] = c[0] * f; cands[o + 5] = c[1] * f
+                o += 6
             }
-        }
-        return pickFlow(lvl, mov, cands, 3, tc, tc, 0, 1, handle, spirv)
+        } }
+        // Level 0 is the full-res grey, half-band filtered (FIR7): scoring every
+        // 2nd px in each direction gives the same pick for a quarter of the reads.
+        val step = if (c == 0 && tc >= 16) 2 else 1
+        return pickFlow(lvl, mov, cands, 3, tc, tc, 0, step, handle, spirv)
     }
 
     /** 3x3 median of each flow component separately (repeat edge), cf. hmfsr flow_median.cpp. */
     fun median3x3(flow: Array<Array<FloatArray>>): Array<Array<FloatArray>> {
         val ny = flow.size; val nx = flow[0].size
-        val v = FloatArray(9)
-        return Array(ny) { y -> Array(nx) { x -> FloatArray(2) { ch ->
-            var i = 0
-            for (j in -1..1) for (k in -1..1) v[i++] = flow[(y + j).coerceIn(0, ny - 1)][(x + k).coerceIn(0, nx - 1)][ch]
-            v.sort(); v[4]
-        } } }
+        val out = Array(ny) { Array(nx) { FloatArray(2) } }
+        java.util.stream.IntStream.range(0, ny).parallel().forEach { y ->
+            val v = FloatArray(9)
+            val r0 = flow[maxOf(y - 1, 0)]; val r1 = flow[y]; val r2 = flow[minOf(y + 1, ny - 1)]
+            for (x in 0 until nx) {
+                val xl = maxOf(x - 1, 0); val xr = minOf(x + 1, nx - 1)
+                for (ch in 0..1) {
+                    v[0] = r0[xl][ch]; v[1] = r0[x][ch]; v[2] = r0[xr][ch]
+                    v[3] = r1[xl][ch]; v[4] = r1[x][ch]; v[5] = r1[xr][ch]
+                    v[6] = r2[xl][ch]; v[7] = r2[x][ch]; v[8] = r2[xr][ch]
+                    out[y][x][ch] = median9(v)
+                }
+            }
+        }
+        return out
+    }
+
+    /** Median of 9 by the classic 19-exchange network (Paeth / Devillard). */
+    private fun median9(p: FloatArray): Float {
+        fun s(a: Int, b: Int) { if (p[a] > p[b]) { val t = p[a]; p[a] = p[b]; p[b] = t } }
+        s(1, 2); s(4, 5); s(7, 8); s(0, 1); s(3, 4); s(6, 7); s(1, 2); s(4, 5); s(7, 8)
+        s(0, 3); s(5, 8); s(4, 7); s(3, 6); s(1, 4); s(2, 5); s(4, 7); s(4, 2); s(6, 4); s(4, 2)
+        return p[4]
     }
 
     internal fun gpuL1(
