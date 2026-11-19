@@ -109,6 +109,7 @@ class Gles31JxlOutputProcessor(context: Context) {
             // JXL still matches the JPEG look at 8-bit-equivalent settings.
             GLES31.glUniform1i(location(outputProgram, "u_basic"), resolvedLook.toneMapper.shaderMode)
             aces2.bind(outputProgram, resolvedLook.toneMapper.shaderMode)
+            GLES31.glUniform2f(location(outputProgram, "u_camera_tone"), resolvedLook.shadowLift, resolvedLook.highlightRecovery)
             GLES31.glUniform1f(location(outputProgram, "u_agx_purity_boost"), resolvedLook.agxPurityBoost)
             GLES31.glUniform1i(location(outputProgram, "u_agx_punchy"), if (resolvedLook.agxLook == AgxLook.PUNCHY) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_contrast"), resolvedLook.agxContrast)

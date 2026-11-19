@@ -1,4 +1,66 @@
-# SOOC shadow balance (2026-11-18)
+# Adjustable SOOC tone balance (2026-11-19)
+
+The original fixed two-stop toe below is historical. Its strongest lift was in
+very dark pixels, reducing perceived contrast with Sigmoid. The default now uses
+20% of that lift and a smooth near-black gate from scene peak 0.001 to 0.008.
+Below the gate, gain is exactly one; no pedestal is added. At middle grey the
+new default adds approximately 0.05 EV rather than 0.25 EV. Bright pixels remain
+unchanged by the shadow control. Both adjustments are opt-in relative to a
+zeroed control: 0% shadow lift exactly bypasses the toe; 0% highlight recovery
+retains the selected display transform's highlight roll-off.
+
+Photo output settings now expose **Shadow lift** (0–100%, default 20%),
+**Highlight recovery** (0–100%, default 0%), and a dedicated reset button.
+Values are saved per lens and carried in the immutable development settings,
+including offline merge settings. Old preferences without the new keys take the
+new defaults. JPEG descriptions record the actual amounts. The common GLSL
+uniform, CPU/reference transform, preview snapshots, scopes and BGU/JNI/AOT
+parameters carry the same two amounts. The Ultra HDR scene tap is unchanged.
+
+The highlight control uses the neutral flat-field stop-shift formula documented
+for [RapidRAW 1.7](https://getrapidraw.com/docs/technical/tone-and-color):
+
+```
+distance = max(log2(peak) + 3, 0)
+depth = distance * distance / (distance + 1)
+shift = -amount * (1 - exp(-1.6 * depth))
+gain = exp2(shift)
+```
+
+It starts at 0.125, lowers bright tones by at most one stop, and applies one RGB
+scale before the display mapper. Unlike RapidRAW's full implementation it uses
+pixel peak, not an edge-aware luminance base, and does not include its local
+texture compensation or clipped-region map. It is not claimed as a full port of
+RapidRAW's local Highlights module. It cannot reconstruct all-channel clipping.
+The meter's broad-highlight guard is evaluated with recovery disabled so turning
+the slider up cannot buy global exposure and undo its effect.
+
+Sigmoid itself retains the generalized log-logistic response from
+[darktable 5.6.2](https://github.com/darktable-org/darktable/blob/release-5.6.2/src/iop/sigmoid.c),
+including the original contrast 1.5, zero skew, black target and hue correction.
+No extra Basic/AgX shoulder is inserted into Sigmoid.
+
+Validation of this revision includes neutral flat-field reference values,
+monotonic ramps over both slider endpoints, exact bypass/black protection,
+all-mapper scope/output/inverse consistency and unchanged automatic highlight
+guards. Device preview parity now sweeps both sliders; output GPU/CPU parity
+covers all mappers at off/default/maximum combinations. Halide parity covers
+default controls and maximum recovery/lift, and all four ABI archives are
+regenerated.
+
+The original personal DNG/JPEG paths under Downloads/images are no longer
+present in this session; the earlier review JPEGs remain under /tmp. No claim is
+made that the revised response was re-rendered against those unavailable RAWs.
+
+Final revision validation: 2,077 JVM tests, zero failures/errors, 10 skipped
+(2,067 passed); the isolated device-test app and instrumentation APK built.
+All 14 selected phone tests passed: six scene-linear/fused output checks,
+seven BGU/JNI checks, and the preview sweep over both sliders. The shared
+standalone/fused shaders and GLES 2/3/3.1 helper compile; all 16 Halide host
+parity cases pass with maximum absolute error 1.27e-5.
+
+## Original fixed toe implementation (2026-11-18, superseded)
+
 
 The four supplied 2026-11-18 DNG/JPEG pairs used ACES 2.0, automatic development
 exposure, and Active D-Lighting Off. Backlit foregrounds remain very dark while

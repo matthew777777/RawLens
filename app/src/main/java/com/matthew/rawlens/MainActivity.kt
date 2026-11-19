@@ -3856,6 +3856,8 @@ class MainActivity : Activity() {
         },
         highlightHeadroom = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_HEADROOM, 1f),
         highlightSoftHeadroom = lensPreferences().getFloat(KEY_JPEG_SKY_PROTECTION, 0.85f),
+        shadowLift = lensPreferences().getFloat(CameraToneBalance.KEY_SHADOW_LIFT, CameraToneBalance.DEFAULT_SHADOW_LIFT),
+        highlightRecovery = lensPreferences().getFloat(CameraToneBalance.KEY_HIGHLIGHT_RECOVERY, 0f),
         highlightShoulder = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_SHOULDER, 1f),
         hlReconstruction = HighlightReconstructionDefaults.read(lensPreferences()),
         mono = MonoSettings.read(lensPreferences())

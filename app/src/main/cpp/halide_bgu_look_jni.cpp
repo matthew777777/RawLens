@@ -70,9 +70,9 @@ Java_com_matthew_rawlens_BguLook_lookIntoNative(
         lensRows <= 0) {
         return -1;
     }
-    // BguLook documents the packing: 9 floats, 11 ints. Outputs are caller
+    // BguLook documents the packing: 11 floats, 11 ints. Outputs are caller
     // buffers (fit hot loop reuses them; this entry never news arrays).
-    if (env->GetArrayLength(fparams) != 9 || env->GetArrayLength(iparams) != 11 ||
+    if (env->GetArrayLength(fparams) != 11 || env->GetArrayLength(iparams) != 11 ||
         env->GetArrayLength(wb) != 4 || env->GetArrayLength(ccm) != 9 ||
         env->GetArrayLength(aces) != 9 || env->GetArrayLength(white) != 3 ||
         env->GetArrayLength(quad) != bguElementCount({w, h, 4}) ||
@@ -119,7 +119,7 @@ Java_com_matthew_rawlens_BguLook_lookIntoNative(
         halide_buffer_t devBuf = makeF32(w, h, 3, devPtr, devShape);
         rc = bgu_look(&quadBuf, &lensBuf, &wbBuf, &ccmBuf, &acesBuf, &whiteBuf,
                       ipPtr[0], fpPtr[0], fpPtr[1], fpPtr[2], fpPtr[3], fpPtr[4], fpPtr[5],
-                      fpPtr[6], fpPtr[7], fpPtr[8], ipPtr[1], ipPtr[2], ipPtr[3], ipPtr[4],
+                      fpPtr[6], fpPtr[7], fpPtr[8], fpPtr[9], fpPtr[10], ipPtr[1], ipPtr[2], ipPtr[3], ipPtr[4],
                       ipPtr[5], ipPtr[6], ipPtr[7], ipPtr[8], ipPtr[9], ipPtr[10], &guideBuf,
                       &devBuf);
     }

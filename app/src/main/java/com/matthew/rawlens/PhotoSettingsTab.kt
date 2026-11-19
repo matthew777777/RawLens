@@ -298,6 +298,8 @@ internal class PhotoSettingsTab(
                 .putFloat(MainActivity.KEY_JPEG_HIGHLIGHT_HEADROOM, resolved.highlightHeadroom)
                 .putFloat(MainActivity.KEY_JPEG_SKY_PROTECTION, resolved.highlightSoftHeadroom)
                 .putFloat(MainActivity.KEY_JPEG_HIGHLIGHT_SHOULDER, resolved.highlightShoulder)
+                .putFloat(CameraToneBalance.KEY_SHADOW_LIFT, resolved.shadowLift)
+                .putFloat(CameraToneBalance.KEY_HIGHLIGHT_RECOVERY, resolved.highlightRecovery)
                 .putBoolean(MainActivity.KEY_JPEG_HL_RECONSTRUCTION, resolved.hlReconstruction)
                 .putBoolean(HighlightReconstructionDefaults.APPLIED, true)
                 .putString(MonoMode.PREFERENCE_KEY, resolved.mono.mode.name)
@@ -670,6 +672,32 @@ internal class PhotoSettingsTab(
             setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
         })
         addAgxSlider(
+            "Shadow lift", 100,
+            (currentJpegSettings.shadowLift * 100f).toInt(),
+            { "$it%" },
+            { settings, value -> settings.copy(shadowLift = value / 100f) }
+        )
+        addAgxSlider(
+            "Highlight recovery", 100,
+            (currentJpegSettings.highlightRecovery * 100f).toInt(),
+            { "$it%" },
+            { settings, value -> settings.copy(highlightRecovery = value / 100f) }
+        )
+        kit.content.addView(TextView(activity).apply {
+            tag = "settings-description"
+            text = "Shadow lift protects deep blacks. Highlight recovery gently lowers bright tones before the tone mapper. Set either to 0% to bypass it."
+            setTextColor(activity.getColor(R.color.text_secondary))
+            textSize = 12f
+            setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
+        })
+        kit.content.addView(Button(activity).apply {
+            text = "Reset shadow and highlight adjustments"
+            setOnClickListener {
+                if (applyJpegOutputSettings(currentJpegSettings.copy(
+                    shadowLift = CameraToneBalance.DEFAULT_SHADOW_LIFT, highlightRecovery = 0f))) host.reshow()
+            }
+        })
+        addAgxSlider(
             "Highlight headroom", 100,
             ((currentJpegSettings.highlightHeadroom - 0.5f) * 100f).toInt(),
             { String.format(Locale.US, "%.2f", 0.5f + it / 100f) },
@@ -699,6 +727,8 @@ internal class PhotoSettingsTab(
                     highlightHeadroom = currentJpegSettings.highlightHeadroom,
                     highlightSoftHeadroom = currentJpegSettings.highlightSoftHeadroom,
                     highlightShoulder = currentJpegSettings.highlightShoulder,
+                    shadowLift = currentJpegSettings.shadowLift,
+                    highlightRecovery = currentJpegSettings.highlightRecovery,
                     demosaic = currentJpegSettings.demosaic,
                     chromaCleanup = currentJpegSettings.chromaCleanup
                 )

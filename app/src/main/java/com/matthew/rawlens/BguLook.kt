@@ -32,8 +32,8 @@ data class BguLookOut(
 internal object BguLook {
     val available: Boolean = BguSpike.available
 
-    /** [fparams] order: EV, AgX contrast/saturation/purity/hue/shadowEv/highlightEv/gamut, shoulder. */
-    const val FP_COUNT = 9
+    /** [fparams] order: EV, AgX contrast/saturation/purity/hue/shadowEv/highlightEv/gamut, shoulder, shadow lift, highlight recovery. */
+    const val FP_COUNT = 11
     const val FP_EV = 0
     const val FP_CONTRAST = 1
     const val FP_SATURATION = 2
@@ -43,6 +43,8 @@ internal object BguLook {
     const val FP_HIGHLIGHT_EV = 6
     const val FP_GAMUT = 7
     const val FP_SHOULDER = 8
+    const val FP_SHADOW_LIFT = 9
+    const val FP_HIGHLIGHT_RECOVERY = 10
 
     /** [iparams] order: jpeg (0 RAW, 1 Base, 2 Punchy, 3 Basic), p3, applyLens, greenRow, qbX, qbY, lowStep, aL, aT, aR, aB. */
     const val IP_COUNT = 11

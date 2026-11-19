@@ -108,6 +108,8 @@ public:
     Input<float> agxHighlightEv_{"agxHighlightEv"};
     Input<float> agxGamut_{"agxGamut"};
     Input<float> highlightShoulder_{"highlightShoulder"};
+    Input<float> shadowLift_{"shadowLift"};
+    Input<float> highlightRecovery_{"highlightRecovery"};
     Input<int> displayP3_{"displayP3"};
     // Lens geometry: sensor quad origin of low-res texel (0,0), sensor-pixel
     // step per low-res texel, active array, green-row parity, apply flag.
@@ -215,7 +217,10 @@ public:
         Expr balanceT = clamp((peak - 0.18f) / 0.42f, 0.0f, 1.0f);
         Expr balanceFade = 1.0f - balanceT * balanceT * (3.0f - 2.0f * balanceT);
         Expr toe = 0.06f / (0.06f + peak);
-        Expr balanceGain = select(peak >= 0.6f, 1.0f, 1.0f + 3.0f * toe * toe * balanceFade);
+        Expr balanceGain = select(peak >= 0.6f, 1.0f, 1.0f + 3.0f * clamp(shadowLift_, 0.0f, 1.0f) * toe * toe * balanceFade * smoothstepGlsl(0.001f, 0.008f, peak));
+        Expr distance = max(log(max(peak, 0.125f)) / log(2.0f) + 3.0f, 0.0f);
+        Expr depth = distance * distance / (distance + 1.0f);
+        balanceGain *= pow(2.0f, -clamp(highlightRecovery_, 0.0f, 1.0f) * (1.0f - exp(-1.6f * depth)));
         toAces = Vec3{toAces.r * balanceGain, toAces.g * balanceGain, toAces.b * balanceGain};
         Vec3 rec = matVecConst(ACESCG_TO_REC2020, toAces);
         Vec3 scene{max(rec.r, 0.0f), max(rec.g, 0.0f), max(rec.b, 0.0f)};

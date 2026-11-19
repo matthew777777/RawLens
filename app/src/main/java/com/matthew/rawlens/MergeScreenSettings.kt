@@ -47,6 +47,8 @@ internal object MergeScreenSettings {
         },
         highlightHeadroom = prefs.getFloat(MainActivity.KEY_JPEG_HIGHLIGHT_HEADROOM, 1f),
         highlightSoftHeadroom = prefs.getFloat(MainActivity.KEY_JPEG_SKY_PROTECTION, 0.85f),
+        shadowLift = prefs.getFloat(CameraToneBalance.KEY_SHADOW_LIFT, CameraToneBalance.DEFAULT_SHADOW_LIFT),
+        highlightRecovery = prefs.getFloat(CameraToneBalance.KEY_HIGHLIGHT_RECOVERY, 0f),
         highlightShoulder = prefs.getFloat(MainActivity.KEY_JPEG_HIGHLIGHT_SHOULDER, 1f),
         hlReconstruction = prefs.getBoolean(MainActivity.KEY_JPEG_HL_RECONSTRUCTION, true)
     ).resolvedForPlatform()

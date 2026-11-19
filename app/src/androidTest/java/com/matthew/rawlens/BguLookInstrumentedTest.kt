@@ -73,6 +73,7 @@ class BguLookInstrumentedTest {
         fparams[BguLook.FP_HIGHLIGHT_EV] = 6.5f
         fparams[BguLook.FP_GAMUT] = 0f
         fparams[BguLook.FP_SHOULDER] = 1f
+        fparams[BguLook.FP_SHADOW_LIFT] = CameraToneBalance.DEFAULT_SHADOW_LIFT
         val iparams = IntArray(BguLook.IP_COUNT)
         iparams[BguLook.IP_JPEG] = 1
         val out = BguLook.run(
@@ -120,6 +121,7 @@ class BguLookInstrumentedTest {
         fparams[BguLook.FP_HIGHLIGHT_EV] = 6.5f
         fparams[BguLook.FP_GAMUT] = 0f
         fparams[BguLook.FP_SHOULDER] = 1f
+        fparams[BguLook.FP_SHADOW_LIFT] = CameraToneBalance.DEFAULT_SHADOW_LIFT
         val iparams = IntArray(BguLook.IP_COUNT)
         iparams[BguLook.IP_JPEG] = 1
         val out = BguLook.run(

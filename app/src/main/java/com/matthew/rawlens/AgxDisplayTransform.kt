@@ -55,7 +55,7 @@ object AgxDisplayTransform {
         settings: JpegOutputSettings
     ): FloatArray {
         require(inputAcescg.size == 3 && inputAcescg.all(Float::isFinite))
-        val acescg = CameraToneBalance.map(inputAcescg)
+        val acescg = CameraToneBalance.map(inputAcescg, settings)
         if (settings.toneMapper == PhotoToneMapper.ACES_2) return Aces2DisplayTransform.map(acescg, outputMatrix === REC2020_TO_DISPLAY_P3)
         val sceneRec2020 = map(ACESCG_TO_REC2020_D65, acescg)
         if (settings.toneMapper == PhotoToneMapper.SIGMOID) return map(outputMatrix, SigmoidDisplayTransform.map(sceneRec2020))
@@ -151,7 +151,7 @@ object AgxDisplayTransform {
     fun scopeCurve(inputLinear: Float, settings: JpegOutputSettings = JpegOutputSettings()): Float {
         val resolved = settings.resolvedForPlatform()
         if (!inputLinear.isFinite()) return 0f
-        val linear = inputLinear * CameraToneBalance.gain(inputLinear)
+        val linear = inputLinear * CameraToneBalance.gain(inputLinear, resolved.shadowLift, resolved.highlightRecovery)
         if (resolved.toneMapper == PhotoToneMapper.ACES_2) return srgbOetf(Aces2DisplayTransform.map(floatArrayOf(linear,linear,linear))[0])
         if (resolved.toneMapper == PhotoToneMapper.SIGMOID) return srgbOetf(SigmoidDisplayTransform.curve(linear))
         if (resolved.toneMapper == PhotoToneMapper.BASIC) return BasicDisplayTransform.encode(linear, resolved.highlightShoulder)

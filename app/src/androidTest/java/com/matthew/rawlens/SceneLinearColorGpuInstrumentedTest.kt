@@ -271,8 +271,8 @@ class SceneLinearColorGpuInstrumentedTest {
             assertTrue("highlight scene values were clipped", actual.any { it > 1f })
             assertTrue(actual.indices.filter { it % 4 == 3 }.all { actual[it] == 1f })
 
-            for (mode in PhotoToneMapper.entries) {
-            val settings = JpegOutputSettings(toneMapper = mode)
+            for (mode in PhotoToneMapper.entries) for (controls in listOf(0f to 0f, .2f to 0f, 1f to 1f)) {
+            val settings = JpegOutputSettings(toneMapper = mode, shadowLift = controls.first, highlightRecovery = controls.second)
             val bitmap = Gles31JpegOutputProcessor(context).process(output, settings).bitmap
             try {
                 for (y in 0 until HEIGHT) {

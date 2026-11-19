@@ -1,5 +1,5 @@
-#ifndef HALIDE____Users___monikamalinowska___AndroidStudioProjects___RawLens___app___src___main___cpp___halide___filters___arm64___v8a___bgu_look_h
-#define HALIDE____Users___monikamalinowska___AndroidStudioProjects___RawLens___app___src___main___cpp___halide___filters___arm64___v8a___bgu_look_h
+#ifndef HALIDE____tmp___rawlens___tone___controls___index___arm64___v8a___bgu_look_h
+#define HALIDE____tmp___rawlens___tone___controls___index___arm64___v8a___bgu_look_h
 #include <stdint.h>
 
 // Forward declarations of the types used in the interface
@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 HALIDE_FUNCTION_ATTRS
-int bgu_look(struct halide_buffer_t *_quad_buffer, struct halide_buffer_t *_lens_buffer, struct halide_buffer_t *_wb_buffer, struct halide_buffer_t *_ccm_buffer, struct halide_buffer_t *_camToAces_buffer, struct halide_buffer_t *_camWhite_buffer, int32_t _jpeg, float _exposureEv, float _agxContrast, float _agxSaturation, float _agxPurity, float _agxHue, float _agxShadowEv, float _agxHighlightEv, float _agxGamut, float _highlightShoulder, int32_t _displayP3, int32_t _applyLens, int32_t _lensGreenRow, int32_t _quadBaseX, int32_t _quadBaseY, int32_t _lowStep, int32_t _activeL, int32_t _activeT, int32_t _activeR, int32_t _activeB, struct halide_buffer_t *_guide_buffer, struct halide_buffer_t *_developed_buffer);
+int bgu_look(struct halide_buffer_t *_quad_buffer, struct halide_buffer_t *_lens_buffer, struct halide_buffer_t *_wb_buffer, struct halide_buffer_t *_ccm_buffer, struct halide_buffer_t *_camToAces_buffer, struct halide_buffer_t *_camWhite_buffer, int32_t _jpeg, float _exposureEv, float _agxContrast, float _agxSaturation, float _agxPurity, float _agxHue, float _agxShadowEv, float _agxHighlightEv, float _agxGamut, float _highlightShoulder, float _shadowLift, float _highlightRecovery, int32_t _displayP3, int32_t _applyLens, int32_t _lensGreenRow, int32_t _quadBaseX, int32_t _quadBaseY, int32_t _lowStep, int32_t _activeL, int32_t _activeT, int32_t _activeR, int32_t _activeB, struct halide_buffer_t *_guide_buffer, struct halide_buffer_t *_developed_buffer);
 
 HALIDE_FUNCTION_ATTRS
 int bgu_look_argv(void **args);

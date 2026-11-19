@@ -150,6 +150,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         var agxShadowEv: Float
         var agxHighlightEv: Float
         var agxGamut: Float
+        var shadowLift: Float
+        var highlightRecovery: Float
         var highlightShoulder: Float
         var rotation: Int
         var mirrored: Boolean
@@ -212,6 +214,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var agxShadowEv = 10f
         override var agxHighlightEv = 6.5f
         override var agxGamut = 0f
+        override var shadowLift = CameraToneBalance.DEFAULT_SHADOW_LIFT
+        override var highlightRecovery = 0f
         override var highlightShoulder = 1f
         override var rotation = 0
         override var mirrored = false
@@ -265,6 +269,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var agxShadowEv = 10f
         override var agxHighlightEv = 6.5f
         override var agxGamut = 0f
+        override var shadowLift = CameraToneBalance.DEFAULT_SHADOW_LIFT
+        override var highlightRecovery = 0f
         override var highlightShoulder = 1f
         override var lensGains: FloatArray? = null
         override var lensRows = 1
@@ -393,6 +399,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     @Volatile private var agxShadowEv = 10f
     @Volatile private var agxHighlightEv = 6.5f
     @Volatile private var agxGamut = 0f
+    @Volatile private var shadowLift = CameraToneBalance.DEFAULT_SHADOW_LIFT
+    @Volatile private var highlightRecovery = 0f
     @Volatile private var highlightShoulder = 1f
     /** Preview highlight guards (hard p99.5 / soft p95), mirroring the save path. */
     @Volatile private var previewHeadroom = 1f
@@ -570,6 +578,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var agxShadowEvLoc = -1
     private var agxHighlightEvLoc = -1
     private var agxGamutLoc = -1
+    private var cameraToneLoc = -1
+    private var gpuCameraToneLoc = -1
     private var highlightShoulderLoc = -1
     private var exposureEvLoc = -1
     private var lensLoc = -1
@@ -906,6 +916,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         agxHighlightEv = resolved.agxHighlightEv
         agxGamut = resolved.agxGamutCompression
         highlightShoulder = resolved.highlightShoulder
+        shadowLift = resolved.shadowLift
+        highlightRecovery = resolved.highlightRecovery
         previewHeadroom = resolved.highlightHeadroom
         // Single source of truth with the save-path meter: the broad guard is
         // re-solved under these AgX settings and the shoulder is carried over,
@@ -1597,6 +1609,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         out.agxHighlightEv = agxHighlightEv
         out.agxGamut = agxGamut
         out.highlightShoulder = highlightShoulder
+        out.shadowLift = shadowLift
+        out.highlightRecovery = highlightRecovery
         out.rotation = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         out.mirrored = c.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
         expectFrameInterval(maxOf(result?.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L,
@@ -1683,6 +1697,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         glUniform1f(exposureEvLoc, state.exposureEv)
         glUniform1i(basicToneLoc, state.basicTone)
         aces2.bind(program, state.basicTone)
+        android.opengl.GLES20.glUniform2f(cameraToneLoc, state.shadowLift, state.highlightRecovery)
         glUniform1f(agxPunchyLoc, state.agxPunchy)
         glUniform1f(agxContrastLoc, state.agxContrast)
         glUniform1f(agxSaturationLoc, state.agxSaturation)
@@ -2142,6 +2157,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glUniform1i(gpuJpegLoc, if (frame.jpeg) 1 else 0)
                     glUniform1i(gpuBasicToneLoc, frame.basicTone)
                     aces2.bind(gpuProgram, frame.basicTone)
+                    android.opengl.GLES20.glUniform2f(gpuCameraToneLoc, frame.shadowLift, frame.highlightRecovery)
                     glUniform1f(gpuAgxPunchyLoc, frame.agxPunchy)
                     glUniform1f(gpuAgxContrastLoc, frame.agxContrast)
                     glUniform1f(gpuAgxSaturationLoc, frame.agxSaturation)
@@ -2709,6 +2725,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         agxShadowEvLoc = glGetUniformLocation(program, "u_agxShadowEv")
         agxHighlightEvLoc = glGetUniformLocation(program, "u_agxHighlightEv")
         agxGamutLoc = glGetUniformLocation(program, "u_agxGamut")
+        cameraToneLoc = glGetUniformLocation(program, "u_camera_tone")
         highlightShoulderLoc = glGetUniformLocation(program, "u_highlightShoulder")
         exposureEvLoc = glGetUniformLocation(program, "u_exposureEv")
         lensLoc = glGetUniformLocation(program, "u_lens")
@@ -2814,6 +2831,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             gpuAgxShadowEvLoc = glGetUniformLocation(id, "u_agxShadowEv")
             gpuAgxHighlightEvLoc = glGetUniformLocation(id, "u_agxHighlightEv")
             gpuAgxGamutLoc = glGetUniformLocation(id, "u_agxGamut")
+            gpuCameraToneLoc = glGetUniformLocation(id, "u_camera_tone")
             gpuHighlightShoulderLoc = glGetUniformLocation(id, "u_highlightShoulder")
             gpuExposureEvLoc = glGetUniformLocation(id, "u_exposureEv")
             gpuBayerLoc = glGetUniformLocation(id, "u_bayer")
@@ -2893,6 +2911,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         positionLoc = -1; uvLoc = -1
         jpegLoc = -1; basicToneLoc = -1; agxPunchyLoc = -1; agxContrastLoc = -1; agxSaturationLoc = -1; agxPurityLoc = -1
         agxHueLoc = -1; agxShadowEvLoc = -1; agxHighlightEvLoc = -1; agxGamutLoc = -1
+        cameraToneLoc = -1
+        gpuCameraToneLoc = -1
         highlightShoulderLoc = -1
         exposureEvLoc = -1
         lensLoc = -1; lensSizeLoc = -1; lensActiveLoc = -1; applyLensLoc = -1; lensGreenRowLoc = -1

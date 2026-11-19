@@ -55,8 +55,9 @@ class AgxDisplayTransformTest {
             previous = output.average().toFloat()
         }
         assertRgb(
-            floatArrayOf(0.24525285f, 0.245218f, 0.245182f),
-            agxSrgb(floatArrayOf(0.18f, 0.18f, 0.18f)), 1e-4f
+            floatArrayOf(0.21487383f, 0.21484137f, 0.21480779f),
+            agxSrgb(floatArrayOf(0.18f, 0.18f, 0.18f),
+                JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, shadowLift = 0f)), 1e-4f
         )
         // Scene-linear soft shoulder (knee 0.9, scale 0.8) compresses 16->1.7 before AgX,
         // so extreme neutrals plateau at ~0.699 instead of the pinned 0.96 white.

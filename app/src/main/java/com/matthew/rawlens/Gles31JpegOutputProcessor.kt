@@ -132,6 +132,7 @@ class Gles31JpegOutputProcessor(context: Context) {
             GLES31.glUniform1i(location(outputProgram, "u_display_p3"), if (resolved.displayP3) 1 else 0)
             GLES31.glUniform1i(GLES31.glGetUniformLocation(outputProgram, "u_basic"), resolved.toneMapper.shaderMode)
             aces2.bind(outputProgram, resolved.toneMapper.shaderMode)
+            GLES31.glUniform2f(location(outputProgram, "u_camera_tone"), resolved.shadowLift, resolved.highlightRecovery)
             GLES31.glUniform1f(location(outputProgram, "u_agx_purity_boost"), resolved.agxPurityBoost)
             GLES31.glUniform1i(location(outputProgram, "u_agx_punchy"), if (resolved.agxLook == AgxLook.PUNCHY) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_contrast"), resolved.agxContrast)

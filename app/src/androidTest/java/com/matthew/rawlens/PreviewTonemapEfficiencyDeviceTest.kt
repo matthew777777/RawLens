@@ -197,7 +197,9 @@ class PreviewTonemapEfficiencyDeviceTest {
             glViewport(0,0,256,1)
             val pixels = ByteBuffer.allocateDirect(256 * 4)
             var maximumError = 0
+            for (lift in floatArrayOf(0f, .2f, 1f)) for (recovery in floatArrayOf(0f, 1f))
             for (shoulder in floatArrayOf(0f, 1f)) for (p3 in 0..1) for (ev in floatArrayOf(-2f,0f,2f)) {
+                glUniform2f(glGetUniformLocation(p, "u_camera_tone"), lift, recovery)
                 i("u_displayP3",p3); f("u_exposureEv",ev); f("u_highlightShoulder", shoulder)
                 glDrawArrays(GL_TRIANGLES,0,3); pixels.clear()
                 glReadPixels(0,0,256,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels)
@@ -206,7 +208,7 @@ class PreviewTonemapEfficiencyDeviceTest {
                     val t = ((n - .70f) / .29f).coerceIn(0f,1f)
                     val blend = t*t*(3f-2f*t)
                     val scene = (n + (1f-n)*blend) * Math.pow(2.0,ev.toDouble()).toFloat()
-                    val settings = JpegOutputSettings(toneMapper = PhotoToneMapper.BASIC, highlightShoulder = shoulder)
+                    val settings = JpegOutputSettings(toneMapper = PhotoToneMapper.BASIC, highlightShoulder = shoulder, shadowLift = lift, highlightRecovery = recovery)
                     val rgb = if (p3 == 1) AgxDisplayTransform.acescgToOutputLinearDisplayP3(floatArrayOf(scene,scene,scene), settings)
                         else AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(scene,scene,scene), settings)
                     repeat(3) { ch ->

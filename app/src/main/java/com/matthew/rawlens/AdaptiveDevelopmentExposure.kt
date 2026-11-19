@@ -94,7 +94,7 @@ data class AdaptiveExposureTuning(
                 // fixed so rolling off clouds cannot buy more capture/develop exposure.
                 highlightSoftHeadroom = if (resolved.toneMapper == PhotoToneMapper.BASIC)
                     resolved.highlightSoftHeadroom.toDouble() else AgxDisplayTransform.invertScopeCurve(
-                        encodedAnchor, resolved
+                        encodedAnchor, resolved.copy(highlightRecovery = 0f)
                     ).toDouble(),
                 highlightShoulder = if (resolved.toneMapper == PhotoToneMapper.BASIC) 0f else resolved.highlightShoulder,
                 centerWeight = resolved.centerWeight,

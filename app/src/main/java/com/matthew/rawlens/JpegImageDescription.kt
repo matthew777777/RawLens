@@ -46,7 +46,7 @@ internal fun jpegImageDescription(
         append("- AgX gamut compression: ${number(settings.agxGamutCompression)}\n")
         append("- Highlight compression: exponential shoulder; knee 0.900, strength ${number(settings.highlightShoulder)}\n")
     }
-    append("- Camera tone balance: ratio-preserving shadow lift, maximum 2 EV, fades out at scene peak 0.600; no black pedestal\n")
+    append("- Camera tone balance: shadow lift ${number(settings.shadowLift)}, near-black protection; highlight recovery ${number(settings.highlightRecovery)}, capped 1 EV; ratio-preserving\n")
     append("- Working space: scene-linear ACEScg (AP1, D60)\n")
     append(if (settings.chromaCleanup.rapidRawActive)
         "- JPEG preprocessing: RapidRAW 1.7 develop ON; color NR ${number(settings.chromaCleanup.rapidRawColorNoiseReduction)}, " +

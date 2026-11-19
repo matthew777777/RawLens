@@ -1237,6 +1237,7 @@ class Gles31AmazeProcessor(
                 finalProgram.float("u_agx_highlight_ev", settings.agxHighlightEv)
                 finalProgram.float("u_agx_gamut_compression", settings.agxGamutCompression)
                 finalProgram.float("u_highlight_shoulder", settings.resolvedForPlatform().highlightShoulder)
+                finalProgram.vec2("u_camera_tone", floatArrayOf(settings.shadowLift, settings.highlightRecovery))
                 // RAWR-parity gain-map encode (declarations arrive via the
                 // agx_output import slice of agx_srgb8.glsl).
                 val resolvedFused = settings.resolvedForPlatform()
