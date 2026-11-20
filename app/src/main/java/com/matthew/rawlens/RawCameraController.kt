@@ -737,6 +737,7 @@ class RawCameraController(
             val openCameraId = effectiveRoute.openCameraId
             activePhysicalCameraId = effectiveRoute.physicalCameraId
             characteristics = effectiveRoute.characteristics
+            supportsDualRaw() // refresh the cached answer for Settings
             if (id == "0") lapisSessionSpec?.let { LapisRootSession.bind(effectiveRoute.characteristics,it) }
             vendorKeyCharacteristics = if (effectiveRoute.physicalCameraId == null) effectiveRoute.characteristics
                 else runCatching { cameraManager.getCameraCharacteristics(openCameraId) }
@@ -2452,9 +2453,19 @@ class RawCameraController(
     }
 
     /** Uses the current lens and RAW session, including physical-camera outputs. */
-    fun supportsDualRaw(): Boolean =
-        lapisSessionSpec?.dcg == true ||
-            supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+    /**
+     * Settings pauses the camera by default (characteristics cleared), so the
+     * answer from the last open camera is kept; otherwise the Dual-RAW switch
+     * is always greyed out inside Settings.
+     */
+    @Volatile private var lastDualRawSupport = false
+
+    fun supportsDualRaw(): Boolean {
+        if (characteristics == null && lapisSessionSpec == null) return lastDualRawSupport
+        return (lapisSessionSpec?.dcg == true ||
+            supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR))
+            .also { lastDualRawSupport = it }
+    }
 
     fun captureDualRaw() {
         if (lapisSessionSpec?.dcg == true) {
@@ -4917,7 +4928,7 @@ class RawCameraController(
 
     /** Advertised vendor keys for the open lens, backing the per-lens key editor. */
     fun vendorKeyDiscovery(): List<DiscoveredVendorKey> {
-        val chars = vendorKeyCharacteristics ?: return emptyList()
+        val chars = settingsVendorCharacteristics() ?: return emptyList()
         return VendorKeyAndroid.discover(chars)
     }
 
@@ -4930,12 +4941,30 @@ class RawCameraController(
     @Volatile private var measuredRawFpsDiagnostic = ""
     fun vendorRawFpsDiagnostic(): String = rawFpsDiagnostic + measuredRawFpsDiagnostic
 
+    /**
+     * Statics for Settings editors. Settings pauses the camera by default, which
+     * nulls the live fields; resolve the selected route from CameraManager then so
+     * editors don't read "not declared" (greyed DNG levels, FPS list without 60).
+     */
+    private fun settingsRoute(): CameraRoute? =
+        selectedCameraId?.let { id -> runCatching { resolveCameraRoute(id) }.getOrNull() }
+
+    private fun settingsCharacteristics(): CameraCharacteristics? =
+        characteristics ?: settingsRoute()?.characteristics
+
+    private fun settingsVendorCharacteristics(): CameraCharacteristics? =
+        vendorKeyCharacteristics ?: settingsRoute()?.let { route ->
+            if (route.physicalCameraId == null) route.characteristics
+            else runCatching { cameraManager.getCameraCharacteristics(route.openCameraId) }
+                .getOrDefault(route.characteristics)
+        }
+
     fun vendorRawPreviewFpsRanges(): List<IntRange> =
-        vendorKeyCharacteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+        settingsVendorCharacteristics()?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             .orEmpty().map { it.lower..it.upper }
 
     fun vendorRawPreviewFpsOptions(): List<Int> {
-        val ranges = vendorKeyCharacteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+        val ranges = settingsVendorCharacteristics()?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
         return listOf(24, 30, 48, 50, 60).filter { fps -> ranges.any { it.lower <= fps && it.upper == fps } }
     }
 
@@ -5020,7 +5049,7 @@ class RawCameraController(
 
     /** Camera-provided values shown in the guided DNG override editor. */
     fun dngMetadataDefaults(): DngMetadataDefaults {
-        val camera = characteristics
+        val camera = settingsCharacteristics()
         fun transform(key: CameraCharacteristics.Key<ColorSpaceTransform>): List<Double>? =
             camera?.get(key)?.let { transform ->
                 List(9) { index -> transform.getElement(index / 3, index % 3).toDouble() }
