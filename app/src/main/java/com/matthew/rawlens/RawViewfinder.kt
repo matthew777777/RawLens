@@ -153,6 +153,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         var shadowLift: Float
         var highlightRecovery: Float
         var highlightShoulder: Float
+        var toneLook: FloatArray
         var rotation: Int
         var mirrored: Boolean
         var timestamp: Long
@@ -217,6 +218,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var shadowLift = CameraToneBalance.DEFAULT_SHADOW_LIFT
         override var highlightRecovery = 0f
         override var highlightShoulder = 1f
+        override var toneLook: FloatArray = ToneLook.DEFAULT
         override var rotation = 0
         override var mirrored = false
         override var timestamp = 0L
@@ -272,6 +274,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var shadowLift = CameraToneBalance.DEFAULT_SHADOW_LIFT
         override var highlightRecovery = 0f
         override var highlightShoulder = 1f
+        override var toneLook: FloatArray = ToneLook.DEFAULT
         override var lensGains: FloatArray? = null
         override var lensRows = 1
         override var lensCols = 1
@@ -402,6 +405,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     @Volatile private var shadowLift = CameraToneBalance.DEFAULT_SHADOW_LIFT
     @Volatile private var highlightRecovery = 0f
     @Volatile private var highlightShoulder = 1f
+    @Volatile private var toneLook: FloatArray = ToneLook.DEFAULT
     /** Preview highlight guards (hard p99.5 / soft p95), mirroring the save path. */
     @Volatile private var previewHeadroom = 1f
     @Volatile private var previewSoftHeadroom = 0.85f
@@ -916,6 +920,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         agxHighlightEv = resolved.agxHighlightEv
         agxGamut = resolved.agxGamutCompression
         highlightShoulder = resolved.highlightShoulder
+        toneLook = ToneLook.values(resolved)
         shadowLift = resolved.shadowLift
         highlightRecovery = resolved.highlightRecovery
         previewHeadroom = resolved.highlightHeadroom
@@ -1609,6 +1614,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         out.agxHighlightEv = agxHighlightEv
         out.agxGamut = agxGamut
         out.highlightShoulder = highlightShoulder
+        out.toneLook = toneLook
         out.shadowLift = shadowLift
         out.highlightRecovery = highlightRecovery
         out.rotation = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
@@ -1696,7 +1702,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         glUniform1i(jpegLoc, if (state.jpeg) 1 else 0)
         glUniform1f(exposureEvLoc, state.exposureEv)
         glUniform1i(basicToneLoc, state.basicTone)
-        aces2.bind(program, state.basicTone)
+        aces2.bind(program, state.basicTone, state.toneLook)
         android.opengl.GLES20.glUniform2f(cameraToneLoc, state.shadowLift, state.highlightRecovery)
         glUniform1f(agxPunchyLoc, state.agxPunchy)
         glUniform1f(agxContrastLoc, state.agxContrast)
@@ -2156,7 +2162,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glUniform1i(gpuDisplayP3Loc, if (frame.displayP3) 1 else 0)
                     glUniform1i(gpuJpegLoc, if (frame.jpeg) 1 else 0)
                     glUniform1i(gpuBasicToneLoc, frame.basicTone)
-                    aces2.bind(gpuProgram, frame.basicTone)
+                    aces2.bind(gpuProgram, frame.basicTone, frame.toneLook)
                     android.opengl.GLES20.glUniform2f(gpuCameraToneLoc, frame.shadowLift, frame.highlightRecovery)
                     glUniform1f(gpuAgxPunchyLoc, frame.agxPunchy)
                     glUniform1f(gpuAgxContrastLoc, frame.agxContrast)

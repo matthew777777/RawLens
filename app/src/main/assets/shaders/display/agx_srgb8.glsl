@@ -244,10 +244,11 @@ void main() {
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
     highp vec3 outputLinear;
     highp vec3 basicEncoded = vec3(0.0);
-    if (u_basic == 3) outputLinear = aces2_output(balancedAcescg, u_display_p3);
+    if (u_basic == 3) outputLinear = aces2_output(tl_aces_pre(balancedAcescg), u_display_p3);
+    else if (u_basic == 4) outputLinear = odrt(ACESCG_TO_REC2020_D65 * balancedAcescg, u_display_p3);
     else if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(ACESCG_TO_REC2020_D65 * balancedAcescg);
     else if (EFFECTIVE_BASIC == 1) {
-        highp vec3 sceneOutput = outputMatrix * (ACESCG_TO_REC2020_D65 * balancedAcescg);
+        highp vec3 sceneOutput = outputMatrix * tl_basic_pre(ACESCG_TO_REC2020_D65 * balancedAcescg);
         basicEncoded = basic_encoded(sceneOutput);
         outputLinear = vec3(0.0);
         // Ordinary SDR goes straight to encoded output, skipping decode/re-encode.

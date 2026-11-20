@@ -3860,7 +3860,8 @@ class MainActivity : Activity() {
         highlightRecovery = lensPreferences().getFloat(CameraToneBalance.KEY_HIGHLIGHT_RECOVERY, 0f),
         highlightShoulder = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_SHOULDER, 1f),
         hlReconstruction = HighlightReconstructionDefaults.read(lensPreferences()),
-        mono = MonoSettings.read(lensPreferences())
+        mono = MonoSettings.read(lensPreferences()),
+        toneLook = ToneLookSettings.load(lensPreferences())
     ).resolvedForPlatform()
 
     /** JPEG XL container options (darktable parity); defaults resolve to 16-bit lossless. */

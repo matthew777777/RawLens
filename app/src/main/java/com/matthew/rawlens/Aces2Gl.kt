@@ -8,7 +8,9 @@ import java.nio.ByteBuffer
 internal class Aces2Gl {
     private var texture = 0
 
-    fun bind(program: Int, mode: Int) {
+    fun bind(program: Int, mode: Int, look: FloatArray = ToneLook.DEFAULT) {
+        val lookLocation = GL.glGetUniformLocation(program, ToneLook.UNIFORM)
+        if (lookLocation >= 0) GL.glUniform4fv(lookLocation, look.size / 4, look, 0)
         val location = GL.glGetUniformLocation(program, "u_aces2")
         if (location < 0) return
         GL.glUniform1i(location, 7)

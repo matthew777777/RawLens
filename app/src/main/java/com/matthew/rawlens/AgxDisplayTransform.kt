@@ -56,11 +56,12 @@ object AgxDisplayTransform {
     ): FloatArray {
         require(inputAcescg.size == 3 && inputAcescg.all(Float::isFinite))
         val acescg = CameraToneBalance.map(inputAcescg, settings)
-        if (settings.toneMapper == PhotoToneMapper.ACES_2) return Aces2DisplayTransform.map(acescg, outputMatrix === REC2020_TO_DISPLAY_P3)
+        if (settings.toneMapper == PhotoToneMapper.ACES_2) return Aces2DisplayTransform.map(ToneLook.pre(acescg, settings), outputMatrix === REC2020_TO_DISPLAY_P3)
         val sceneRec2020 = map(ACESCG_TO_REC2020_D65, acescg)
-        if (settings.toneMapper == PhotoToneMapper.SIGMOID) return map(outputMatrix, SigmoidDisplayTransform.map(sceneRec2020))
+        if (settings.toneMapper == PhotoToneMapper.OPENDRT) return OpenDrt.map(sceneRec2020, ToneLook.values(settings), outputMatrix === REC2020_TO_DISPLAY_P3)
+        if (settings.toneMapper == PhotoToneMapper.SIGMOID) return map(outputMatrix, SigmoidDisplayTransform.map(sceneRec2020, settings.toneLook))
         if (settings.toneMapper == PhotoToneMapper.BASIC) {
-            val output = map(outputMatrix, sceneRec2020)
+            val output = map(outputMatrix, ToneLook.pre(sceneRec2020, settings))
             val encoded = BasicDisplayTransform.encodeRgb(output, settings.highlightShoulder)
             return FloatArray(3) { BasicDisplayTransform.decode(encoded[it]) }
         }
@@ -152,9 +153,10 @@ object AgxDisplayTransform {
         val resolved = settings.resolvedForPlatform()
         if (!inputLinear.isFinite()) return 0f
         val linear = inputLinear * CameraToneBalance.gain(inputLinear, resolved.shadowLift, resolved.highlightRecovery)
-        if (resolved.toneMapper == PhotoToneMapper.ACES_2) return srgbOetf(Aces2DisplayTransform.map(floatArrayOf(linear,linear,linear))[0])
-        if (resolved.toneMapper == PhotoToneMapper.SIGMOID) return srgbOetf(SigmoidDisplayTransform.curve(linear))
-        if (resolved.toneMapper == PhotoToneMapper.BASIC) return BasicDisplayTransform.encode(linear, resolved.highlightShoulder)
+        if (resolved.toneMapper == PhotoToneMapper.ACES_2) return srgbOetf(Aces2DisplayTransform.map(ToneLook.pre(floatArrayOf(linear,linear,linear), resolved))[0])
+        if (resolved.toneMapper == PhotoToneMapper.OPENDRT) return srgbOetf(OpenDrt.map(floatArrayOf(linear, linear, linear), ToneLook.values(resolved), false)[0])
+        if (resolved.toneMapper == PhotoToneMapper.SIGMOID) return srgbOetf(SigmoidDisplayTransform.curve(linear, SigmoidDisplayTransform.Params.of(resolved.toneLook)))
+        if (resolved.toneMapper == PhotoToneMapper.BASIC) return BasicDisplayTransform.encode(ToneLook.pre(floatArrayOf(linear,linear,linear), resolved)[0], resolved.highlightShoulder)
         val positive = max(0f, linear)
         val shoulder = resolved.highlightShoulder.coerceIn(0f, 1f)
         val soft = when {

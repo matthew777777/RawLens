@@ -212,7 +212,9 @@ object AdaptiveDevelopmentExposure {
     fun analyze(
         cfa: UnpackedRawCfa,
         workspace: Workspace = Workspace(),
-        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning(),
+        /** One sensor frame: clipped photosites leave the highlight guards. Never for merges. */
+        singleFrame: Boolean = false
     ): AdaptiveExposureResult {
         require(cfa.values.size == cfa.width * cfa.height)
         val stride = bayerSampleStride(cfa.values.size)
@@ -235,7 +237,7 @@ object AdaptiveDevelopmentExposure {
             }
             index += stride
         }
-        return analyzeSamples(samples, count, tuning, weights)
+        return analyzeSamples(samples, count, tuning, weights, excludeClipped = singleFrame)
     }
 
     /**
@@ -290,7 +292,9 @@ object AdaptiveDevelopmentExposure {
         crop: RawCrop,
         lensShading: LensShadingModel?,
         workspace: Workspace = Workspace(),
-        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning(),
+        /** One sensor frame: clipped photosites leave the highlight guards. Never for merges. */
+        singleFrame: Boolean = false
     ): AdaptiveExposureResult {
         require(crop.left + crop.width <= layout.width && crop.top + crop.height <= layout.height)
         val input = source.duplicate().order(ByteOrder.nativeOrder())
@@ -330,7 +334,7 @@ object AdaptiveDevelopmentExposure {
             }
             index += stride
         }
-        return analyzeSamples(samples, count, tuning, weights)
+        return analyzeSamples(samples, count, tuning, weights, excludeClipped = singleFrame)
     }
 
     /**
@@ -451,7 +455,9 @@ object AdaptiveDevelopmentExposure {
         samples: FloatArray,
         count: Int,
         tuning: AdaptiveExposureTuning = AdaptiveExposureTuning(),
-        weights: FloatArray? = null
+        weights: FloatArray? = null,
+        /** Single-frame sensor samples only: merged RGB may carry valid values above 1. */
+        excludeClipped: Boolean = false
     ): AdaptiveExposureResult {
         // AE-1: the log-average takes log2 of every sample between p5 and p95,
         // so a zero there made it -inf (max lift, HDR-scene ceiling) and a
@@ -463,8 +469,15 @@ object AdaptiveDevelopmentExposure {
         }
         // Meter what AgX sees: the scene-linear shoulder compresses above-knee
         // content before the log domain, so apply it before any statistic.
-        applyShoulder(samples, count, tuning.bounded().highlightShoulder)
+        // Sort on raw values first: clipped photosites (>= CLIP_LEVEL) sit at the top and
+        // are counted before the shoulder (monotonic, so it keeps the order) rewrites them.
         sortSamples(samples, weights, count)
+        var guardCount = count
+        while (guardCount > 0 && samples[guardCount - 1] >= CLIP_LEVEL) guardCount--
+        // Already-clipped photosites cannot be recovered by exposure: protecting them only
+        // greys them and darkens the frame. Highlight guards meter the unclipped tail.
+        if (!excludeClipped || guardCount < MIN_SAMPLES) guardCount = count
+        applyShoulder(samples, count, tuning.bounded().highlightShoulder)
         val low = percentile(samples, count, 0.05)
         val highForAverage = percentile(samples, count, 0.95)
         // Center weighting shapes only the brightness placement: guards below
@@ -488,10 +501,10 @@ object AdaptiveDevelopmentExposure {
         // of vetoing the whole frame's lift; scenes with broader bright areas
         // stay capped by the p95 broad guard below.
         val highlight = percentile(samples, count, 0.995).toDouble()
-        val spikeGuardLevel = percentile(samples, count, 0.99).toDouble()
+        val spikeGuardLevel = percentile(samples, guardCount, 0.99).toDouble()
         // Broad-area highlight level (sky, walls): keeps large bright regions
         // from flattening even when the p99 spike itself is still safe.
-        val highlightBroad = percentile(samples, count, 0.95).toDouble()
+        val highlightBroad = percentile(samples, guardCount, 0.95).toDouble()
         val bounded = tuning.bounded()
         var correction = log2(bounded.middleGreyTarget / exp2(logAverage))
         // Do not move the measured upper tail past display-referred white before AgX rolls it off.
@@ -638,6 +651,8 @@ object AdaptiveDevelopmentExposure {
 
     private const val MAX_SAMPLES = 65_536
     private const val MIN_SAMPLES = 64
+    /** Normalized sensor level treated as clipped (white level minus a small black/noise margin). */
+    private const val CLIP_LEVEL = 0.97f
     internal const val SHADOW_FLOOR = 1e-4f
     private const val TARGET_MIDDLE = 0.18
     // Defaults for [AdaptiveExposureTuning]; wired from JpegOutputSettings.

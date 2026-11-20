@@ -44,11 +44,12 @@ class CameraToneBalanceTest {
         }
     }
     @Test fun highlightRecoveryMatchesRapidRawFlatFieldResponseAndNeverFolds() {
-        // Independent RapidRAW 1.7 neutral-ramp values, start -3 EV, knee 1,
-        // cap -1 EV, rate 1.6. The local guided base is deliberately not ported.
+        // Independent RapidRAW 1.7 highlight_shift values (shader.wgsl): pivot -3 EV, knee 1,
+        // pull 1.5, cap 1.3, amount min(1.2 * recovery, 1.1); white (level 0) held at the
+        // -0.1 EV ceiling. The local guided base is deliberately not ported.
         assertEquals(1f, CameraToneBalance.gain(.125f, 0f, 1f), 0f)
-        assertEquals(.6827025f, CameraToneBalance.gain(.25f, 0f, 1f), 1e-5f)
-        assertEquals(.5095599f, CameraToneBalance.gain(1f, 0f, 1f), 1e-5f)
+        assertEquals(.6475763f, CameraToneBalance.gain(.25f, 0f, 1f), 1e-4f)
+        assertEquals(.9330330f, CameraToneBalance.gain(1f, 0f, 1f), 1e-4f)
         for (lift in floatArrayOf(0f, .2f, 1f)) for (recovery in floatArrayOf(0f, .5f, 1f)) {
             var previous = 0f
             for (i in 0..50000) {

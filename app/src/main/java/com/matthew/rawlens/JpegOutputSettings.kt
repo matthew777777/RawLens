@@ -95,7 +95,9 @@ data class JpegOutputSettings(
      */
     val hlReconstruction: Boolean = true,
     /** B&W photosite mode (after rwmono); OFF keeps the colour develop. */
-    val mono: MonoSettings = MonoSettings()
+    val mono: MonoSettings = MonoSettings(),
+    /** Sigmoid / ACES 2.0 / Basic look controls (neutral defaults). */
+    val toneLook: ToneLookSettings = ToneLookSettings()
 ) {
     /**
      * Expand the existing AgX shadow range to restore middle grey after protection.
@@ -142,6 +144,7 @@ data class JpegOutputSettings(
             highlightShoulder = bounded(highlightShoulder, 0f, 1f, 1f),
             shadowLift = bounded(shadowLift, 0f, 1f, CameraToneBalance.DEFAULT_SHADOW_LIFT),
             highlightRecovery = bounded(highlightRecovery, 0f, 1f, 0f),
+            toneLook = toneLook.bounded(),
             centerWeight = bounded(centerWeight, 0f, 3f, 0f),
             gainmapQuality = gainmapQuality.coerceIn(1, 100),
             hdrExposure = bounded(hdrExposure, 1e-6f, 1024f, 1f),

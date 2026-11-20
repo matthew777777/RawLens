@@ -12,6 +12,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Settings → Photo: developed format (JPEG / JPEG XL), JPEG XL container
@@ -302,6 +303,7 @@ internal class PhotoSettingsTab(
                 .putFloat(CameraToneBalance.KEY_HIGHLIGHT_RECOVERY, resolved.highlightRecovery)
                 .putBoolean(MainActivity.KEY_JPEG_HL_RECONSTRUCTION, resolved.hlReconstruction)
                 .putBoolean(HighlightReconstructionDefaults.APPLIED, true)
+                .also { resolved.toneLook.save(it) }
                 .putString(MonoMode.PREFERENCE_KEY, resolved.mono.mode.name)
                 .putBoolean(MonoMode.KEY_KEEP_COLOR_DNG, resolved.mono.keepColorDng)
                 .apply()
@@ -552,7 +554,7 @@ internal class PhotoSettingsTab(
             }
         })
         if (currentJpegSettings.toneMapper == PhotoToneMapper.ACES_2) {
-            kit.content.addView(kit.sectionDesc("ACES 2.0 perceptual tone and gamut mapping. 100 nit SDR rendering for sRGB or Display P3."))
+            kit.content.addView(kit.sectionDesc("ACES 2.0 perceptual tone and gamut mapping. 100 nit SDR rendering for sRGB or Display P3. Look controls are under Advanced tone & color."))
         }
         val advancedLookStart = kit.content.childCount
         if (currentJpegSettings.toneMapper == PhotoToneMapper.AGX) {
@@ -647,6 +649,104 @@ internal class PhotoSettingsTab(
                 { settings, value -> settings.copy(agxGamutCompression = value / 100f) }
             )
         }
+        fun addLookSlider(title: String, maximum: Int, toProgress: (ToneLookSettings) -> Float, fromProgress: (Int) -> Float,
+                          format: (Int) -> String, apply: (ToneLookSettings, Float) -> ToneLookSettings) =
+            addAgxSlider(title, maximum, toProgress(currentJpegSettings.toneLook).roundToInt(), format) { settings, value ->
+                settings.copy(toneLook = apply(settings.toneLook, fromProgress(value)))
+            }
+        val pct: (Int) -> String = { "$it%" }
+        when (currentJpegSettings.toneMapper) {
+            PhotoToneMapper.SIGMOID -> {
+                kit.content.addView(kit.sectionDesc("darktable sigmoid: same curve and parameters as darktable's sigmoid module. Defaults equal darktable's defaults; colorfulness 100% = off."))
+                addLookSlider("Sigmoid contrast", 350, { (it.sigmoidContrast - 0.5f) * 100f }, { 0.5f + it / 100f },
+                    { String.format(Locale.US, "%.2f", 0.5f + it / 100f) }) { t, v -> t.copy(sigmoidContrast = v) }
+                addLookSlider("Sigmoid skew", 200, { (it.sigmoidSkew + 1f) * 100f }, { it / 100f - 1f },
+                    { String.format(Locale.US, "%+.2f", it / 100f - 1f) }) { t, v -> t.copy(sigmoidSkew = v) }
+                addLookSlider("Target white", 50, { (it.sigmoidWhite - 0.5f) * 100f }, { 0.5f + it / 100f },
+                    { "${50 + it}%" }) { t, v -> t.copy(sigmoidWhite = v) }
+                addLookSlider("Target black", 200, { it.sigmoidBlack * 10000f }, { it / 10000f },
+                    { String.format(Locale.US, "%.2f%%", it / 100f) }) { t, v -> t.copy(sigmoidBlack = v) }
+                addLookSlider("Preserve hue", 100, { it.sigmoidHue * 100f }, { it / 100f }, pct) { t, v -> t.copy(sigmoidHue = v) }
+                addLookSlider("Colorfulness", 200, { it.sigmoidColorfulness * 100f }, { it / 100f }, pct) { t, v -> t.copy(sigmoidColorfulness = v) }
+            }
+            PhotoToneMapper.ACES_2 -> {
+                kit.content.addView(kit.sectionDesc("ACES 2.0 look: exposure, contrast (around 18% grey) and saturation are applied in ACEScg before the 100 nit output transform."))
+                addLookSlider("ACES exposure", 80, { (it.acesExposureEv + 2f) * 20f }, { it / 20f - 2f },
+                    { String.format(Locale.US, "%+.2f EV", it / 20f - 2f) }) { t, v -> t.copy(acesExposureEv = v) }
+                addLookSlider("ACES contrast", 100, { (it.acesContrast - 0.5f) * 100f }, { 0.5f + it / 100f },
+                    { "${50 + it}%" }) { t, v -> t.copy(acesContrast = v) }
+                addLookSlider("ACES saturation", 200, { it.acesSaturation * 100f }, { it / 100f }, pct) { t, v -> t.copy(acesSaturation = v) }
+            }
+            PhotoToneMapper.BASIC -> {
+                addLookSlider("Basic contrast", 100, { (it.basicContrast - 0.5f) * 100f }, { 0.5f + it / 100f },
+                    { "${50 + it}%" }) { t, v -> t.copy(basicContrast = v) }
+                addLookSlider("Basic saturation", 200, { it.basicSaturation * 100f }, { it / 100f }, pct) { t, v -> t.copy(basicSaturation = v) }
+            }
+            PhotoToneMapper.OPENDRT -> {
+                kit.content.addView(kit.sectionDesc("OpenDRT v1.1.0 by Jed Smith (GPL-3.0). Pick a look or tonescale preset to load its upstream values, then fine-tune every OpenDRT parameter below. SDR 100 nit, sRGB or Display P3 output."))
+                fun setOdrt(next: OpenDrtSettings) {
+                    if (applyJpegOutputSettings(currentJpegSettings.copy(toneLook = currentJpegSettings.toneLook.copy(openDrt = next)))) host.reshow()
+                }
+                fun choose(title: String, items: List<String>, pick: (Int) -> Unit) {
+                    android.app.AlertDialog.Builder(activity).setTitle(title)
+                        .setItems(items.toTypedArray()) { _, i -> pick(i) }.show()
+                }
+                val odrt = currentJpegSettings.toneLook.openDrt.bounded()
+                kit.content.addView(Button(activity).apply {
+                    isAllCaps = false
+                    text = "Look preset: ${OpenDrt.LOOKS[odrt.look].first}"
+                    setOnClickListener { choose("OpenDRT look preset", OpenDrt.LOOKS.map { it.first }) { setOdrt(currentJpegSettings.toneLook.openDrt.withLook(it)) } }
+                })
+                kit.content.addView(Button(activity).apply {
+                    isAllCaps = false
+                    text = "Apply tonescale preset…"
+                    setOnClickListener { choose("OpenDRT tonescale preset", OpenDrt.TONESCALES.map { it.first }) { setOdrt(currentJpegSettings.toneLook.openDrt.withTonescale(it)) } }
+                })
+                var group = ""
+                for (p in OpenDrtParam.entries) {
+                    if (p.hidden) continue
+                    if (p.group != group) { group = p.group; kit.content.addView(kit.sectionDesc("OpenDRT · $group")) }
+                    val choices = p.choices
+                    when {
+                        p.toggle -> kit.content.addView(SettingsSwitch(activity).apply {
+                            text = p.label
+                            setTextColor(activity.getColor(R.color.text_primary))
+                            isChecked = odrt[p] > 0.5f
+                            setOnCheckedChangeListener { button, on ->
+                                val next = currentJpegSettings.toneLook.openDrt.with(p, if (on) 1f else 0f)
+                                if (!applyJpegOutputSettings(currentJpegSettings.copy(toneLook = currentJpegSettings.toneLook.copy(openDrt = next))))
+                                    button.isChecked = currentJpegSettings.toneLook.openDrt[p] > 0.5f
+                            }
+                        })
+                        choices != null -> kit.content.addView(Button(activity).apply {
+                            isAllCaps = false
+                            text = "${p.label}: ${choices[odrt[p].toInt()]}"
+                            setOnClickListener { choose(p.label, choices) { setOdrt(currentJpegSettings.toneLook.openDrt.with(p, it.toFloat())) } }
+                        })
+                        else -> {
+                            val steps = 1000
+                            val span = p.max - p.min
+                            addAgxSlider(p.label, steps, ((odrt[p] - p.min) / span * steps).roundToInt(),
+                                { String.format(Locale.US, "%.3f", p.min + span * it / steps) }) { settings, v ->
+                                settings.copy(toneLook = settings.toneLook.copy(openDrt = settings.toneLook.openDrt.with(p, p.min + span * v / steps)))
+                            }
+                        }
+                    }
+                }
+            }
+            else -> Unit
+        }
+        if (currentJpegSettings.toneMapper != PhotoToneMapper.AGX) {
+            kit.content.addView(Button(activity).apply {
+                text = "Reset ${currentJpegSettings.toneMapper.label} look"
+                setOnClickListener {
+                    val look = currentJpegSettings.toneLook
+                    val reset = if (currentJpegSettings.toneMapper == PhotoToneMapper.OPENDRT) look.copy(openDrt = OpenDrtSettings().withLook(look.openDrt.look))
+                        else ToneLookSettings(openDrt = look.openDrt)
+                    if (applyJpegOutputSettings(currentJpegSettings.copy(toneLook = reset))) host.reshow()
+                }
+            })
+        }
         kit.content.addView(SettingsSwitch(activity).apply {
             text = "Adaptive development exposure (AUTO and ZSL)"
             setTextColor(activity.getColor(R.color.text_primary))
@@ -685,7 +785,7 @@ internal class PhotoSettingsTab(
         )
         kit.content.addView(TextView(activity).apply {
             tag = "settings-description"
-            text = "Shadow lift protects deep blacks. Highlight recovery gently lowers bright tones before the tone mapper. Set either to 0% to bypass it."
+            text = "Shadow lift protects deep blacks. Highlight recovery is RapidRAW 1.7 Highlights (100% = slider -100): pulls bright tones while holding white. Set either to 0% to bypass it."
             setTextColor(activity.getColor(R.color.text_secondary))
             textSize = 12f
             setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
@@ -730,7 +830,8 @@ internal class PhotoSettingsTab(
                     shadowLift = currentJpegSettings.shadowLift,
                     highlightRecovery = currentJpegSettings.highlightRecovery,
                     demosaic = currentJpegSettings.demosaic,
-                    chromaCleanup = currentJpegSettings.chromaCleanup
+                    chromaCleanup = currentJpegSettings.chromaCleanup,
+                    toneLook = currentJpegSettings.toneLook
                 )
                 if (applyJpegOutputSettings(official)) {
                     host.setStatus("AGX RESET • OFFICIAL BASE")

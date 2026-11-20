@@ -286,14 +286,15 @@ internal object VfGpuImport {
             " cam *= exp2(u_exposureEv);" +
             " vec3 balancedAces = camera_tone_balance(u_camToAces * cam);" +
             " vec3 scene2020 = acesCgToRec2020() * balancedAces;" +
-            " if (u_basic == 3) { vec3 se=srgbOetf(clamp(aces2_output(balancedAces,u_displayP3),0.0,1.0));" +
+            " if (u_basic == 3) { vec3 se=srgbOetf(clamp(aces2_output(tl_aces_pre(balancedAces),u_displayP3),0.0,1.0));" +
             " @OUT@=vec4(se,1.0); return; }" +
+            " if (u_basic == 4) { vec3 se=srgbOetf(odrt(scene2020,u_displayP3)); @OUT@=vec4(se,1.0); return; }" +
             " if (u_basic == 2) { mat3 sm=rec2020ToSrgb(); if(u_displayP3!=0)sm=rec2020ToDisplayP3();" +
             " vec3 se=srgbOetf(clamp(sm*dt_sigmoid(scene2020),0.0,1.0));" +
             " @OUT@=vec4(se,1.0); return; }" +
             " if (u_basic == 1) {" +
             "  mat3 basicMat = rec2020ToSrgb(); if (u_displayP3 != 0) basicMat = rec2020ToDisplayP3();" +
-            "  vec3 basicScene = max(basicMat * scene2020, vec3(0.0)); float peak = max(basicScene.r, max(basicScene.g, basicScene.b));" +
+            "  vec3 basicScene = max(basicMat * tl_basic_pre(scene2020), vec3(0.0)); float peak = max(basicScene.r, max(basicScene.g, basicScene.b));" +
             "  float knee = 0.76 - 0.16 * clamp(u_highlightShoulder, 0.0, 1.0);" +
             "  if (peak > knee) { float d = 1.0 - knee; float mapped = 1.0 - d * (d / (peak + d - knee));" +
             "   basicScene *= mapped / peak; float white = 1.0 - 1.0 / (1.0 + 0.15 * (peak - mapped));" +

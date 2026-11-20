@@ -298,14 +298,16 @@ class RawDevelopmentCoordinator(context: Context) {
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
                 if (cpuCfa != null) AdaptiveDevelopmentExposure.analyze(
-                    cpuCfa, adaptiveWorkspace, settings.adaptiveExposureTuning
+                    cpuCfa, adaptiveWorkspace, settings.adaptiveExposureTuning,
+                    singleFrame = true
                 )
                 else AdaptiveDevelopmentExposure.analyzeRaw(
                     // Packed frames never reach here: their branch above
                     // always produces a CFA, so analyze() wins instead.
                     rawPlane, requireNotNull(layout),
                     normalization, geometry.processingCrop, lensModel,
-                    adaptiveWorkspace, settings.adaptiveExposureTuning
+                    adaptiveWorkspace, settings.adaptiveExposureTuning,
+                    singleFrame = true
                 )
             }
         } else null

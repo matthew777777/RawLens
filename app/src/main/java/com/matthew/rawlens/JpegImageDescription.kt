@@ -20,7 +20,7 @@ internal fun jpegImageDescription(
     val rgbMerge = typeSuffix == CaptureFileNames.TYPE_MFSR || typeSuffix == CaptureFileNames.TYPE_LKR
     val mono = monochromeMode?.takeIf { it != MonoMode.OFF }
     val input = if (mono != null) "B&W ${mono.label} photosite luminance" else if (rgbMerge) "Merged linear camera RGB" else "RAW_SENSOR"
-    val tone = if (settings.toneMapper == PhotoToneMapper.ACES_2) "ACES 2.0" else if (settings.toneMapper == PhotoToneMapper.SIGMOID) "Sigmoid" else if (settings.toneMapper == PhotoToneMapper.BASIC) "Basic" else "AgX ${settings.agxLook.label}"
+    val tone = if (settings.toneMapper == PhotoToneMapper.ACES_2) "ACES 2.0" else if (settings.toneMapper == PhotoToneMapper.SIGMOID) "Sigmoid" else if (settings.toneMapper == PhotoToneMapper.BASIC) "Basic" else if (settings.toneMapper == PhotoToneMapper.OPENDRT) "OpenDRT ${OpenDrt.LOOKS[settings.toneLook.openDrt.look].first}" else "AgX ${settings.agxLook.label}"
     val gamut = if (settings.displayP3) "Display P3" else "sRGB"
     if (!description.isNullOrBlank()) append(description.trimEnd()).append("\n\nJPEG DEVELOPMENT\n")
     else append("Captured with RawLens\nJPEG DEVELOPMENT\n")
@@ -33,8 +33,12 @@ internal fun jpegImageDescription(
         append("- Highlight compression: Khronos-derived rational shoulder and path to white; knee 0.760..0.600, white limit 1.000, strength ${number(settings.highlightShoulder)}\n")
     } else if (settings.toneMapper == PhotoToneMapper.ACES_2) {
         append("- ACES 2.0: perceptual tone/chroma/gamut mapping, 100 nit SDR output, reference LUT\n")
+    } else if (settings.toneMapper == PhotoToneMapper.OPENDRT) {
+        val o = settings.toneLook.openDrt.bounded()
+        append("- OpenDRT v1.1.0 (Jed Smith): base look ${OpenDrt.LOOKS[o.look].first}, SDR 100 nit\n")
+        append("- OpenDRT parameters: " + OpenDrtParam.entries.filter { !it.hidden }.joinToString(", ") { it.name.lowercase() + "=" + number(o[it]) } + "\n")
     } else if (settings.toneMapper == PhotoToneMapper.SIGMOID) {
-        append("- Sigmoid: contrast 1.5, skew 0, preserve hue 100%, Rec.2020 primaries\n")
+        settings.toneLook.bounded().let { t -> append(String.format(java.util.Locale.US, "- Sigmoid (darktable): contrast %.2f, skew %.2f, white %.0f%%, black %.4f%%, preserve hue %.0f%%, colorfulness %.0f%%, Rec.2020 primaries\n", t.sigmoidContrast, t.sigmoidSkew, t.sigmoidWhite * 100f, t.sigmoidBlack * 100f, t.sigmoidHue * 100f, t.sigmoidColorfulness * 100f)) }
     } else {
         append("- AgX look: ${settings.agxLook.label}\n")
         append("- AgX contrast: ${number(settings.agxContrast)}\n")

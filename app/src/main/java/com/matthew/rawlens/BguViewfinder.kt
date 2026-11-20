@@ -1223,7 +1223,8 @@ class BguViewfinder @JvmOverloads constructor(
                         centerWeight = previewCenterWeight,
                         focusX = previewFocusX,
                         focusY = previewFocusY
-                    ).bounded()
+                    ).bounded(),
+                    singleFrame = true
                 ).correctionEv
             } catch (_: Exception) {
                 Double.NaN
