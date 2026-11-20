@@ -19,4 +19,18 @@ class StableUiScaleTest {
         assertEquals(440, StableUiScale.targetDensityDpi(currentDpi = 440, stableDpi = 0, shortSidePx = 1080))
         assertEquals(440, StableUiScale.targetDensityDpi(currentDpi = 440, stableDpi = 480, shortSidePx = 0))
     }
+
+    @Test fun tallPhonesAreNotFitted() {
+        assertEquals(520, StableUiScale.fitDensityDpi(dpi = 520, longSidePx = 2772))
+        assertEquals(320, StableUiScale.fitDensityDpi(dpi = 320, longSidePx = 1280))
+    }
+
+    @Test fun squareScreenShrinksUi() {
+        // 1440 px at 360 dpi = 640 dp: exactly fits.
+        assertEquals(360, StableUiScale.fitDensityDpi(dpi = 360, longSidePx = 1440))
+        // 1440 px at 480 dpi = 480 dp -> 0.75 scale -> 640 dpi.
+        assertEquals(640, StableUiScale.fitDensityDpi(dpi = 480, longSidePx = 1440))
+        // Shrink is capped at 0.7.
+        assertEquals(800, StableUiScale.fitDensityDpi(dpi = 560, longSidePx = 1440))
+    }
 }

@@ -18,6 +18,33 @@ internal object StableUiScale {
     private const val MAX_SHORT_SIDE_DP = 960f
 
     /**
+     * Portrait height, in dp, the camera chrome (top island + bottom panel) is laid out
+     * for. Ordinary phones (16:9 and taller) already reach it and render unchanged;
+     * squat screens (square 1:1 like the Unihertz Titan, 4:3) get the whole UI shrunk so
+     * the viewfinder keeps a usable share of the screen.
+     */
+    private const val DESIGN_LONG_SIDE_DP = 640f
+    /** Never shrink the UI below this fraction, so touch targets stay usable. */
+    private const val MIN_FIT_SCALE = 0.7f
+
+    /**
+     * Density that fits [DESIGN_LONG_SIDE_DP] into the screen's long side, starting from
+     * [dpi]. Returns [dpi] unchanged when the screen is already tall enough.
+     */
+    fun fitDensityDpi(dpi: Int, longSidePx: Int): Int {
+        if (dpi <= 0 || longSidePx <= 0) return dpi
+        val longSideDp = longSidePx * DisplayMetrics.DENSITY_DEFAULT.toFloat() / dpi
+        if (longSideDp >= DESIGN_LONG_SIDE_DP) return dpi
+        val scale = (longSideDp / DESIGN_LONG_SIDE_DP).coerceAtLeast(MIN_FIT_SCALE)
+        return (dpi / scale).roundToInt()
+    }
+
+    /** Density before the short-screen fit: the stable density, when plausible. */
+    private fun unfittedDensityDpi(currentDpi: Int, metrics: DisplayMetrics) = targetDensityDpi(
+        currentDpi, DisplayMetrics.DENSITY_DEVICE_STABLE,
+        minOf(metrics.widthPixels, metrics.heightPixels))
+
+    /**
      * Density to render at: [stableDpi] when it differs from [currentDpi] and still
      * yields a plausible short side. A stable density that does not belong to the active
      * resolution (some phones keep the factory value after a resolution switch) is rejected.
@@ -31,9 +58,9 @@ internal object StableUiScale {
     fun wrap(base: Context): Context {
         val current = base.resources.configuration
         val metrics = base.resources.displayMetrics
-        val dpi = targetDensityDpi(
-            current.densityDpi, DisplayMetrics.DENSITY_DEVICE_STABLE,
-            minOf(metrics.widthPixels, metrics.heightPixels))
+        val dpi = fitDensityDpi(
+            unfittedDensityDpi(current.densityDpi, metrics),
+            maxOf(metrics.widthPixels, metrics.heightPixels))
         if (dpi == current.densityDpi && current.fontScale == 1f) return base
         val config = Configuration(current)
         if (dpi != current.densityDpi) {
@@ -59,7 +86,11 @@ internal object StableUiScale {
         val system = context.applicationContext.resources.configuration
         val pinned = context.resources.configuration
         if (pinned.densityDpi <= 0) return 1f
-        val scale = system.densityDpi.toFloat() / pinned.densityDpi * system.fontScale / pinned.fontScale
+        // Compare against the density before the short-screen fit, so a shrunk camera UI
+        // does not blow up text on the settings pages.
+        val reference = unfittedDensityDpi(
+            system.densityDpi, context.applicationContext.resources.displayMetrics)
+        val scale = system.densityDpi.toFloat() / reference * system.fontScale / pinned.fontScale
         return scale.coerceIn(0.85f, 2f)
     }
 
