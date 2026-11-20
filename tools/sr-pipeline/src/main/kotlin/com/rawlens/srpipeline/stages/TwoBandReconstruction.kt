@@ -65,6 +65,23 @@ class TwoBandReconstruction(
          * samples sat: high = N/Nw - L(x) - grad L(x) . m/Nw, m = sum w (p - x).
          */
         val singlePass: Boolean = true,
+        /**
+         * GPU only: steer the narrow kernel along edges (twoband_tensor: the
+         * reference grey's structure tensor over 5x5 gradients). Across an edge
+         * it stays sigmaHigh wide, along it it stretches by
+         * 1 + (maxStretch - 1) coherence^2. An isotropic narrow kernel is sharp
+         * on green sites and a 4-neighbour average on R/B sites wherever the
+         * frames' offsets leave the green quincunx gaps, which alternates along
+         * edges: a zipper. Real burst 170823_957, checkerboard energy on edges
+         * (with the default denoise + sharpening): isotropic 1.05, stretch 2
+         * 0.85, 3 0.80, Wronski merge 0.81. Known-truth bench, clean 1x PSNR /
+         * texture 0.5-0.7 c/px: isotropic 44.96 / 0.60, stretch 2 44.45 / 0.55,
+         * 3 43.07 / 0.51 (random isotropic waves are steering's worst case;
+         * the bench's random shifts fill the gaps, so it has no zipper to fix);
+         * dim 38.97 -> 39.21, moving-edge trail 65.0 -> 68.5 dB at stretch 2.
+         */
+        val steer: Boolean = true,
+        val maxStretch: Double = 2.0,
     )
 
     private class Samples {

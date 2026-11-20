@@ -51,7 +51,8 @@ class WronskiVsKernelNetBenchTest {
             noiseAcc = spv("noise_acc"), noiseEven = spv("noise_even"),
             mergeTwoBand = File(spvDir, "merge_twoband.spv").takeIf { it.exists() }?.readBytes(),
             twoBandResolve = File(spvDir, "twoband_resolve.spv").takeIf { it.exists() }?.readBytes(),
-            twoBandDct = File(spvDir, "twoband_dct.spv").takeIf { it.exists() }?.readBytes())
+            twoBandDct = File(spvDir, "twoband_dct.spv").takeIf { it.exists() }?.readBytes(),
+            twoBandTensor = File(spvDir, "twoband_tensor.spv").takeIf { it.exists() }?.readBytes())
     }
 
     enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, WRONSKI_GHOST, WRONSKI_BLUR, WRONSKI_ALIGN2, TWOBAND, CM_ONLY, DETAIL_ONLY }
@@ -85,7 +86,9 @@ class WronskiVsKernelNetBenchTest {
                 sigmaHigh = System.getenv("BENCH_TB_HIGH")?.toDoubleOrNull() ?: 0.35,
                 confK = System.getenv("BENCH_TB_CONFK")?.toDoubleOrNull() ?: 0.05,
                 deconvStrength = System.getenv("BENCH_TB_DECONV")?.toDoubleOrNull() ?: 0.25,
-                gainCap = System.getenv("BENCH_TB_CAP")?.toDoubleOrNull() ?: 1.5) else null,
+                gainCap = System.getenv("BENCH_TB_CAP")?.toDoubleOrNull() ?: 1.5,
+                steer = System.getenv("BENCH_TB_STEER") != "0",
+                maxStretch = System.getenv("BENCH_TB_STRETCH")?.toDoubleOrNull() ?: 2.0) else null,
         )
     }
 

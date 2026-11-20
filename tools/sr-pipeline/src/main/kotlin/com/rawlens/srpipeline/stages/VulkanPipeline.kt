@@ -95,6 +95,8 @@ object VulkanPipeline {
         val mergeTwoBand: ByteArray? = null,
         val twoBandResolve: ByteArray? = null,
         val twoBandDct: ByteArray? = null,
+        /** twoband_tensor.comp: edge steering field (TwoBandReconstruction.Params.steer). */
+        val twoBandTensor: ByteArray? = null,
     )
 
 
@@ -353,7 +355,8 @@ object VulkanPipeline {
         // Noise evening (guide grid): per-frame robustness upload + vec4
         // accumulators (sum g r, sum (g r)^2, sum r, sum r^2).
         val twoBand = config.twoBand?.takeIf { config.bayer && config.colourDiff != null }
-        if (twoBand != null) require(spirvs.mergeTwoBand != null && spirvs.twoBandResolve != null && spirvs.twoBandDct != null) {
+        if (twoBand != null) require(spirvs.mergeTwoBand != null && spirvs.twoBandResolve != null && spirvs.twoBandDct != null &&
+            (!twoBand.steer || spirvs.twoBandTensor != null)) {
             "VulkanPipeline: two-band needs merge_twoband / twoband_resolve / twoband_dct" }
         val tbAuxRes = if (twoBand != null) SrpBridge.createResident(handle, 4L * outW * outH) else 0L
         val tbRobRes = if (twoBand != null) SrpBridge.createResident(handle, (gw * gh).toLong()) else 0L
@@ -380,8 +383,9 @@ object VulkanPipeline {
         // kerngrad, which exact-size residents cannot express).
         val frameRes = SrpBridge.createResident(handle, (w * h).toLong())
         require(frameRes != 0L) { "VulkanPipeline: resident frame alloc failed" }
-        // Two-band has no per-frame kernels: skip their residents (w*h + grid floats).
-        val noKernels = config.mobilePolynomial || twoBand != null
+        // Two-band computes the kernel covariance once, from the reference
+        // (edge-steered narrow kernel), so it keeps these residents.
+        val noKernels = config.mobilePolynomial
         val kernPreRes = if (noKernels) 0L else SrpBridge.createResident(handle, (w * h).toLong())
         require(noKernels || kernPreRes != 0L) { "VulkanPipeline: resident kernPre alloc failed" }
         val kernGreyRes = if (noKernels) 0L else SrpBridge.createResident(handle, (gw * gh).toLong())
@@ -625,6 +629,17 @@ object VulkanPipeline {
                     spirvs.mergeSplat, w, h, outW, outH, tile,
                     config.scale, config.bayer, ftx, fty)) }
             } else if (twoBand != null) {
+                // Edge steering: the reference frame's Wronski covariance (frameRes
+                // still holds the raw frame here), kept in kernCovRes for every frame.
+                if (reference && twoBand.steer) {
+                    frameKernelsGpuRes()   // GAT grey + gradients (kernGradsRes); cov unused
+                    val tp = IntArray(32)
+                    tp[2] = gw * gh; tp[7] = java.lang.Float.floatToRawIntBits(twoBand.maxStretch.toFloat())
+                    tp[12] = gw - 1; tp[13] = gh - 1; tp[14] = gw
+                    timed("tbTensor") { checkRc("tbTensor", SrpBridge.dispatchRes(handle, spirvs.twoBandTensor!!,
+                        longArrayOf(kernGradsRes, kernCovRes), longArrayOf(2L * (gw - 1) * (gh - 1), 4L * gw * gh),
+                        tp, (gw * gh).toLong())) }
+                }
                 timed("colourDiffUpload") { checkRc("colourDiffUpload", SrpBridge.uploadResident(handle, frameRes,
                     ColourDiff.packInto(frame, frameBuf, config.colourDiff!![0], config.colourDiff[1]), (w * h).toLong())) }
                 frameObserver?.invoke(frameBuf, flow, rBuf)
@@ -639,9 +654,11 @@ object VulkanPipeline {
                 push[7] = java.lang.Float.floatToRawIntBits(twoBand.sigmaHigh.toFloat())
                 push[8] = java.lang.Float.floatToRawIntBits(twoBand.sigmaLow.toFloat())
                 push[12] = ftx; push[13] = outW; push[14] = fty
+                push[15] = if (twoBand.steer) gw else 0
                 timed("mergeTwoBand") { checkRc("mergeTwoBand", SrpBridge.dispatchRes(handle, spirvs.mergeTwoBand!!,
-                    longArrayOf(frameRes, tbFlowRes, tbRobRes, numRes, denRes, tbAuxRes),
-                    longArrayOf((w * h).toLong(), 2L * ftx * fty, (gw * gh).toLong(), total.toLong(), total.toLong(), 4L * outW * outH),
+                    longArrayOf(frameRes, tbFlowRes, tbRobRes, numRes, denRes, tbAuxRes, kernCovRes),
+                    longArrayOf((w * h).toLong(), 2L * ftx * fty, (gw * gh).toLong(), total.toLong(), total.toLong(), 4L * outW * outH,
+                        4L * gw * gh),
                     push, (outW * outH).toLong())) }
             } else {
                 val covRes = if(config.mobilePolynomial) polynomialLutRes else frameKernelsGpuRes()

@@ -186,7 +186,8 @@ class SrpPipelineFullresDeviceTest {
                     pyrDown = if (args.getString("rawlensSrpResident") == "true") assetBytes("pyr_down") else null,
                     mergeTwoBand = if (twoBand) assetBytes("merge_twoband") else null,
                     twoBandResolve = if (twoBand) assetBytes("twoband_resolve") else null,
-                    twoBandDct = if (twoBand) assetBytes("twoband_dct") else null),
+                    twoBandDct = if (twoBand) assetBytes("twoband_dct") else null,
+                    twoBandTensor = if (twoBand) assetBytes("twoband_tensor") else null),
                 // Native output like MfsrMerge: a 2x frame (600 MB) cannot be a heap direct buffer.
                 output = SrpBridge.nativeFloats((w * srpScale).toInt() * (h * srpScale).toInt() * 3),
             )

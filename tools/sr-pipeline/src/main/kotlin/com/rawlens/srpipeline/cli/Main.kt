@@ -617,7 +617,10 @@ private fun merge(plan: Plan) {
                     else if (plan.twoBandGpu) config.copy(twoBand = System.getenv("SRP_TB")?.split(',')?.let { q ->
                         com.rawlens.srpipeline.stages.TwoBandReconstruction.Params(sigmaHigh = q[0].toDouble(),
                             denoise = q.getOrNull(1) != "0", grainFloor = q.getOrNull(2)?.toDouble() ?: 0.0,
-                            sigmaLow = q.getOrNull(3)?.toDouble() ?: 1.0) } ?: com.rawlens.srpipeline.stages.TwoBandReconstruction.Params())
+                            sigmaLow = q.getOrNull(3)?.toDouble() ?: 1.0,
+                            deconvStrength = q.getOrNull(4)?.toDouble() ?: 0.25,
+                            steer = q.getOrNull(5) != "0",
+                            maxStretch = q.getOrNull(6)?.toDouble() ?: 2.0) } ?: com.rawlens.srpipeline.stages.TwoBandReconstruction.Params())
                     else config, handle,
                     AlignGpu.Spirvs(
                         align = spv(dir, "align"),
@@ -648,6 +651,7 @@ private fun merge(plan: Plan) {
                         mergeTwoBand = if (plan.twoBandGpu) spv(dir, "merge_twoband") else null,
                         twoBandResolve = if (plan.twoBandGpu) spv(dir, "twoband_resolve") else null,
                         twoBandDct = if (plan.twoBandGpu) spv(dir, "twoband_dct") else null,
+                        twoBandTensor = if (plan.twoBandGpu) spv(dir, "twoband_tensor") else null,
                     ),
                     frameObserver = cache?.let { c -> { f, flow, r -> c.record(f,flow,r) } }
                         ?: twoBand?.let { t -> { f, flow, r -> t.record(f, flow, r) } },

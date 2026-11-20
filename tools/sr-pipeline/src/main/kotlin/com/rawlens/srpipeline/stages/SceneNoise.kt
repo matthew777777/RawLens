@@ -42,12 +42,24 @@ object SceneNoise {
                 val to = (bin + 1) * samples.size / bins
                 val coefficients = DoubleArray(to - from) { samples[from + it].second }
                 coefficients.sort()
+                // Quantization step of this bin's coefficients: the smallest
+                // gap between sorted values that is not float32 rounding of
+                // the normalized raw (gaps under 16 ulp(1f) are equal levels).
+                var quantum = Double.MAX_VALUE
+                for (i in 1 until coefficients.size) {
+                    val gap = coefficients[i] - coefficients[i - 1]
+                    if (gap > FLOAT_LEVEL_EPS && gap < quantum) quantum = gap
+                }
                 val center = median(coefficients)
                 for (i in coefficients.indices) coefficients[i] = abs(coefficients[i] - center)
                 coefficients.sort()
                 val sigma = median(coefficients) / 0.6744897501960817
                 val variance = sigma * sigma
-                if (!(variance > 0.0)) continue
+                // A spread under half a quantization step is not a measurement
+                // (dark 10-bit planes: most coefficients equal, MAD = float
+                // rounding ~1e-10); its 1/variance^2 weight dragged the whole
+                // fit to 0 (burst 170823_957 red: alpha 0, beta 7e-21 -> NaN merge).
+                if (!(variance > 0.0) || sigma < 0.5 * quantum) continue
                 val level = samples[(from + to) / 2].first
                 val u = level / variance
                 val v = 1.0 / variance
@@ -70,6 +82,8 @@ object SceneNoise {
         }
         return alpha to beta
     }
+
+    private val FLOAT_LEVEL_EPS = 16.0 * Math.ulp(1f)
 
     private fun median(sorted: DoubleArray) = (sorted[(sorted.size - 1) / 2] + sorted[sorted.size / 2]) / 2
 }

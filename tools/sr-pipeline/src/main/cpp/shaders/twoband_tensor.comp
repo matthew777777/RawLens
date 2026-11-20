@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Two-band edge steering field, once per burst from the reference frame.
+// Structure tensor of the reference grey gradients (the Wronski kernel
+// chain's GAT grey at half resolution, kernels' grads buffer) over a 5x5
+// gradient window; out per grey pixel: (e.x, e.y, stretch, 0) with e the
+// edge (long axis) direction and stretch = 1 + (maxStretch - 1) * coh^2,
+// coh = (l1 - l2) / (l1 + l2) the coherence. Noise gradients have no common
+// direction: over 25 samples their coherence stays low, so flat and noisy
+// areas get a near-isotropic narrow kernel without a threshold.
+// merge_twoband reads it (pad[4] = covW) and builds its narrow kernel:
+// sigmaHigh across the edge, stretch * sigmaHigh along it.
+//
+// Bindings: 0 grads vec2 ((gh - 1) x (gw - 1)), 1 out vec4 (gh x gw).
+// push: pad[1] = gradW, pad[2] = gradH, pad[3] = outW, pixelCount = outW*outH,
+//   alpha = maxStretch.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer Grads { vec2 grads[]; };
+layout(set = 0, binding = 1) writeonly buffer Field { vec4 field[]; };
+
+void main() {
+  const uint id = gl_GlobalInvocationID.x;
+  if (id >= p.pixelCount) return;
+  const int gradW = int(p.pad[1]), gradH = int(p.pad[2]);
+  const uint outW = p.pad[3];
+  const int x = int(id % outW), y = int(id / outW);
+  float t00 = 0.0, t01 = 0.0, t11 = 0.0;
+  for (int dy = -2; dy <= 2; ++dy) {
+    const int yy = clamp(y + dy, 0, gradH - 1);
+    for (int dx = -2; dx <= 2; ++dx) {
+      const vec2 g = grads[uint(yy * gradW + clamp(x + dx, 0, gradW - 1))];
+      t00 += g.x * g.x; t01 += g.x * g.y; t11 += g.y * g.y;
+    }
+  }
+  const float h = 0.5 * (t00 + t11);
+  const float d = sqrt(max(0.25 * (t00 - t11) * (t00 - t11) + t01 * t01, 0.0));
+  const float coh = h > 1e-20 ? d / h : 0.0;   // (l1 - l2) / (l1 + l2)
+  // Gradient (across-edge) direction = eigenvector of l1 = h + d; the edge
+  // runs perpendicular to it.
+  vec2 n = abs(t01) > 1e-20 ? normalize(vec2(t01, h + d - t00)) : (t00 >= t11 ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+  field[id] = vec4(-n.y, n.x, 1.0 + (p.alpha - 1.0) * coh * coh, 0.0);
+}

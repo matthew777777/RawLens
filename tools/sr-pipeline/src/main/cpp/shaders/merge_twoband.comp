@@ -12,13 +12,22 @@
 //   green, narrow (sigmaHigh): aux = (sum w g, sum w, sum w dx, sum w dy)
 //                              dx, dy = sample - pixel in sensor px
 //   R / B differences, wide:  num.r / den.r, num.b / den.b
-// No per-frame kernels, no steering: the merge blur is the narrow kernel's.
+// No per-frame kernels: the merge blur is the narrow kernel's.
+// Edge steering (pad[4] = field grid width, 0 = isotropic): twoband_tensor's
+// field from the reference frame (edge direction e, stretch from the
+// structure-tensor coherence), read nearest at the output position on the
+// reference grid: sigmaHigh across the edge, stretch * sigmaHigh along. On an edge the
+// gather then follows the edge: at an R/B site of a horizontal edge it uses
+// the left / right greens (same edge position), not the ones above / below.
+// An isotropic narrow kernel is sharp on green sites and a 4-neighbour
+// average on R/B sites wherever the frames leave the green quincunx gaps, and
+// that alternation along an edge is a zipper.
 //
 // push: width/height = frame, pixelCount = outW*outH, tileSize, scale,
 //   alpha = sigmaHigh, beta = sigmaLow (sensor px),
-//   pad[1] = nTilesX, pad[2] = outW, pad[3] = nTilesY.
+//   pad[1] = nTilesX, pad[2] = outW, pad[3] = nTilesY, pad[4] = field width.
 // Buffers: 0 frame, 1 flow (vec2 per tile), 2 rob (w/2 x h/2), 3 num (x3),
-//   4 den (x3), 5 aux (vec4).
+//   4 den (x3), 5 aux (vec4), 6 field (vec4 e.x, e.y, stretch at w/2 x h/2).
 layout(local_size_x = 256) in;
 
 struct HmsrPush {
@@ -35,6 +44,7 @@ layout(set = 0, binding = 2) readonly buffer Rob { float rob[]; };
 layout(set = 0, binding = 3) buffer Num { float num_[]; };
 layout(set = 0, binding = 4) buffer Den { float den_[]; };
 layout(set = 0, binding = 5) buffer Aux { vec4 aux_[]; };
+layout(set = 0, binding = 6) readonly buffer Cov { vec4 cov_[]; };
 
 vec4 flowWeights(float t) {
   float u = 1.0 - t;
@@ -71,8 +81,22 @@ void main() {
   const float mx = lx + F.x, my = ly + F.y;
   if (!(mx >= 0.0 && mx < float(W) && my >= 0.0 && my < float(H))) return;
   const int cj = int(mx), ci = int(my);
-  const float invL = 0.5 / (p.beta * p.beta), invH = 0.5 / (p.alpha * p.alpha);
-  const float reachH2 = 9.0 * p.alpha * p.alpha;
+  const float invL = 0.5 / (p.beta * p.beta);
+  // Narrow kernel: exponent = -(qxx dx^2 + 2 qxy dx dy + qyy dy^2).
+  float qxx = 0.5 / (p.alpha * p.alpha), qxy = 0.0, qyy = qxx;
+  const uint covW = p.pad[4];
+  if (covW != 0u) {
+    const uint covH = p.height / 2u;
+    const uvec2 k = uvec2(clamp(ivec2(floor(vec2(lx, ly) * 0.5)), ivec2(0), ivec2(covW - 1u, covH - 1u)));
+    const vec4 fld = cov_[k.y * covW + k.x];
+    const vec2 e1 = fld.xy;
+    const float stretch = fld.z;
+    // Axis variances sigmaHigh^2 (across) and (stretch sigmaHigh)^2 (along).
+    const float i2 = 0.5 / (p.alpha * p.alpha), i1 = i2 / (stretch * stretch);
+    qxx = i1 * e1.x * e1.x + i2 * e1.y * e1.y;
+    qxy = (i1 - i2) * e1.x * e1.y;
+    qyy = i1 * e1.y * e1.y + i2 * e1.x * e1.x;
+  }
 
   vec3 val = vec3(0.0), acc = vec3(0.0);
   vec4 nar = vec4(0.0);
@@ -90,8 +114,9 @@ void main() {
       const float wl = r * exp(-d2 * invL) * fy * (1.0 - smoothstep(2.5, 3.5, abs(dx)));
       const uint ch = uint((i2 & 1) + (j & 1));   // RGGB: 0 R, 1 G, 2 B
       val[ch] += wl * c; acc[ch] += wl;
-      if (ch == 1u && d2 < reachH2) {
-        const float wn = r * exp(-d2 * invH);
+      const float qn = qxx * dx * dx + 2.0 * qxy * dx * dy + qyy * dy * dy;
+      if (ch == 1u && qn < 4.5) {   // 3 sigma along the kernel's own axes
+        const float wn = r * exp(-qn) * fy * (1.0 - smoothstep(2.5, 3.5, abs(dx)));
         nar += wn * vec4(c, 1.0, dx, dy);
       }
     }

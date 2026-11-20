@@ -764,6 +764,7 @@ internal object MfsrMerge {
                     mergeTwoBand = asset("merge_twoband"),
                     twoBandResolve = asset("twoband_resolve"),
                     twoBandDct = asset("twoband_dct"),
+                    twoBandTensor = asset("twoband_tensor"),
                 ),
                 output = nativeOut
             )
