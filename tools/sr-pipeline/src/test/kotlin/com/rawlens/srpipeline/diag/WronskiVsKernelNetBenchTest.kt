@@ -209,8 +209,6 @@ class WronskiVsKernelNetBenchTest {
                     val truth = truths[scale]!!
                     val m = 24 * scale
                     val sweptMax = hypot(7 * 4.0, 7 * 2.5) + discR + 4
-                    for (k in Kernel.values().filter { if (kernelSel == null) it != Kernel.CM_ONLY && it != Kernel.DETAIL_ONLY else it.name in kernelSel }) {
-                        val merged = run(handle, frames, cfg(k, fin, al, be, scale.toFloat()))
                         fun report(img: Array<Array<FloatArray>>, k: String) {
                         val all = psnr(img, truth) { y, x -> y in m until img.size - m && x in m until img.size - m }
                         val swept = psnr(img, truth) { y, x ->
@@ -251,6 +249,21 @@ class WronskiVsKernelNetBenchTest {
                         println("TEX   %-6s %-6s %dx %-18s %s".format(scene, label, scale, k,
                             TextureTransfer.format(TextureTransfer.measure(img, truth, scale, 360, 40, 128))))
                         }
+                    // BENCH_TWOBAND=sigmaHigh[:d[:floor]],... CPU two-band prototype, oracle
+                    // shifts, static scene only (no robustness). d = DCT Wiener on.
+                    if (scene == "static") System.getenv("BENCH_TWOBAND")?.split(',')?.filter { it.isNotEmpty() }?.forEach { spec ->
+                        val q = spec.split(':')
+                        val prm = TwoBandMerge.Params(sigmaHigh = q[0].toDouble(), denoise = q.getOrNull(1) == "d",
+                            grainFloor = q.getOrNull(2)?.toDouble() ?: 0.0, noiseA = a0, noiseB = b0,
+                            sigmaLow = System.getenv("BENCH_TB_LOW")?.toDoubleOrNull() ?: 1.0)
+                        // BENCH_TB_JITTER=s: Gaussian alignment error (px) on frames 1..7.
+                        val jit = System.getenv("BENCH_TB_JITTER")?.toDoubleOrNull() ?: 0.0
+                        val jr = java.util.Random(9)
+                        val sh = shifts.mapIndexed { i, (x, y) -> if (i == 0) x to y else (x + jit * jr.nextGaussian()) to (y + jit * jr.nextGaussian()) }
+                        report(TwoBandMerge.merge(frames, sh, t.gains, scale, prm), "2B$spec" + if (jit > 0) "j$jit" else "")
+                    }
+                    for (k in Kernel.values().filter { if (kernelSel == null) it != Kernel.CM_ONLY && it != Kernel.DETAIL_ONLY else it.name in kernelSel }) {
+                        val merged = run(handle, frames, cfg(k, fin, al, be, scale.toFloat()))
                         report(merged, k.name)
                         // BENCH_DECONV=l1,l2,...: merge-matched deconvolution sweep on this result.
                         System.getenv("BENCH_DECONV")?.split(',')?.mapNotNull { it.toDoubleOrNull() }?.forEach { lam ->
