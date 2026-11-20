@@ -131,6 +131,10 @@ struct FullStats {
 // returns the PriorFn used for every tile (empty = 'none').
 using PriorFactory = std::function<PriorFn(float a, float b, float sigma, const std::array<float, 3>& wb)>;
 
+// Auto LR tile edge for a w x h LR grid at output scale s (FullParams.tile = 0); align = 4 at 1x with the
+// DCT, else 2. Exposed so the NPU prior can be compiled for the real tile size before the first merge.
+int AutoTileSize(int w, int h, int s, int overlap, int align);
+
 bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames, int W, int H, const int cfa[4],
                const float black[4], float white, const std::array<float, 3>& wb, const FullParams& prm,
                const PriorFactory& make_prior, std::vector<float>* rgb_out, int* out_w, int* out_h,

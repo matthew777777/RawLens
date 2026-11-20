@@ -122,6 +122,21 @@ static void BoxBlurGrey(std::vector<float>* a, int n, int r) {
   }
 }
 
+int AutoTileSize(int w, int h, int s, int overlap, int align) {
+  // The grid fitted to this frame (2026-11-20): target 416 at 1x, 320 at 2x (Mali-G615 cache), up to 5 %
+  // above it when that saves a row or column, then the smallest tile giving that grid (the last tile no
+  // longer overlaps its neighbour by most of its width). 4080 x 3060 at 1x: 11 x 8 = 88 tiles of 416 ->
+  // 10 x 8 = 80 of 424, phone ~-0.5 s; 2x zoom keeps 7 x 5 of 320.
+  const int target = s == 1 ? 416 : 320;
+  const int ov0 = std::min(overlap, target / 4) & ~1;
+  auto fit = [&](int len) {
+    const int n = std::max(1, int(std::ceil(double(len - ov0) / (1.05 * target - ov0))));
+    return (len - ov0 + n - 1) / n + ov0;
+  };
+  const int t = std::max(fit(w), fit(h));
+  return (t + align - 1) / align * align;
+}
+
 bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, const int cfa[4],
                const float black[4], float white, const std::array<float, 3>& wb, const FullParams& prm,
                const PriorFactory& make_prior, std::vector<float>* rgb_out, int* out_w, int* out_h,
@@ -317,20 +332,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // The DCT x-step needs the solved tile (s * tile) to be a multiple of 4.
   const int tile_target = prm.tile > 0 ? prm.tile : (prm.s == 1 ? 416 : 320);
   const int tile_align = ((prm.solve.dct_prior || prm.solve.dct_fallback) && prm.s == 1) ? 4 : 2;
-  int tile_req = tile_target;
-  if (prm.tile <= 0) {
-    // Auto: the grid fitted to this frame (2026-11-20). Up to 5 % above the target when that saves a row
-    // or column, then the smallest tile giving that grid (the last tile no longer overlaps its neighbour
-    // by most of its width). 4080 x 3060 at 1x: 11 x 8 = 88 tiles of 416 -> 10 x 8 = 80 of 424, phone
-    // ~-0.5 s; 2x zoom keeps 7 x 5 of 320.
-    const int ov0 = std::min(prm.overlap, tile_target / 4) & ~1;
-    auto fit = [&](int len) {
-      const int n = std::max(1, int(std::ceil(double(len - ov0) / (1.05 * tile_target - ov0))));
-      return (len - ov0 + n - 1) / n + ov0;
-    };
-    tile_req = std::max(fit(g.w), fit(g.h));
-    tile_req = (tile_req + tile_align - 1) / tile_align * tile_align;
-  }
+  const int tile_req = prm.tile > 0 ? tile_target : AutoTileSize(g.w, g.h, prm.s, prm.overlap, tile_align);
   const int tile = std::min({tile_req, g.w, g.h}) & ~(tile_align - 1);
   const int ov = std::min(prm.overlap, tile / 4) & ~1;
   const int step = tile - ov;

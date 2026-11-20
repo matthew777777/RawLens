@@ -337,6 +337,13 @@ extern "C" JNIEXPORT jobject JNICALL Java_com_matthew_rawlens_LkrBridge_nativeMe
 
 // Settings -> Merge -> "Network" (learned post-fit prior on the NPU). Turning it on compiles the NPU
 // model in the background so the next merge does not wait for it.
+// HR tile edges the prior is compiled for at camera open: the merge's own auto tile size (AutoTileSize)
+// for the main 4080 x 3060 mode, 1x full frame and 2x zoom (half-size crop). Other sizes compile on
+// their first merge. (Fixed 416 / 640 went stale when the 1x grid was fitted to the frame: 424.)
+static std::vector<int> PrewarmTileEdges() {
+  return {lkrl::AutoTileSize(4080, 3060, 1, 16, 4), 2 * lkrl::AutoTileSize(2040, 1530, 2, 16, 2)};
+}
+
 // A usable NPU for the prior (MDLA / Hexagon through NNAPI): Settings -> Network defaults to this.
 extern "C" JNIEXPORT jboolean JNICALL Java_com_matthew_rawlens_LkrBridge_nativeHasNpu(JNIEnv*, jclass) {
   return lkrl::PriorNpuAvailable() ? JNI_TRUE : JNI_FALSE;
@@ -349,7 +356,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetPr
   if (on && !was)
     std::thread([] {
       std::string err;
-      for (int t : {640, 416})   // HR tile edges of the auto tile size (416 at 1x, 320 x 2 at 2x)
+      for (int t : PrewarmTileEdges())
         if (!lkrl::PriorPrewarm(t, t, &err)) { __android_log_print(ANDROID_LOG_WARN, "LkrPrior", "prewarm %d: %s", t, err.c_str()); break; }
     }).detach();
 }
@@ -453,7 +460,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_matthew_rawlens_LkrBridge_nativePrew
     if (__system_property_get("debug.lkr.network", v) > 0 && v[0]) setenv("LKRL_PRIOR", v, 0);
     if (lkrl::PriorEnabled()) {
       std::string err;
-      for (int t : {416, 640})   // HR tile edges of the auto tile size (416 at 1x, 320 x 2 at 2x)
+      for (int t : PrewarmTileEdges())
         if (!lkrl::PriorPrewarm(t, t, &err)) { __android_log_print(ANDROID_LOG_WARN, "LkrLite", "prior prewarm %d: %s", t, err.c_str()); break; }
     }
   }
