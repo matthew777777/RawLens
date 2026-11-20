@@ -1,5 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
 // SPDX-License-Identifier: Apache-2.0
 // Temporal weight, pass 0: per-sample model-error tolerance for weight_th.comp,
 // computed ONCE per sample instead of once per row tap (5x). Same expression,
@@ -12,6 +13,8 @@ layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
 // Frames are fp16, two per uint (halves the traffic of every frame read; 2026-11-14).
 float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
 layout(std430, binding = 2) writeonly buffer TD { float tdet[]; };
+// Local block offsets (K x nb vec2, LR px on top of the tile affine; lite_common.glsl dloc).
+layout(std430, binding = 3) readonly buffer LD { vec2 dloc[]; };
 
 void main() {
   int c = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y);
@@ -21,9 +24,47 @@ void main() {
   int t = row + c;
   int cl = row + max(c - 2, 0), cr = row + min(c + 2, pc.w - 1);
   int cu = (k * pc.h + max(i - 2, 0)) * pc.w + c, cd = (k * pc.h + min(i + 2, pc.h - 1)) * pc.w + c;
-  float yh = yv(int(t)) - 0.5 * (yv(int(cl)) + yv(int(cr))), yv = yv(int(t)) - 0.5 * (yv(int(cu)) + yv(int(cd)));
+  float lh = yv(int(t)) - 0.5 * (yv(int(cl)) + yv(int(cr))), lv = yv(int(t)) - 0.5 * (yv(int(cu)) + yv(int(cd)));
   float rh = r[t] - 0.5 * (r[cl] + r[cr]), rv = r[t] - 0.5 * (r[cu] + r[cd]);
-  float dy = yh * yh + yv * yv;
-  float dp = (yh + rh) * (yh + rh) + (yv + rv) * (yv + rv);
-  tdet[t] = 0.5 * min(dy, dp);
+  float dy = lh * lh + lv * lv;
+  float dp = (lh + rh) * (lh + rh) + (lv + rv) * (lv + rv);
+  // Motion gate (pc.rob_k = d0 > 0): the tolerance covers the reference-only start's interpolation
+  // error of STATIC detail. Where the local field had to move frame k's block (turning car, wind),
+  // the edge lands a fraction of a pixel off and the tolerance would keep it as a period-4 zipper:
+  // scale by d0^2 / (d0^2 + |d|^2), d0 = misregistration tol; d below (pc.f2 selects the measure).
+  float g = 1.0;
+  if (pc.rob_k > 0.0) {
+    int B = pc.kOff, nbx = (pc.w + B - 1) / B, nby = (pc.h + B - 1) / B;
+    vec2 cc = (vec2(c, i) + 0.5) / float(B) - 0.5, fl = floor(cc), f = cc - fl;
+    int x0 = clamp(int(fl.x), 0, nbx - 1), y0 = clamp(int(fl.y), 0, nby - 1);
+    int x1 = clamp(int(fl.x) + 1, 0, nbx - 1), y1 = clamp(int(fl.y) + 1, 0, nby - 1);
+    int b = k * nby;
+    vec2 a00 = dloc[(b + y0) * nbx + x0], a10 = dloc[(b + y0) * nbx + x1];
+    vec2 a01 = dloc[(b + y1) * nbx + x0], a11 = dloc[(b + y1) * nbx + x1];
+    float d2;
+    if (pc.f2 > 1.5) {
+      // Field curvature (default): bilinear interpolation follows a smooth field exactly (approaching,
+      // turning car: offsets grow steadily across the plate), it fails where the field bends or steps
+      // (moving outline over background, swaying branch). Second difference around the nearest block,
+      // halved ~ the largest bilinear error between two block centres.
+      int xc = clamp(int(floor(cc.x + 0.5)), 1, max(nbx - 2, 1)), yc = clamp(int(floor(cc.y + 0.5)), 1, max(nby - 2, 1));
+      vec2 m = dloc[(b + yc) * nbx + xc];
+      vec2 sx = dloc[(b + yc) * nbx + min(xc + 1, nbx - 1)] + dloc[(b + yc) * nbx + max(xc - 1, 0)] - 2.0 * m;
+      vec2 sy = dloc[(b + min(yc + 1, nby - 1)) * nbx + xc] + dloc[(b + max(yc - 1, 0)) * nbx + xc] - 2.0 * m;
+      d2 = 0.25 * max(dot(sx, sx), dot(sy, sy));
+    } else if (pc.f2 > 0.0) {
+      // Field disagreement: a block offset that is large but shared by the neighbours is
+      // tracked motion (the car body, plate: keep the tolerance there). Where the four surrounding
+      // blocks disagree (moving outline over background, non-rigid sway) the bilinear offset is wrong
+      // for one side of the edge: d = largest pairwise corner difference.
+      vec2 e0 = a00 - a11, e1 = a10 - a01, e2 = a00 - a10, e3 = a01 - a11, e4 = a00 - a01, e5 = a10 - a11;
+      d2 = max(max(max(dot(e0, e0), dot(e1, e1)), max(dot(e2, e2), dot(e3, e3))), max(dot(e4, e4), dot(e5, e5)));
+    } else {
+      vec2 d = mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y);
+      d2 = dot(d, d);
+    }
+    float d02 = pc.rob_k * pc.rob_k;
+    g = d02 / (d02 + d2);
+  }
+  tdet[t] = 0.5 * g * min(dy, dp);
 }

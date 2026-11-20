@@ -32,6 +32,7 @@ layout(push_constant) uniform P {
   float sigma2, lv_a, lv_b, k_y2, k_c2, wb_r, wb_g, wb_b;
   float dark_level, dark_cap, dark_luma;
   float luma_cap, chroma_all, luma_floor, grain2;
+  float grain_rel2, grain_rho, chroma_norm, grain_tilt;
 } pc;
 
 const float C4 = 0.35355339, C1 = 0.98078528, C2 = 0.92387953, C3 = 0.83146961,
@@ -153,11 +154,35 @@ void main() {
     ty = pc.k_y2 * min(max(tot - pc.grain2 * pc.sigma2 * relativeMean * relativeMean,
                            pc.luma_floor * tot), pc.luma_cap * tot);
   }
+  // Grain mode (2026-11-20, night look): keep a film / DSLR-like grain, std = grain_rel x the block's own
+  // luma (gain-invariant), never less than grain_rho of the noise variance (organic, not waxy). Kept share
+  // rho = clamp(grain_rel^2 ymean^2 / tot, grain_rho, 1); a Wiener-type shrink with t = tot (1 - rho) / rho
+  // leaves ~rho of a noise coefficient's variance. Clean blocks (tot <= kept grain) are untouched.
+  if (pc.grain_rel2 > 0.0) {
+    float tot = pc.sigma2 * totalLevel;
+    float rho = clamp(pc.grain_rel2 * ymean * ymean / max(tot, 1e-20), pc.grain_rho, 1.0);
+    ty = max(ty, tot * (1.0 - rho) / rho);
+  }
   t = ty * mix(1.0, boost, pc.dark_luma);
   if (live && r == 0)
     nv[iy * pc.nx + ix] = (pc.grain2 > 0.0 || pc.chroma_all > 0.0 ? totalLevel : level) * boost;
 #else
-  t = live ? pc.k_c2 * pc.sigma2 * nv[iy * pc.nx + ix] : 0.0;
+  // chroma_norm: the luma-unit noise level times (var of this colour difference / var of luma) for
+  // per-plane noise: R - G (wb) has (wb_r^2 + wb_g^2) vs luma's (wb_r^2 + wb_b^2) / 16 + wb_g^2 / 4 -- with
+  // night white balance ~8x, so k_c was ~2.8x weaker than written and colour noise stayed.
+  float cn = 1.0;
+  if (pc.chroma_norm > 0.0) {
+    float wc = CH == 1 ? pc.wb_r : pc.wb_b;
+    cn = (wc * wc + pc.wb_g * pc.wb_g) / (0.0625 * (pc.wb_r * pc.wb_r + pc.wb_b * pc.wb_b) + 0.25 * pc.wb_g * pc.wb_g);
+  }
+  t = live ? pc.k_c2 * cn * pc.sigma2 * nv[iy * pc.nx + ix] : 0.0;
+#endif
+#if CH == 0
+  if (pc.grain_rel2 > 0.0 && pc.grain_tilt > 0.0) {
+    // Grain shaping: coarse frequencies (mottle) shrink harder, the finest keep more -- film / DSLR grain
+    // is fine, blotchy luma looks digital. Threshold x exp(tilt (1 - 2 f)), f = (r + j) / 14 in 0..1.
+    for (int j = 0; j < 8; ++j) v[j] = shrink(v[j], t * exp(pc.grain_tilt * (1.0 - float(r + j) / 7.0)));
+  } else
 #endif
   for (int j = 0; j < 8; ++j) v[j] = shrink(v[j], t);
   if (r == 0) v[0] = dc;

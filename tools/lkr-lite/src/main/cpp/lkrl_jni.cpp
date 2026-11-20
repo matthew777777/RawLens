@@ -73,7 +73,6 @@ struct NoiseModelRef {
   float iso = 0;
 };
 thread_local NoiseModelRef g_noise_model;
-thread_local bool g_kernelnet_denoise = true;
 
 // stats layout (float[16]): tiles, sigma, a, b, ms_noise, ms_coarse, ms_tiles,
 // ms_gpu, ms_prior, ms_total, prior_calls, out_w, out_h, backend (0 none,
@@ -110,9 +109,6 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     return nullptr;
   }
   lkrl::FullParams prm = lkrl::AppDefaults();
-  prm.solve.kernelnet_denoise = g_kernelnet_denoise ? 1.0f : 0.0f;
-  g_kernelnet_denoise = true;
-  LKR_LOG("KernelNet denoise: %s (noise-gated)", prm.solve.kernelnet_denoise > 0 ? "on" : "off");
   // x2 buffers are large and a third worker gains about 3 % on Mali (measured); debug.lkr.workers still overrides.
   if (s >= 2) {
     prm.workers = std::min(prm.workers, 2);
@@ -141,6 +137,23 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.adjgen", v) > 0 && v[0]) setenv("LKRL_ADJ_GENERIC", v, 0);
     // A/B of the tile-preparation prefetch: debug.lkr.noprefetch = 1 restores prepare-then-solve.
     if (__system_property_get("debug.lkr.noprefetch", v) > 0 && v[0] == '1') setenv("LKRL_NO_PREFETCH", "1", 0);
+    // 2026-11-19 zipper / dots fixes A/B: debug.lkr.zipfix=0 turns all off (MHC start, no tdet gate, no dln /
+    // axn / gcf); single switches debug.lkr.rcd (2 GPU, 1 CPU, 0 MHC), .tdgate, .dln, .axn, .gcf.
+    if (__system_property_get("debug.lkr.zipfix", v) > 0 && v[0] == '0') {
+      setenv("LKRL_RCD", "0", 0); setenv("LKRL_TDGATE", "0", 0); setenv("LKRL_DLN", "0", 0); setenv("LKRL_GCF", "0", 0); setenv("LKRL_CANC", "0", 0);
+    }
+    if (__system_property_get("debug.lkr.rcd", v) > 0 && v[0]) setenv("LKRL_RCD", v, 0);
+    if (__system_property_get("debug.lkr.tdgate", v) > 0 && v[0]) setenv("LKRL_TDGATE", v, 0);
+    if (__system_property_get("debug.lkr.dln", v) > 0 && v[0]) setenv("LKRL_DLN", v, 0);
+    if (__system_property_get("debug.lkr.axn", v) > 0 && v[0]) setenv("LKRL_AXN", v, 0);
+    if (__system_property_get("debug.lkr.gcf", v) > 0 && v[0]) setenv("LKRL_GCF", v, 0);
+    if (__system_property_get("debug.lkr.canc", v) > 0 && v[0]) setenv("LKRL_CANC", v, 0);
+    if (__system_property_get("debug.lkr.sched", v) > 0 && v[0] && v[0] != '-') setenv("LKRL_SCHEDULE", v, 1);
+    else unsetenv("LKRL_SCHEDULE");
+    // Speed A/B (2026-11-20): debug.lkr.coarsethr = coarse alignment threads ("-" = default).
+    if (__system_property_get("debug.lkr.coarsethr", v) > 0 && v[0] && v[0] != '-') setenv("LKRL_COARSE_THR", v, 1);
+    // Blown-highlight neutralise A/B: debug.lkr.hlold=1 = the old all-channels-clipped rule (pink / yellow).
+    if (__system_property_get("debug.lkr.hlold", v) > 0 && v[0] == '1') setenv("LKRL_HL_OLD", "1", 0);
     // A/B of the DCT look: debug.lkr.fb = 0 no DCT pass; debug.lkr.prior = 1 / 0 forces shadow-luma denoise on / off.
     if (__system_property_get("debug.lkr.fb", v) > 0 && v[0]) setenv("LKRL_FB", v, 0);
     // A/B of the coarse LK iteration cap: debug.lkr.coarseit = 40 restores the old cap.
@@ -177,6 +190,13 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
 #endif
   prm.tile = tile;
   prm.overlap = overlap;
+#ifdef __ANDROID__
+  {   // A/B: debug.lkr.tile = LR tile edge (overlap unchanged)
+    char tv[PROP_VALUE_MAX] = {0};
+    if (__system_property_get("debug.lkr.tile", tv) > 0 && std::atoi(tv) >= 128) prm.tile = std::atoi(tv);
+    if (__system_property_get("debug.lkr.overlap", tv) > 0 && std::atoi(tv) >= 8) prm.overlap = std::atoi(tv);
+  }
+#endif
   prm.crop_x = crop[0];
   prm.crop_y = crop[1];
   prm.crop_w = crop[2];
@@ -329,14 +349,9 @@ extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetPr
   if (on && !was)
     std::thread([] {
       std::string err;
-      for (int t : {1024, 512})
+      for (int t : {640, 416})   // HR tile edges of the auto tile size (416 at 1x, 320 x 2 at 2x)
         if (!lkrl::PriorPrewarm(t, t, &err)) { __android_log_print(ANDROID_LOG_WARN, "LkrPrior", "prewarm %d: %s", t, err.c_str()); break; }
     }).detach();
-}
-
-extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetKernelNetDenoise(
-    JNIEnv*, jclass, jboolean enabled) {
-  g_kernelnet_denoise = enabled == JNI_TRUE;
 }
 
 // Learned noise model for the next merge on the calling thread (path null = none).
@@ -438,7 +453,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_matthew_rawlens_LkrBridge_nativePrew
     if (__system_property_get("debug.lkr.network", v) > 0 && v[0]) setenv("LKRL_PRIOR", v, 0);
     if (lkrl::PriorEnabled()) {
       std::string err;
-      for (int t : {512, 1024})
+      for (int t : {416, 640})   // HR tile edges of the auto tile size (416 at 1x, 320 x 2 at 2x)
         if (!lkrl::PriorPrewarm(t, t, &err)) { __android_log_print(ANDROID_LOG_WARN, "LkrLite", "prior prewarm %d: %s", t, err.c_str()); break; }
     }
   }

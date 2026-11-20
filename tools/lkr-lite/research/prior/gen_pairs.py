@@ -27,19 +27,29 @@ def hardness(x, y, cell=32):
     return np.stack([f(lum), f(chroma)]).astype(np.float32)
 
 
-def align_truth(x, g):
+def align_truth(x, g, scale=2):
     """The generator's truth and Lite's output differ by a fixed coordinate convention: the truth sits
     (+1.5, -0.5) HR px off (measured 2026-11-17). Shift it by that, then refine +-0.25 px in 1/8 steps on
     green (cubic resampling)."""
     from scipy.ndimage import shift
     c = slice(64, -64)
     best = None
-    for dy in np.arange(1.25, 1.751, 0.125):
-        for dx in np.arange(-0.75, -0.249, 0.125):
+    # 2x: measured offset; other scales: search +-2 px in 1/4 steps, then refine around the best in 1/8
+    if scale == 2: grid = [(dy, dx) for dy in np.arange(1.25, 1.751, 0.125) for dx in np.arange(-0.75, -0.249, 0.125)]
+    else: grid = [(dy, dx) for dy in np.arange(-2, 2.01, 0.25) for dx in np.arange(-2, 2.01, 0.25)]
+    for dy, dx in grid:
+        if True:
             ga = shift(g[..., 1], (dy, dx), order=3)
             k = (x[c, c, 1] * ga[c, c]).sum() / max((x[c, c, 1] ** 2).sum(), 1e-12)
             e = ((x[c, c, 1] * k - ga[c, c]) ** 2).mean()
             if best is None or e < best[0]: best = (e, dy, dx)
+    if scale != 2:
+        for dy in np.arange(best[1] - 0.125, best[1] + 0.126, 0.125):
+            for dx in np.arange(best[2] - 0.125, best[2] + 0.126, 0.125):
+                ga = shift(g[..., 1], (dy, dx), order=3)
+                k = (x[c, c, 1] * ga[c, c]).sum() / max((x[c, c, 1] ** 2).sum(), 1e-12)
+                e = ((x[c, c, 1] * k - ga[c, c]) ** 2).mean()
+                if e < best[0]: best = (e, dy, dx)
     return shift(g, (best[1], best[2], 0), order=3).astype(np.float32)
 
 
@@ -47,6 +57,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('sources'); ap.add_argument('template'); ap.add_argument('out')
     ap.add_argument('--count', type=int, default=400); ap.add_argument('--poles', action='store_true', help='every scene: thin bright tilted lines (pole highlights)'); ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--noise', type=float, nargs=2, default=[5e-6, 3e-4], help='noise a range (log-uniform); night: 3e-4 3e-3')
+    ap.add_argument('--s', type=int, default=2, help='Lite output scale: 2 -> 1024 x 1024 pairs, 1 -> 512 x 512 (truth box-averaged 2 x 2)')
     a = ap.parse_args()
     a.sources, a.template, a.out = (os.path.abspath(os.path.expanduser(v)) for v in (a.sources, a.template, a.out))
     os.makedirs(a.out, exist_ok=True)
@@ -64,7 +76,7 @@ def main():
         W, H = Image.open(src).size
         if W < 1100 or H < 1100: continue
         sx, sy = int(rng.integers(0, W - 1024)), int(rng.integers(0, H - 1024))
-        nl = float(np.exp(rng.uniform(np.log(5e-6), np.log(3e-4))))   # noise a (signal-dependent)
+        nl = float(np.exp(rng.uniform(np.log(a.noise[0]), np.log(a.noise[1]))))   # noise a (signal-dependent)
         args = [sys.executable, '-I', SYN, a.template, src, None, '--frames', '8', '--size', '512',
                 '--src-at', str(sx), str(sy), '--no-person', '--no-clip', '--person-speed', '0', '--seed', str(i),
                 '--tremor', f'{rng.uniform(1, 4):.2f}', '--blur', f'{rng.uniform(0.2, 0.5):.2f}',
@@ -91,15 +103,18 @@ def main():
                 r = subprocess.run(ar, capture_output=True, text=True, cwd=td)
                 if r.returncode != 0: print('synth failed', r.stderr[-300:]); break
                 env = dict(os.environ, LKRL_TRACE_PREFIX=os.path.join(td, 't_' + tag))
-                r = subprocess.run([LITE, burst, os.path.join(td, tag + '.dng'), '--s', '2', '--crop', '512', '512', '--at', '1536', '1024',
+                r = subprocess.run([LITE, burst, os.path.join(td, tag + '.dng'), '--s', str(a.s), '--tile', '512', '--crop', '512', '512',   # one tile: its trace is the pair
+                                     '--at', '1536', '1024',
                                     '--noise', f'{nl:.6g}', f'{nl * 0.05:.6g}'], capture_output=True, text=True, env=env, cwd=td)
                 hyb = os.path.join(td, f't_{tag}_tile_0_0-hybrid.f32')
                 if r.returncode != 0 or not os.path.exists(hyb): print('lite failed'); break
-                outs[tag] = np.transpose(np.fromfile(hyb, np.float32).reshape(3, 1024, 1024), (1, 2, 0))
-                if tag == 'clean': g = np.load(os.path.join(burst, 'labels.npz'))['gt'].astype(np.float32)
+                outs[tag] = np.transpose(np.fromfile(hyb, np.float32).reshape(3, 512 * a.s, 512 * a.s), (1, 2, 0))
+                if tag == 'clean':
+                    g = np.load(os.path.join(burst, 'labels.npz'))['gt'].astype(np.float32)   # 1024 x 1024 (2x)
+                    if a.s == 1: g = g.reshape(512, 2, 512, 2, 3).mean((1, 3))   # sensor-scale truth
             if len(outs) < 2: n += 1; continue
             x, xc = outs['noisy'], outs['clean']
-            g = align_truth(xc, g)
+            g = align_truth(xc, g, a.s)
             from scipy.ndimage import gaussian_filter as gf
             c = slice(64, -64)
             k = (xc[c, c] * g[c, c]).sum() / max(float((xc[c, c] ** 2).sum()), 1e-12); e = xc * k - g

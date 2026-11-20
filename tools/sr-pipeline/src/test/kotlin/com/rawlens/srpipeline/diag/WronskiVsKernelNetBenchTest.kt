@@ -253,14 +253,16 @@ class WronskiVsKernelNetBenchTest {
                     // shifts, static scene only (no robustness). d = DCT Wiener on.
                     if (scene == "static") System.getenv("BENCH_TWOBAND")?.split(',')?.filter { it.isNotEmpty() }?.forEach { spec ->
                         val q = spec.split(':')
-                        val prm = TwoBandMerge.Params(sigmaHigh = q[0].toDouble(), denoise = q.getOrNull(1) == "d",
-                            grainFloor = q.getOrNull(2)?.toDouble() ?: 0.0, noiseA = a0, noiseB = b0,
+                        // spec sigmaHigh[:d|n[:floor[:2p]]]: d = DCT Wiener, 2p = two-pass (stored samples).
+                        val prm = com.rawlens.srpipeline.stages.TwoBandReconstruction.Params(sigmaHigh = q[0].toDouble(),
+                            denoise = q.getOrNull(1) == "d", grainFloor = q.getOrNull(2)?.toDoubleOrNull() ?: 0.0,
+                            singlePass = q.getOrNull(3) != "2p",
                             sigmaLow = System.getenv("BENCH_TB_LOW")?.toDoubleOrNull() ?: 1.0)
                         // BENCH_TB_JITTER=s: Gaussian alignment error (px) on frames 1..7.
                         val jit = System.getenv("BENCH_TB_JITTER")?.toDoubleOrNull() ?: 0.0
                         val jr = java.util.Random(9)
                         val sh = shifts.mapIndexed { i, (x, y) -> if (i == 0) x to y else (x + jit * jr.nextGaussian()) to (y + jit * jr.nextGaussian()) }
-                        report(TwoBandMerge.merge(frames, sh, t.gains, scale, prm), "2B$spec" + if (jit > 0) "j$jit" else "")
+                        report(TwoBandMerge.merge(frames, sh, t.gains, scale, prm, a0, b0), "2B$spec" + if (jit > 0) "j$jit" else "")
                     }
                     for (k in Kernel.values().filter { if (kernelSel == null) it != Kernel.CM_ONLY && it != Kernel.DETAIL_ONLY else it.name in kernelSel }) {
                         val merged = run(handle, frames, cfg(k, fin, al, be, scale.toFloat()))

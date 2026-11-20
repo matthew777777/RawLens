@@ -10,13 +10,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MfsrSettingsTest {
-    @Test fun lkrKernelNetDefaultsOnAndPreservesExplicitChoice() {
-        assertTrue(MfsrSettings().lkrKernelNetDenoise)
-        assertTrue(MfsrSettings.fromPreferences(emptyMap<String, Any>()).lkrKernelNetDenoise)
-        for (enabled in listOf(false, true)) {
-            val settings = MfsrSettings(lkrKernelNetDenoise = enabled)
-            assertEquals(settings, MfsrSettings.fromPreferences(settings.toPreferences()))
-        }
+    @Test fun removedLkrKernelNetSwitchIsIgnored() {
+        // KernelNet was removed from LK-R (2026-11-20); a saved choice must not change anything.
+        assertEquals(MfsrSettings(), MfsrSettings.fromPreferences(mapOf("lkr_kernelnet_denoise" to false)))
     }
 
     @Test fun preferencesSurviveReload() {

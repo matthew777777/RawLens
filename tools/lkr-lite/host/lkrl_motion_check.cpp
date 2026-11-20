@@ -32,7 +32,6 @@ int main() {
     p.schedule = "GGGGGG";
     p.chroma_from_avg = 0;
     p.noise_b = variance;
-    p.kernelnet_denoise = 0;
     p.auto_local_lambda = false;
     std::vector<float> m(K * 6, 0), d, z;
     for (int k = 0; k < K; ++k) {

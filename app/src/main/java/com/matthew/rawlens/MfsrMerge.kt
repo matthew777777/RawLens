@@ -333,7 +333,8 @@ internal object MfsrMerge {
      * when the map is already applied.
      */
     internal fun applyShadingAfterMerge(
-        rgb: java.nio.FloatBuffer, w: Int, h: Int, model: LensShadingModel, scale: Int = 1
+        rgb: java.nio.FloatBuffer, w: Int, h: Int, model: LensShadingModel, scale: Int = 1,
+        highlightWb: FloatArray? = null
     ) {
         if (model.alreadyApplied) return
         ShardWorkers.forEachShard(h) { y0, y1 ->
@@ -343,11 +344,35 @@ internal object MfsrMerge {
                 val sx = x / scale
                 val sy = y / scale
                 val gG = 0.5f * (model.gainAt(sx, sy, CfaColor.GREEN, 0) + model.gainAt(sx, sy, CfaColor.GREEN, 1))
-                rgb.put(i, rgb.get(i) * model.gainAt(sx, sy, CfaColor.RED))
-                rgb.put(i + 1, rgb.get(i + 1) * gG)
-                rgb.put(i + 2, rgb.get(i + 2) * model.gainAt(sx, sy, CfaColor.BLUE))
+                shadePixel(rgb, i, model.gainAt(sx, sy, CfaColor.RED), gG, model.gainAt(sx, sy, CfaColor.BLUE), highlightWb)
             }
         }
+    }
+
+    /** Merge's raw clip level (lkrl SolveParams::clip): its highlight neutralise starts at 0.85 of it. */
+    private const val HIGHLIGHT_CLIP = 0.98f
+
+    /**
+     * Shading gains for one interleaved pixel. With [wb] (LK-R), blown highlights stay white: the merge
+     * neutralised them at G = 1, but shading gains above 1 push G over the DNG's [0, 1] clamp, which cuts
+     * G and leaves R / B -> pink (also bright unblown pixels pushed over 1 by the gain). Same rule as
+     * lkrl FinishLook: smoothstep(0.85, 1) of the brightest channel (before shading against the raw clip,
+     * after it against the file's 1.0), blend to neutral at the wb-space luma, capped at min(wb) so the
+     * clamped file stays neutral.
+     */
+    private fun shadePixel(rgb: java.nio.FloatBuffer, i: Int, gR: Float, gG: Float, gB: Float, wb: FloatArray?) {
+        val r0 = rgb.get(i); val g0 = rgb.get(i + 1); val b0 = rgb.get(i + 2)
+        var r = r0 * gR; var g = g0 * gG; var b = b0 * gB
+        if (wb != null) {
+            val v = maxOf(maxOf(r0, g0, b0) / HIGHLIGHT_CLIP, maxOf(r, g, b))
+            var m = ((v - 0.85f) / 0.15f).coerceIn(0f, 1f)
+            m = m * m * (3f - 2f * m)
+            if (m > 0f) {
+                val lum = minOf(0.25f * wb[0] * r + 0.5f * wb[1] * g + 0.25f * wb[2] * b, minOf(wb[0], wb[1], wb[2]))
+                r += m * (lum / wb[0] - r); g += m * (lum / wb[1] - g); b += m * (lum / wb[2] - b)
+            }
+        }
+        rgb.put(i, r); rgb.put(i + 1, g); rgb.put(i + 2, b)
     }
 
     /**
@@ -356,7 +381,7 @@ internal object MfsrMerge {
      */
     internal fun applyShadingMapped(
         rgb: java.nio.FloatBuffer, w: Int, h: Int, model: LensShadingModel,
-        x0: Int, y0: Int, sx: Float, sy: Float
+        x0: Int, y0: Int, sx: Float, sy: Float, highlightWb: FloatArray? = null
     ) {
         if (model.alreadyApplied) return
         ShardWorkers.forEachShard(h) { ya, yb ->
@@ -366,9 +391,7 @@ internal object MfsrMerge {
                     val sxx = (x0 + (x + 0.5f) * sx).toInt()
                     val i = 3 * (y * w + x)
                     val gG = 0.5f * (model.gainAt(sxx, syy, CfaColor.GREEN, 0) + model.gainAt(sxx, syy, CfaColor.GREEN, 1))
-                    rgb.put(i, rgb.get(i) * model.gainAt(sxx, syy, CfaColor.RED))
-                    rgb.put(i + 1, rgb.get(i + 1) * gG)
-                    rgb.put(i + 2, rgb.get(i + 2) * model.gainAt(sxx, syy, CfaColor.BLUE))
+                    shadePixel(rgb, i, model.gainAt(sxx, syy, CfaColor.RED), gG, model.gainAt(sxx, syy, CfaColor.BLUE), highlightWb)
                 }
             }
         }

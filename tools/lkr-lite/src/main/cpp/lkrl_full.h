@@ -29,8 +29,16 @@ struct RawFrame {
 
 struct FullParams {
   int s = 1;               // output scale (1 or 2)
-  int tile = 512;          // LR tile edge incl. overlap (even)
-  int overlap = 32;        // LR overlap between tiles (even)
+  // LR tile edge incl. overlap (even); 0 = auto: 416 at 1x, 320 at 2x (with overlap 16: 1x 88 tiles 12.1-12.3 s). Mali-G615 (2026-11-20, day burst,
+  // 8 frames): 512 -> 384 at 1x 14.4 -> 13.6 s, 512 -> 320 at 2x zoom 15.4 -> 11.4 s; 768 / 1024 were
+  // 15.9 / 22.2 s (a tile's working set falls out of cache). Image 57-64 dB vs 512, detail unchanged.
+  int tile = 0;
+  // LR overlap between tiles (even). 32 -> 16 (2026-11-20): Mali 2x zoom 11.6 -> 9.8 s (42 -> 35 tiles);
+  // no seam build-up (differences in the overlap strips 0.76-1.26x elsewhere, 52-63 dB vs 32).
+  int overlap = 16;
+  // Low-frequency colour noise on the finished image (lkrl_lfc.cpp): Wiener strength in measured-noise
+  // units, 0 = off. Self-gating (measured noise), so on for every scene. LKRL_LFC overrides.
+  float lfc_k = 16.0f;   // night burst 194618: colour blotches -31 %; day 184641: no pixel changes > 0.01
   // Optional zero-initialised caller allocation for (w, h, 3) floats; null or a null result uses rgb_out.
   std::function<float*(int, int)> out_alloc;
   // Optional: refines the burst's own noise fit (a, b in normalised raw units,
@@ -94,6 +102,7 @@ struct FullParams {
 
 struct FullStats {
   int tiles = 0;
+  float lfc_ms = 0, lfc_wu = 0, lfc_wv = 0;   // low-frequency colour pass: time, mean Wiener weight U / V
   float sigma = 0, a = 0, b = 0;
   float fit_a = 0, fit_b = 0;   // the burst's own fit, before noise_refine
   bool noise_learned = false;   // a, b came from noise_refine (learned model)

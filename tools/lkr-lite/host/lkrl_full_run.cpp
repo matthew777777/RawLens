@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Desktop full-frame / region run through the same MergeFull path the app uses.
-//   lkr_full_run BURST_DIR OUT.dng [--s 1 --tile 512 --overlap 32 --crop W H --frames K]
+//   lkr_full_run BURST_DIR OUT.dng [--s 1 --tile 0(auto) --overlap 16 --crop W H --frames K]
 #include <dirent.h>
 
 #include <algorithm>
@@ -221,7 +221,8 @@ int main(int argc, char** argv) {
   std::printf("%zu frames %ux%u -> %dx%d s=%d tiles %d  sigma %.5f a %.3g b %.3g  prior %s%s\n", fr.size(), m.width,
               m.height, ow, oh, prm.s, st.tiles, st.sigma, st.a, st.b, dct_prior ? "dct" : "none", "");
   std::printf("reference frame %d (sharpest)\n", st.ref_index);
-  std::printf("DCT luma: %s; lost-frame colour cleanup: %s; KernelNet: independent noise-gated switch (LKRL_KNDN)\n",
+  std::printf("lfc %.0f ms, mean weight U %.2f V %.2f\n", st.lfc_ms, st.lfc_wu, st.lfc_wv);
+  std::printf("DCT luma: %s; lost-frame colour cleanup: %s\n",
               dct_prior ? "on" : "off", prm.solve.dct_fallback ? "on" : "off");
   std::printf("look: prior %.2f grain %.2f%s  local lambda %.2f\n", st.prior_gain, st.grain,
               prm.auto_look ? " (auto from noise)" : "", st.local_lambda);

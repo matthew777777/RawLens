@@ -84,15 +84,22 @@ void main() {
   // Every tap is checked here too: the weights may predate the last motion step (weights_once).
   if (!taps(warpQ(k, subPos(i, j, 0, 0)), x0a, fa)) return;
   int ta = base + x0a.y * pc.W + x0a.x;
-  float sum = mix(mix(z[ta], z[ta + 1], fa.x), mix(z[ta + pc.W], z[ta + pc.W + 1], fa.x), fa.y);
   int tb = 0, tc = 0, td = 0;
   if (ADJ_S == 2) {
     if (!taps(warpQ(k, subPos(i, j, 1, 0)), x0b, fb) || !taps(warpQ(k, subPos(i, j, 0, 1)), x0c, fc) ||
         !taps(warpQ(k, subPos(i, j, 1, 1)), x0d, fd)) return;
     tb = base + x0b.y * pc.W + x0b.x; tc = base + x0c.y * pc.W + x0c.x; td = base + x0d.y * pc.W + x0d.x;
-    sum += mix(mix(z[tb], z[tb + 1], fb.x), mix(z[tb + pc.W], z[tb + pc.W + 1], fb.x), fb.y);
-    sum += mix(mix(z[tc], z[tc + 1], fc.x), mix(z[tc + pc.W], z[tc + pc.W + 1], fc.x), fc.y);
-    sum += mix(mix(z[td], z[td + 1], fd.x), mix(z[td + pc.W], z[td + pc.W + 1], fd.x), fd.y);
+  }
+  // The z taps are this pass's main cost on Mali (scattered reads). Skipped where the result is known
+  // (2026-11-20, bit-identical): the average step starts from z = 0 (sum = 0), coverage-only uses no residual.
+  float sum = 0.0;
+  if (pc.mode != 2 && pc.rpow >= 0.0) {
+    sum = mix(mix(z[ta], z[ta + 1], fa.x), mix(z[ta + pc.W], z[ta + pc.W + 1], fa.x), fa.y);
+    if (ADJ_S == 2) {
+      sum += mix(mix(z[tb], z[tb + 1], fb.x), mix(z[tb + pc.W], z[tb + pc.W + 1], fb.x), fb.y);
+      sum += mix(mix(z[tc], z[tc + 1], fc.x), mix(z[tc + pc.W], z[tc + pc.W + 1], fc.x), fc.y);
+      sum += mix(mix(z[td], z[td + 1], fd.x), mix(z[td + pc.W], z[td + pc.W + 1], fd.x), fd.y);
+    }
   }
   float rs = (sum * invn - yv(int(o))) * wk * invn * pc.scale;
   bool c = pc.mode >= 1;

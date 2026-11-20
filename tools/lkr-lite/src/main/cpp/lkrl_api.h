@@ -41,7 +41,6 @@ struct SolveParams {
   std::vector<int> prior_at;   // empty = every iteration
   // Non-learned x-step on the prior iterations (shaders/dct_x.comp). H and W must be multiples of 4.
   bool dct_prior = false;
-  float kernelnet_denoise = -1.0f;   // < 0: CLI environment (default on); app explicitly selects 0 or 1
   // Without dct_prior: one DCT pass at the end, only on tiles that lost frames and only for the
   // excess colour noise. Luma is unchanged unless dct_prior is explicitly on.
   bool dct_fallback = true;    // Lite: light DCT cleanup only where frames were lost (2026-11-14; --fallback 0 = off)
@@ -55,6 +54,14 @@ struct SolveParams {
   float dct_grain = 1.0f;
   float dct_luma_floor = 0.10f;
   float dct_luma_cap = 0.25f;     // dct_prior on: at most this share removed (deepest shadows keep grain)   // dct_prior on: at least this share of luma noise variance removed (mid-tones / highlights)
+  // Night look (2026-11-20): luma keeps grain of std dct_grain_rel x local luma (film / DSLR-like, gain
+  // invariant), at least dct_grain_rho of the noise variance; 0 = off. Self-gating: blocks cleaner than the
+  // kept grain are not touched. dct_chroma_norm: colour thresholds in colour-noise units (see dct_x.glsl).
+  // Defaults (user 2026-11-20, night burst IMG_20260921_194618_520: "almost no chroma, no bleeding,
+  // organic DSLR / film luma"): 8 % relative grain, at least 20 % of the noise variance kept, coarse
+  // frequencies shrunk harder (tilt 0.7). Day burst 184641: no pixel changes by more than 0.01.
+  float dct_grain_rel = 0.08f, dct_grain_rho = 0.2f, dct_grain_tilt = 0.7f;
+  bool dct_chroma_norm = true;
   float dct_luma = 2.0f, dct_chroma = 2.0f;   // noise-sigma multipliers; 16 erased real leaf colour
   // Dark blocks (mean luma below dct_dark_level, full effect below a quarter) use their measured
   // AC energy as the noise level when it exceeds the model, up to dct_dark_cap x (1 = off).
@@ -140,8 +147,7 @@ struct SolveParams {
   // chroma part below keeps daylight shadow colour noise below Google HDR+.
   float shadow_boost = 0.0f;
   float shadow_chroma = 0.7f;
-  // Neutralise fully clipped highlights only. A clipped single channel
-  // does not justify discarding the remaining sunset / coloured-light signal.
+  // Blown highlights go white: neutralise once any channel nears clip (FinishLook).
   bool highlight_desat = true;
   // EXPERIMENT (off): where frames were rejected, pull chroma toward its 3x3 median applied twice,
   // scaled by the lost-frame factor -- removes reference-frame false colour on aliased wires/railings.

@@ -17,7 +17,8 @@ average as a colour-edge guide, preserving leaf/wall boundaries.
 Lost-frame DCT cleanup is colour-only (luma threshold zero), without the
 texture-energy shadow boost. The colour threshold is 2 noise sigmas, previously
 16. `--prior 0` / app DCT off disables DCT luma shrinkage; `--prior 1` enables it.
-Automatic KernelNet and noise-gated hybrid luma denoising remain independent.
+Noise-gated hybrid luma denoising stays independent. KernelNet was removed from LK-R
+(2026-11-20).
 `--fallback 0` disables the remaining colour DCT pass; `LKRL_FB=0` now works too.
 Research environment overrides can still explicitly change these settings.
 
@@ -126,36 +127,35 @@ side-by-side renders (`render_ab.py`). Paths point at the session scratchpad.
 The standalone front end now exists: `lkrl_full_run BURST_DIR OUT.dng --s 1`
 (or `--s 2`) loads DNG bursts, estimates noise, aligns tiles and writes a full-frame
 result. Build it with the CMake commands above. `lkrl_run` remains the trace tool.
-Vulkan headers/loader and `glslc` are required; KernelNet weights are read from
-`tools/sr-pipeline/src/main/resources/kernelnet/`.
+Vulkan headers/loader and `glslc` are required.
 
 This tool is separate from the app's `LkrMerge` / `lkr-pipeline` integration.
 Hybrid chroma averaging, noise-gated luma refinement, lost-frame cleanup and fp16
-frame storage are implemented. KernelNet post-denoise is automatic by default (`LKRL_KNDN=0` disables it). GPU LK
+frame storage are implemented. GPU LK
 (`LKRL_GPU_LK`) and motion look (`LKRL_MLOOK`) remain opt-in experiments.
 The measured results below describe their named datasets and configurations.
 
-### App KernelNet denoising switch (2026-11-15)
+### Night look (2026-11-20)
 
-The app's Merge settings and saved-burst LK-SR options expose **Automatic
-KernelNet denoise**, on by default. Its per-merge selection is passed explicitly
-through JNI to the tiled solver; both desktop runners default to automatic denoising, with `LKRL_KNDN=0` to disable it. Explicit saved app choices are preserved.
-When enabled, strength is zero at or below 4% estimated relative noise at mid-grey,
-ramps to full strength at 8%, and follows the existing per-pixel noise/coverage
-model. This uses estimated noise, not time of day or an ISO threshold. Low-noise
-merges bypass both model inference and the denoising pass entirely.
+KernelNet (post-merge denoise, its app switch and `lkrl_kernelnet_check`) was removed from
+LK-R. Night denoising is now the DCT pass plus a low-frequency colour stage:
 
-Android builds embed the existing PhotonCamera model in the native library, so
-the device needs no host filesystem path. Model initialization is safe across
-concurrent tile workers. This switch is independent of the sliding-DCT prior.
+- colour DCT thresholds are in each colour channel's own noise units (`dct_chroma_norm`,
+  `LKRL_CNORM`); without this, colour shrinkage at night white balance was ~2.8x weaker
+  than the written factor;
+- luma keeps film-like grain: at least `dct_grain_rel` (8 %) of local luma, and at least
+  `dct_grain_rho` (20 %) of the noise variance. Coarse DCT frequencies shrink harder than
+  fine ones (`dct_grain_tilt` 0.7), so the grain stays fine rather than blotchy (`LKRL_GREL`,
+  `LKRL_GRHO`, `LKRL_GTILT`);
+- `lkrl_lfc.cpp` runs on the finished image. It fits colour to luma with a guided filter at
+  1/4 resolution, then Wiener-shrinks the colour blotches the 8x8 DCT cannot see. The noise
+  level is measured on the image itself (flattest places, relative to the noise model), so
+  the stage gates itself. `FullParams::lfc_k` 16 (`LKRL_LFC=0` turns it off). About 100 ms
+  on the Mac CPU.
 
-`lkrl_kernelnet_check` is a standalone Vulkan synthetic regression (host target;
-the same source can be linked with the Android core). On Mali-G615, all six
-1×/2× cases passed: 2% noise was byte-identical with the switch off/on and used
-the same four GPU submissions; 6% and 10% noise ran an additional submission,
-produced finite output and reduced interior flat-field variance. This validates
-the bypass and noise reduction, not full-scene texture/motion quality or the
-wall-clock cost of low-light processing.
+Night burst `IMG_20260921_194618_520`, 1x: luma fine noise 0.37 -> 0.20, colour blotches
+U 0.035 -> 0.024, V 0.026 -> 0.018. Day burst `IMG_20260919_184641_979`: no pixel changes
+by more than 0.01.
 
 ## Phone performance (2026-11-13, Mali-G615 MC2, car burst 8 frames, full frame, `--guide 2 --msmooth 1 --msr 1`)
 

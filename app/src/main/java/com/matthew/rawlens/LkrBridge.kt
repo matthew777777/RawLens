@@ -84,8 +84,6 @@ internal object LkrBridge {
         tuning: FloatArray?, outWidth: Int, outHeight: Int
     ): ByteBuffer?
 
-    /** Per-merge switch; enabled strength is gated by the measured scene noise. */
-    @JvmStatic external fun nativeSetKernelNetDenoise(enabled: Boolean)
 
     /** Settings -> Merge -> "Network": learned post-fit prior (NPU: MediaTek MDLA / Qualcomm Hexagon via
      *  NNAPI; no NPU: Vulkan fallback). */

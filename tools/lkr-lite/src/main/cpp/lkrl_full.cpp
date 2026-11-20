@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lkrl_full.h"
+#include "lkrl_lfc.h"
 #include "lkrl_prior.h"
 
 #include <algorithm>
@@ -210,6 +211,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     std::vector<float> c(size_t(g.w) * g.h);
     LoadTile(frames[0], g, 0, 0, g.w, g.h, black, white, c.data());
     S.sigma = NoiseSigma(c.data(), g.h, g.w);
+    if (const char* v = std::getenv("LKRL_SIGMA")) S.sigma = float(std::atof(v));   // diagnostics
     int bins = 0;
     NoiseAB(c.data(), g.h, g.w, &S.a, &S.b, &bins);
     S.fit_a = S.a;
@@ -256,7 +258,11 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     std::vector<float> ref = alignmentGrey(frames[0], &bw, &bh);
     const float mref = median_of(ref);
     const LkRef lref = LkPrepare(ref.data(), bh, bw, 3);
-    const int nthr = std::max(1, std::min(K - 1, int(std::thread::hardware_concurrency()) / 2));
+    // One thread per frame up to the cores minus the noise fit's (2026-11-20; was half the cores: 7 frames
+    // ran in 2 rounds on the 8-core phone, ~0.75 s serial before any GPU work). LKRL_COARSE_THR overrides.
+    static const int coarse_thr = std::getenv("LKRL_COARSE_THR") ? std::atoi(std::getenv("LKRL_COARSE_THR")) : 0;
+    const int ncpu = std::max(1, int(std::thread::hardware_concurrency()));
+    const int nthr = std::max(1, std::min(K - 1, coarse_thr > 0 ? coarse_thr : std::max(1, ncpu - 1)));
     std::vector<std::thread> pool;
     for (int tt = 0; tt < nthr; ++tt)
       pool.emplace_back([&, tt] {
@@ -287,6 +293,20 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         }
       });
     for (auto& th : pool) th.join();
+    if (const char* fn = std::getenv("LKRL_AFFINE_FILE")) {   // diagnostics: K lines of 6 numbers
+      if (FILE* f = std::fopen(fn, "r")) {
+        for (int k = 0; k < K; ++k) for (int m = 0; m < 6; ++m) if (std::fscanf(f, "%lf", &P[k][m]) != 1) break;
+        std::fclose(f);
+      }
+    }
+    if (std::getenv("LKRL_NOGAIN")) std::fill(gain.begin(), gain.end(), 1.0f);   // diagnostics
+    if (const char* v = std::getenv("LKRL_COARSE_SHIFT")) {   // diagnostics: add (dx, dy) to frames 1..K-1
+      float dx = 0, dy = 0; std::sscanf(v, "%f %f", &dx, &dy);
+      for (int k = 1; k < K; ++k) { P[k][2] += dx; P[k][5] += dy; }
+    }
+    if (std::getenv("LKRL_PRINT_AFFINE"))   // diagnostics
+      for (int k = 0; k < K; ++k)
+        std::fprintf(stderr, "affine %d: %.6f %.6f %.3f %.6f %.6f %.3f gain %.4f\n", k, P[k][0], P[k][1], P[k][2], P[k][3], P[k][4], P[k][5], gain[k]);
   }
   noise_fit.join();
   S.ms_coarse = now_ms() - t;   // wall, noise fit included
@@ -295,7 +315,23 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   t = now_ms();
   const PriorFn prior = make_prior ? make_prior(S.a, S.b, S.sigma, wb) : PriorFn();
   // The DCT x-step needs the solved tile (s * tile) to be a multiple of 4.
-  const int tile = std::min({prm.tile, g.w, g.h}) & (((prm.solve.dct_prior || prm.solve.dct_fallback) && prm.s == 1) ? ~3 : ~1);
+  const int tile_target = prm.tile > 0 ? prm.tile : (prm.s == 1 ? 416 : 320);
+  const int tile_align = ((prm.solve.dct_prior || prm.solve.dct_fallback) && prm.s == 1) ? 4 : 2;
+  int tile_req = tile_target;
+  if (prm.tile <= 0) {
+    // Auto: the grid fitted to this frame (2026-11-20). Up to 5 % above the target when that saves a row
+    // or column, then the smallest tile giving that grid (the last tile no longer overlaps its neighbour
+    // by most of its width). 4080 x 3060 at 1x: 11 x 8 = 88 tiles of 416 -> 10 x 8 = 80 of 424, phone
+    // ~-0.5 s; 2x zoom keeps 7 x 5 of 320.
+    const int ov0 = std::min(prm.overlap, tile_target / 4) & ~1;
+    auto fit = [&](int len) {
+      const int n = std::max(1, int(std::ceil(double(len - ov0) / (1.05 * tile_target - ov0))));
+      return (len - ov0 + n - 1) / n + ov0;
+    };
+    tile_req = std::max(fit(g.w), fit(g.h));
+    tile_req = (tile_req + tile_align - 1) / tile_align * tile_align;
+  }
+  const int tile = std::min({tile_req, g.w, g.h}) & ~(tile_align - 1);
   const int ov = std::min(prm.overlap, tile / 4) & ~1;
   const int step = tile - ov;
   auto starts = [&](int len) {
@@ -551,8 +587,26 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       // and blurred the night treeline).
       const int sub_size = look_t > 0.5f ? prm.sub_lk_night : prm.sub_lk;
       const int sub_blur = int(std::lround(prm.sub_lk_blur_night * look_t));
+      // Any tile size (2026-11-20): quadrants of sub_size spread evenly over the tile (overlapping when n is
+      // not a multiple), each 16 px field block from the nearest quadrant. The old n % sub_size == 0 rule
+      // silently turned this off for the faster 416 / 424 px tiles: wind-moved bushes lost ~20 % fine detail
+      // (IMG_20260919_184641_979). With n a multiple the quadrants and blocks are exactly the old ones.
       const bool use_sub = sub_size >= 64 && prm.tile_lk && !prm.paper_parity && sp.local_block == 16 &&
-                           n % sub_size == 0 && look_t <= prm.sub_lk_max_noise;
+                           n >= sub_size && look_t <= prm.sub_lk_max_noise;
+      // Quadrant starts along one axis (grey px) and the field blocks [b0, b1) each one owns.
+      const int sub_gs = sub_size / 2;
+      std::vector<int> qs;
+      std::vector<std::pair<int, int>> qb;
+      if (use_sub) {
+        const int nq = std::max(1, (g2 + sub_gs / 2) / sub_gs);
+        for (int i = 0; i < nq; ++i) qs.push_back(nq == 1 ? (g2 - sub_gs) / 2 : i * (g2 - sub_gs) / (nq - 1));
+        auto firstBlock = [](int lo2) { return lo2 <= 8 ? 0 : (lo2 - 8 + 15) / 16; };   // first block centre >= lo2 (LR px)
+        for (int i = 0; i < nq; ++i) {
+          const int lo2 = i == 0 ? 0 : qs[i - 1] + qs[i] + sub_gs;              // 2 x midpoint of the centres
+          const int hi2 = i == nq - 1 ? 2 * g2 + 16 : qs[i] + qs[i + 1] + sub_gs;
+          qb.push_back({firstBlock(lo2), firstBlock(hi2)});
+        }
+      }
       const int sub_nbx = (n + 15) / 16, sub_nby = (n + 15) / 16;
       std::vector<float>& sub_field = o.sub_field;
       sub_field.clear();
@@ -560,10 +614,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       o.use_sub = use_sub;
       std::vector<LkRef> qref;   // quadrant references, row-major in the order align_frame visits them
       if (use_sub) {
-        const int gs = sub_size / 2;
+        const int gs = sub_gs;
         std::vector<float> sr(size_t(gs) * gs);
-        for (int qy = 0; qy + gs <= g2; qy += gs)
-          for (int qx = 0; qx + gs <= g2; qx += gs) {
+        for (int qy : qs)
+          for (int qx : qs) {
             for (int i = 0; i < gs; ++i)
               for (int j = 0; j < gs; ++j) sr[size_t(i) * gs + j] = gref[size_t(qy + i) * g2 + qx + j];
             if (sub_blur > 0) BoxBlurGrey(&sr, gs, sub_blur);
@@ -588,11 +642,12 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         // Sub-tile alignment (parallax): quadrant affine relative to the tile's,
         // written as the local motion start d(u) = (A' u + t') - (A u + t), LR px.
         if (k > 0 && use_sub) {
-          const int gs = sub_size / 2;   // quadrant edge in grey px
+          const int gs = sub_gs;   // quadrant edge in grey px
           std::vector<float> sm(size_t(gs) * gs);
           size_t qi = 0;
-          for (int qy = 0; qy + gs <= g2; qy += gs)
-            for (int qx = 0; qx + gs <= g2; qx += gs) {
+          for (size_t iy = 0; iy < qs.size(); ++iy)
+            for (size_t ix = 0; ix < qs.size(); ++ix) {
+              const int qx = qs[ix], qy = qs[iy];
               const LkRef& sr = qref[qi++];
               for (int i = 0; i < gs; ++i)
                 for (int j = 0; j < gs; ++j) sm[size_t(i) * gs + j] = gm[size_t(qy + i) * g2 + qx + j];
@@ -612,7 +667,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
               const double ax = pq[0], bx_ = pq[1], ay = pq[3], by_ = pq[4];
               const double tx = 2.0 * (pq[2] + qx - (ax * qx + bx_ * qy));
               const double ty = 2.0 * (pq[5] + qy - (ay * qx + by_ * qy));
-              const int b0x = 2 * qx / 16, b1x = 2 * (qx + gs) / 16, b0y = 2 * qy / 16, b1y = 2 * (qy + gs) / 16;
+              const size_t ixq = size_t(std::find(qs.begin(), qs.end(), qx) - qs.begin()), iyq = size_t(std::find(qs.begin(), qs.end(), qy) - qs.begin());
+              const int b0x = qb[ixq].first, b1x = qb[ixq].second, b0y = qb[iyq].first, b1y = qb[iyq].second;
               for (int by = b0y; by < b1y && by < sub_nby; ++by)
                 for (int bx = b0x; bx < b1x && bx < sub_nbx; ++bx) {
                   const double ux = bx * 16 + 8, uy = by * 16 + 8;
@@ -651,15 +707,15 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         for (int k = 0; k < K; ++k)
           for (int c = 0; c < 6; ++c) p[k * 6 + c] = float(pts[size_t(k)][size_t(c)]);
         if (use_sub) {
-          const int gs = sub_size / 2;
+          const int gs = sub_gs;
           struct Sub { int k, qx, qy; size_t qi; std::array<double, 6> ps; };
           std::vector<Sub> subs;
           std::vector<std::vector<float>> sms;
           for (int k = 1; k < K; ++k) {
             const auto& pt = pts[size_t(k)];
             size_t qi = 0;
-            for (int qy = 0; qy + gs <= g2; qy += gs)
-              for (int qx = 0; qx + gs <= g2; qx += gs) {
+            for (int qy : qs)
+              for (int qx : qs) {
                 std::vector<float> sm(size_t(gs) * gs);
                 for (int i = 0; i < gs; ++i)
                   for (int j = 0; j < gs; ++j) sm[size_t(i) * gs + j] = gms[size_t(k)][size_t(qy + i) * g2 + qx + j];
@@ -685,7 +741,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
             const double ax = pq[0], bx_ = pq[1], ay = pq[3], by_ = pq[4];
             const double tx = 2.0 * (pq[2] + qx - (ax * qx + bx_ * qy));
             const double ty = 2.0 * (pq[5] + qy - (ay * qx + by_ * qy));
-            const int b0x = 2 * qx / 16, b1x = 2 * (qx + gs) / 16, b0y = 2 * qy / 16, b1y = 2 * (qy + gs) / 16;
+            const size_t ixq = size_t(std::find(qs.begin(), qs.end(), qx) - qs.begin()), iyq = size_t(std::find(qs.begin(), qs.end(), qy) - qs.begin());
+              const int b0x = qb[ixq].first, b1x = qb[ixq].second, b0y = qb[iyq].first, b1y = qb[iyq].second;
             for (int by = b0y; by < b1y && by < sub_nby; ++by)
               for (int bx = b0x; bx < b1x && bx < sub_nbx; ++bx) {
                 const double ux = bx * 16 + 8, uy = by * 16 + 8;
@@ -933,6 +990,17 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     total.alloc_ms += v.alloc_ms; total.pipeline_ms += v.pipeline_ms; total.sets_ms += v.sets_ms;
     total.record_ms += v.record_ms; total.queue_ms += v.queue_ms; total.wait_ms += v.wait_ms;
     total.coherency_ms += v.coherency_ms; total.query_ms += v.query_ms;
+  }
+  {
+    static const float lfc_env = std::getenv("LKRL_LFC") ? float(std::atof(std::getenv("LKRL_LFC"))) : -1.0f;
+    const float lk = lfc_env >= 0.0f ? lfc_env : prm.lfc_k;
+    if (lk > 0.0f) {
+      const double tl = now_ms();
+      const float wbf[3] = {wb[0], wb[1], wb[2]};
+      LfcStats ls;
+      LowFreqChroma(rgb_data, *out_w, *out_h, wbf, lk, S.a, S.b, prm.s, &ls);
+      S.lfc_ms = float(now_ms() - tl); S.lfc_wu = ls.wu; S.lfc_wv = ls.wv;
+    }
   }
   S.ms_total = now_ms() - t0;
   if (st) *st = S;

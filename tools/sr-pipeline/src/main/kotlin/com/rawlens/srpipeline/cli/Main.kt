@@ -74,6 +74,8 @@ internal data class Plan(
     val tune: String? = "app",
     val organicReconstruction: Boolean = false,
     val tiledPolynomial: Boolean = false,
+    /** --reconstruction two-band: CPU two-band reconstruction over the Vulkan registration (desktop oracle). */
+    val twoBand: Boolean = false,
     val mobilePolynomial: Boolean = false,
 )
 
@@ -178,6 +180,7 @@ internal fun parseArgs(args: Array<String>): Plan {
     var organicReconstruction = false
     var tiledPolynomial = false
     var mobilePolynomial = false
+    var twoBand = false
 
     var i = 0
     while (i < args.size) {
@@ -186,10 +189,11 @@ internal fun parseArgs(args: Array<String>): Plan {
                 val method = args.getOrNull(++i)
                 tiledPolynomial = method == "organic-tiled"
                 mobilePolynomial = method == "mobile"
+                twoBand = method == "two-band"
                 organicReconstruction = when (method) {
                     "organic", "organic-tiled" -> true
-                    "legacy", "mobile" -> false
-                    else -> fail("--reconstruction requires legacy|organic|organic-tiled|mobile")
+                    "legacy", "mobile", "two-band" -> false
+                    else -> fail("--reconstruction requires legacy|organic|organic-tiled|mobile|two-band")
                 }
                 i++
             }
@@ -402,6 +406,7 @@ internal fun parseArgs(args: Array<String>): Plan {
         tune = tune,
         organicReconstruction = organicReconstruction,
         tiledPolynomial = tiledPolynomial,
+        twoBand = twoBand,
         mobilePolynomial = mobilePolynomial,
     )
 }
@@ -639,6 +644,12 @@ private fun merge(plan: Plan) {
             val handle = SrpBridge.nativeCreate()
             require(handle != 0L) { "sr-pipeline: nativeCreate failed" }
             val cache = if (plan.tiledPolynomial) com.rawlens.srpipeline.stages.PolynomialTileCache(w,h,config) else null
+            // SRP_TB=sigmaHigh,denoise(0/1),grainFloor,sigmaLow overrides the two-band defaults.
+            val twoBand = if (!plan.twoBand) null else com.rawlens.srpipeline.stages.TwoBandRecorder(w, h, config,
+                System.getenv("SRP_TB")?.split(',')?.let { q -> com.rawlens.srpipeline.stages.TwoBandReconstruction.Params(
+                    sigmaHigh = q[0].toDouble(), denoise = q.getOrNull(1) != "0",
+                    grainFloor = q.getOrNull(2)?.toDouble() ?: 0.0, sigmaLow = q.getOrNull(3)?.toDouble() ?: 1.0) }
+                    ?: com.rawlens.srpipeline.stages.TwoBandReconstruction.Params())
             try {
                 val fft = spv(dir, "fft")
                 val buf = VulkanPipeline.run(
@@ -672,9 +683,11 @@ private fun merge(plan: Plan) {
                         greyFir = if (plan.grey.startsWith("FIR")) spv(dir, "grey_fir") else null,
                         pyrDown = if (plan.grey.startsWith("FIR")) spv(dir, "pyr_down") else null,
                     ),
-                    frameObserver = cache?.let { c -> { f, flow, r -> c.record(f,flow,r) } },
+                    frameObserver = cache?.let { c -> { f, flow, r -> c.record(f,flow,r) } }
+                        ?: twoBand?.let { t -> { f, flow, r -> t.record(f, flow, r) } },
                 )
                 cache?.finish(buf)
+                twoBand?.let { t -> println("sr-pipeline: two-band reconstruction over ${t.frames} frames"); t.finish(buf) }
                 buf
             } finally {
                 cache?.close()

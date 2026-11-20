@@ -20,4 +20,7 @@ void MhcCoherentCodes(const uint16_t* codes, int sensor_w, int sensor_h, int pit
 // planar output 3 x h x w.
 void MhcCoherentRggb(const float* raw, int h, int w, float* rgb_planar);
 
+// Edge-directed (RCD-style) start image, same layout (test 2026-11-19, LKRL_RCD=1).
+void RcdRggb(const float* raw, int h, int w, float* rgb_planar);
+
 }  // namespace lkrl

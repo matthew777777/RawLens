@@ -241,16 +241,27 @@ void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, 
       }
     }
   }
-  // Neutralise only pixels with no remaining unsaturated colour channel.
-  // One-channel clipping is common in sunsets: the other channels still
-  // contain valid colour. Do not expand this mask into coloured neighbours.
+  // Blown highlights go white (user 2026-11-19). Once ANY channel clips, its true value is unknown
+  // (>= clip), so the remaining channels' ratio is false colour: a sun glow with only green clipped
+  // turned pink after white balance (IMG_20260928_185731_891), and a merge of frames clipping in
+  // different channels turned yellow. Strength follows the brightest raw channel (smoothstep from
+  // 0.85 clip to clip: a soft edge, the sensor clip level is not noise), target = neutral at the pixel's
+  // wb-space luma, so brightness is kept. (Before: only pixels with ALL channels near clip;
+  // LKRL_HL_OLD=1 restores that.)
   if (prm.highlight_desat) {
-    const float lo = 0.92f * prm.clip, hi = prm.clip;
+    static const bool hl_old = std::getenv("LKRL_HL_OLD") != nullptr;
+    const float lo = (hl_old ? 0.92f : 0.85f) * prm.clip, hi = prm.clip;
+    const float wmin = std::min(prm.wb[0], std::min(prm.wb[1], prm.wb[2]));
     for (size_t i = 0; i < HW; ++i) {
-      const float mn = std::min(x[i], std::min(x[HW + i], x[2 * HW + i]));
-      const float m = std::clamp((mn - lo) / std::max(hi - lo, 1e-6f), 0.0f, 1.0f);
+      const float v = hl_old ? std::min(x[i], std::min(x[HW + i], x[2 * HW + i]))
+                             : std::max(x[i], std::max(x[HW + i], x[2 * HW + i]));
+      float m = std::clamp((v - lo) / std::max(hi - lo, 1e-6f), 0.0f, 1.0f);
+      if (!hl_old) m = m * m * (3.0f - 2.0f * m);
       if (m <= 0.0f) continue;
-      const float L = q[0] * x[i] + q[1] * x[HW + i] + q[2] * x[2 * HW + i];   // wb-space luma
+      float L = q[0] * x[i] + q[1] * x[HW + i] + q[2] * x[2 * HW + i];   // wb-space luma
+      // The output is stored clamped to [0, 1] per camera channel (16-bit DNG): a neutral brighter than
+      // min(wb) would get its least-gained channel (G) cut back and turn pink again, so white is capped there.
+      if (!hl_old) L = std::min(L, wmin);
       for (int c = 0; c < 3; ++c) {
         const float neutral = L / prm.wb[c];
         x[c * HW + i] += m * (neutral - x[c * HW + i]);

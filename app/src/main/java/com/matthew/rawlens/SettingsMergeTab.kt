@@ -112,18 +112,6 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 "RawLens improvements: DSLR look, motion and water rejection, local motion, " +
                 "shadow cleanup. Own quick tile; same shutter, ZSL and save path as MFSR."
         ))
-        content.addView(settingsCheck("LK-R denoise: automatic KernelNet", mfsrSettings.lkrKernelNetDenoise).apply {
-            setOnCheckedChangeListener { _, checked ->
-                if (checked != mfsrSettings.lkrKernelNetDenoise &&
-                    !applyMfsrSettings(mfsrSettings.copy(lkrKernelNetDenoise = checked))) {
-                    isChecked = mfsrSettings.lkrKernelNetDenoise
-                }
-            }
-        })
-        content.addView(sectionDesc(
-            "On by default. PhotonCamera-based KernelNet denoising increases in noisy, " +
-                "low-light scenes. Low-noise scenes skip it."
-        ))
         content.addView(settingsCheck("LK-R: Network", mfsrSettings.lkrNetwork).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrNetwork &&

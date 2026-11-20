@@ -1,0 +1,61 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
+// SPDX-License-Identifier: Apache-2.0
+// Luma-guided chroma (2026-11-19, 2x). At 2x the sparse R / B planes put their edges a little off the
+// green edge: a thin dark trunk against blue sky gets a blue fringe / blue dots (IMG_20260919_184641_979,
+// 8 frames; also green fringes on plate letters). A guided filter (He et al. 2010) refits the colour
+// differences U = R - Y, V = B - Y locally as a linear function of luma, U' = a Y + b over
+// (2 r + 1)^2, a = cov(Y, U) / (var Y + k nv), nv = luma noise of the merged image (noise model at
+// output px). Luma Y = (R + 2 G + B) / 4 is kept exactly; colour follows the luma edges like a
+// demosaicer's. Isoluminant colour detail finer than the window is softened, luma detail never.
+// pc.LB = r, pc.clip = k, pc.a / pc.b = noise at output px.
+// mode 0: fp16 RGB copy (P); mode 1: per-window a, b for U and V (AB); mode 2: box of a, b, write.
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) buffer Z { float z[]; };
+layout(std430, binding = 1) buffer P { uvec2 pk[]; };
+layout(std430, binding = 2) buffer AB { vec4 ab[]; };
+vec3 P3(int k) { uvec2 v = pk[k]; return vec3(unpackHalf2x16(v.x), unpackHalf2x16(v.y).x); }
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  if (X >= pc.W || Y >= pc.H) return;
+  int i = Y * pc.W + X, HW = pc.H * pc.W;
+  if (pc.mode == 0) {
+    pk[i] = uvec2(packHalf2x16(vec2(z[i], z[HW + i])), packHalf2x16(vec2(z[2 * HW + i], 0.0)));
+    return;
+  }
+  int r = pc.LB;
+  float inv = 1.0 / float((2 * r + 1) * (2 * r + 1));
+  if (pc.mode == 1) {
+    float sy = 0.0, syy = 0.0, su = 0.0, sv = 0.0, syu = 0.0, syv = 0.0;
+    [[dont_unroll]] for (int dy = -r; dy <= r; ++dy) {
+      int row = clamp(Y + dy, 0, pc.H - 1) * pc.W;
+      [[dont_unroll]] for (int dx = -r; dx <= r; ++dx) {
+        vec3 c = P3(row + clamp(X + dx, 0, pc.W - 1));
+        float l = 0.25 * c.x + 0.5 * c.y + 0.25 * c.z, u = c.x - l, v = c.z - l;
+        sy += l; syy += l * l; su += u; sv += v; syu += l * u; syv += l * v;
+      }
+    }
+    float my = sy * inv, mu = su * inv, mv = sv * inv;
+    float vy = max(syy * inv - my * my, 0.0);
+    float nv = 0.375 * (pc.a * max(my, 0.0) + pc.b);   // var of (R + 2G + B) / 4 for per-plane var a y + b
+    float d = 1.0 / (vy + pc.clip * nv + 1e-12);
+    float au = (syu * inv - my * mu) * d, av = (syv * inv - my * mv) * d;
+    ab[i] = vec4(au, mu - au * my, av, mv - av * my);
+    return;
+  }
+  // (A side-window choice -- best-fitting covering window instead of the average -- flipped with tiny input
+  // changes between single- and multi-tile runs: the trunk was clean in one and blue in the other. The
+  // along-line chroma in axn_apply fixes the trunk robustly; the plain average stays.)
+  vec4 m = vec4(0.0);
+  [[dont_unroll]] for (int dy = -r; dy <= r; ++dy) {
+    int row = clamp(Y + dy, 0, pc.H - 1) * pc.W;
+    [[dont_unroll]] for (int dx = -r; dx <= r; ++dx) m += ab[row + clamp(X + dx, 0, pc.W - 1)];
+  }
+  m *= inv;
+  vec3 c = vec3(z[i], z[HW + i], z[2 * HW + i]);
+  float l = 0.25 * c.x + 0.5 * c.y + 0.25 * c.z;
+  float R = l + m.x * l + m.y, B = l + m.z * l + m.w;
+  z[i] = R; z[HW + i] = (l - 0.25 * R - 0.25 * B) * 2.0; z[2 * HW + i] = B;
+}

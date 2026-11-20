@@ -109,7 +109,7 @@ class LkrPipelineDeviceTest {
                 LkrBridge.nativeSetNoiseModel(noiseModel, noiseIso)
                 val t0 = SystemClock.elapsedRealtime()
                 val rgb = LkrBridge.nativeMerge(bufs.toTypedArray(), w, h, w, cfa, black, white, wb,
-                    c.scale, 512, 32, c.crop, dct, stats, null, c.outW, c.outH)
+                    c.scale, 0, 16, c.crop, dct, stats, null, c.outW, c.outH)   // tile 0 = native auto, as LkrMerge
                 val ms = SystemClock.elapsedRealtime() - t0
                 assertNotNull("merge ${c.name} failed", rgb)
                 if (c.outW > 0) org.junit.Assert.assertEquals("${c.name} output size", c.outW.toLong() * c.outH * 12, rgb!!.capacity().toLong())

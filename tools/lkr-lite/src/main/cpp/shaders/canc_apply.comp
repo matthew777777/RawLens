@@ -1,0 +1,61 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
+// SPDX-License-Identifier: Apache-2.0
+// Reference chroma anchor (2026-11-19). A thin trunk swaying in front of the sky
+// (IMG_20260919_184641_979, tree left of the road) turned teal: frames where the trunk moved put sky
+// colour on it and the rejection admitted those samples. The reference frame alone (z0, its RCD start)
+// has the right colour there. Where the merged image's local-mean chroma (U = R - Y, V = B - Y, box of
+// 2 r + 1) differs from the reference's by more than the reference's own noise allows, the local mean is
+// moved to the reference's:  w = clamp(|dUV| / (K sd) - 1),  U -= w dU, V -= w dV.
+// sd = chroma noise of the reference's box mean: one frame, var(U) ~ 1.4 (a y + b) per LR sample,
+// (2 r + 1)^2 / s^2 LR samples in the box. Luma is never changed; fine colour detail (deviations from
+// the box mean) stays the merge's.
+// Only where the merge lost most frames: on the car plate (5.6 of 8 frames used) the reference's own
+// demosaic false colour on the letters would replace the merge's correct colour; the trunks keep 2.6-3.5.
+// g = clamp((K / 2 + 1 - eff) / (K / 4)), eff = box mean of the frames used (1 + sum of the other
+// frames' final weights, as the debug map): the anchor acts where fewer than about half the frames
+// survived, i.e. where the merge's colour rests on fewer samples than it rejected.
+// pc.LB = r (output px), pc.clip = K, pc.a / pc.b = noise model per LR px, pc.s = scale, pc.K / h / w.
+// mode 0: A = (dU, dV, Y_ref, eff); mode 1: B = row box of A; mode 2: column box of B, apply to Z.
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer R { float zr[]; };
+layout(std430, binding = 2) buffer A { vec4 ta[]; };
+layout(std430, binding = 3) buffer B { vec4 tb[]; };
+layout(std430, binding = 4) readonly buffer WT { float wt[]; };
+void main() {
+  int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  if (X >= pc.W || Y >= pc.H) return;
+  int i = Y * pc.W + X, HW = pc.H * pc.W, r = pc.LB;
+  if (pc.mode == 0) {
+    vec3 m = vec3(z[i], z[HW + i], z[2 * HW + i]), f = vec3(zr[i], zr[HW + i], zr[2 * HW + i]);
+    float ym = 0.25 * m.x + 0.5 * m.y + 0.25 * m.z, yf = 0.25 * f.x + 0.5 * f.y + 0.25 * f.z;
+    int li = min(Y / pc.s, pc.h - 1) * pc.w + min(X / pc.s, pc.w - 1), hw = pc.h * pc.w;
+    float eff = 1.0;
+    for (int k = 1; k < pc.K; ++k) eff += wt[k * hw + li];
+    ta[i] = vec4((m.x - ym) - (f.x - yf), (m.z - ym) - (f.z - yf), yf, eff);
+    return;
+  }
+  float inv = 1.0 / float(2 * r + 1);
+  if (pc.mode == 1) {
+    vec4 s = vec4(0.0);
+    [[dont_unroll]] for (int t = -r; t <= r; ++t) s += ta[Y * pc.W + clamp(X + t, 0, pc.W - 1)];
+    tb[i] = s * inv;
+    return;
+  }
+  vec4 s = vec4(0.0);
+  [[dont_unroll]] for (int t = -r; t <= r; ++t) s += tb[clamp(Y + t, 0, pc.H - 1) * pc.W + X];
+  s *= inv;
+  float nlr = float((2 * r + 1) * (2 * r + 1)) / float(pc.s * pc.s);
+  float sd = sqrt(1.4 * max(pc.a * max(s.z, 0.0) + pc.b, 1e-12) / nlr);
+  float Kf = float(pc.K);
+  float g = clamp((0.5 * Kf + 1.0 - s.w) / (0.25 * Kf), 0.0, 1.0);
+  float w = g * clamp(length(s.xy) / (pc.clip * sd) - 1.0, 0.0, 1.0);
+  if (w <= 0.0) return;
+  vec3 m = vec3(z[i], z[HW + i], z[2 * HW + i]);
+  float ym = 0.25 * m.x + 0.5 * m.y + 0.25 * m.z;
+  float R = m.x - w * s.x, Bc = m.z - w * s.y;
+  z[i] = R; z[HW + i] = (ym - 0.25 * R - 0.25 * Bc) * 2.0; z[2 * HW + i] = Bc;
+}

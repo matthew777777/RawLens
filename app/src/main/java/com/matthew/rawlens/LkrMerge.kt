@@ -45,11 +45,11 @@ internal object LkrMerge {
 
     data class Settings(
         val scale: Int = 1,
-        val tile: Int = 512,
-        val overlap: Int = 32,
+        /** LR tile edge; 0 = native auto (416 at 1x, 320 at 2x: fastest on Mali-G615). */
+        val tile: Int = 0,
+        val overlap: Int = 16,
         /** Regularise with the Vulkan sliding-DCT x-step; false = no prior. */
         val dctPrior: Boolean = false,
-        val kernelNetDenoise: Boolean = true,
         /** Learned post-fit network on the NPU (Settings -> Merge -> "Network"). */
         val network: Boolean = false,
         /** Sensor sub-rectangle `[x, y, w, h]`, or null for full frame. */
@@ -190,7 +190,6 @@ internal object LkrMerge {
         LkrBridge.nativeSetNoiseModel(
             noiseSource?.let { WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), it) },
             noiseSource?.iso?.toFloat() ?: 0f)
-        LkrBridge.nativeSetKernelNetDenoise(settings.kernelNetDenoise)
         LkrBridge.nativeSetPrior(settings.network)
         val t0 = SystemClock.elapsedRealtime()
         // packedBits >= 0: frames from LkrBridge.nativeStage (tight rows, packed when > 0).
@@ -221,15 +220,16 @@ internal object LkrMerge {
         rgb.order(ByteOrder.nativeOrder())
         val ow = stats[LkrBridge.STAT_OUT_W].toInt()
         val oh = stats[LkrBridge.STAT_OUT_H].toInt()
-        // Lens shading on the merged RGB, as MFSR does (sensor-resolution maps).
+        // Lens shading on the merged RGB, as MFSR does (sensor-resolution maps); blown highlights stay white
+        // through the gains (the merge made them neutral; see MfsrMerge.shadePixel).
         // Zoomed output maps each pixel back to its sensor position in the crop.
         val region = settings.crop ?: intArrayOf(0, 0, w, h)
         RawPreDemosaicPipeline.lensShadingModel(metadata)?.let {
             if (region[0] == 0 && region[1] == 0 && ow == w && oh == h)
-                MfsrMerge.applyShadingAfterMerge(rgb.asFloatBuffer(), ow, oh, it)
+                MfsrMerge.applyShadingAfterMerge(rgb.asFloatBuffer(), ow, oh, it, highlightWb = wb)
             else
                 MfsrMerge.applyShadingMapped(rgb.asFloatBuffer(), ow, oh, it,
-                    region[0], region[1], region[2].toFloat() / ow, region[3].toFloat() / oh)
+                    region[0], region[1], region[2].toFloat() / ow, region[3].toFloat() / oh, highlightWb = wb)
         }
         rgb.rewind()
         Log.i(LOG_TAG, "lkr ${ow}x$oh s=${settings.scale} K=${buffers.size} tiles=${stats[LkrBridge.STAT_TILES].toInt()} " +
@@ -238,7 +238,7 @@ internal object LkrMerge {
                 stats[LkrBridge.STAT_MS_TILES], stats[LkrBridge.STAT_MS_GPU], stats[LkrBridge.STAT_MS_PRIOR]))
         return MfsrMerge.MfsrResult(rgb, ow, oh, buffers.size, mergeMs, metadata, result,
             buildString {
-                append("- Tile size: ${settings.tile}, overlap: ${settings.overlap}\n")
+                append("- Tile size: ${if (settings.tile > 0) settings.tile.toString() else "auto"}, overlap: ${settings.overlap}\n")
                 append("- Tiles: ${stats[LkrBridge.STAT_TILES].toInt()}\n")
                 append("- Prior: ${if (settings.dctPrior) "Shadow luma DCT" else "Colour DCT only"}\n")
                 append("- Crop (x, y, width, height): ${region.joinToString()}\n")

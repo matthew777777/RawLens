@@ -61,8 +61,6 @@ data class MfsrSettings(
     val engine: MfsrEngine = MfsrEngine.MFSR,
     /** LK-R: regularise with the Vulkan sliding-DCT x-step; false (default) = no prior. */
     val lkrDctPrior: Boolean = false,
-    /** Noise-gated PhotonCamera KernelNet post-denoise; daylight bypass, enabled by default. */
-    val lkrKernelNetDenoise: Boolean = true,
     /** LK-R: learned post-fit network (colour dots / colour zipper; colour only). Stored default: on with
      *  an NPU (LkrBridge.nativeHasNpu); this constructor default only applies before settings load. */
     val lkrNetwork: Boolean = false,
@@ -106,7 +104,6 @@ data class MfsrSettings(
         "mfsr_zipper_fix" to zipperFix,
         "mfsr_engine" to engine.name,
         "lkr_dct_prior" to lkrDctPrior,
-        "lkr_kernelnet_denoise" to lkrKernelNetDenoise,
         "lkr_network" to lkrNetwork,
         "lkr_middle_reference" to lkrMiddleReference,
         "lkr_zoom" to lkrZoom.name,
@@ -138,7 +135,6 @@ data class MfsrSettings(
             zipperFix = values["mfsr_zipper_fix"] as? Boolean ?: true,
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,
             lkrDctPrior = values["lkr_dct_prior"] as? Boolean ?: false,
-            lkrKernelNetDenoise = values["lkr_kernelnet_denoise"] as? Boolean ?: true,
             // Default: on for phones with an NPU (nearly free there; colour-only since d1affb09, no luma
             // sharpening), off otherwise (the Vulkan fallback costs GPU time). Caught here: LkrBridge's class
             // init loads the native library (absent in JVM tests).

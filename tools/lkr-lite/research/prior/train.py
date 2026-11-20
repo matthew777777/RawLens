@@ -114,6 +114,13 @@ def highpass(t):
     return t - F.conv2d(F.pad(t, (2, 2, 2, 2), mode='reflect'), k, groups=t.shape[1])
 
 
+def local_energy(t, r=4):
+    """Local RMS of the fine scale (luma and colour per channel), box 2 r + 1. Matching it to the target's
+    means the network cannot win by smoothing texture away (L1 alone prefers the median = waxy)."""
+    h = highpass(t)
+    return torch.sqrt(F.avg_pool2d(h * h, 2 * r + 1, stride=1, padding=r, count_include_pad=False) + 1e-6)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('pairs'); ap.add_argument('out')
@@ -124,10 +131,13 @@ def main():
     ap.add_argument('--init', default=None, help='start from this checkpoint (fine-tune)')
     ap.add_argument('--clean', action='store_true', help='denoiser: train to the clean truth (needs gen_pairs c)')
     ap.add_argument('--grain', type=float, nargs=2, default=None, help='with --clean: luma grain share range, e.g. 0 0.6 (2nd input)')
+    ap.add_argument('--energy', type=float, default=0.0, help='weight of the local fine-energy match (anti-smearing), e.g. 1')
     ap.add_argument('--hard', type=float, default=0.0, help='share of crops from hard-patch mining (Gharbi 2016), e.g. 0.5')
     a = ap.parse_args()
     dev = 'mps' if torch.backends.mps.is_available() else 'cpu'
     pairs = load_pairs(a.pairs, a.clean)
+    # fixed shuffle before the split: with several pair dirs the held-out set covers all of them
+    pairs = [pairs[i] for i in np.random.default_rng(7).permutation(len(pairs))]
     val, tr = pairs[:a.val], pairs[a.val:]
     print(f'{len(tr)} train / {len(val)} val pairs, device {dev}')
     m = Prior(a.ch, a.layers, 2 if a.grain else 1).to(dev)
@@ -139,19 +149,28 @@ def main():
     vb = [batch(val, vrng, 16, 256, dev, grain=a.grain) for _ in range(4)]
     hidx = HardIndex(tr) if a.hard > 0 else None
     if hidx is not None: print('hard-patch cells', len(hidx.keys))
-    t0 = time.time()
+    t0 = time.time(); nskip = 0; best = float('inf')
     for it in range(1, a.steps + 1):
         x, y, s = batch(tr, rng, a.batch, a.patch, dev, hidx, a.hard, a.grain)
         o = m(x, s)
         loss = F.l1_loss(o, y) + 2.0 * F.l1_loss(highpass(o), highpass(y))
-        opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0); opt.step(); sched.step()
+        if a.energy > 0: loss = loss + a.energy * F.l1_loss(local_energy(o), local_energy(y))
+        opt.zero_grad(); loss.backward()
+        gn = torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)
+        if not (torch.isfinite(loss) and torch.isfinite(gn)):   # skip a bad step (a NaN run 2026-11-20 at step ~4300)
+            nskip += 1; opt.zero_grad(); sched.step(); continue
+        opt.step(); sched.step()
         if it % 500 == 0 or it == a.steps:
             with torch.no_grad():
                 vin = sum(F.l1_loss(x, y).item() for x, y, s in vb) / len(vb)
                 vout = sum(F.l1_loss(m(x, s), y).item() for x, y, s in vb) / len(vb)
                 hin = sum(F.l1_loss(highpass(x), highpass(y)).item() for x, y, s in vb) / len(vb)
                 hout = sum(F.l1_loss(highpass(m(x, s)), highpass(y)).item() for x, y, s in vb) / len(vb)
-            print(f'step {it} loss {loss.item():.5f} | val L1 Lite {vin:.5f} -> prior {vout:.5f} | fine-scale {hin:.5f} -> {hout:.5f} | {time.time() - t0:.0f} s', flush=True)
+                eout = sum((local_energy(m(x, s)).mean() / local_energy(y).mean()).item() for x, y, s in vb) / len(vb)
+            print(f'texture energy out/target {eout:.3f} | ', end='')
+            print(f'step {it} loss {loss.item():.5f} | val L1 Lite {vin:.5f} -> prior {vout:.5f} | fine-scale {hin:.5f} -> {hout:.5f} | skipped {nskip} | {time.time() - t0:.0f} s', flush=True)
+            if not np.isfinite(vout) or vout >= best: continue   # keep the best finite checkpoint
+            best = vout
             torch.save({'state': m.state_dict(), 'ch': a.ch, 'layers': a.layers, 'cond': m.cond}, a.out)
 
 
