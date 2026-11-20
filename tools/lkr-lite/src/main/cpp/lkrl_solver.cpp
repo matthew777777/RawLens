@@ -321,7 +321,7 @@ LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   kdyuv_ = gpu_->pipeline(spv::kdyuv, sizeof(spv::kdyuv), 1, sizeof(DctPush));
   hyb_ = gpu_->pipeline(spv::hyb, sizeof(spv::hyb), 4, 48);
   adjwg_ = gpu_->pipeline(spv::adj_wg, sizeof(spv::adj_wg), 7, sizeof(Push));
-  fin_ = gpu_->pipeline(spv::fin, sizeof(spv::fin), 7, 64);
+  fin_ = gpu_->pipeline(spv::fin, sizeof(spv::fin), 7, 80);
   ok_ = true;
   for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_, &le_tensor_, &le_blur_, &le_apply_, &dln_apply_, &axn_apply_, &gcf_apply_, &canc_apply_, &rcd_start_, &prior_conv_})
     ok_ = ok_ && q->pipe != VK_NULL_HANDLE;
@@ -1600,10 +1600,12 @@ bool LiteSolver::finish(const float* z, std::vector<float>* x, int H, int W, con
   std::memcpy(bx.map, x->data(), 3 * HW * 4);
   std::memcpy(bz.map, z, 3 * HW * 4);
   if (hns) std::memcpy(bns.map, noise_scale->data(), HW * 4);
-  struct FinPush { int32_t H, W, mode, pl, sm, has_ns, notch, desat; float wbr, wbg, wbb, clip, grain, eqs, p0, p1; };
-  static_assert(sizeof(FinPush) == 64, "fin push");
+  struct FinPush { int32_t H, W, mode, pl, sm, has_ns, notch, desat; float wbr, wbg, wbb, clip, grain, eqs, p0, p1;
+                   float hr, hg, hb, hrec; };
+  static_assert(sizeof(FinPush) == 80, "fin push");
   FinPush f{H, W, 0, 0, 0, hns ? 1 : 0, fa.notch ? 1 : 0, fa.desat ? (std::getenv("LKRL_HL_OLD") ? 2 : 1) : 0, fa.wb[0], fa.wb[1], fa.wb[2],
-            fa.clip, fa.grain, fa.eq_strength, 0.0f, 0.0f};
+            fa.clip, fa.grain, fa.eq_strength, float(fa.hl_radius), 0.0f, fa.hl_ratio[0], fa.hl_ratio[1], fa.hl_ratio[2],
+            fa.hl_rec ? 1.0f : 0.0f};
   gpu_->resetSets();
   VkDescriptorSet st = gpu_->set(fin_, {&bx, &bz, &bns, &bp, &bt, &bm, &bk});
   const uint32_t gx = div_up(uint32_t(W), 16), gy = div_up(uint32_t(H), 16);
@@ -1620,6 +1622,7 @@ bool LiteSolver::finish(const float* z, std::vector<float>* x, int H, int W, con
   }
   if (fa.grain > 0.0f || fa.notch) run(5);
   if (fa.grain > 0.0f && fa.notch) notch(0);
+  if (fa.desat && fa.hl_rec) run(7);   // highlight reconstruction: dilated per-channel clip (P1..P3)
   run(6);
   if (!gpu_->submit()) return fail("fin submit");
   x->assign(bx.as<float>(), bx.as<float>() + 3 * HW);

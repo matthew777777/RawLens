@@ -248,20 +248,94 @@ void FinishLook(const float* z, float* x, int H, int W, const SolveParams& prm, 
   // 0.85 clip to clip: a soft edge, the sensor clip level is not noise), target = neutral at the pixel's
   // wb-space luma, so brightness is kept. (Before: only pixels with ALL channels near clip;
   // LKRL_HL_OLD=1 restores that.)
+  // Highlight reconstruction (2026-11-20, inpaint opposed; user: Samsung hdrplus clouds came out flat
+  // white although only green was clipped -- red kept the whole cloud texture). Each channel near its
+  // clip (same soft edge as below) moves towards max(itself, ratio_c x mean of the other two in wb space),
+  // so the cloud keeps the shape the unclipped channels recorded and the colour of its unclipped edge.
+  // Output can exceed the clip; the white rule below then only acts where ALL channels clip.
+  static const bool hl_rec_off = std::getenv("LKRL_HL_REC") && std::getenv("LKRL_HL_REC")[0] == '0';
+  const bool hl_rec = prm.highlight_desat && !hl_rec_off && !std::getenv("LKRL_HL_OLD");
+  // Dilated per-channel clip (fin.comp mode 7): bright pixels count a channel clipped when it clips within
+  // 2 s px (the merge leaves too-low values inside a channel's clipped area -> dark specks once rebuilt).
+  std::vector<float> xd;
+  if (hl_rec) {
+    const float lo = 0.85f * prm.clip;
+    const int r = 2 * prm.s;
+    xd.assign(x, x + 3 * HW);
+    for (int Y = 0; Y < H; ++Y)
+      for (int X = 0; X < W; ++X) {
+        const size_t i = size_t(Y) * W + X;
+        if (std::max(x[i], std::max(x[HW + i], x[2 * HW + i])) <= lo) continue;
+        for (int dy = -r; dy <= r; ++dy)
+          for (int dx = -r; dx <= r; ++dx) {
+            const size_t j = size_t(std::clamp(Y + dy, 0, H - 1)) * W + size_t(std::clamp(X + dx, 0, W - 1));
+            for (int c = 0; c < 3; ++c) xd[c * HW + i] = std::max(xd[c * HW + i], x[c * HW + j]);
+          }
+      }
+  }
+  if (hl_rec) {
+    const float lo = 0.85f * prm.clip, hi = prm.clip;
+    for (size_t i = 0; i < HW; ++i) {
+      const float v[3] = {x[i], x[HW + i], x[2 * HW + i]};
+      if (std::max(v[0], std::max(v[1], v[2])) <= lo) continue;
+      float m[3], u[3];   // clipped share; scene level each channel implies (wb space / rim colour)
+      for (int c = 0; c < 3; ++c) {
+        const float t = std::clamp((xd[c * HW + i] - lo) / std::max(hi - lo, 1e-6f), 0.0f, 1.0f);
+        m[c] = t * t * (3.0f - 2.0f * t);
+        u[c] = v[c] * prm.wb[c] / prm.hl_ratio[c];
+      }
+      for (int c = 0; c < 3; ++c) {
+        if (m[c] <= 0.0f) continue;
+        // From the other channels, each weighted by how unclipped it is (a clipped one reads low).
+        const int a = (c + 1) % 3, b = (c + 2) % 3;
+        const float wa = 1.0f - m[a], wbb = 1.0f - m[b];
+        if (wa + wbb <= 1e-3f) continue;   // all clipped: the white rule below
+        const float rec = prm.hl_ratio[c] * (wa * u[a] + wbb * u[b]) / (wa + wbb) / prm.wb[c];
+        x[c * HW + i] = v[c] + m[c] * (std::max(v[c], rec) - v[c]);
+      }
+      // Colour from the rim, brightness from the reconstruction: where neighbouring pixels clip in
+      // different channels (perforated metal near Nyquist, 133623) each was rebuilt from another
+      // channel -> colour speckle. Keep the rebuilt level U (mean implied level), rim colour, by the
+      // largest clipped share.
+      const float mm = std::max(m[0], std::max(m[1], m[2]));
+      if (mm > 0.0f) {
+        float U = 0.0f;
+        for (int c = 0; c < 3; ++c) U += x[c * HW + i] * prm.wb[c] / prm.hl_ratio[c];
+        U *= 1.0f / 3.0f;
+        for (int c = 0; c < 3; ++c) x[c * HW + i] += mm * (U * prm.hl_ratio[c] / prm.wb[c] - x[c * HW + i]);
+      }
+    }
+  }
   if (prm.highlight_desat) {
     static const bool hl_old = std::getenv("LKRL_HL_OLD") != nullptr;
     const float lo = (hl_old ? 0.92f : 0.85f) * prm.clip, hi = prm.clip;
-    const float wmin = std::min(prm.wb[0], std::min(prm.wb[1], prm.wb[2]));
+    // HDR (prm.clip > 1, reference units): the output white is the HDR clip, not 1, so white is capped
+    // there; a cap at 1 dragged every highlight above the 0 EV frame's clip down (synthetic bracket 1.5-3x
+    // clip read 0.88 of the reachable level). Normal merges (clip <= 1) are unchanged.
+    const float wmin = std::min(prm.wb[0], std::min(prm.wb[1], prm.wb[2])) * std::max(1.0f, prm.clip);
     for (size_t i = 0; i < HW; ++i) {
-      const float v = hl_old ? std::min(x[i], std::min(x[HW + i], x[2 * HW + i]))
-                             : std::max(x[i], std::max(x[HW + i], x[2 * HW + i]));
+      // With reconstruction: white only where every channel clipped (min channel); else the old rules.
+      float d[3] = {x[i], x[HW + i], x[2 * HW + i]};
+      if (hl_rec && std::max(d[0], std::max(d[1], d[2])) > 0.85f * prm.clip)
+        for (int c = 0; c < 3; ++c) d[c] = std::max(d[c], xd[c * HW + i]);
+      const float v = (hl_old || hl_rec) ? std::min(d[0], std::min(d[1], d[2]))
+                                         : std::max(x[i], std::max(x[HW + i], x[2 * HW + i]));
       float m = std::clamp((v - lo) / std::max(hi - lo, 1e-6f), 0.0f, 1.0f);
       if (!hl_old) m = m * m * (3.0f - 2.0f * m);
       if (m <= 0.0f) continue;
       float L = q[0] * x[i] + q[1] * x[HW + i] + q[2] * x[2 * HW + i];   // wb-space luma
       // The output is stored clamped to [0, 1] per camera channel (16-bit DNG): a neutral brighter than
       // min(wb) would get its least-gained channel (G) cut back and turn pink again, so white is capped there.
-      if (!hl_old) L = std::min(L, wmin);
+      if (!hl_old && !hl_rec) L = std::min(L, wmin);
+      if (hl_rec) {
+        // Every channel clipped: the scene is at least as bright as the most-gained channel implies
+        // (max over c of v_c wb_c / col_c), the level the reconstructed surroundings reach; at the clip
+        // level it read as dark specks inside cloud cores. Rim colour, as the reconstruction.
+        float U = 0.0f;
+        for (int c = 0; c < 3; ++c) U = std::max(U, d[c] * prm.wb[c] / prm.hl_ratio[c]);
+        for (int c = 0; c < 3; ++c) x[c * HW + i] += m * (U * prm.hl_ratio[c] / prm.wb[c] - x[c * HW + i]);
+        continue;
+      }
       for (int c = 0; c < 3; ++c) {
         const float neutral = L / prm.wb[c];
         x[c * HW + i] += m * (neutral - x[c * HW + i]);

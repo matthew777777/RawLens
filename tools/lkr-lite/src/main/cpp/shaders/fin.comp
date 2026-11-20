@@ -15,6 +15,7 @@ layout(std430, binding = 6) buffer KB { float KP[]; };
 layout(push_constant) uniform PC {
   int H, W, mode, pl, sm, has_ns, notch, desat;
   float wbr, wbg, wbb, clip, grain, eqs, p0, p1;
+  float hr, hg, hb, hrec;   // highlight reconstruction ratios (lkrl_finish.cpp), hrec != 0 = on
 } pc;
 const float k5[5] = float[5](1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0);
 int refl(int i, int n) { return i < 0 ? -i : (i >= n ? 2 * n - 2 - i : i); }
@@ -93,20 +94,64 @@ void main() {
     P[i] = q.x * (z[i] - x[i]) + q.y * (z[HW + i] - x[HW + i]) + q.z * (z[2 * HW + i] - x[2 * HW + i]);
   } else if (pc.mode == 13) {  // fused notch write-back
     P[pc.pl * HW + i] = T[i];
+  } else if (pc.mode == 7) {   // highlight reconstruction: per-channel max over (2 p0 + 1)^2 -> P1..P3
+    // Bright pixels only (own max > 0.85 clip): the merge leaves too-low values inside clipped areas of a
+    // channel (no valid samples there; Samsung cloud core: R 0.66 amid clipped R) -> dark specks once
+    // rebuilt. A channel clipped within the radius counts as clipped. Dark pixels (branches) untouched.
+    vec3 v = vec3(x[i], x[HW + i], x[2 * HW + i]), d = v;
+    if (max(v.x, max(v.y, v.z)) > 0.85 * pc.clip) {
+      int r = int(pc.p0);
+      for (int dy = -r; dy <= r; ++dy)
+        for (int dx = -r; dx <= r; ++dx) {
+          int yy = clamp(Y + dy, 0, pc.H - 1), xx = clamp(X + dx, 0, pc.W - 1), j = yy * pc.W + xx;
+          d = max(d, vec3(x[j], x[HW + j], x[2 * HW + j]));
+        }
+    }
+    P[HW + i] = d.x; P[2 * HW + i] = d.y; P[3 * HW + i] = d.z;
   } else if (pc.mode == 6) {   // grain add + highlight desaturation
     if (pc.grain > 0.0) {
       float den = pc.has_ns != 0 ? 1.0 + pc.eqs * (ns[i] - 1.0) : 1.0;
       for (int c = 0; c < 3; ++c) x[c * HW + i] += pc.grain * P[i] / den / wb[c];
     }
+    bool rec = pc.desat == 1 && pc.hrec != 0.0;
+    if (rec) {   // highlight reconstruction (inpaint opposed, lkrl_finish.cpp)
+      float lo = 0.85 * pc.clip, hi = pc.clip;
+      vec3 v = vec3(x[i], x[HW + i], x[2 * HW + i]);
+      if (max(v.x, max(v.y, v.z)) > lo) {
+        vec3 col = vec3(pc.hr, pc.hg, pc.hb);
+        vec3 vd = max(v, vec3(P[HW + i], P[2 * HW + i], P[3 * HW + i]));   // dilated (mode 7)
+        vec3 m = clamp((vd - lo) / max(hi - lo, 1e-6), 0.0, 1.0);
+        m = m * m * (3.0 - 2.0 * m);
+        vec3 u = v * wb / col, w = 1.0 - m;   // implied scene level, unclipped weight
+        vec3 ws = vec3(w.y + w.z, w.z + w.x, w.x + w.y);
+        vec3 su = vec3(w.y * u.y + w.z * u.z, w.z * u.z + w.x * u.x, w.x * u.x + w.y * u.y);
+        vec3 rec = col * su / max(ws, 1e-6) / wb;
+        vec3 r = v + m * (max(v, rec) - v);
+        r = mix(v, r, step(vec3(1e-3), ws));   // all clipped: the white rule below
+        float mm = max(m.x, max(m.y, m.z));     // rim colour, rebuilt level (lkrl_finish.cpp)
+        float U = dot(r * wb / col, vec3(1.0 / 3.0));
+        r += mm * (U * col / wb - r);
+        x[i] = r.x; x[HW + i] = r.y; x[2 * HW + i] = r.z;
+      }
+    }
     if (pc.desat != 0) {   // blown highlights -> white (lkrl_finish.cpp); desat 2 = old all-channels rule
       bool old = pc.desat == 2;
       float lo = (old ? 0.92 : 0.85) * pc.clip, hi = pc.clip;
-      float v = old ? min(x[i], min(x[HW + i], x[2 * HW + i])) : max(x[i], max(x[HW + i], x[2 * HW + i]));
+      vec3 xd = vec3(x[i], x[HW + i], x[2 * HW + i]);
+      if (rec && max(xd.x, max(xd.y, xd.z)) > 0.85 * pc.clip) xd = max(xd, vec3(P[HW + i], P[2 * HW + i], P[3 * HW + i]));
+      float v = (old || rec) ? min(xd.x, min(xd.y, xd.z)) : max(x[i], max(x[HW + i], x[2 * HW + i]));
       float m = clamp((v - lo) / max(hi - lo, 1e-6), 0.0, 1.0);
       if (!old) m = m * m * (3.0 - 2.0 * m);
       if (m > 0.0) {
         float L = q.x * x[i] + q.y * x[HW + i] + q.z * x[2 * HW + i];
-        if (!old) L = min(L, min(wb.x, min(wb.y, wb.z)));   // output is clamped to 1 per camera channel
+        // output is clamped to its white per camera channel: 1, or the HDR clip (pc.clip > 1, reference units)
+        if (!old && !rec) L = min(L, min(wb.x, min(wb.y, wb.z)) * max(1.0, pc.clip));
+        if (rec) {   // all clipped: the most-gained channel's implied level, rim colour (lkrl_finish.cpp)
+          vec3 col = vec3(pc.hr, pc.hg, pc.hb);
+          vec3 u = xd * wb / col;   // dilated: the level the clipped surroundings imply
+          float U = max(u.x, max(u.y, u.z));
+          for (int c = 0; c < 3; ++c) x[c * HW + i] += m * (U * col[c] / wb[c] - x[c * HW + i]);
+        } else
         for (int c = 0; c < 3; ++c) x[c * HW + i] += m * (L / wb[c] - x[c * HW + i]);
       }
     }

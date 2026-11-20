@@ -157,6 +157,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     if (__system_property_get("debug.lkr.coarsethr", v) > 0 && v[0] && v[0] != '-') setenv("LKRL_COARSE_THR", v, 1);
     // Blown-highlight neutralise A/B: debug.lkr.hlold=1 = the old all-channels-clipped rule (pink / yellow).
     if (__system_property_get("debug.lkr.hlold", v) > 0 && v[0] == '1') setenv("LKRL_HL_OLD", "1", 0);
+    // Highlight reconstruction A/B: debug.lkr.hlrec = 0 off (read once per process).
+    if (__system_property_get("debug.lkr.hlrec", v) > 0 && v[0]) setenv("LKRL_HL_REC", v, 0);
     // A/B of the DCT look: debug.lkr.fb = 0 no DCT pass; debug.lkr.prior = 1 / 0 forces shadow-luma denoise on / off.
     if (__system_property_get("debug.lkr.fb", v) > 0 && v[0]) setenv("LKRL_FB", v, 0);
     // A/B of the coarse LK iteration cap: debug.lkr.coarseit = 40 restores the old cap.

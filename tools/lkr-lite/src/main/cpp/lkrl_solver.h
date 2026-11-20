@@ -105,7 +105,7 @@ class LiteSolver {
              std::vector<float>* weights_out = nullptr, std::vector<float>* x_out = nullptr);
   // FinishLook default path on the GPU (fin.comp): notch, luma notch where frames were lost, clip
   // halo, grain, highlight desaturation. x in/out (3 H W planar camera RGB).
-  struct FinishArgs { float wb[3]; float clip, grain, eq_strength; bool notch, desat; };
+  struct FinishArgs { float wb[3]; float clip, grain, eq_strength; bool notch, desat; float hl_ratio[3]; bool hl_rec; int hl_radius; };
   bool finish(const float* z, std::vector<float>* x, int H, int W, const FinishArgs& fa,
               const std::vector<float>* noise_scale, std::string* err);   // final residual vs z (K x h x w, 0 = invalid), final weights
 

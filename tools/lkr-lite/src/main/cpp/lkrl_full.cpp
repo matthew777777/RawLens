@@ -243,6 +243,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // the robust threshold too lenient and smeared a moving car).
   // Runs beside the coarse alignment below, which does not use it.
   double t = now_ms();
+  float hl_ratio[3] = {1.0f, 1.0f, 1.0f};
+  size_t hl_cells = 0;
   std::thread noise_fit([&] {
     const double tn = now_ms();
     std::vector<float> c(size_t(g.w) * g.h);
@@ -261,6 +263,28 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     // every robust / temporal test reject all frames. Fall back to the
     // level-independent MAD sigma as read noise.
     if (S.a <= 0 && S.b < 0.25f * S.sigma * S.sigma) S.b = S.sigma * S.sigma;
+    // Highlight reconstruction colour (SolveParams::hl_ratio): white-balanced rim colour (G = 1), summed over the reference's 2x2 cells in the soft-clip band (brightest channel in
+    // [0.85 clip, clip), every channel unclipped) -- the unclipped rim of clipped areas, the same band
+    // the reconstruction blends over. Sums = brightness-weighted, so the bright rim dominates.
+    {
+      const float clip = prm.solve.clip, lo = 0.85f * clip;
+      double sc[3] = {0, 0, 0}, so[3] = {0, 0, 0};
+      size_t nb = 0;
+      for (int y = 0; y + 1 < g.h; y += 2)
+        for (int x = 0; x + 1 < g.w; x += 2) {
+          const float* r0 = c.data() + size_t(y) * g.w + x;
+          const float v[3] = {r0[0], 0.5f * (r0[1] + r0[g.w]), r0[g.w + 1]};
+          const float mx = std::max(v[0], std::max(r0[1], std::max(r0[g.w], v[2])));
+          if (mx < lo || mx >= clip) continue;
+          const float vw[3] = {v[0] * wb[0], v[1] * wb[1], v[2] * wb[2]};
+          for (int k = 0; k < 3; ++k) { sc[k] += vw[k]; so[k] += 0.5 * (vw[(k + 1) % 3] + vw[(k + 2) % 3]); }
+          ++nb;
+        }
+      // Rim colour normalised to green (wb space); a clipped channel is rebuilt from the unclipped ones.
+      for (int k = 0; k < 3; ++k) hl_ratio[k] = (nb >= 64 && sc[1] > 0) ? float(std::clamp(sc[k] / sc[1], 0.25, 4.0)) : 1.0f;
+      (void)so;
+      hl_cells = nb;
+    }
     S.ms_noise = now_ms() - tn;
   });
 
@@ -395,6 +419,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   sp.sigma_max = prm.smax_x * S.sigma;
   sp.sigma_end = prm.end_x * S.sigma;
   sp.wb = wb;
+  for (int k = 0; k < 3; ++k) sp.hl_ratio[k] = hl_ratio[k];
+  if (const char* v = std::getenv("LKRL_HL_LOG"))
+    if (v[0] == '1') std::fprintf(stderr, "lkr-lite: highlight ratios R %.3f G %.3f B %.3f from %zu rim cells\n",
+                                  hl_ratio[0], hl_ratio[1], hl_ratio[2], hl_cells);
   if (prm.paper_parity) {
     sp.prior_gain = 1.0f;
     sp.grain = 0.0f;
@@ -1042,6 +1070,21 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       LfcStats ls;
       LowFreqChroma(rgb_data, *out_w, *out_h, wbf, lk, S.a, S.b, prm.s, &ls);
       S.lfc_ms = float(now_ms() - tl); S.lfc_wu = ls.wu; S.lfc_wv = ls.wv;
+    }
+  }
+  // Highlight reconstruction (FinishLook) can lift clipped channels above the output white (clouds whose
+  // green clipped: rebuilt from red / blue). Report the reached level as the white, as an HDR merge does,
+  // so writers scale instead of clamping one channel (a clamped green turns the cloud pink). 99.99th
+  // percentile of the values above the white: a lone ringing overshoot does not darken the whole file.
+  static const bool hl_rec_env_off = std::getenv("LKRL_HL_REC") && std::getenv("LKRL_HL_REC")[0] == '0';
+  if (prm.solve.highlight_desat && hl_cells >= 64 && !hl_rec_env_off && !std::getenv("LKRL_HL_OLD")) {
+    std::vector<float> over;
+    for (size_t i = 0, n3 = size_t(*out_w) * *out_h * 3; i < n3; ++i)
+      if (rgb_data[i] > S.hdr_white) over.push_back(rgb_data[i]);
+    if (over.size() >= 16) {
+      const size_t q = size_t(double(over.size() - 1) * 0.9999);
+      std::nth_element(over.begin(), over.begin() + q, over.end());
+      S.hdr_white = std::max(S.hdr_white, over[q]);
     }
   }
   S.ms_total = now_ms() - t0;
