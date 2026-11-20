@@ -19,7 +19,9 @@ internal class ScopeLutCache(
     private var exposureEv = 0.0
 
     fun get(current: JpegOutputSettings, ev: Double = 0.0): FloatArray {
-        val safeEv = if (ev.isFinite()) ev.coerceIn(-8.0, 8.0) else 0.0
+        // Quantised to 1/32 EV: live AE moves a little every frame, and an invisible histogram
+        // shift is not worth a LUT rebuild on the camera thread.
+        val safeEv = if (ev.isFinite()) Math.round(ev.coerceIn(-8.0, 8.0) * 32.0) / 32.0 else 0.0
         val cached = lut
         if (cached != null && current == settings && safeEv == exposureEv) return cached
         return (if (safeEv == 0.0) build(current) else

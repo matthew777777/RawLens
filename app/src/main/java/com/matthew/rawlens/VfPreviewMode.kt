@@ -19,7 +19,11 @@ enum class VfPreviewMode {
         FOLLOW -> !format.includesJpeg
     }
 
-    fun label(format: CaptureFormat): String = if (resolve(format)) "RAW VF" else "JPG VF"
+    fun label(format: CaptureFormat): String = when (this) {
+        FOLLOW -> "Auto (${if (resolve(format)) "RAW VF" else "JPG VF"})"
+        RAW -> "RAW VF"
+        JPEG -> "JPG VF"
+    }
 
     companion object {
         fun fromPreference(value: String?): VfPreviewMode =

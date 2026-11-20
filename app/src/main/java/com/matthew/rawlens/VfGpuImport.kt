@@ -226,41 +226,21 @@ internal object VfGpuImport {
         ).correctionEv
     }
 
-    // Shared AgX helpers + tonemap tail. Both fragment shaders are composed from
-    // these pieces so the CPU and GPU paths can never drift apart. The tail takes the
+    // Shared helpers + tonemap tail. Both fragment shaders are composed from these
+    // pieces so the CPU and GPU paths can never drift apart. The tail takes the
     // already-fetched lens-corrected normalized superpixel `b` (UN-gained camera RGB;
     // the RAW branch applies `gains`, the JPEG branch folds WB into `u_camToAces`)
-    // and the framebuffer out-variable name. AgX matrices are pinned to
-    // assets/shaders/display/agx_srgb8.glsl. GLSL mat3() fills column-major, so each
-    // literal triple is one COLUMN (a row-ordered literal transposes the matrix:
-    // the outset then tints neutrals blue).
+    // and the framebuffer out-variable name. The JPEG tone pipeline itself lives in
+    // the baked [VfToneLut] (stills CPU twin), not in per-pixel GLSL.
     private const val TONEMAP_HELPERS =
-        "mat3 agxInset() { return mat3(0.856627153315983, 0.137318972929847, 0.111898212999950, 0.095121240538159, 0.761241990602591, 0.076799418603190, 0.048251606145858, 0.101439036467562, 0.811302368396859); }" +
-            "mat3 agxOutset() { return mat3(1.127100581814437, -0.141329763498438, -0.141329763498438, -0.110606643096603, 1.157823702216272, -0.110606643096603, -0.016493938717835, -0.016493938717834, 1.251936406595040); }" +
-            "mat3 acesCgToRec2020() { return mat3(1.025877552449, -0.002232441770, -0.005013950857, -0.020020686312, 1.004568990995, -0.025282661381, -0.005775003430, -0.002349522759, 1.030082295555); }" +
-            "mat3 rec2020ToSrgb() { return mat3(1.6604910021, -0.1245504745, -0.0181507634, -0.5876411388, 1.1328998971, -0.1005788980, -0.0728498633, -0.0083494226, 1.1187296614); }" +
-            "mat3 rec2020ToDisplayP3() { return mat3(1.343578252570, -0.065297452837, 0.002821787226, -0.282179670449, 1.075787915784, -0.019598494598, -0.061398582051, -0.010490463088, 1.016776707234); }" +
-            "vec3 agxSigmoid(vec3 x) { vec3 x2 = x * x; vec3 x4 = x2 * x2;" +
-            " return -17.86 * x4 * x2 * x + 78.01 * x4 * x2 - 126.7 * x4 * x + 92.06 * x4" +
-            " - 28.72 * x2 * x + 4.361 * x2 - 0.1718 * x + vec3(0.002857); }" +
-            "float gamutScale(float d, float a) { if (abs(d) < 0.000001) return 1.0;" +
-            " return d > 0.0 ? (1.0 - a) / d : -a / d; }" +
-            "vec3 srgbOetf(vec3 l) { vec3 lo = 12.92 * l;" +
-            " vec3 hi = 1.055 * pow(l, vec3(1.0 / 2.4)) - vec3(0.055);" +
-            " return mix(hi, lo, vec3(lessThanEqual(l, vec3(0.0031308)))); }" +
-            // Interleaved-gradient-noise dither: float-only so both ESSL versions share
-            // it (ESSL 1.00 has no uint/bitwise ops for the save path's hash01).
-            // Pinned to VFHP (highp where available): the hash needs >16-bit
-            // intermediates at 1080p (mediump would coarsen it into banding).
             "VFHP float ign(VFHP vec2 p, VFHP float ch) { return fract(52.9829189 *" +
             " fract(dot(p + ch * 16.0 + 5.588238, vec2(0.06711056, 0.00583715)))); }"
 
+    // JPEG preview: everything after the camera matrix (tone balance, mapper, gamut, OETF) is
+    // the baked [VfToneLut]; only per-frame values stay uniforms.
     private const val AGX_UNIFORMS =
-        "uniform int u_jpeg; uniform int u_basic;" +
-            "uniform float u_agxPunchy; uniform float u_agxContrast; uniform float u_agxSaturation; uniform float u_agxPurity;" +
-            "uniform float u_agxHue; uniform float u_agxShadowEv; uniform float u_agxHighlightEv;" +
-            "uniform float u_agxGamut; uniform float u_exposureEv; uniform float u_highlightShoulder;" +
-            "uniform mat3 u_camToAces; uniform vec3 u_cameraWhite; uniform int u_displayP3;"
+        "uniform int u_jpeg; uniform float u_exposureEv;" +
+            "uniform mat3 u_camToAces; uniform vec3 u_cameraWhite;"
 
     /** RAW VF brightness lift: the linear Reinhard preview meters ~1 EV dark, so the
      * shared tail applies +1 EV (×2.0) in RAW mode only. JPEG/AgX keeps its own
@@ -276,60 +256,15 @@ internal object VfGpuImport {
             "  vec3 noiseRaw = vec3(ign(gl_FragCoord.xy, 0.0), ign(gl_FragCoord.xy, 1.0), ign(gl_FragCoord.xy, 2.0));" +
             "  @OUT@ = vec4(encRaw + (noiseRaw - vec3(0.5)) / 255.0, 1.0); return; }" +
             // JPEG: the save-path sequence on the superpixel (highlight
-            // neutralize -> preview EV -> calibrated camera-to-ACEScg -> AgX ->
-            // sRGB/P3 -> gamut -> clip -> OETF -> one-LSB dither). Only the
+            // neutralize -> preview EV -> calibrated camera-to-ACEScg -> baked
+            // stills tone pipeline [VfToneLut] -> one-LSB dither). Only the
             // superpixel demosaic stands in for AMaZE detail/denoise.
             " vec3 cam = max(vec3(b.r, (b.g + b.b) * 0.5, b.a), vec3(0.0));" +
             " vec3 whiteB = smoothstep(vec3(0.70), vec3(0.99), cam);" +
             " float whiteBlend = max(whiteB.r, max(whiteB.g, whiteB.b));" +
             " cam = mix(cam, u_cameraWhite, whiteBlend);" +
             " cam *= exp2(u_exposureEv);" +
-            " vec3 balancedAces = camera_tone_balance(u_camToAces * cam);" +
-            " vec3 scene2020 = acesCgToRec2020() * balancedAces;" +
-            " if (u_basic == 3) { vec3 se=srgbOetf(clamp(aces2_output(tl_aces_pre(balancedAces),u_displayP3),0.0,1.0));" +
-            " @OUT@=vec4(se,1.0); return; }" +
-            " if (u_basic == 4) { vec3 se=srgbOetf(odrt(scene2020,u_displayP3)); @OUT@=vec4(se,1.0); return; }" +
-            " if (u_basic == 2) { mat3 sm=rec2020ToSrgb(); if(u_displayP3!=0)sm=rec2020ToDisplayP3();" +
-            " vec3 se=srgbOetf(clamp(sm*dt_sigmoid(scene2020),0.0,1.0));" +
-            " @OUT@=vec4(se,1.0); return; }" +
-            " if (u_basic == 1) {" +
-            "  mat3 basicMat = rec2020ToSrgb(); if (u_displayP3 != 0) basicMat = rec2020ToDisplayP3();" +
-            "  vec3 basicScene = max(basicMat * tl_basic_pre(scene2020), vec3(0.0)); float peak = max(basicScene.r, max(basicScene.g, basicScene.b));" +
-            "  float knee = 0.76 - 0.16 * clamp(u_highlightShoulder, 0.0, 1.0);" +
-            "  if (peak > knee) { float d = 1.0 - knee; float mapped = 1.0 - d * (d / (peak + d - knee));" +
-            "   basicScene *= mapped / peak; float white = 1.0 - 1.0 / (1.0 + 0.15 * (peak - mapped));" +
-            "   basicScene = mix(basicScene, vec3(mapped), white); }" +
-            "  vec3 encBasic = srgbOetf(clamp(basicScene, 0.0, 1.0));" +
-            "  vec3 noiseBasic = vec3(ign(gl_FragCoord.xy, 0.0), ign(gl_FragCoord.xy, 1.0), ign(gl_FragCoord.xy, 2.0));" +
-            "  @OUT@ = vec4(encBasic + (noiseBasic - vec3(0.5)) / 255.0, 1.0); return; }" +
-            " vec3 scene = max(scene2020, vec3(0.0));" +
-            " for (int c = 0; c < 3; ++c) { if (scene[c] > 0.9 && u_highlightShoulder > 0.0) {" +
-            "  float t = (scene[c] - 0.9) / 0.8;" +
-            "  float comp = 0.9 + 0.8 * (1.0 - exp(-t));" +
-            "  scene[c] = mix(scene[c], comp, clamp(u_highlightShoulder, 0.0, 1.0)); } }" +
-            " vec3 v = agxInset() * scene;" +
-            " v = log2(max(v, vec3(1e-10)));" +
-            " float evRange = u_agxShadowEv + u_agxHighlightEv;" +
-            " float pivot = u_agxShadowEv / evRange;" +
-            " v = clamp((v - vec3(-2.473931188 - u_agxShadowEv)) / vec3(evRange), vec3(0.0), vec3(1.0));" +
-            " v = clamp(vec3(pivot) + (v - vec3(pivot)) * u_agxContrast, vec3(0.0), vec3(1.0));" +
-            " v = agxSigmoid(v);" +
-            " if (u_agxPunchy > 0.5) { float l = dot(v, vec3(0.2126, 0.7152, 0.0722)); v = vec3(l) + 1.4 * (pow(max(v, vec3(0.0)), vec3(1.35)) - vec3(l)); }" +
-            " v = mix(v, agxOutset() * v, u_agxPurity);" +
-            " v = pow(max(v, vec3(0.0)), vec3(2.2));" +
-            " vec3 lumaW = vec3(0.2627, 0.6780, 0.0593);" +
-            " float mappedLuma = dot(v, lumaW); float sceneLuma = dot(scene, lumaW);" +
-            " float ratio = (sceneLuma > 1e-9) ? mappedLuma / max(sceneLuma, 1e-9) : 1.0;" +
-            " v = mix(v, scene * ratio, u_agxHue);" +
-            " float g = dot(v, lumaW); v = vec3(g) + u_agxSaturation * (v - vec3(g));" +
-            " mat3 outMat = rec2020ToSrgb(); if (u_displayP3 != 0) { outMat = rec2020ToDisplayP3(); }" +
-            " v = outMat * v;" +
-            " float anchor = clamp(dot(v, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);" +
-            " vec3 delta = v - vec3(anchor);" +
-            " float sc = min(gamutScale(delta.r, anchor), min(gamutScale(delta.g, anchor), gamutScale(delta.b, anchor)));" +
-            " sc = mix(1.0, clamp(sc, 0.0, 1.0), u_agxGamut);" +
-            " v = vec3(anchor) + sc * delta;" +
-            " vec3 enc = srgbOetf(clamp(v, 0.0, 1.0));" +
+            " vec3 enc = vfToneLut(u_camToAces * cam);" +
             " VFHP float d0 = ign(gl_FragCoord.xy, 0.0);" +
             " VFHP float d1 = ign(gl_FragCoord.xy, 1.0);" +
             " VFHP float d2 = ign(gl_FragCoord.xy, 2.0);" +
@@ -464,7 +399,7 @@ internal object VfGpuImport {
             "varying VFHP vec2 tex; uniform VFHP sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             LENS_UNIFORMS_COMMON +
-            TONEMAP_HELPERS + CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl +
+            TONEMAP_HELPERS + "\n#define VF_TEX texture2D\n" + VfToneLut.glsl + "\n" +
             LENS_GAIN_ES1 +
             "void main() { vec4 b = texture2D(raw, tex); b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "gl_FragColor")
@@ -494,7 +429,7 @@ internal object VfGpuImport {
             "uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             "in highp vec2 tex; out vec4 fragColor;" +
-            TONEMAP_HELPERS + CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl +
+            TONEMAP_HELPERS + "\n#define VF_TEX texture\n" + VfToneLut.glsl + "\n" +
             LENS_GAIN_ES3 +
             // Runtime-specialized unpack: black/white for the exact RAW bit depth
             // (10/12/16-bit sensor modes all present as unpacked 16-bit codes) are

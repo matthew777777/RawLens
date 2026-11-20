@@ -541,6 +541,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var gpuUvLoc = -1
     private var gpuJpegLoc = -1
     private val aces2 = Aces2Gl()
+    /** Baked JPEG-preview tone pipeline (one LUT fetch per pixel for every tone mapper). */
+    private val toneLutGl = VfToneLutGl(context.cacheDir)
     private var gpuBasicToneLoc = -1
     private var gpuAgxPunchyLoc = -1
     private var gpuAgxContrastLoc = -1
@@ -921,6 +923,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         agxGamut = resolved.agxGamutCompression
         highlightShoulder = resolved.highlightShoulder
         toneLook = ToneLook.values(resolved)
+        toneLutGl.request(resolved)
         shadowLift = resolved.shadowLift
         highlightRecovery = resolved.highlightRecovery
         previewHeadroom = resolved.highlightHeadroom
@@ -1704,7 +1707,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         glUniformMatrix3fv(camToAcesLoc, 1, false, state.camToAces, 0)
         glUniform3fv(cameraWhiteLoc, 1, state.camWhite, 0)
         glUniform1i(displayP3Loc, if (state.displayP3) 1 else 0)
-        glUniform1i(jpegLoc, if (state.jpeg) 1 else 0)
+        // JPEG preview needs the baked LUT; until the first bake lands, show the RAW preview.
+        glUniform1i(jpegLoc, if (state.jpeg && toneLutGl.bind(program, TONE_LUT_UNIT, glEs3)) 1 else 0)
         glUniform1f(exposureEvLoc, state.exposureEv)
         glUniform1i(basicToneLoc, state.basicTone)
         aces2.bind(program, state.basicTone, state.toneLook)
@@ -2165,7 +2169,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glUniformMatrix3fv(gpuCamToAcesLoc, 1, false, frame.camToAces, 0)
                     glUniform3fv(gpuCameraWhiteLoc, 1, frame.camWhite, 0)
                     glUniform1i(gpuDisplayP3Loc, if (frame.displayP3) 1 else 0)
-                    glUniform1i(gpuJpegLoc, if (frame.jpeg) 1 else 0)
+                    glUniform1i(gpuJpegLoc, if (frame.jpeg && toneLutGl.bind(gpuProgram, TONE_LUT_UNIT, glEs3)) 1 else 0)
                     glUniform1i(gpuBasicToneLoc, frame.basicTone)
                     aces2.bind(gpuProgram, frame.basicTone, frame.toneLook)
                     android.opengl.GLES20.glUniform2f(gpuCameraToneLoc, frame.shadowLift, frame.highlightRecovery)
@@ -2747,11 +2751,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         quadBaseLoc = glGetUniformLocation(program, "u_quadBase")
         frameSizeLoc = glGetUniformLocation(program, "u_frameSize")
         stepLoc = glGetUniformLocation(program, "u_step")
+        // Tone uniforms (AgX/ACES/look/display P3) moved into the baked VfToneLut.
         check(gainsLoc >= 0 && colorLoc >= 0 && camToAcesLoc >= 0 && cameraWhiteLoc >= 0 &&
-            displayP3Loc >= 0 && positionLoc >= 0 && uvLoc >= 0 &&
-            jpegLoc >= 0 && agxContrastLoc >= 0 && agxSaturationLoc >= 0 && agxPurityLoc >= 0 &&
-            agxHueLoc >= 0 && agxShadowEvLoc >= 0 && agxHighlightEvLoc >= 0 && agxGamutLoc >= 0 &&
-            highlightShoulderLoc >= 0 &&
+            positionLoc >= 0 && uvLoc >= 0 &&
+            jpegLoc >= 0 &&
             exposureEvLoc >= 0 &&
             lensLoc >= 0 && lensSizeLoc >= 0 && lensActiveLoc >= 0 && applyLensLoc >= 0 &&
             lensGreenRowLoc >= 0 &&
@@ -2858,10 +2861,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             gpuApplyLensLoc = glGetUniformLocation(id, "u_applyLens")
             gpuLensGreenRowLoc = glGetUniformLocation(id, "u_lensGreenRow")
             check(gpuGainsLoc >= 0 && gpuColorLoc >= 0 && gpuCamToAcesLoc >= 0 && gpuCameraWhiteLoc >= 0 &&
-                gpuDisplayP3Loc >= 0 && gpuPositionLoc >= 0 && gpuUvLoc >= 0 &&
-                gpuJpegLoc >= 0 && gpuAgxContrastLoc >= 0 && gpuAgxSaturationLoc >= 0 && gpuAgxPurityLoc >= 0 &&
-                gpuAgxHueLoc >= 0 && gpuAgxShadowEvLoc >= 0 && gpuAgxHighlightEvLoc >= 0 && gpuAgxGamutLoc >= 0 &&
-                gpuHighlightShoulderLoc >= 0 &&
+                gpuPositionLoc >= 0 && gpuUvLoc >= 0 &&
+                gpuJpegLoc >= 0 &&
                 gpuExposureEvLoc >= 0 &&
                 gpuBayerLoc >= 0 && gpuQuadBaseLoc >= 0 && gpuFrameSizeLoc >= 0 && gpuStepLoc >= 0 &&
                 gpuChansLoc >= 0 && gpuBlackQLoc >= 0 && gpuDenQLoc >= 0 &&
@@ -2884,6 +2885,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
 
     private fun releaseGl() {
         aces2.close()
+        toneLutGl.close()
         // Runs on the GL worker: release native Vulkan imports first, then our refs.
         vfHint.close()
         try {
@@ -2944,6 +2946,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     }
 
     companion object {
+        /** Texture unit of the VF tone LUT (0 = frame, 1 = lens shading). */
+        private const val TONE_LUT_UNIT = 2
         // WYSIWYG fragment shaders (CPU ESSL 1.00 + GPU ESSL 3.00) are composed from
         // shared pieces in VfGpuImport so both paths run the identical tonemap tail:
         // u_jpeg == 0 is the raw-clean Reinhard preview (+1 EV) with hardware

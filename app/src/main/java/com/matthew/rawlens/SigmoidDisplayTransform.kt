@@ -53,7 +53,11 @@ internal object SigmoidDisplayTransform {
 
     fun map(input: FloatArray, look: ToneLookSettings = ToneLookSettings()): FloatArray {
         val t = look.bounded()
-        val params = Params.of(t)
+        return map(input, t, Params.of(t))
+    }
+
+    /** [map] with bounded [t] and its [params] precomputed (hot loops such as the VF LUT bake). */
+    fun map(input: FloatArray, t: ToneLookSettings, params: Params): FloatArray {
         val hue = t.sigmoidHue
         val average = (input.sum() / 3f).coerceAtLeast(0f)
         val minimum = input.min()

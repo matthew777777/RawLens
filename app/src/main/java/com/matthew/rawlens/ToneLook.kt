@@ -107,16 +107,21 @@ internal object ToneLook {
     const val VEC4_COUNT = 3 + OpenDrt.VEC4_COUNT
 
     /** CPU twin of tl_pre (scopes, meters, tests). */
-    fun pre(rgb: FloatArray, settings: JpegOutputSettings): FloatArray {
-        val v = values(settings)
-        val lum = if (settings.toneMapper == PhotoToneMapper.ACES_2)
-            floatArrayOf(.2722287f, .6740818f, .0536895f) else floatArrayOf(.2627f, .6780f, .0593f)
+    fun pre(rgb: FloatArray, settings: JpegOutputSettings): FloatArray =
+        pre(rgb, values(settings), settings.toneMapper == PhotoToneMapper.ACES_2)
+
+    /** [pre] with [values] already packed (hot loops such as the VF LUT bake). */
+    fun pre(rgb: FloatArray, v: FloatArray, aces: Boolean): FloatArray {
+        val lum = if (aces) ACES_LUM else REC2020_LUM
         val x = FloatArray(3) { rgb[it].coerceAtLeast(0f) * v[8] }
         val y = x[0] * lum[0] + x[1] * lum[1] + x[2] * lum[2]
         if (y <= 1e-7f) return x
         val yc = (.18 * (y / .18).toDouble().pow(v[9].toDouble())).toFloat()
         return FloatArray(3) { (yc + (x[it] * yc / y - yc) * v[10]).coerceAtLeast(0f) }
     }
+
+    private val ACES_LUM = floatArrayOf(.2722287f, .6740818f, .0536895f)
+    private val REC2020_LUM = floatArrayOf(.2627f, .6780f, .0593f)
 
     val DEFAULT: FloatArray by lazy { values(JpegOutputSettings()) }
 

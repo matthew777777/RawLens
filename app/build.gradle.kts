@@ -320,6 +320,7 @@ android {
             if (project.hasProperty("waveletCheck")) applicationIdSuffix = ".waveletcheck"
             if (project.hasProperty("lkrCheck")) applicationIdSuffix = ".lkrcheck"
             if (project.hasProperty("monoCheck")) applicationIdSuffix = ".monocheck"
+            if (project.hasProperty("vfCheck")) applicationIdSuffix = ".vfcheck"
             if (project.hasProperty("stabCheck")) {
                 applicationIdSuffix = ".stabcheck"
                 manifestPlaceholders["appLabel"] = "RawLens Stab"

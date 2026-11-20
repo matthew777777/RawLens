@@ -49,19 +49,48 @@ object AgxDisplayTransform {
         map(if (displayP3) REC2020_TO_DISPLAY_P3 else REC2020_TO_SRGB,
             map(ACESCG_TO_REC2020_D65, acescg))
 
+    /**
+     * Per-settings constants of the output pipeline, computed once. Per-sample calls then do only
+     * pixel maths (the VF LUT bake evaluates ~110k samples per settings change).
+     */
+    internal class Prepared(input: JpegOutputSettings) {
+        val settings = input.resolvedForPlatform()
+        val outputMatrix = if (settings.displayP3) REC2020_TO_DISPLAY_P3 else REC2020_TO_SRGB
+        val look = ToneLook.values(settings)
+        val aces = settings.toneMapper == PhotoToneMapper.ACES_2
+        val sigmoidLook = settings.toneLook.bounded()
+        val sigmoidParams = SigmoidDisplayTransform.Params.of(sigmoidLook)
+        val whiteLog2 = (ln(settings.highlightHeadroom.toDouble()) / LN_2).toFloat()
+
+        fun outputLinear(acescg: FloatArray): FloatArray = acescgToOutputLinear(acescg, outputMatrix, settings, this)
+
+        /** Basic's display-linear input before its shoulder and clip. */
+        fun basicOutput(input: FloatArray): FloatArray =
+            map(outputMatrix, ToneLook.pre(map(ACESCG_TO_REC2020_D65, toneBalance(input)), look, aces))
+
+        fun toneBalance(rgb: FloatArray): FloatArray {
+            val scale = CameraToneBalance.gain(maxOf(rgb[0], rgb[1], rgb[2]), settings.shadowLift, settings.highlightRecovery, whiteLog2)
+            return FloatArray(3) { rgb[it] * scale }
+        }
+    }
+
     private fun acescgToOutputLinear(
         inputAcescg: FloatArray,
         outputMatrix: FloatArray,
-        settings: JpegOutputSettings
+        settings: JpegOutputSettings,
+        prepared: Prepared? = null
     ): FloatArray {
         require(inputAcescg.size == 3 && inputAcescg.all(Float::isFinite))
-        val acescg = CameraToneBalance.map(inputAcescg, settings)
-        if (settings.toneMapper == PhotoToneMapper.ACES_2) return Aces2DisplayTransform.map(ToneLook.pre(acescg, settings), outputMatrix === REC2020_TO_DISPLAY_P3)
+        val acescg = prepared?.toneBalance(inputAcescg) ?: CameraToneBalance.map(inputAcescg, settings)
+        fun pre(rgb: FloatArray) = if (prepared != null) ToneLook.pre(rgb, prepared.look, prepared.aces) else ToneLook.pre(rgb, settings)
+        if (settings.toneMapper == PhotoToneMapper.ACES_2) return Aces2DisplayTransform.map(pre(acescg), outputMatrix === REC2020_TO_DISPLAY_P3)
         val sceneRec2020 = map(ACESCG_TO_REC2020_D65, acescg)
-        if (settings.toneMapper == PhotoToneMapper.OPENDRT) return OpenDrt.map(sceneRec2020, ToneLook.values(settings), outputMatrix === REC2020_TO_DISPLAY_P3)
-        if (settings.toneMapper == PhotoToneMapper.SIGMOID) return map(outputMatrix, SigmoidDisplayTransform.map(sceneRec2020, settings.toneLook))
+        if (settings.toneMapper == PhotoToneMapper.OPENDRT) return OpenDrt.map(sceneRec2020, prepared?.look ?: ToneLook.values(settings), outputMatrix === REC2020_TO_DISPLAY_P3)
+        if (settings.toneMapper == PhotoToneMapper.SIGMOID) return map(outputMatrix,
+            if (prepared != null) SigmoidDisplayTransform.map(sceneRec2020, prepared.sigmoidLook, prepared.sigmoidParams)
+            else SigmoidDisplayTransform.map(sceneRec2020, settings.toneLook))
         if (settings.toneMapper == PhotoToneMapper.BASIC) {
-            val output = map(outputMatrix, ToneLook.pre(sceneRec2020, settings))
+            val output = map(outputMatrix, pre(sceneRec2020))
             val encoded = BasicDisplayTransform.encodeRgb(output, settings.highlightShoulder)
             return FloatArray(3) { BasicDisplayTransform.decode(encoded[it]) }
         }
@@ -73,7 +102,7 @@ object AgxDisplayTransform {
         // strength, so skies keep gradation instead of flattening when exposure pushes
         // tails near white. Strength 0 = pinned Filament AgX only.
         // Must stay in sync with agx_srgb8.glsl agx_base() and VfGpuImport tail.
-        val shoulder = settings.resolvedForPlatform().highlightShoulder.coerceIn(0f, 1f)
+        val shoulder = (prepared?.settings ?: settings.resolvedForPlatform()).highlightShoulder.coerceIn(0f, 1f)
         val softScene = FloatArray(3) {
             val p = positiveScene[it]
             // Branch on the extremes: p + 1.0*(c-p) is not identity in float
@@ -149,14 +178,18 @@ object AgxDisplayTransform {
      *
      * Must stay in sync with the achromatic path above and agx_srgb8.glsl agx_base().
      */
-    fun scopeCurve(inputLinear: Float, settings: JpegOutputSettings = JpegOutputSettings()): Float {
-        val resolved = settings.resolvedForPlatform()
+    fun scopeCurve(inputLinear: Float, settings: JpegOutputSettings = JpegOutputSettings()): Float =
+        scopeCurve(inputLinear, Prepared(settings))
+
+    /** [scopeCurve] with per-settings constants hoisted (scope LUT builds run on the camera thread). */
+    internal fun scopeCurve(inputLinear: Float, p: Prepared): Float {
+        val resolved = p.settings
         if (!inputLinear.isFinite()) return 0f
         val linear = inputLinear * CameraToneBalance.gain(inputLinear, resolved.shadowLift, resolved.highlightRecovery)
-        if (resolved.toneMapper == PhotoToneMapper.ACES_2) return srgbOetf(Aces2DisplayTransform.map(ToneLook.pre(floatArrayOf(linear,linear,linear), resolved))[0])
-        if (resolved.toneMapper == PhotoToneMapper.OPENDRT) return srgbOetf(OpenDrt.map(floatArrayOf(linear, linear, linear), ToneLook.values(resolved), false)[0])
-        if (resolved.toneMapper == PhotoToneMapper.SIGMOID) return srgbOetf(SigmoidDisplayTransform.curve(linear, SigmoidDisplayTransform.Params.of(resolved.toneLook)))
-        if (resolved.toneMapper == PhotoToneMapper.BASIC) return BasicDisplayTransform.encode(ToneLook.pre(floatArrayOf(linear,linear,linear), resolved)[0], resolved.highlightShoulder)
+        if (resolved.toneMapper == PhotoToneMapper.ACES_2) return srgbOetf(Aces2DisplayTransform.map(ToneLook.pre(floatArrayOf(linear,linear,linear), p.look, true))[0])
+        if (resolved.toneMapper == PhotoToneMapper.OPENDRT) return srgbOetf(OpenDrt.map(floatArrayOf(linear, linear, linear), p.look, false)[0])
+        if (resolved.toneMapper == PhotoToneMapper.SIGMOID) return srgbOetf(SigmoidDisplayTransform.curve(linear, p.sigmoidParams))
+        if (resolved.toneMapper == PhotoToneMapper.BASIC) return BasicDisplayTransform.encode(ToneLook.pre(floatArrayOf(linear,linear,linear), p.look, false)[0], resolved.highlightShoulder)
         val positive = max(0f, linear)
         val shoulder = resolved.highlightShoulder.coerceIn(0f, 1f)
         val soft = when {
@@ -179,9 +212,9 @@ object AgxDisplayTransform {
     /** Sampled [scopeCurve] for scope hot loops; index `i` maps linear `i/(size-1)`. */
     fun buildScopeLut(settings: JpegOutputSettings, size: Int = SCOPE_LUT_SIZE, exposureEv: Double = 0.0): FloatArray {
         require(size >= 2)
-        val resolved = settings.resolvedForPlatform()
+        val prepared = Prepared(settings)
         val gain = if (exposureEv.isFinite()) 2.0.pow(exposureEv).toFloat() else 1f
-        return FloatArray(size) { scopeCurve(it.toFloat() / (size - 1) * gain, resolved) }
+        return FloatArray(size) { scopeCurve(it.toFloat() / (size - 1) * gain, prepared) }
     }
 
     /** LUT lookup for normalized linear 0..1; out-of-range inputs clamp to the ends. */

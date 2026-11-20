@@ -30,9 +30,18 @@ class VfPreviewModeTest {
 
     @Test
     fun labelsMatchRenderPath() {
-        assertEquals("JPG VF", VfPreviewMode.FOLLOW.label(CaptureFormat.JPEG))
-        assertEquals("JPG VF", VfPreviewMode.FOLLOW.label(CaptureFormat.JPEG_DNG))
-        assertEquals("RAW VF", VfPreviewMode.FOLLOW.label(CaptureFormat.DNG_ONLY))
+        assertEquals("Auto (JPG VF)", VfPreviewMode.FOLLOW.label(CaptureFormat.JPEG))
+        assertEquals("Auto (JPG VF)", VfPreviewMode.FOLLOW.label(CaptureFormat.JPEG_DNG))
+        assertEquals("Auto (RAW VF)", VfPreviewMode.FOLLOW.label(CaptureFormat.DNG_ONLY))
+    }
+
+    @Test
+    fun choicesStayDistinctForEveryCaptureFormat() {
+        for (format in CaptureFormat.entries) {
+            assertEquals(3, VfPreviewMode.entries.map { it.label(format) }.toSet().size)
+            assertEquals("RAW VF", VfPreviewMode.RAW.label(format))
+            assertEquals("JPG VF", VfPreviewMode.JPEG.label(format))
+        }
     }
 
     @Test

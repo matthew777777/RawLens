@@ -94,10 +94,7 @@ class VfGpuImportTest {
         val cpu = VfGpuImport.cpuFragmentShader()
         val gpu = VfGpuImport.gpuFragmentShader()
         for (marker in listOf(
-            "agxInset", "agxOutset", "agxSigmoid", "gamutScale", "srgbOetf",
-            "u_jpeg", "u_agxContrast", "u_agxSaturation", "u_agxPurity",
-            "u_agxHue", "u_agxShadowEv", "u_agxHighlightEv", "u_agxGamut",
-            "u_exposureEv", "rec2020ToSrgb",
+            "u_jpeg", "u_exposureEv", "u_toneLut", "vfToneLut(u_camToAces * cam)",
             "(b.g + b.b) * 0.5"
         )) {
             assertTrue("CPU missing $marker", cpu.contains(marker))
@@ -105,40 +102,24 @@ class VfGpuImportTest {
         }
     }
 
-    @Test fun `AgX tail applies adaptive exposure before the log domain and converts to sRGB`() {
-        val tail = VfGpuImport.cpuFragmentShader()
-        val evIndex = tail.indexOf("exp2(u_exposureEv)")
-        assertTrue("tail must scale scene-linear rgb by the preview EV", evIndex >= 0)
-        val logIndex = tail.indexOf("log2(max(v")
-        assertTrue("tail must keep the AgX log domain", logIndex >= 0)
-        assertTrue("exposure must apply before the log domain", evIndex < logIndex)
-        val outIndex = tail.indexOf("outMat * v")
-        assertTrue("tail must convert the working space via the selected output matrix", outIndex >= 0)
-        assertTrue("tail must offer the sRGB output matrix", tail.contains("outMat = rec2020ToSrgb()"))
-        assertTrue(
-            "tail must follow the Display P3 target",
-            tail.contains("if (u_displayP3 != 0) { outMat = rec2020ToDisplayP3(); }")
-        )
-        val gamutIndex = tail.indexOf("gamutScale(delta.r")
-        assertTrue("tail must keep gamut compression", gamutIndex >= 0)
-        assertTrue("output conversion must precede gamut compression", outIndex < gamutIndex)
+    @Test fun `JPEG tail applies preview exposure before the baked tone LUT`() {
+        for (tail in listOf(VfGpuImport.cpuFragmentShader(), VfGpuImport.gpuFragmentShader())) {
+            val evIndex = tail.indexOf("cam *= exp2(u_exposureEv)")
+            assertTrue("tail must scale scene-linear rgb by the preview EV", evIndex >= 0)
+            val lutIndex = tail.indexOf("vfToneLut(u_camToAces * cam)")
+            assertTrue("tail must look up the baked stills tone pipeline", lutIndex >= 0)
+            assertTrue("exposure must apply before the LUT", evIndex < lutIndex)
+        }
     }
 
-    @Test fun `AgX matrices are neutral-preserving in GLSL column-major order`() {
-        // GLSL mat3() fills column-major: literal (a0..a8) has rows
-        // (a0,a3,a6), (a1,a4,a7), (a2,a5,a8). A row-ordered literal transposes
-        // the matrix and tints neutrals (observed: B/R 1.5 from the outset).
+    @Test fun `per-pixel tone mapping is gone from the VF shaders`() {
+        // The VF must stay cheap: no mapper code runs per display pixel (it is baked).
         for (shader in listOf(VfGpuImport.cpuFragmentShader(), VfGpuImport.gpuFragmentShader())) {
-            for (name in listOf("agxInset", "agxOutset", "acesCgToRec2020", "rec2020ToSrgb", "rec2020ToDisplayP3")) {
-                val literal = shader.substringAfter("$name() { return mat3(").substringBefore(");")
-                val elements = literal.split(",").map { it.trim().toFloat() }
-                assertEquals("$name must carry 9 elements", 9, elements.size)
-                for (row in 0..2) {
-                    val sum = elements[row] + elements[row + 3] + elements[row + 6]
-                    assertEquals("$name row $row must sum to 1", 1f, sum, 0.01f)
-                }
-            }
+            for (heavy in listOf("agxSigmoid", "dt_sigmoid", "aces2_output", "odrt(", "camera_tone_balance", "u_tone_look"))
+                assertFalse("VF shader still contains $heavy", shader.contains(heavy))
         }
+        assertTrue(VfGpuImport.cpuFragmentShader().contains("#define VF_TEX texture2D"))
+        assertTrue(VfGpuImport.gpuFragmentShader().contains("#define VF_TEX texture\n"))
     }
 
     @Test fun `GPU vertex shader is ESSL 3 passing through UVs`() {
@@ -192,9 +173,6 @@ class VfGpuImportTest {
         for (marker in listOf(
             "u_camToAces",
             "u_cameraWhite",
-            "u_displayP3",
-            "acesCgToRec2020",
-            "rec2020ToDisplayP3",
             "smoothstep(vec3(0.70), vec3(0.99)"
         )) {
             assertTrue("CPU missing $marker", cpu.contains(marker))
@@ -202,12 +180,11 @@ class VfGpuImportTest {
         }
     }
 
-    @Test fun `VF JPEG tail matches save-path floors and dithered output`() {
+    @Test fun `VF JPEG tail dithers the LUT output`() {
         val tail = VfGpuImport.cpuFragmentShader()
-        assertTrue("tail must use the save-path log floor", tail.contains("log2(max(v, vec3(1e-10)))"))
-        assertTrue("tail must keep the save-path luma guard", tail.contains("sceneLuma > 1e-9"))
         assertTrue("tail must dither 8-bit output", tail.contains("gl_FragCoord"))
         assertTrue("tail must quantize with one-LSB dither", tail.contains("/ 255.0"))
+        assertTrue("LUT output is clamped after filtering", tail.contains("clamp(mix(c0, c1, fi), 0.0, 1.0)"))
     }
 
     @Test fun `both shaders select lens green parity from the CFA pattern`() {

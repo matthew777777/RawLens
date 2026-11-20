@@ -204,12 +204,12 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             }
         })
         content.addView(Button(this).apply {
-            text = "Preview: " + vfPreviewModeText().substringAfter("(").removeSuffix(")")
+            text = "Preview: " + vfPreviewModeChoice().let { (mode, label) -> label(mode) }
             setOnClickListener {
                 val (mode, modeLabel) = vfPreviewModeChoice()
                 p.kit.chooseEnum("Preview", mode, modeLabel) { picked ->
                     selectVfPreviewMode(picked)
-                    text = "Preview: " + vfPreviewModeText().substringAfter("(").removeSuffix(")")
+                    text = "Preview: " + vfPreviewModeChoice().let { (mode, label) -> label(mode) }
                 }
             }
         })
