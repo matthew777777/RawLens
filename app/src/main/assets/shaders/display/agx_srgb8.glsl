@@ -191,7 +191,8 @@ highp vec3 basic_decode(highp vec3 encoded) {
 
 // ST2084 (PQ) opto-electronic transfer, SMPTE ST 2084: absolute nits in
 // [0, 10000] map to codes in [0, 1]. HDR stills treat graded linear 1.0
-// (SDR white) as 100 nits; brighter scene highlights extend above it.
+// (SDR white) as 203 nits (ITU-R BT.2408 reference white, what Chrome,
+// Windows and Lightroom use); brighter scene highlights extend above it.
 highp vec3 pq_oetf(highp vec3 nits) {
     highp vec3 y = clamp(nits / vec3(10000.0), vec3(0.0), vec3(1.0));
     highp vec3 ym1 = pow(y, vec3(0.15930176));
@@ -259,10 +260,10 @@ void main() {
 
     // The sole deliberate final display-gamut mapping/clipping boundary.
     // SDR clamps to white and encodes sRGB; HDR keeps highlight energy and
-    // encodes ST2084 (graded linear 1.0 = 100 nits, see pq_oetf).
+    // encodes ST2084 (graded linear 1.0 = 203 nits, see pq_oetf).
     highp vec3 baseLinear = (EFFECTIVE_HDR_PQ != 0) ? max(outputLinear, vec3(0.0))
                                            : clamp(outputLinear, 0.0, 1.0);
-    highp vec3 encoded = (EFFECTIVE_HDR_PQ != 0) ? pq_oetf(baseLinear * vec3(100.0))
+    highp vec3 encoded = (EFFECTIVE_HDR_PQ != 0) ? pq_oetf(baseLinear * vec3(203.0))
                                          : ((EFFECTIVE_BASIC == 1) ? basicEncoded : srgb_oetf(baseLinear));
     if (EFFECTIVE_GAINMAP_ONLY == 0 && EFFECTIVE_GRAIN_AMOUNT > 0.0) {
         // Neutral, zero-mean display grain replaces sensor residual retention. Combining an

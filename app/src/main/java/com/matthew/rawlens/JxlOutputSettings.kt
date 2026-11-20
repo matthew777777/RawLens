@@ -107,7 +107,7 @@ enum class JxlBitDepth(
 /**
  * HDR transfer for JXL stills. SDR keeps the classic AgX SDR grade;
  * PQ preserves scene highlights above SDR white as true HDR (ST2084,
- * graded linear 1.0 = 100 nits). The develop look stays shared: only the
+ * graded linear 1.0 = 203 nits, BT.2408 reference white). The develop look stays shared: only the
  * highlight handling and output encoding change.
  */
 enum class JxlHdrTransfer(val label: String) {

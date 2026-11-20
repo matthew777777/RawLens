@@ -39,7 +39,7 @@ object NativeUltraHdrWriter {
             resolved.gainmapGamma,
             resolved.gainmapOffsetSdr,
             resolved.gainmapOffsetHdr,
-            // Capacities describe the display ladder, not the fitted ceiling.
+            // Upper bound only: native clamps HDRCapacityMax to the fitted ceiling.
             0f,
             resolved.gainMapMaxLog2,
             resolved.multiChannelMap,

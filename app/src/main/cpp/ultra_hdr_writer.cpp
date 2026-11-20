@@ -218,6 +218,11 @@ Java_com_matthew_rawlens_NativeUltraHdrWriter_nativeEncodeUltraHdr(
 
     rawlens::gainmap::UltrahdrMuxParams mux = uh.toMuxParams();
     mux.gainMapMaxLog2 = fittedMax;
+    // Full map at display headroom == fitted ceiling. Leaving HDRCapacityMax at
+    // the wide 4.7 EV scaled the map by log2(headroom)/4.7 (weight ~0.3 on a
+    // ~1.5 EV phone panel), so a fitted 1 EV map rendered as ~0.3 EV: weak HDR
+    // vs stock/RAWR, which write capacity <= their map max.
+    mux.hdrCapacityMaxLog2 = std::min(mux.hdrCapacityMaxLog2, std::max(fittedMax, mux.hdrCapacityMinLog2 + 0.01f));
 
     std::string error;
     std::vector<unsigned char> baseJpeg, mapJpeg;

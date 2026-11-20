@@ -86,7 +86,9 @@ object NativeJxlEncoder {
             descriptor.fd,
             orientation,
             if (hdrPq) TRANSFER_PQ else TRANSFER_SRGB,
-            if (hdrPq) JxlPixelPack.peakNits(rgb, resolved).takeIf { it > 0f } ?: 0f else 0f
+            // Never below SDR white: a dimmer target makes viewers render the
+            // whole frame as darker-than-SDR.
+            if (hdrPq) maxOf(JxlPixelPack.peakNits(rgb, resolved), 203f) else 0f
         )
         if (error != null) throw IOException(error)
     }
