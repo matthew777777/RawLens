@@ -1,7 +1,6 @@
 package com.rawlens.srpipeline.diag
 
 import com.rawlens.srpipeline.stages.BurstConfig
-import com.rawlens.srpipeline.stages.KernelNet
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
@@ -524,7 +523,6 @@ class Sr2xTruthTest {
     fun steeringPriorSweep() {
         assumeTrue(System.getProperty("srpipeline.diag", "").isNotEmpty())
         val h = C13aMergeDiagTest()
-        val kn = C13bKernelSweepTest()
         val truth = truth2x()
         val rng = java.util.Random(5)
         val shifts = listOf(0.0 to 0.0) + List(7) { (rng.nextDouble() * 6 - 3) to (rng.nextDouble() * 6 - 3) }
@@ -550,10 +548,9 @@ class Sr2xTruthTest {
             }
             val C = h.divided(h.run(frames, cfg))
             val wCovs = com.rawlens.srpipeline.stages.EndToEnd.frameKernels(frames[0], cfg)
-            val kCovs = kn.knCovsRggb(frames[0], KernelNet.sigma(FloatArray(4) { a.toFloat() }, FloatArray(4) { b.toFloat() }))
             val line = StringBuilder()
             val (pc, dc) = score(C, truth); line.append("merge %.2f/%.2f".format(pc, dc))
-            for ((name, covs) in listOf("iso" to null, "wronski" to wCovs, "kernelnet" to kCovs)) for (kappa in listOf(0.1f, 0.2f)) {
+            for ((name, covs) in listOf("iso" to null, "wronski" to wCovs)) for (kappa in listOf(0.1f, 0.2f)) {
                 for (ss in if (covs == null) listOf(1f) else listOf(1f, 2f)) {
                     val E = backProject(C, frames, flows, 16, iters = 15, mu = 0.2f, chromaSigma = 1.0, wb = wb, weights = rw,
                         btvKappa = kappa, noiseA = a.toFloat(), noiseB = b.toFloat(), noiseFloor = 0.002f, charbK = 1f,

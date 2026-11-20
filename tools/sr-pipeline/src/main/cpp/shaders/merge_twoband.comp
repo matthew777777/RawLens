@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Two-band MFSR accumulation (TwoBandReconstruction.finishSinglePass, GPU
+// form). One invocation per output pixel per frame, atomic-free (each output
+// pixel owned by one invocation), frames streamed once like merge_splat.
+//
+// Input frame: colour-difference CFA (ColourDiff: green raw, R/B sites hold
+// wb*C - G_hat). Flow: per finest tile, C2 B-spline interpolated (as
+// merge_splat continuous motion). Robustness: guide grid, bilinear.
+// Gather over the 7x7 frame neighbourhood of the aligned position:
+//   green, wide (sigmaLow):   num.g / den.g  (low band)
+//   green, narrow (sigmaHigh): aux = (sum w g, sum w, sum w dx, sum w dy)
+//                              dx, dy = sample - pixel in sensor px
+//   R / B differences, wide:  num.r / den.r, num.b / den.b
+// No per-frame kernels, no steering: the merge blur is the narrow kernel's.
+//
+// push: width/height = frame, pixelCount = outW*outH, tileSize, scale,
+//   alpha = sigmaHigh, beta = sigmaLow (sensor px),
+//   pad[1] = nTilesX, pad[2] = outW, pad[3] = nTilesY.
+// Buffers: 0 frame, 1 flow (vec2 per tile), 2 rob (w/2 x h/2), 3 num (x3),
+//   4 den (x3), 5 aux (vec4).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer Comp { float img[]; };
+layout(set = 0, binding = 1) readonly buffer Align { vec2 align_[]; };
+layout(set = 0, binding = 2) readonly buffer Rob { float rob[]; };
+layout(set = 0, binding = 3) buffer Num { float num_[]; };
+layout(set = 0, binding = 4) buffer Den { float den_[]; };
+layout(set = 0, binding = 5) buffer Aux { vec4 aux_[]; };
+
+vec4 flowWeights(float t) {
+  float u = 1.0 - t;
+  return vec4(u*u*u, 4.0 - 6.0*t*t + 3.0*t*t*t, 1.0 + 3.0*t + 3.0*t*t - 3.0*t*t*t, t*t*t) / 6.0;
+}
+
+void main() {
+  const uint id = gl_GlobalInvocationID.x;
+  if (id >= p.pixelCount) return;
+  const uint outW = p.pad[2];
+  const int W = int(p.width), H = int(p.height);
+  const uint ts = p.tileSize, nTx = p.pad[1], nTy = p.pad[3];
+  const float lx = (float(id % outW) + 0.5) / p.scale;
+  const float ly = (float(id / outW) + 0.5) / p.scale;
+
+  vec2 g = vec2(lx, ly) / float(ts) - 0.5;
+  ivec2 base = ivec2(floor(g));
+  vec4 wx = flowWeights(fract(g.x)), wy = flowWeights(fract(g.y));
+  vec2 F = vec2(0.0);
+  for (int y = 0; y < 4; ++y) {
+    const uint yy = uint(clamp(base.y + y - 1, 0, int(nTy) - 1)) * nTx;
+    for (int x = 0; x < 4; ++x)
+      F += wx[x] * wy[y] * align_[yy + uint(clamp(base.x + x - 1, 0, int(nTx) - 1))];
+  }
+
+  const uint rw = p.width / 2u, rh = p.height / 2u;
+  vec2 q = clamp(vec2(lx, ly) * 0.5 - 0.5, vec2(0.0), vec2(rw - 1u, rh - 1u));
+  uvec2 lo = uvec2(q), hi = min(lo + 1u, uvec2(rw - 1u, rh - 1u));
+  vec2 f = fract(q);
+  const float r = mix(mix(rob[lo.y*rw + lo.x], rob[lo.y*rw + hi.x], f.x),
+                      mix(rob[hi.y*rw + lo.x], rob[hi.y*rw + hi.x], f.x), f.y);
+  if (!(r > 0.0)) return;
+
+  const float mx = lx + F.x, my = ly + F.y;
+  if (!(mx >= 0.0 && mx < float(W) && my >= 0.0 && my < float(H))) return;
+  const int cj = int(mx), ci = int(my);
+  const float invL = 0.5 / (p.beta * p.beta), invH = 0.5 / (p.alpha * p.alpha);
+  const float reachH2 = 9.0 * p.alpha * p.alpha;
+
+  vec3 val = vec3(0.0), acc = vec3(0.0);
+  vec4 nar = vec4(0.0);
+  for (int di = -3; di <= 3; ++di) {
+    const int i2 = ci + di;
+    if (i2 < 0 || i2 >= H) continue;
+    const float dy = float(i2) + 0.5 - my;
+    const float fy = 1.0 - smoothstep(2.5, 3.5, abs(dy));
+    for (int dj = -3; dj <= 3; ++dj) {
+      const int j = cj + dj;
+      if (j < 0 || j >= W) continue;
+      const float dx = float(j) + 0.5 - mx;
+      const float d2 = dx*dx + dy*dy;
+      const float c = img[uint(i2) * p.width + uint(j)];
+      const float wl = r * exp(-d2 * invL) * fy * (1.0 - smoothstep(2.5, 3.5, abs(dx)));
+      const uint ch = uint((i2 & 1) + (j & 1));   // RGGB: 0 R, 1 G, 2 B
+      val[ch] += wl * c; acc[ch] += wl;
+      if (ch == 1u && d2 < reachH2) {
+        const float wn = r * exp(-d2 * invH);
+        nar += wn * vec4(c, 1.0, dx, dy);
+      }
+    }
+  }
+  num_[id*3u] += val.r; num_[id*3u+1u] += val.g; num_[id*3u+2u] += val.b;
+  den_[id*3u] += acc.r; den_[id*3u+1u] += acc.g; den_[id*3u+2u] += acc.b;
+  aux_[id] += nar;
+}

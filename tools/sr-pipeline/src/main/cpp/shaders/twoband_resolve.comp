@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Two-band MFSR resolve (after merge_twoband over all frames), per output pixel.
+// pad[0] = pass:
+//  0: num <- num / den per channel: (R diff, low green L, B diff); 0 where empty.
+//  1: high band hf = c (N/Nw - L - grad L . m/Nw), c = Nw / (Nw + confK),
+//     grad L from the neighbouring L (sensor px); noise variance of hf
+//     nv = (a L + b) * 0.5 / Nw * c^2 (sum w^2 ~ sum w / 2 for a Gaussian
+//     over uniformly placed samples). den <- (hf, nv, 0); aux <- 0 (the DCT
+//     passes accumulate into it).
+//  2: num.g <- L + (aux.y > 0 ? aux.x / aux.y : hf) (DCT-shrunk high band).
+// push: pixelCount, scale, pad[2] = outW, pad[3] = outH,
+//   alpha = confK, beta = noise a, robustness = noise b.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) buffer Num { float num_[]; };
+layout(set = 0, binding = 1) buffer Den { float den_[]; };
+layout(set = 0, binding = 2) buffer Aux { vec4 aux_[]; };
+
+float L(int x, int y) {
+  x = clamp(x, 0, int(p.pad[2]) - 1); y = clamp(y, 0, int(p.pad[3]) - 1);
+  return num_[(uint(y) * p.pad[2] + uint(x)) * 3u + 1u];
+}
+
+void main() {
+  const uint id = gl_GlobalInvocationID.x;
+  if (id >= p.pixelCount) return;
+  const uint pass = p.pad[0];
+  if (pass == 0u) {
+    for (uint c = 0u; c < 3u; ++c) {
+      const float d = den_[id*3u + c];
+      num_[id*3u + c] = d > 0.0 ? num_[id*3u + c] / d : 0.0;
+    }
+  } else if (pass == 1u) {
+    const int x = int(id % p.pad[2]), y = int(id / p.pad[2]);
+    const vec4 a = aux_[id];
+    const float l = num_[id*3u + 1u];
+    float hf = 0.0, nv = 0.0;
+    if (a.y > 1e-12) {
+      const vec2 grad = 0.5 * p.scale * vec2(L(x + 1, y) - L(x - 1, y), L(x, y + 1) - L(x, y - 1));
+      const float c = a.y / (a.y + p.alpha);
+      hf = c * (a.x / a.y - l - dot(grad, a.zw) / a.y);
+      nv = max(p.beta * max(l, 0.0) + p.robustness, 0.0) * 0.5 / a.y * c * c;
+    }
+    den_[id*3u] = hf; den_[id*3u + 1u] = nv; den_[id*3u + 2u] = 0.0;
+    aux_[id] = vec4(0.0);
+  } else {
+    const vec4 a = aux_[id];
+    num_[id*3u + 1u] += a.y > 1e-9 ? a.x / a.y : den_[id*3u];
+  }
+}

@@ -8,7 +8,7 @@ if [[ $# == 0 || ${1:-} == --help || ${1:-} == -h ]]; then
     cat <<'HELP'
 Usage: tools/sr-pipeline/run.sh --in BURST_DIR --out OUTPUT_DIR [options]
 
-Defaults: --backend vulkan --kernel kernelnet --scale 2 --lut auto
+Defaults: --backend vulkan --kernel wronski --scale 2 --lut auto
 Builds the desktop CLI, native DNG/Vulkan library and shaders automatically.
 Additional sr-pipeline options (e.g. --ref, --crop, --limit) are forwarded.
 Requires JDK 21+, CMake, Vulkan headers/loader, glslangValidator and a Vulkan
@@ -34,7 +34,7 @@ cmake -S "$module_dir/host" -B "$native_dir" -DCMAKE_BUILD_TYPE=Release \
     "-DSRP_JAVA_HOME=$JAVA_HOME"
 # Only build the CLI's library and shader targets, not the proof executables.
 targets=(srpipeline_jni)
-for shader in merge_accumulate gat align corr fft ica demosaic grad kernels divide robustness merge_splat merge_polynomial kernelnet grey_fft corr_direct ica_wg noise_even noise_acc ca_warp grey_fir pyr_down flow_pick; do
+for shader in merge_accumulate gat align corr fft ica demosaic grad kernels divide robustness merge_splat merge_polynomial grey_fft corr_direct ica_wg noise_even noise_acc ca_warp grey_fir pyr_down flow_pick merge_twoband twoband_resolve twoband_dct; do
     targets+=("srp_${shader}_spv")
 done
 cmake --build "$native_dir" --parallel 8 --target "${targets[@]}"
@@ -46,5 +46,5 @@ case "$(uname -s)" in
 esac
 export JAVA_OPTS="${JAVA_OPTS:--Xmx6g}"
 exec "$module_dir/build/install/sr-pipeline/bin/sr-pipeline" \
-    --backend vulkan --kernel kernelnet --scale 2 --lut auto \
+    --backend vulkan --kernel wronski --scale 2 --lut auto \
     --lib "$native_lib" --spv-dir "$native_dir" "$@"

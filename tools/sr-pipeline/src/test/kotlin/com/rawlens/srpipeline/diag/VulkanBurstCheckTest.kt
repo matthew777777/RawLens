@@ -4,8 +4,7 @@ import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.HotPixels
-import com.rawlens.srpipeline.stages.KernelNet
-import com.rawlens.srpipeline.stages.KernelNetConfig
+import com.rawlens.srpipeline.stages.CfaFlips
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
@@ -235,7 +234,7 @@ class VulkanBurstCheckTest {
             corrDirect = spv("corr_direct"), icaWg = spv("ica_wg"))
         fun stageSpv(kn: Boolean) = VulkanPipeline.Spirvs(gat = spv("gat"), grad = spv("grad"), kernels = spv("kernels"),
             divide = spv("divide"), robust = spv("robustness"), mergeSplat = spv("merge_splat"), fft = fft, corr = spv("corr"),
-            greyFft = spv("grey_fft"), kernelNet = if (kn) spv("kernelnet") else null)
+            greyFft = spv("grey_fft"))
         val only = (System.getenv("SRP_BURSTS") ?: "").split(',').filter { it.isNotBlank() }
         try {
             for (burst in bursts.filter { only.isEmpty() || it in only }) {
@@ -270,10 +269,6 @@ class VulkanBurstCheckTest {
                         robustnessParams = RobustnessParams(noiseCorrection = true, s3 = true), robustnessEnabled = true,
                         sigmaSqCurve = curves.sigmaSq, dSqCurve = curves.dSq, icaIterations = 3,
                         colourDiff = if (zip) floatArrayOf(wbR, wbB) else null,
-                        kernelNet = if (!kn) null else KernelNetConfig(
-                            weights = KernelNet.bundledWeights(),
-                            sigma = KernelNet.sigma(FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
-                            fullReference = full[0], cropX = ox, cropY = oy, flipX = false, flipY = true),
                     )
                     val results = ArrayList<Pair<String, Array<Array<FloatArray>>>>()
                     results += "single" to bilinear(frames[0])
@@ -303,144 +298,8 @@ class VulkanBurstCheckTest {
     }
 
     /** KernelNet minimum kernel width (kernelnet.comp clamp) vs texture checker, zipper fix on, Vulkan. */
-    @Test
-    fun kernelNetFloorOnVulkan() {
-        assumeTrue(System.getProperty("srpipeline.diag", "").isNotEmpty())
-        val lib = System.getProperty("srpipeline.lib", "")
-        assumeTrue(lib.isNotEmpty())
-        System.load(lib)
-        val handle = SrpBridge.nativeCreate()
-        val scratch = System.getenv("SRP_SCRATCH") ?: error("SRP_SCRATCH")
-        val variants = System.getenv("SRP_KN_VARIANTS")?.split(';')?.filter { it.isNotBlank() }?.map { v ->
-            val (label, dir) = v.split('=', limit = 2); label to dir.takeIf { it.isNotEmpty() }
-        } ?: listOf("0.25" to null, "0.40" to "$scratch/spv_kn0.40", "0.60" to "$scratch/spv_kn0.60")
-        val caps = (System.getenv("SRP_KN_CAPS") ?: "").split(',').mapNotNull { it.toFloatOrNull() }
-        val fft = spv("fft")
-        val alignSpv = AlignGpu.Spirvs(align = spv("align"), corr = spv("corr"), fft = fft, ica = spv("ica"),
-            corrDirect = spv("corr_direct"), icaWg = spv("ica_wg"))
-        val wrMode = System.getenv("SRP_MODE") == "wronski"   // variants override kernels.spv instead of kernelnet.spv
-        fun stageSpv(knDir: String?, kn: Boolean) = VulkanPipeline.Spirvs(gat = spv("gat"), grad = spv("grad"),
-            kernels = if (wrMode && !kn) spv("kernels", knDir) else spv("kernels"),
-            divide = spv("divide"), robust = spv("robustness"), mergeSplat = spv("merge_splat"), fft = fft, corr = spv("corr"),
-            greyFft = spv("grey_fft"), kernelNet = if (kn) spv("kernelnet", knDir) else null)
-        try {
-            for (burst in bursts) {
-                val files = (0..7).map { "$root/$burst/${burst}_F%02d.dng".format(it) }
-                val t = tags(files[0])
-                val alpha = doubleArrayOf(t.noise[0], t.noise[2], t.noise[4], t.noise[2])
-                val beta = doubleArrayOf(t.noise[1], t.noise[3], t.noise[5], t.noise[3])
-                val wbR = (t.neutral[1] / t.neutral[0]).toFloat(); val wbB = (t.neutral[1] / t.neutral[2]).toFloat()
-                val full = fullFlipped(files[0], t)
-                val fin = BurstConfig.finalize(BurstConfig.estimateSnr(full, alpha, beta))
-                val curves = NoiseLutGen.generate(alpha, beta)
-                n = if (fin.tileSize >= 32) 1024 else 512
-                fun fit(p: Pair<Int, Int>) = (minOf(p.first, W - n) and -2) to (minOf(p.second, H - n) and -2)
-                val places = listOf("tl" to (400 to 300), "c" to (1784 to 1274), "br" to (3200 to 2300), "tex" to texturedOrigin(full)).map { it.first to fit(it.second) }
-                for ((place, xy) in places) {
-                    val (ox, oy) = xy
-                    val frames = listOf(crop(full, ox, oy)) + files.drop(1).map { cropFlipped(it, t, ox, oy) }
-                    val defects = HotPixels.confirm(HotPixels.candidates(frames[0]), n, n, frames.subList(1, 3).map { f -> { y: Int, x: Int -> f[y][x] } })
-                    frames.forEach { HotPixels.correct(it, defects) }
-                    val tiles = try { BurstConfig.sanitize(1f, fin.tileSize, listOf(1, 2, 4, 4), fin.tileSizes, n, n); fin.tileSizes } catch (_: IllegalArgumentException) { listOf(16, 16, 16, 8) }
-                    fun cfg(kn: Boolean, cap: Float = KernelNet.DEFAULT_SIGMA_CAP, label: String = "") = PipelineConfig(scale = 1f, bayer = true, factors = listOf(1, 2, 4, 4), tileSizes = tiles,
-                        kernelParams = KernelParams(fin.kDetail.toFloat(), fin.kDenoise.toFloat(), fin.dTh.toFloat(), fin.dTr.toFloat(),
-                            kMin = if (label == "base") 0f else (System.getenv("SRP_KMIN")?.toFloat() ?: 0f)),
-                        kernelPreprocessing = "gat", kernelAlpha = FloatArray(4) { alpha[it].toFloat() }, kernelBeta = FloatArray(4) { beta[it].toFloat() },
-                        robustnessParams = RobustnessParams(noiseCorrection = true, s3 = true), robustnessEnabled = true,
-                        sigmaSqCurve = curves.sigmaSq, dSqCurve = curves.dSq, colourDiff = floatArrayOf(wbR, wbB),
-                        kernelNet = if (!kn) null else KernelNetConfig(weights = KernelNet.bundledWeights(),
-                            sigma = KernelNet.sigma(FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
-                            sigmaCap = cap, fullReference = full, cropX = ox, cropY = oy, flipX = false, flipY = true))
-                    fun runOnce(kn: Boolean, dir: String?, cap: Float = KernelNet.DEFAULT_SIGMA_CAP, label: String = "base"): Array<Array<FloatArray>> {
-                        val buf = VulkanPipeline.run({ frames[0].map { it.copyOf() }.toTypedArray() },
-                            frames.drop(1).map { f -> { _: ByteBuffer -> f.map { it.copyOf() }.toTypedArray() } }, cfg(kn, cap, label), handle, alignSpv, stageSpv(dir, kn))
-                        val fb = buf.asFloatBuffer()
-                        return Array(n) { y -> Array(n) { x -> FloatArray(3) { c -> fb.get((y * n + x) * 3 + c).let { if (it.isNaN()) 0f else it } } } }
-                    }
-                    val single = bilinear(frames[0])
-                    val wr = runOnce(false, null)
-                    val panels = arrayListOf(single, wr)
-                    val sharpW = edgeSharp(wr, frames[0])
-                    val line = StringBuilder("single texChk %.3f | wronski_on texChk %.3f zip %.2f".format(textureChecker(single, frames[0]), textureChecker(wr, frames[0]), metrics(wr, frames[0], wbR, wbB).zipper))
-                    val oneCap = System.getenv("SRP_KN_CAP")?.toFloatOrNull() ?: KernelNet.DEFAULT_SIGMA_CAP
-                    val runs = if (caps.isEmpty()) variants.map { v ->
-                        val c = v.first.substringAfter('@', "").toFloatOrNull()
-                        Triple(v.first, v.second, c ?: if (v.first == "base") KernelNet.DEFAULT_SIGMA_CAP else oneCap) }
-                        else caps.map { Triple("cap%.1f".format(it), null as String?, it) }
-                    for ((label, dir, cap) in runs) {
-                        val img = runOnce(!wrMode, dir, cap, label)
-                        panels += img
-                        val m = metrics(img, frames[0], wbR, wbB)
-                        line.append(" | kn_$label texChk %.3f zip %.2f (G %.2f) spk %.0f sharp %.3f".format(textureChecker(img, frames[0]), m.zipper, m.gYard, m.speckle, edgeSharp(img, frames[0]) / sharpW))
-                    }
-                    println("KNF $burst $place $line")
-                    val mean = frames[0].sumOf { r -> r.sumOf { it.toDouble() } } / (n * n)
-                    sheet("knfloor_${burst}_$place", panels, wbR, wbB, (0.18 / maxOf(mean, 1e-4)).toFloat().coerceIn(1f, 40f), frames[0])
-                }
-            }
-        } finally { SrpBridge.nativeDestroy(handle) }
-    }
 
     /** Full-res KernelNet (+zipper fix, HotPixels) merge per burst -> build/vkfull/<burst>.f32 (sensor orientation) + .tags. */
-    @Test
-    fun fullResKernelNet() {
-        assumeTrue(System.getProperty("srpipeline.diag", "").isNotEmpty())
-        val lib = System.getProperty("srpipeline.lib", ""); assumeTrue(lib.isNotEmpty())
-        System.load(lib)
-        val handle = SrpBridge.nativeCreate()
-        val dir = File("build/vkfull").apply { mkdirs() }
-        val fft = spv("fft")
-        val alignSpv = AlignGpu.Spirvs(align = spv("align"), corr = spv("corr"), fft = fft, ica = spv("ica"), corrDirect = spv("corr_direct"), icaWg = spv("ica_wg"))
-        val stage = VulkanPipeline.Spirvs(gat = spv("gat"), grad = spv("grad"), kernels = spv("kernels"), divide = spv("divide"),
-            robust = spv("robustness"), mergeSplat = spv("merge_splat"), fft = fft, corr = spv("corr"), greyFft = spv("grey_fft"), kernelNet = spv("kernelnet"))
-        try {
-            val onlyB = (System.getenv("SRP_BURSTS") ?: "").split(',').filter { it.isNotBlank() }
-            // SRP_NOISE=a,b: our blind estimate (noise_estimate.h) for all planes, no DNG profile
-            val est = System.getenv("SRP_NOISE")?.split(',')?.map { it.toDouble() }
-            for (burst in bursts.filter { onlyB.isEmpty() || it in onlyB }) {
-                val files = (0..7).map { "$root/$burst/${burst}_F%02d.dng".format(it) }
-                val t = tags(files[0])
-                val alpha = if (est != null) DoubleArray(4) { est[0] } else doubleArrayOf(t.noise[0], t.noise[2], t.noise[4], t.noise[2])
-                val beta = if (est != null) DoubleArray(4) { est[1] } else doubleArrayOf(t.noise[1], t.noise[3], t.noise[5], t.noise[3])
-                val ref = fullFlipped(files[0], t)
-                val fin = BurstConfig.finalize(BurstConfig.estimateSnr(ref, alpha, beta))
-                val curves = NoiseLutGen.generate(alpha, beta)
-                val defects = HotPixels.confirm(HotPixels.candidates(ref), H, W, files.subList(1, 3).map { p -> fullFlipped(p, t) }.map { f -> { y: Int, x: Int -> f[y][x] } })
-                HotPixels.correct(ref, defects)
-                val cfg = PipelineConfig(scale = 1f, bayer = true, factors = listOf(1, 2, 4, 4), tileSizes = fin.tileSizes,
-                    kernelParams = KernelParams(fin.kDetail.toFloat(), fin.kDenoise.toFloat(), fin.dTh.toFloat(), fin.dTr.toFloat()),
-                    kernelPreprocessing = "gat", kernelAlpha = FloatArray(4) { alpha[it].toFloat() }, kernelBeta = FloatArray(4) { beta[it].toFloat() },
-                    robustnessParams = RobustnessParams(noiseCorrection = true, s3 = true), robustnessEnabled = true,
-                    sigmaSqCurve = curves.sigmaSq, dSqCurve = curves.dSq, memoryTight = true,
-                    colourDiff = floatArrayOf((t.neutral[1] / t.neutral[0]).toFloat(), (t.neutral[1] / t.neutral[2]).toFloat()),
-                    kernelNet = if (System.getenv("SRP_KERNEL") == "wronski") null else KernelNetConfig(weights = KernelNet.bundledWeights(),
-                        sigma = KernelNet.sigma(FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }), flipX = false, flipY = true))
-                val buf = VulkanPipeline.run({ ref }, files.drop(1).map { p -> { _: ByteBuffer -> fullFlipped(p, t).also { HotPixels.correct(it, defects) } } },
-                    cfg, handle, alignSpv, stage)
-                // back to sensor orientation (undo the horizontal flip), NaN -> 0, write little-endian f32
-                val fb = buf.asFloatBuffer()
-                val outB = ByteBuffer.allocate(W * 3 * 4).order(ByteOrder.LITTLE_ENDIAN)
-                java.io.FileOutputStream(File(dir, "$burst${System.getenv("SRP_KERNEL")?.let { "_$it" } ?: ""}${System.getenv("SRP_TAG") ?: ""}.f32")).channel.use { ch ->
-                    for (y in 0 until H) {
-                        outB.clear()
-                        for (x in 0 until W) for (c in 0..2) outB.putFloat(fb.get(((H - 1 - y) * W + x) * 3 + c).let { if (it.isFinite()) it else 0f })
-                        outB.flip(); ch.write(outB)
-                    }
-                }
-                val bb = ByteBuffer.wrap(File(files[0]).readBytes()).order(ByteOrder.LITTLE_ENDIAN)
-                val off = bb.getInt(4); val cnt = bb.getShort(off).toInt() and 0xffff
-                val tagText = StringBuilder("w=$W\nh=$H\nneutral=${t.neutral.joinToString(",")}\n")
-                for (i in 0 until cnt) {
-                    val e = off + 2 + 12 * i; val tag = bb.getShort(e).toInt() and 0xffff; val c = bb.getInt(e + 4)
-                    val name = mapOf(50721 to "cm1", 50722 to "cm2", 50964 to "fm1", 50965 to "fm2", 50723 to "cc1", 50724 to "cc2")[tag]
-                    if (name != null) { val p = bb.getInt(e + 8); tagText.append("$name=" + (0 until c).joinToString(",") { (bb.getInt(p + 8 * it).toDouble() / bb.getInt(p + 8 * it + 4)).toString() } + "\n") }
-                    if (tag == 50778 || tag == 50779) tagText.append("illum${tag - 50777}=${bb.getShort(e + 8).toInt() and 0xffff}\n")
-                }
-                File(dir, "$burst.tags").writeText(tagText.toString())
-                println("VKFULL $burst done (defects ${defects.size})")
-            }
-        } finally { SrpBridge.nativeDestroy(handle) }
-    }
 
     /** Wraps each build/vkfull/<burst>.f32 merge in a linear DNG (CLI writer, colour profile + orientation from F00). */
     @Test

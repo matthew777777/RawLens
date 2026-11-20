@@ -73,24 +73,15 @@ data class PipelineConfig(
      */
     val memoryTight: Boolean = false,
     /**
-     * Reconstruction kernel source. Null: Wronski's per-frame anisotropic
-     * kernels (supplement S.1, 1:1 with the IPOL reference). Non-null:
-     * PhotonCamera KernelNet from the reference frame ([KernelNetConfig]);
-     * Vulkan bayer path only.
-     */
-    val kernelNet: KernelNetConfig? = null,
-    /**
-     * KernelNet's continuous motion handling for the Wronski kernels too:
-     * regularized finest-grid flow, B-spline flow / strength sampling,
-     * bilinear robustness lookup and soft motion-membership rejection.
-     * Always on with [kernelNet]; false keeps Wronski IPOL-exact.
+     * Continuous motion handling: regularized finest-grid flow, B-spline
+     * flow / strength sampling, bilinear robustness lookup and soft
+     * motion-membership rejection. False keeps Wronski IPOL-exact.
      */
     val continuousMotion: Boolean = false,
     /**
-     * KernelNet's reconstruction details for Wronski's per-frame kernels
-     * (Vulkan bayer path): 7x7 faded gather, separate green detail
-     * reconstruction and green frame weights (with [colourDiff]).
-     * Always on with [kernelNet]; false keeps Wronski IPOL-exact.
+     * Detail reconstruction for Wronski's per-frame kernels (Vulkan bayer
+     * path): 7x7 faded gather, separate green detail reconstruction and
+     * green frame weights (with [colourDiff]). False keeps Wronski IPOL-exact.
      */
     val detailReconstruction: Boolean = false,
     /**
@@ -157,6 +148,12 @@ data class PipelineConfig(
     val chromaScale: Float = 1f,
     /** Reduce luminance averaging uniformly to retain source grain; 0 disables (KernelNet colour differences). */
     val grainRetention: Float = DEFAULT_GRAIN_RETENTION,
+    /**
+     * Vulkan bayer merge: two-band reconstruction (merge_twoband +
+     * twoband_resolve + twoband_dct) instead of per-frame kernels. Needs
+     * colourDiff. [TwoBandReconstruction] is the CPU reference.
+     */
+    val twoBand: TwoBandReconstruction.Params? = null,
 ) {
     companion object {
         /**

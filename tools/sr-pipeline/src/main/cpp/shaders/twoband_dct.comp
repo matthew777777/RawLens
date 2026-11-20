@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Two-band high-band denoise: 8x8 DCT empirical Wiener, one block per
+// workgroup of 64, blocks on a stride-8 grid offset by (pad[0], pad[1]) in
+// {0, 4}: the four phase dispatches give the step-4 overlap of the CPU
+// reference without atomics (blocks of one phase are disjoint).
+// Input den = (hf, nv, -) per output pixel; output aux += (win * hf', win).
+// Per-block noise = mean nv; gain = max(floor, (e - nv) / e) per coefficient.
+// push: pad[2] = outW, pad[3] = outH, pad[4] = blocks per row, alpha = floor.
+layout(local_size_x = 64) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer Den { float den_[]; };
+layout(set = 0, binding = 1) buffer Aux { vec4 aux_[]; };
+
+shared float s_a[64];
+shared float s_b[64];
+shared float s_nv[64];
+
+const float PI = 3.14159265359;
+float basis(uint k, uint x) {
+  return (k == 0u ? 0.35355339 : 0.5) * cos(PI * float(2u * x + 1u) * float(k) / 16.0);
+}
+
+void main() {
+  const uint lid = gl_LocalInvocationID.x;
+  const uint lx = lid & 7u, ly = lid >> 3u;
+  const uint outW = p.pad[2], outH = p.pad[3], bpr = p.pad[4];
+  const uint b = gl_WorkGroupID.x;
+  const uint bx = p.pad[0] + (b % bpr) * 8u, by = p.pad[1] + (b / bpr) * 8u;
+  if (bx + 8u > outW || by + 8u > outH) return;   // uniform per workgroup
+  const uint pix = (by + ly) * outW + bx + lx;
+  s_a[lid] = den_[pix * 3u];
+  s_nv[lid] = den_[pix * 3u + 1u];
+  barrier();
+  for (uint s = 32u; s > 0u; s >>= 1u) { if (lid < s) s_nv[lid] += s_nv[lid + s]; barrier(); }
+  const float nv = s_nv[0] / 64.0;
+  // rows: s_b[y][k] = sum_x C[k][x] a[y][x]
+  float t = 0.0;
+  for (uint x = 0u; x < 8u; ++x) t += basis(lx, x) * s_a[ly * 8u + x];
+  s_b[lid] = t; barrier();
+  // cols: coef[l][k] = sum_y C[l][y] s_b[y][k]   (l = ly, k = lx)
+  t = 0.0;
+  for (uint y = 0u; y < 8u; ++y) t += basis(ly, y) * s_b[y * 8u + lx];
+  const float e = t * t;
+  t *= e > 1e-30 ? max(p.alpha, max(0.0, e - nv) / e) : 1.0;
+  barrier();
+  s_a[lid] = t; barrier();
+  // inverse cols: s_b[y][k] = sum_l C[l][y] coef[l][k]   (y = ly, k = lx)
+  t = 0.0;
+  for (uint l = 0u; l < 8u; ++l) t += basis(l, ly) * s_a[l * 8u + lx];
+  s_b[lid] = t; barrier();
+  // inverse rows: out[y][x] = sum_k C[k][x] s_b[y][k]
+  t = 0.0;
+  for (uint k = 0u; k < 8u; ++k) t += basis(k, lx) * s_b[ly * 8u + k];
+  const float w = (0.5 - 0.5 * cos(2.0 * PI * (float(lx) + 0.5) / 8.0)) * (0.5 - 0.5 * cos(2.0 * PI * (float(ly) + 0.5) / 8.0));
+  aux_[pix] += vec4(w * t, w, 0.0, 0.0);
+}

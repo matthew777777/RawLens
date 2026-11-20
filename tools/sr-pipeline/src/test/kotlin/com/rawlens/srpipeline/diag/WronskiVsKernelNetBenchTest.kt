@@ -3,8 +3,6 @@ package com.rawlens.srpipeline.diag
 import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
-import com.rawlens.srpipeline.stages.KernelNet
-import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
@@ -49,18 +47,21 @@ class WronskiVsKernelNetBenchTest {
         VulkanPipeline.Spirvs(gat = spv("gat"), grad = spv("grad"), kernels = spv("kernels"),
             divide = spv("divide"), robust = spv("robustness"), mergeSplat = spv("merge_splat"),
             fft = spv("fft"), corr = spv("corr"), greyFft = spv("grey_fft"), greyFir = spv("grey_fir"),
-            pyrDown = spv("pyr_down"), kernelNet = spv("kernelnet"),
-            noiseAcc = spv("noise_acc"), noiseEven = spv("noise_even"))
+            pyrDown = spv("pyr_down"),
+            noiseAcc = spv("noise_acc"), noiseEven = spv("noise_even"),
+            mergeTwoBand = File(spvDir, "merge_twoband.spv").takeIf { it.exists() }?.readBytes(),
+            twoBandResolve = File(spvDir, "twoband_resolve.spv").takeIf { it.exists() }?.readBytes(),
+            twoBandDct = File(spvDir, "twoband_dct.spv").takeIf { it.exists() }?.readBytes())
     }
 
-    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, WRONSKI_GHOST, WRONSKI_BLUR, WRONSKI_ALIGN2, KERNELNET, CM_ONLY, DETAIL_ONLY }
+    enum class Kernel { WRONSKI_IPOL, WRONSKI_NEW, WRONSKI_EVEN, WRONSKI_GHOST, WRONSKI_BLUR, WRONSKI_ALIGN2, TWOBAND, CM_ONLY, DETAIL_ONLY }
 
     private fun cfg(k: Kernel, fin: BurstConfig.Final, a: DoubleArray, b: DoubleArray, scale: Float): PipelineConfig {
         val tuning = SrTuning()
         val al = FloatArray(4) { a[it].toFloat() }; val be = FloatArray(4) { b[it].toFloat() }
-        val v2 = k == Kernel.WRONSKI_ALIGN2
+        val v2 = k == Kernel.WRONSKI_ALIGN2 || k == Kernel.TWOBAND
         val lv = if (v2) BurstConfig.alignV2Levels(16, 512, 512) else null
-        val all = setOf(Kernel.WRONSKI_BLUR, Kernel.WRONSKI_ALIGN2)
+        val all = setOf(Kernel.WRONSKI_BLUR, Kernel.WRONSKI_ALIGN2, Kernel.TWOBAND)
         return PipelineConfig(
             scale = scale, bayer = true, greyMethod = "FIR7",
             // 512 px truth is too small for 32/64 px tiles (as Sr2xTruthTest).
@@ -80,9 +81,8 @@ class WronskiVsKernelNetBenchTest {
             noiseEvening = k in setOf(Kernel.WRONSKI_EVEN, Kernel.WRONSKI_GHOST) || k in all,
             ghostGrow = k == Kernel.WRONSKI_GHOST || k in all,
             blurGamma = if (k in all) (System.getenv("BENCH_BLUR_GAMMA")?.toFloatOrNull() ?: 1f) else 0f,
-            kernelNet = if (k != Kernel.KERNELNET) null else KernelNetConfig(
-                weights = KernelNet.bundledWeights(), sigma = KernelNet.sigma(al, be),
-                sigmaScale = tuning.knSigmaScale, sigmaCap = tuning.knSigmaCap, sigmaFloor = tuning.knFloor(scale)),
+            twoBand = if (k == Kernel.TWOBAND) com.rawlens.srpipeline.stages.TwoBandReconstruction.Params(
+                sigmaHigh = System.getenv("BENCH_TB_HIGH")?.toDoubleOrNull() ?: 0.35) else null,
         )
     }
 

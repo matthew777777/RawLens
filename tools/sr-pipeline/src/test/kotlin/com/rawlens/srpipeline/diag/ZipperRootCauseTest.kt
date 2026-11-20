@@ -4,8 +4,7 @@ import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
-import com.rawlens.srpipeline.stages.KernelNet
-import com.rawlens.srpipeline.stages.KernelNetConfig
+import com.rawlens.srpipeline.stages.CfaFlips
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
@@ -124,24 +123,20 @@ class ZipperRootCauseTest {
         val wbR = if (neutral != null && neutral.size == 3) (neutral[1] / neutral[0]).toFloat() else 1f
         val wbB = if (neutral != null && neutral.size == 3) (neutral[1] / neutral[2]).toFloat() else 1f
         val fin = BurstConfig.finalize(BurstConfig.estimateSnr(full, alpha, beta))
-        val (fx, fy) = KernelNet.rggbFlips(meta.cfa)
+        val (fx, fy) = CfaFlips.rggbFlips(meta.cfa)
         val alignSpv = AlignGpu.Spirvs(align = spv("align"), corr = spv("corr"), fft = spv("fft"), ica = spv("ica"),
             corrDirect = spv("corr_direct"), icaWg = spv("ica_wg"), alignWg = spv("align_wg"),
             argminWg = spv("corr_argmin_wg"), l2Fused = spv("corr_l2_fused"))
         val stageSpv = VulkanPipeline.Spirvs(gat = spv("gat"), grad = spv("grad"), kernels = spv("kernels"),
             divide = spv("divide"), robust = spv("robustness"), mergeSplat = spv("merge_splat"), fft = spv("fft"),
-            corr = spv("corr"), greyFft = spv("grey_fft"), greyFir = spv("grey_fir"), pyrDown = spv("pyr_down"),
-            kernelNet = spv("kernelnet"))
+            corr = spv("corr"), greyFft = spv("grey_fft"), greyFir = spv("grey_fir"), pyrDown = spv("pyr_down"))
         fun run(kn: Boolean, floor: Float, cd: Boolean, nFrames: Int, chroma: Float = 1f): Array<Array<FloatArray>> {
             val cfg = PipelineConfig(scale = 2f, bayer = true, greyMethod = "FIR7", factors = listOf(1, 2, 4, 4),
                 tileSizes = listOf(16, 16, 16, 8),
                 kernelParams = KernelParams(fin.kDetail.toFloat(), fin.kDenoise.toFloat(), fin.dTh.toFloat(), fin.dTr.toFloat(), kMin = 0.64f),
                 kernelPreprocessing = "gat", kernelAlpha = FloatArray(4) { alpha[it].toFloat() }, kernelBeta = FloatArray(4) { beta[it].toFloat() },
                 robustnessParams = RobustnessParams(noiseCorrection = false, s3 = true), robustnessEnabled = true,
-                colourDiff = if (cd) floatArrayOf(wbR, wbB) else null, chromaScale = chroma,
-                kernelNet = if (!kn) null else KernelNetConfig(weights = KernelNet.bundledWeights(),
-                    sigma = KernelNet.sigma(FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
-                    sigmaFloor = floor, fullReference = full, cropX = ox, cropY = oy, flipX = fx, flipY = fy))
+                colourDiff = if (cd) floatArrayOf(wbR, wbB) else null, chromaScale = chroma)
             val use = frames.take(nFrames)
             val buf = VulkanPipeline.run({ use[0].map { it.copyOf() }.toTypedArray() },
                 use.drop(1).map { f -> { _: ByteBuffer -> f.map { it.copyOf() }.toTypedArray() } }, cfg, handle, alignSpv, stageSpv)

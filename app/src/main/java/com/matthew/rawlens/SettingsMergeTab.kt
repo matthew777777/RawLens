@@ -25,26 +25,10 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
         content.addView(sectionTitle("MFSR · Multi-Frame Super-Resolution"))
         content.addView(sectionDesc(
             "Auto, Program and Manual capture a fresh burst; ZSL merges buffered frames. " +
-                "Reconstruction kernel and Wronski supplement S.3 high-frequency " +
-                "artefact rejection for the sharp merge (live tile and offline " +
-                "merges). KernelNet predicts one kernel map from the reference " +
-                "frame; Wronski uses the paper's per-frame anisotropic kernels. " +
-                "S.3 off gives 1:1 parity with the IPOL reference, which has no S.3."
+                "Wronski supplement S.3 high-frequency artefact rejection for the " +
+                "sharp merge (live tile and offline merges). S.3 off gives 1:1 " +
+                "parity with the IPOL reference, which has no S.3."
         ))
-        fun mfsrKernelText(kernel: MfsrKernel): String = when (kernel) {
-            MfsrKernel.KERNELNET -> "Kernel: KernelNet"
-            MfsrKernel.WRONSKI -> "Kernel: Wronski (paper S.1)"
-        }
-        content.addView(settingsButton(mfsrKernelText(mfsrSettings.kernel)).apply {
-            setOnClickListener {
-                p.kit.chooseEnum("Kernel", mfsrSettings.kernel, { mfsrKernelText(it) }) { next ->
-                    if (applyMfsrSettings(mfsrSettings.copy(kernel = next))) {
-                        text = mfsrKernelText(next)
-                        setStatus("MFSR ${mfsrKernelText(next).uppercase(Locale.US)}")
-                    }
-                }
-            }
-        })
         content.addView(settingsCheck("S.3 artefact rejection", mfsrSettings.s3).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.s3) {
@@ -136,7 +120,7 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
         content.addView(sectionDesc(
             "Colour noise is always removed, following the measured noise, without colour bleeding. " +
                 "On: also cleans luma noise in shadows down to a fine, even grain; mid-tones and highlights " +
-                "are left untouched. Off: luma is not touched. KernelNet denoise is controlled separately."
+                "are left untouched. Off: luma is not touched."
         ))
         content.addView(settingsCheck("LK-R reference: middle of the burst", mfsrSettings.lkrMiddleReference).apply {
             setOnCheckedChangeListener { _, checked ->

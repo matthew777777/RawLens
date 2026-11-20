@@ -9,8 +9,6 @@ import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
-import com.rawlens.srpipeline.stages.KernelNet
-import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLut
 import com.rawlens.srpipeline.stages.NoiseLutGen
@@ -155,16 +153,6 @@ class SrpPipelineFullresDeviceTest {
                 // -e rawlensSrpColourDiff true: the app's default zipper-fix
                 // colour-difference merge (WB 1,1: same cost as the app).
                 colourDiff = if (args.getString("rawlensSrpColourDiff") == "true") floatArrayOf(1f, 1f) else null,
-                // -e rawlensSrpKernel kernelnet|wronski (default wronski);
-                // the merge input IS the full frame here.
-                kernelNet = if (args.getString("rawlensSrpKernel") != "kernelnet") null else {
-                    val (fx, fy) = KernelNet.rggbFlips(refMeta.cfa)
-                    KernelNetConfig(
-                        weights = KernelNet.bundledWeights(),
-                        sigma = KernelNet.sigma(
-                            FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
-                        flipX = fx, flipY = fy)
-                },
             )
             Log.i("SrpFullresDevice", "fullres ${w}x$h snr=%.2f tile=%d".format(snr, fin.tileSize))
             val fft = assetBytes("fft")
@@ -192,8 +180,7 @@ class SrpPipelineFullresDeviceTest {
                     mergeSplat = assetBytes("merge_splat"),
                     fft = fft, corr = assetBytes("corr"), greyFft = assetBytes("grey_fft"), greyFir = assetBytes("grey_fir"),
                     // -e rawlensSrpResident true: resident grey + GPU moving pyramid.
-                    pyrDown = if (args.getString("rawlensSrpResident") == "true") assetBytes("pyr_down") else null,
-                    kernelNet = if (args.getString("rawlensSrpKernel") == "kernelnet") assetBytes("kernelnet") else null),
+                    pyrDown = if (args.getString("rawlensSrpResident") == "true") assetBytes("pyr_down") else null),
                 // Native output like MfsrMerge: a 2x frame (600 MB) cannot be a heap direct buffer.
                 output = SrpBridge.nativeFloats((w * srpScale).toInt() * (h * srpScale).toInt() * 3),
             )

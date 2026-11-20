@@ -21,15 +21,6 @@ data class MfsrSettings(
     /** Also save every source frame as DNG alongside the merge. */
     val keepSourceBurst: Boolean = false,
     /**
-     * Reconstruction kernel: Wronski's per-frame anisotropic kernels
-     * (paper supplement S.1, default — parity with the reference
-     * implementation), or PhotonCamera KernelNet from the reference
-     * frame. Default KernelNet (owner 2026-11-04) after the C24 width-window
-     * fix (texture checker 0.67x Wronski on 20 Vulkan crops, ~5 % softer
-     * edges); Wronski stays selectable in Settings -> Burst.
-     */
-    val kernel: MfsrKernel = MfsrKernel.KERNELNET,
-    /**
      * Wronski supplement S.3 high-frequency artefact rejection in the
      * robustness stage (default on, as measured in docs/refactor/
      * mfsr-s3.md). Off gives 1:1 parity with the IPOL reference, which
@@ -38,7 +29,7 @@ data class MfsrSettings(
     val s3: Boolean = true,
     /**
      * Noise model for the merge (GAT, SNR -> tile/kernel params, robustness
-     * LUT, KernelNet sigma). On (default): the learned per-device model
+     * LUT). On (default): the learned per-device model
      * (WaveletDenoiser store, rawlens_noise::fit) sets the green level, the
      * Camera2 profile only the R/B-to-G shape; until the model is trained
      * it falls back to the profile. Off: the Camera2 profile as reported
@@ -98,7 +89,6 @@ data class MfsrSettings(
     fun toPreferences(): Map<String, Any> = mapOf(
         "mfsr_enabled" to enabled,
         "mfsr_keep_source_burst" to keepSourceBurst,
-        "mfsr_kernel" to kernel.name,
         "mfsr_s3" to s3,
         "mfsr_learned_noise" to learnedNoise,
         "mfsr_zipper_fix" to zipperFix,
@@ -128,8 +118,6 @@ data class MfsrSettings(
         fun fromPreferences(values: Map<String, *>): MfsrSettings = MfsrSettings(
             enabled = values["mfsr_enabled"] as? Boolean ?: false,
             keepSourceBurst = values["mfsr_keep_source_burst"] as? Boolean ?: false,
-            kernel = MfsrKernel.entries.firstOrNull { it.name == values["mfsr_kernel"] }
-                ?: MfsrKernel.KERNELNET,
             s3 = values["mfsr_s3"] as? Boolean ?: true,
             learnedNoise = values["mfsr_learned_noise"] as? Boolean ?: true,
             zipperFix = values["mfsr_zipper_fix"] as? Boolean ?: true,
@@ -164,9 +152,6 @@ data class MfsrSettings(
         }
     }
 }
-
-/** MFSR reconstruction kernel source (see [MfsrSettings.kernel]). */
-enum class MfsrKernel { KERNELNET, WRONSKI }
 
 /**
  * LK-R zoom: [factor] of the centre crop. 1x solves the full frame at x1;

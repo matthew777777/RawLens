@@ -107,16 +107,14 @@ class MfsrSettingsTest {
         assertEquals("LK-R\nOFF", MfsrSettings().quickText(MfsrEngine.LKR, 12, 12, true, false))
     }
 
-    @Test fun kernelAndS3SurviveReload() {
-        for (kernel in MfsrKernel.entries) for (s3 in listOf(false, true)) {
-            val original = MfsrSettings(kernel = kernel, s3 = s3)
+    @Test fun s3SurvivesReload() {
+        for (s3 in listOf(false, true)) {
+            val original = MfsrSettings(s3 = s3)
             assertEquals(original, MfsrSettings.fromPreferences(original.toPreferences()))
         }
+        // KernelNet was removed from MFSR (2026-11-20): a saved kernel choice is ignored.
+        assertEquals(MfsrSettings(), MfsrSettings.fromPreferences(mapOf("mfsr_kernel" to "KERNELNET")))
         // Corrupt values heal to the defaults, like the frame count.
-        assertEquals(
-            MfsrKernel.KERNELNET,
-            MfsrSettings.fromPreferences(mapOf("mfsr_kernel" to "junk")).kernel
-        )
         assertEquals(
             true,
             MfsrSettings.fromPreferences(mapOf("mfsr_s3" to "junk")).s3
@@ -128,7 +126,6 @@ class MfsrSettingsTest {
         assertEquals(MfsrSettings(), fresh)
         assertEquals(false, fresh.enabled)
         assertEquals(false, fresh.keepSourceBurst)
-        assertEquals(MfsrKernel.KERNELNET, fresh.kernel)
         assertEquals(true, fresh.s3)
     }
 

@@ -299,7 +299,6 @@ class MainActivity : Activity() {
         }
         preloadFlowNetForMergedHdr()
         preloadRawNindIfEnabled()
-        // Future SR hook: KernelNet preload + RawSuperResolutionSettings load here.
         hdrPlusSettings = HdrPlusSettings.fromPreferences(lensPreferences().all)
         captureExposureMode = CaptureExposureMode.entries.getOrElse(
             lensPreferences().getInt(KEY_CAPTURE_EXPOSURE_MODE, CaptureExposureMode.AUTO.ordinal)

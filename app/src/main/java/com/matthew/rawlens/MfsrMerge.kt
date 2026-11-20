@@ -11,8 +11,6 @@ import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
 import com.rawlens.srpipeline.stages.HotPixels
-import com.rawlens.srpipeline.stages.KernelNet
-import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
@@ -41,7 +39,7 @@ import java.nio.ByteBuffer
  * reference frame, with green from the learned per-device model when trained
  * (switch: MfsrSettings.learnedNoise); never the vendor NoiseProfile. It
  * drives GAT, SNR -> tile/kernel params,
- * the in-app NoiseLutGen robustness LUT and the KernelNet sigma.
+ * the in-app NoiseLutGen robustness LUT.
  * Before the merge: static hot/dead pixels (HotPixels, C18). In the merge:
  * colour-difference accumulation (Z1, MfsrSettings.zipperFix). After it:
  * lens shading on the merged RGB (C19).
@@ -239,7 +237,7 @@ internal object MfsrMerge {
     /**
      * Noise model (S, O) per engine plane, in the engine's R, G1, B, G2 order
      * (RGGB-normalised raster from [decodeRows]: R (0,0), G1 (0,1), B (1,1),
-     * G2 (1,0); the order BurstConfig / GAT / NoiseLutGen / KernelNet expect).
+     * G2 (1,0); the order BurstConfig / GAT / NoiseLutGen expect).
      *
      * Camera2 SENSOR_NOISE_PROFILE lists one (S, O) pair per CFA channel "in
      * the same order as channels listed for the CFA layout key"
@@ -707,11 +705,11 @@ internal object MfsrMerge {
                 // 2x zipper fix: R/B colour differences get a wider kernel than green.
                 chromaScale = tuning.chromaScale(scale.toFloat()),
                 icaIterations = tuning.icaIterations,
-                // KernelNet's continuous motion (regularized flow, smooth
-                // flow/robustness sampling, soft rejection) for Wronski too.
+                // Continuous motion (regularized flow, smooth flow/robustness
+                // sampling, soft rejection).
                 continuousMotion = true,
-                // KernelNet's wide gather, green detail path and green frame
-                // weights for Wronski's per-frame kernels too.
+                // Wide gather, green detail path and green frame weights for
+                // Wronski's per-frame kernels.
                 detailReconstruction = true,
                 // Even noise where motion rejection kept fewer frames.
                 noiseEvening = true,
@@ -723,25 +721,8 @@ internal object MfsrMerge {
                 blurGamma = 1f,
                 // Subtract a neutral black floor above the metadata black.
                 blackPedestal = true,
-                // KernelNet (when selected): one kernel map from the reference
-                // frame, which on the device IS the full frame, so no
-                // separate full-frame copy; the net runs in sensor
-                // orientation via the RGGB-normalization flips.
-                kernelNet = if (settings.kernel != MfsrKernel.KERNELNET) null else {
-                    val (fx, fy) = KernelNet.rggbFlips(dngCodesFor(pattern))
-                    KernelNetConfig(
-                        weights = KernelNet.bundledWeights(),
-                        sigma = KernelNet.sigma(
-                            FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
-                        sigmaScale = tuning.knSigmaScale,
-                        sigmaCap = tuning.knSigmaCap,
-                        sigmaFloor = tuning.knFloor(scale.toFloat()),
-                        flipX = fx,
-                        flipY = fy
-                    )
-                }
             )
-            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=%s continuousMotion=on s3=%s zipperFix=%s".format(snr, fin.tileSize, settings.kernel, settings.s3, settings.zipperFix))
+            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=wronski continuousMotion=on s3=%s zipperFix=%s".format(snr, fin.tileSize, settings.s3, settings.zipperFix))
             fun asset(name: String): ByteArray =
                 context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
             val fft = asset("fft")
@@ -774,7 +755,6 @@ internal object MfsrMerge {
                     noiseAcc = asset("noise_acc"),
                     noiseEven = asset("noise_even"),
                     caWarp = asset("ca_warp"),
-                    kernelNet = if (settings.kernel == MfsrKernel.KERNELNET) asset("kernelnet") else null
                 ),
                 output = nativeOut
             )

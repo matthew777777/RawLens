@@ -14,7 +14,7 @@ import com.rawlens.srpipeline.stages.SrTuning
  * source of truth, shared with the desktop tuning sweeps); only values the
  * user changed are stored (prefs `mfsr_lab_<key>`). The SNR-tuned kernel
  * values are multipliers of the automatic per-burst value. The paper's kernel
- * values act on the Wronski kernel only; KernelNet has its own width values.
+ * values act on the Wronski kernel.
  */
 internal object MfsrTuning {
     enum class Kind { SWITCH, INT, FLOAT }
@@ -59,14 +59,6 @@ internal object MfsrTuning {
             Kind.SWITCH, 0f, 1f, 1f, { if (it.noiseCorrection) 1f else 0f }, { t, v -> t.copy(noiseCorrection = v >= .5f) }),
         ICA_ITER("Alignment refinement steps", "Lucas-Kanade iterations per level (paper: 3).",
             Kind.INT, 1f, 6f, 1f, { it.icaIterations.toFloat() }, { t, v -> t.copy(icaIterations = v.toInt()) }),
-        KN_SCALE("KernelNet width", "KernelNet kernel only. KernelNet kernel width scale.",
-            Kind.FLOAT, .1f, .6f, .01f, { it.knSigmaScale }, { t, v -> t.copy(knSigmaScale = v) }),
-        KN_CAP("KernelNet width cap (px)", "KernelNet kernel only. Largest KernelNet kernel width.",
-            Kind.FLOAT, .9f, 2.5f, .05f, { it.knSigmaCap }, { t, v -> t.copy(knSigmaCap = v) }),
-        KN_FLOOR("KernelNet minimum width, 1× (px)", "KernelNet kernel only. Smallest kernel at sensor size. Lower = sharper; below ~0.9 a checker pattern can appear in texture.",
-            Kind.FLOAT, .3f, 1.2f, .05f, { it.knSigmaFloor }, { t, v -> t.copy(knSigmaFloor = v) }),
-        KN_FLOOR_2X("KernelNet minimum width, 2× (px)", "KernelNet kernel only. Smallest kernel at 2×: the main sharpness control. Lower = crisper, slightly more false colour and noise.",
-            Kind.FLOAT, .3f, 1.2f, .05f, { it.knSigmaFloor2x }, { t, v -> t.copy(knSigmaFloor2x = v) }),
         CHROMA_2X("Colour kernel width, 2× (×)", "R/B colour-difference kernel width relative to green at 2× (needs the zipper fix). Higher = less colour zipper; green detail unchanged.",
             Kind.FLOAT, 1f, 3f, .05f, { it.chromaScale2x }, { t, v -> t.copy(chromaScale2x = v) });
 

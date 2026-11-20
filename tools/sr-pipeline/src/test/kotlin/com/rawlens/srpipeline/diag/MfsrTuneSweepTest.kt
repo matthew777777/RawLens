@@ -5,8 +5,7 @@ import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
 import com.rawlens.srpipeline.stages.HotPixels
-import com.rawlens.srpipeline.stages.KernelNet
-import com.rawlens.srpipeline.stages.KernelNetConfig
+import com.rawlens.srpipeline.stages.CfaFlips
 import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.SrTuning
@@ -26,7 +25,7 @@ import kotlin.math.sqrt
 /**
  * KB-SR tuning sweep on real bursts (owner 2026-11-14: organic DSLR look, no
  * false colour, no zipper, no artefacts), through the app's exact engine
- * config on the real VulkanPipeline (MoltenVK): KernelNet, zipper fix,
+ * config on the real VulkanPipeline (MoltenVK): Wronski kernels, zipper fix,
  * S.3, hot pixels, FIR grey + mobile shaders, at 1x and 2x.
  * One [SrTuning] value is varied at a time around the defaults (env
  * SRP_SWEEP=name to run one group). Output-only metrics on WB'd RGB:
@@ -56,7 +55,7 @@ class MfsrTuneSweepTest {
         VulkanPipeline.Spirvs(gat = spv("gat"), grad = spv("grad"), kernels = spv("kernels"),
             divide = spv("divide"), robust = spv("robustness"), mergeSplat = spv("merge_splat"),
             fft = spv("fft"), corr = spv("corr"), greyFft = spv("grey_fft"), greyFir = spv("grey_fir"),
-            pyrDown = spv("pyr_down"), kernelNet = spv("kernelnet"))
+            pyrDown = spv("pyr_down"))
     }
 
     /**
@@ -69,12 +68,6 @@ class MfsrTuneSweepTest {
         val robust = listOf(.08f, .16f).map { "t $it" to d.copy(t = it) } +
             listOf(8f, 16f).map { "s2 $it" to d.copy(s2 = it) } +
             listOf(.5f, 1.2f).map { "Mt $it" to d.copy(mt = it) }
-        val kn = listOf("default" to d) +
-            listOf(.2f, .3f, .35f).map { "knScale $it" to d.copy(knSigmaScale = it) } +
-            listOf(1.0f, 1.4f, 1.6f).map { "knCap $it" to d.copy(knSigmaCap = it) } +
-            listOf(.9f, .7f, .55f, .4f).map { "knFloor $it" to d.copy(knSigmaFloor = it, knSigmaFloor2x = it) } +
-            listOf(1f, 1.25f, 1.5f, 2f).map { "chroma $it" to d.copy(chromaScale2x = it) } +
-            listOf(.7f, .55f, .4f).map { "knFloorCap $it" to d.copy(knSigmaFloor = it, knSigmaFloor2x = it, knSigmaCap = 1.0f) } + robust
         val wr = listOf("default" to d) +
             listOf(.8f, .9f, 1.15f, 1.3f).map { "kDetail x$it" to d.copy(kDetailScale = it) } +
             listOf(.8f, 1.25f, 1.5f).map { "kDenoise x$it" to d.copy(kDenoiseScale = it) } +
@@ -84,7 +77,7 @@ class MfsrTuneSweepTest {
             listOf(1.5f, 2.5f, 3f).map { "kShrink $it" to d.copy(kShrink = it) } +
             listOf(.5f, .8f, 1f).map { "kMin $it" to d.copy(kMin = it) } +
             robust
-        kn.map { Triple("kn:${it.first}", true, it.second) } + wr.map { Triple("wr:${it.first}", false, it.second) }
+        wr.map { Triple("wr:${it.first}", false, it.second) }
     }
 
     private class Burst(val name: String, val frames: List<Array<FloatArray>>, val alpha: DoubleArray, val beta: DoubleArray,
@@ -116,7 +109,7 @@ class MfsrTuneSweepTest {
         val wbB = if (neutral != null && neutral.size == 3) (neutral[1] / neutral[2]).toFloat() else 1f
         val fin = BurstConfig.finalize(BurstConfig.estimateSnr(full, alpha, beta))
         val curves = runCatching { NoiseLutGen.generate(alpha, beta) }.getOrNull()
-        val (fx, fy) = KernelNet.rggbFlips(meta.cfa)
+        val (fx, fy) = CfaFlips.rggbFlips(meta.cfa)
         return Burst(dir.name, frames, alpha, beta, wbR, wbB, fin, curves, full, ox, oy, fx, fy)
     }
 
@@ -130,10 +123,6 @@ class MfsrTuneSweepTest {
             robustnessParams = tune.robustnessParams(haveNoiseLut = b.curves != null, s3 = true), robustnessEnabled = true,
             sigmaSqCurve = b.curves?.sigmaSq ?: floatArrayOf(0f, 0f), dSqCurve = b.curves?.dSq ?: floatArrayOf(0f, 0f),
             icaIterations = tune.icaIterations, colourDiff = floatArrayOf(b.wbR, b.wbB), chromaScale = tune.chromaScale(scale),
-            kernelNet = if (!kernelNet) null else KernelNetConfig(weights = KernelNet.bundledWeights(),
-                sigma = KernelNet.sigma(FloatArray(4) { b.alpha[it].toFloat() }, FloatArray(4) { b.beta[it].toFloat() }),
-                sigmaScale = tune.knSigmaScale, sigmaCap = tune.knSigmaCap, sigmaFloor = tune.knFloor(scale),
-                fullReference = b.fullRef, cropX = b.ox, cropY = b.oy, flipX = b.flipX, flipY = b.flipY),
         )
         val buf = VulkanPipeline.run({ b.frames[0].map { it.copyOf() }.toTypedArray() },
             b.frames.drop(1).map { f -> { _: ByteBuffer -> f.map { it.copyOf() }.toTypedArray() } }, cfg, handle, alignSpv, stageSpv)

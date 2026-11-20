@@ -25,13 +25,13 @@ import kotlin.math.abs
 @RunWith(AndroidJUnit4::class)
 class SrpPipelineDeviceTest {
     // Always run: a missing generated asset must fail even when GPU probes
-    // are disabled. Cover both Wronski and KernelNet capture paths.
+    // are disabled.
     @Test fun mfsrShadersArePackaged() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val required = listOf(
             "fft", "align", "corr", "ica", "corr_direct", "ica_wg",
             "gat", "grad", "kernels", "divide", "robustness", "merge_splat",
-            "grey_fft", "kernelnet"
+            "grey_fft"
         )
         for (name in required) {
             val bytes = context.assets.open("sr_spv/$name.spv").use { it.readBytes() }

@@ -388,7 +388,6 @@ class MergesActivity : Activity() {
             .putString(KEY_MERGE_OUTPUT_FORMAT, format.name)
             .putString(MainActivity.KEY_DEVELOPED_FORMAT, developedFormat.name)
             .putString(KEY_MERGE_LKR_ZOOM, lkrZoom.name)
-            .putString("mfsr_kernel", tuningMfsr.kernel.name)
             .putBoolean("mfsr_s3", tuningMfsr.s3)
             .putBoolean("mfsr_zipper_fix", tuningMfsr.zipperFix)
             .putBoolean("mfsr_learned_noise", tuningMfsr.learnedNoise)
@@ -690,12 +689,6 @@ class MergesActivity : Activity() {
         }
         when (method) {
             BurstMergeRunner.Method.MFSR -> {
-                val kernel = optionButton("Kernel · ${tuningMfsr.kernel.name}")
-                kernel.setOnClickListener {
-                    tuningMfsr = tuningMfsr.copy(kernel = if (tuningMfsr.kernel == MfsrKernel.KERNELNET) MfsrKernel.WRONSKI else MfsrKernel.KERNELNET)
-                    kernel.text = "Kernel · ${tuningMfsr.kernel.name}"; saveTakeOptions()
-                }
-                content.addView(kernel)
                 toggle("Artefact rejection", tuningMfsr.s3) { tuningMfsr = tuningMfsr.copy(s3 = it) }
                 toggle("Colour zipper correction", tuningMfsr.zipperFix) { tuningMfsr = tuningMfsr.copy(zipperFix = it) }
                 toggle("Learned noise model", tuningMfsr.learnedNoise) { tuningMfsr = tuningMfsr.copy(learnedNoise = it) }

@@ -58,19 +58,6 @@ static libraries, and `assets/models/flownet_flat.ncnn.{param,bin}`. The vendore
 is recorded in `app/src/main/cpp/flownet/UPSTREAM.md`. RawLens supplies its own
 normalized-CFA input renderer and CFA-parity-preserving warp.
 
-RawLens's SR anisotropic weights vendor PhotonCamera's KernelNet parameter model
-from the same commit `9efb24a44119b04223b4a2eef50c7837ad643970`: the JNI tiling
-runtime in `app/src/main/cpp/ncnnMl.cpp` (`KernelNetCtx`), the Java wrapper
-`app/src/main/java/com/particlesdevs/photoncamera/processing/ml/KernelNetNcnnProcessor.java`,
-and `assets/models/kernelnet_aniso_v2_2_params.ncnn.{param,bin}`. Deliberate
-divergences from upstream: the native side emits channel-major float32
-`[s1][s2][rho]` planes instead of upstream's RGBA-interleaved fp16 halves, and
-the Kotlin bridge (`RawSrKernelNetAniso`) converts the raw model output straight
-to the SR precision field as `P = 2*M(s)` per quad (the `mergeCombineWeight`
-convention, `s1`=y / `s2`=x, no transpose, no extra rescale, no width cap, no
-area floor, no narrow-axis clamp — the direct upstream law). Unusable triples
-(non-positive or non-finite axes) fall back to the analytic kernel.
-
 ## Google Filament AgX
 
 RawLens's SDR display transform is a Kotlin/GLSL adaptation of the AgX Base implementation in

@@ -5,7 +5,7 @@ import org.junit.Test
 
 class ColourDiffCliTest {
     private fun plan(vararg flags: String) = parseArgs(arrayOf("--in", "/tmp/burst", "--out", "/tmp/out",
-        "--backend", "vulkan", "--spv-dir", "/tmp/spv", "--kernel", "kernelnet", *flags))
+        "--backend", "vulkan", "--spv-dir", "/tmp/spv", "--kernel", "wronski", *flags))
 
     @Test fun `grain retention supports default and explicit opt out without consuming scale`() {
         assertEquals(0.5f,plan().grainRetention,0f)
@@ -27,12 +27,6 @@ class ColourDiffCliTest {
     @Test fun `actual parser consumes colour gains before the next argument`() {
         val p=plan("--colour-diff","2.2,1.6","--scale","2")
         assertArrayEquals(floatArrayOf(2.2f,1.6f),p.colourDiff,0f)
-        assertEquals(2f,p.scale,0f)
-    }
-    @Test fun `width floor override is consumed with its cap`() {
-        val p=plan("--kn-floor","0.55","--kn-cap","0.85","--scale","2")
-        assertEquals(.55f,p.knFloor!!,0f)
-        assertEquals(.85f,p.knCap,0f)
         assertEquals(2f,p.scale,0f)
     }
     @Test fun `automatic mode uses relative reference neutral and supports explicit opt out`() {

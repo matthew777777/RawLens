@@ -22,7 +22,6 @@ internal fun sharpMergeProvenance(
             append("- LK prior: ${if (settings.lkrDctPrior) "Shadow luma DCT" else "Colour DCT only"}\n")
         } else {
             append("- Merge: MFSR (Multi-Frame Super-Resolution)\n")
-            append("- Requested kernel: ${settings.kernel}\n")
             append("- High-frequency rejection: ${settings.s3}\n")
             append("- Learned noise requested: ${settings.learnedNoise}\n")
             append("- Colour-difference zipper fix: ${settings.zipperFix}\n")

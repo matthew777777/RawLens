@@ -3,7 +3,6 @@ package com.rawlens.srpipeline.diag
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.EndToEnd
 import com.rawlens.srpipeline.stages.Grey
-import com.rawlens.srpipeline.stages.KernelNet
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
@@ -100,35 +99,6 @@ class MultiBurst2xTest {
         }
 
     /** KernelNet covs for a pipeline crop at (ox odd, oy), net in sensor orientation with a 64 px margin. */
-    private fun knCovs(path: String, t: Tags, ox: Int, oy: Int, sigma: Float, kn: C13bKernelSweepTest): Array<Array<Array<FloatArray>>> {
-        val m = 64
-        val sx0 = (ox - 1 - m).coerceAtLeast(0); val sy0 = (oy - m).coerceAtLeast(0)
-        val big = minOf(n + 2 * m, rawW - sx0, rawH - sy0) and 3.inv()
-        val raw = read(path, t, sx0, sy0, big, big)              // sensor-aligned (even x)
-        val luma = Array(big / 2) { ly -> FloatArray(big / 2) { lx ->
-            sqrt(((raw[2 * ly][2 * lx] + raw[2 * ly][2 * lx + 1] + raw[2 * ly + 1][2 * lx] + raw[2 * ly + 1][2 * lx + 1]) / 4f).coerceIn(0f, 1f)) } }
-        val map = kn.knMap(luma, sigma)
-        val mapH = map[0].size; val mapW = map[0][0].size
-        return Array(n / 2) { gy -> Array(n / 2) { gx ->
-            val X = (ox - sx0) + 2f * gx + 1f; val Y = (oy - sy0) + 2f * gy + 1f
-            val u = X / big * mapW - 0.5f; val v = Y / big * mapH - 0.5f
-            val u0 = floor(u).toInt().coerceIn(0, mapW - 1); val v0 = floor(v).toInt().coerceIn(0, mapH - 1)
-            val u1 = minOf(u0 + 1, mapW - 1); val v1 = minOf(v0 + 1, mapH - 1)
-            val fu = (u - u0).coerceIn(0f, 1f); val fv = (v - v0).coerceIn(0f, 1f)
-            val s = FloatArray(3) { c ->
-                val a0 = map[c][v0][u0] + fu * (map[c][v0][u1] - map[c][v0][u0])
-                val a1 = map[c][v1][u0] + fu * (map[c][v1][u1] - map[c][v1][u0])
-                a0 + fv * (a1 - a0) }
-            var s1 = maxOf(s[0], 1e-4f); var s2 = maxOf(s[1], 1e-4f)
-            val rho = s[2].coerceIn(-0.8f, 0.8f)
-            s1 = (s1 * (big / mapW.toFloat()) * 0.25f).coerceIn(0.25f, 2f)
-            s2 = (s2 * (big / mapH.toFloat()) * 0.25f).coerceIn(0.25f, 2f)
-            if (s1 > s2 * 7f) s1 = s2 * 7f else if (s2 > s1 * 7f) s2 = s1 * 7f
-            val det = maxOf(1f - rho * rho, 1e-2f)
-            val re = sign(rho) * sqrt(maxOf(1f - det, 0f))
-            arrayOf(floatArrayOf(0.5f * s2 * s2, 0.5f * re * s1 * s2), floatArrayOf(0.5f * re * s1 * s2, 0.5f * s1 * s1))
-        } }
-    }
 
     private fun stats(img: Array<Array<FloatArray>>, ref: Array<Array<FloatArray>>, wbR: Float, wbB: Float): Triple<Double, Double, Double> {
         val H = img.size
@@ -155,7 +125,6 @@ class MultiBurst2xTest {
         assumeTrue(System.getProperty("srpipeline.diag", "").isNotEmpty())
         val h = C13aMergeDiagTest()
         val tr = Sr2xTruthTest()
-        val kn = C13bKernelSweepTest()
         val png = h.javaClass.getDeclaredMethod("png", String::class.java, Array<Array<FloatArray>>::class.java,
             Int::class.java, Int::class.java, Int::class.java, Int::class.java).also { it.isAccessible = true }
         val only = (System.getenv("SRP_BURSTS") ?: System.getProperty("srpipeline.bursts", "")).split(',').filter { it.isNotBlank() }
@@ -196,12 +165,9 @@ class MultiBurst2xTest {
                 val wb = floatArrayOf(wbR, wbB)
                 val R = tr.backProject(C, frames, flows, 16, iters = 15, mu = 0.2f, chromaSigma = 1.0, wb = wb, weights = rw,
                     btvKappa = 0.1f, noiseA = nA, noiseB = nB, noiseFloor = 0.002f, charbK = 1f)
-                val kc = knCovs(files[0], t, ox, oy, KernelNet.sigma(FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }), kn)
-                val K = tr.backProject(C, frames, flows, 16, iters = 15, mu = 0.2f, chromaSigma = 1.0, wb = wb, weights = rw,
-                    btvKappa = 0.1f, noiseA = nA, noiseB = nB, noiseFloor = 0.002f, charbK = 1f, steerCovs = kc, steerScale = 1f)
                 val (ea, fa, _) = stats(A, A, wbR, wbB)
                 val line = StringBuilder()
-                for ((name, img) in listOf("A" to A, "C" to C, "R" to R, "K" to K)) {
+                for ((name, img) in listOf("A" to A, "C" to C, "R" to R)) {
                     val (e, fl, gd) = stats(img, A, wbR, wbB)
                     line.append(" | %s edge %.2f noise %.2f green %+.5f".format(name, e / ea, fl / fa, gd))
                     png.invoke(h, "mb_${burst}_${place}_$name", img, 384, 384, 256, 2)
