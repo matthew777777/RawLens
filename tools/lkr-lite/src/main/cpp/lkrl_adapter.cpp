@@ -124,7 +124,8 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
   for (int c = 0; c < 3; ++c) lp.wb[c] = prm.wb[c];
   lp.dct_grain = 0.0f; lp.dct_luma = 0.0f;
   if (lp.dct && prm.dct_prior) { lp.dct_grain = prm.dct_grain; lp.dct_luma = prm.dct_luma; lp.dct_luma_floor = prm.dct_luma_floor; lp.dct_luma_cap = prm.dct_luma_cap; }
-  lp.dct_grain_rel = prm.dct_grain_rel; lp.dct_grain_rho = prm.dct_grain_rho; lp.dct_chroma_norm = prm.dct_chroma_norm; lp.dct_grain_tilt = prm.dct_grain_tilt;
+  lp.dct_grain_rel = prm.dct_grain_rel; lp.dct_grain_rho = prm.dct_grain_rho; lp.dct_chroma_norm = prm.dct_chroma_norm; lp.dct_grain_tilt = prm.dct_grain_tilt; lp.dct_grain_sub = prm.dct_grain_sub;
+  if (const char* v = std::getenv("LKRL_GSUB")) lp.dct_grain_sub = float(std::atof(v));
   if (const char* v = std::getenv("LKRL_GTILT")) lp.dct_grain_tilt = float(std::atof(v));
   if (const char* v = std::getenv("LKRL_GREL")) lp.dct_grain_rel = float(std::atof(v));
   if (const char* v = std::getenv("LKRL_GRHO")) lp.dct_grain_rho = float(std::atof(v));

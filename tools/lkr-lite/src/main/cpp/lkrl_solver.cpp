@@ -181,6 +181,7 @@ struct DctPush {   // = lkr_solver.cpp DctPush
   float grain_rel2, grain_rho;   // dct_x.glsl luma grain mode (> 0): kept relative grain^2, min kept share
   float chroma_norm;             // 1: colour thresholds in the colour channel's own noise units
   float grain_tilt;              // grain mode: coarse-vs-fine threshold tilt (log units)
+  float grain_sub;               // grain mode: > 0 = detail-keeping subtraction gain, beta (dct_x.glsl)
 };
 
 // float -> IEEE half, round to nearest even (frames: normalised raw, |x| < 65504).
@@ -1271,7 +1272,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
               prm.dct_luma * prm.dct_luma, prm.dct_chroma * prm.dct_chroma, prm.wb[0], prm.wb[1], prm.wb[2],
               prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma, prm.dct_luma_cap, prm.dct_chroma_all ? 1.0f : 0.0f, prm.dct_luma_floor,
               prm.dct_fallback ? prm.dct_grain * prm.dct_grain : 0.0f,
-              prm.dct_grain_rel * prm.dct_grain_rel, prm.dct_grain_rho, prm.dct_chroma_norm ? 1.0f : 0.0f, prm.dct_grain_tilt};
+              prm.dct_grain_rel * prm.dct_grain_rel, prm.dct_grain_rho, prm.dct_chroma_norm ? 1.0f : 0.0f, prm.dct_grain_tilt,
+              prm.dct_grain_sub};
     gpu_->resetSets();
     // LKRL_DCT_OLD (debug.lkr.dctold): the previous one-block-per-invocation shaders, for A/B.
     static const bool dct_old = std::getenv("LKRL_DCT_OLD") && std::atoi(std::getenv("LKRL_DCT_OLD")) != 0;

@@ -61,6 +61,7 @@ struct SolveParams {
   // organic DSLR / film luma"): 8 % relative grain, at least 20 % of the noise variance kept, coarse
   // frequencies shrunk harder (tilt 0.7). Day burst 184641: no pixel changes by more than 0.01.
   float dct_grain_rel = 0.08f, dct_grain_rho = 0.2f, dct_grain_tilt = 0.7f;
+  float dct_grain_sub = 0.0f;   // grain mode: > 0 = detail-keeping subtraction gain (beta), 0 = Wiener-type rule
   bool dct_chroma_norm = true;
   float dct_luma = 2.0f, dct_chroma = 2.0f;   // noise-sigma multipliers; 16 erased real leaf colour
   // Dark blocks (mean luma below dct_dark_level, full effect below a quarter) use their measured

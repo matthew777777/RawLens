@@ -25,7 +25,11 @@ void main() {
   int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
   if (X >= pc.W || Y >= pc.H) return;
   int i = Y * pc.W + X, HW = pc.H * pc.W;
-  if (pc.mode == 0) { pk[i] = uvec2(packHalf2x16(vec2(z[i], z[HW + i])), packHalf2x16(vec2(z[2 * HW + i], 0.0))); return; }
+  if (pc.mode == 0) {   // fp16 R, G, B and luma (the line test's taps)
+    vec3 c = vec3(z[i], z[HW + i], z[2 * HW + i]);
+    pk[i] = uvec2(packHalf2x16(c.xy), packHalf2x16(vec2(c.z, (c.x + c.y + c.z) * (1.0 / 3.0))));
+    return;
+  }
   uvec2 v = o[i];
   vec2 cw = unpackHalf2x16(v.y);                       // coherence, gradient energy
   float wc = clamp((cw.x - pc.robk) / (pc.tau - pc.robk), 0.0, 1.0);
@@ -40,6 +44,74 @@ void main() {
   // (n + 1) d / k. n = 3, d = 1 at 2x: zeros at 2 and 4 HR px (sub-pixel phase gap + Bayer lattice).
   int n = pc.LB;
   float nf = float(n + 1);
+  float wl = w;   // luma strength after the lattice-share / depth tests (chroma keeps w)
+  // Line test (2026-11-20): the radius-6 tensor still reads "coherent line" a few px past a line's end
+  // and on texture crossing a line, and the along-tangent filter then drew railing bars out below their
+  // bottom rail and smeared the shutter slats / fence behind them (IMG_20210228_133623 2x; LK-R and the
+  // commit before this pass have neither). Across-line second difference of luma s(t) at the tap
+  // positions (nearest px): on a line its sign holds along it (lattice dots only modulate its size).
+  // Both half windows (t <= 0, t >= 0) must carry it with the same polarity and similar strength
+  // (ratio ramp 0.2..0.5), so the line continues on both sides of the pixel; then the filter runs as before.
+  // Crossing texture: lattice beads sit on the line only, real detail crossing it (shutter slats behind
+  // fence bars) continues beside it. Along-tangent second differences on the line vs 3 px to each side:
+  // correlation rho per side, w *= clamp((0.7 - min(rho)) / 0.4). Crossing detail is in step on BOTH
+  // sides (rho ~ 1); foliage beside a pole (184641 far lamp poles) and flat sky beside beads are not.
+  {
+    vec2 nr = vec2(-ev.y, ev.x) / max(length(ev), 1e-6);
+    vec2 sh = vec2(0.0);
+    ivec2 hiI = ivec2(pc.W - 1, pc.H - 1);
+    // Rolling (t - 1, t, t + 1) luma on the line and 3 px to each side (no arrays: Mali spills those).
+    vec3 rc = vec3(0.0), ru = vec3(0.0), rd = vec3(0.0);
+    float eon = 0.0; vec2 e2 = vec2(0.0), ex = vec2(0.0);
+    const int m = 8;   // lattice-share window (below): 17 nearest taps along the tangent
+    vec4 lat = vec4(0.0), bas = vec4(0.0);   // d2 projections + basis sums (as axn_apply)
+    vec3 rl = vec3(0.0);                     // rolling luma for d2 along the tangent
+    float l2 = 0.0;
+    [[dont_unroll]] for (int t = -m; t <= m; ++t) {
+      vec2 q = p + float(t) * ev;
+      ivec2 c = clamp(ivec2(floor(q + 0.5)), ivec2(0), hiI);
+      float lc = unpackHalf2x16(pk[c.y * pc.W + c.x].y).y;
+      rl = vec3(rl.yz, lc);
+      if (t >= 2 - m) {
+        float g2 = 2.0 * rl.y - rl.x - rl.z;
+        int tm = (t - 1) & 3;
+        vec4 bv = vec4(tm == 0 ? 1.0 : (tm == 2 ? -1.0 : 0.0), tm == 1 ? 1.0 : (tm == 3 ? -1.0 : 0.0), (tm & 1) == 0 ? 1.0 : -1.0, 1.0);
+        lat += g2 * bv; bas += bv; l2 += g2 * g2;
+      }
+      if (t < -n || t > n) continue;
+      ivec2 u = clamp(ivec2(floor(q + nr + 0.5)), ivec2(0), hiI), d = clamp(ivec2(floor(q - nr + 0.5)), ivec2(0), hiI);
+      ivec2 u3 = clamp(ivec2(floor(q + 3.0 * nr + 0.5)), ivec2(0), hiI), d3 = clamp(ivec2(floor(q - 3.0 * nr + 0.5)), ivec2(0), hiI);
+      float sv = 2.0 * lc - unpackHalf2x16(pk[u.y * pc.W + u.x].y).y - unpackHalf2x16(pk[d.y * pc.W + d.x].y).y;
+      sh += vec2(t <= 0 ? 1.0 : 0.0, t >= 0 ? 1.0 : 0.0) * sv;
+      rc = vec3(rc.yz, lc);
+      ru = vec3(ru.yz, unpackHalf2x16(pk[u3.y * pc.W + u3.x].y).y);
+      rd = vec3(rd.yz, unpackHalf2x16(pk[d3.y * pc.W + d3.x].y).y);
+      if (t >= 2 - n) {
+        float a0 = 2.0 * rc.y - rc.x - rc.z, au = 2.0 * ru.y - ru.x - ru.z, ad = 2.0 * rd.y - rd.x - rd.z;
+        eon += a0 * a0; e2 += vec2(au * au, ad * ad); ex += a0 * vec2(au, ad);
+      }
+    }
+    float rh = min(abs(sh.x), abs(sh.y)) / max(max(abs(sh.x), abs(sh.y)), 1e-12);   // as axn_apply
+    w *= sh.x * sh.y > 0.0 ? clamp((rh - 0.2) / 0.3, 0.0, 1.0) : 0.0;
+    if (w <= 0.0) return;
+    vec2 rho = ex * inversesqrt(max(eon * e2, vec2(1e-24)));
+    w *= clamp((0.7 - min(rho.x, rho.y)) / 0.4, 0.0, 1.0);
+    if (w <= 0.0) return;
+    // Lattice share (as axn_apply): only act where the along-line variation repeats every 2 or 4 px.
+    // The dark gaps between railing bars are coherent "lines" too and the filter flattened the fence /
+    // flowers behind them (133623 2x). d2 over 17 nearest taps (t = -8..8), as axn_apply.
+    float N = bas.w, mu = lat.w / N;
+    float c4 = lat.x - mu * bas.x, s4 = lat.y - mu * bas.y, c2 = lat.z - mu * bas.z;
+    float eac = max(l2 - lat.w * mu, 1e-20);
+    float f = (2.0 * (c4 * c4 + s4 * s4) + c2 * c2) / (N * eac);
+    wl = w * clamp((f - 0.4) / 0.2, 0.0, 1.0);   // 0.3: fence -5 %; 0.5: pole dots back a little
+    // Depth (as axn_apply): dots ripple the line, crossing twigs cut it. q = rms of the period-2 / 4 part
+    // of d2 / the line's across-line d2 (mean |sv| of the two halves).
+    float q = sqrt(max(2.0 * (c4 * c4 + s4 * s4) + c2 * c2, 0.0)) / N / max((abs(sh.x) + abs(sh.y)) / float(2 * n + 2), 1e-12);
+    wl *= clamp((1.5 - q) / 0.7, 0.0, 1.0);   // 0.3..0.6: bar twigs +25 % but pole dots x2.5
+    // Luma only (as axn_apply): colour dots on twigs / grass stalks have no 2 / 4 px period; the
+    // chroma part of the result keeps the full w.
+  }
   vec3 acc = nf * c0;
   [[dont_unroll]] for (int j = 0; j < 2 * n; ++j) {   // t = -n..-1, 1..n (one rolled loop: 32 registers)
     int t = j < n ? j - n : j - n + 1;
@@ -53,6 +125,8 @@ void main() {
     acc += (wt * f.x * f.y) * P3(k + pc.W + 1);
   }
   acc *= 1.0 / (nf * nf);
-  vec3 r = mix(c0, acc, w);
+  vec3 r = mix(c0, acc, w);   // chroma at full w
+  float dy = (wl - w) * dot(acc - c0, vec3(1.0 / 3.0));   // luma moved back to strength wl
+  r += vec3(dy);
   z[i] = r.x; z[HW + i] = r.y; z[2 * HW + i] = r.z;
 }

@@ -46,7 +46,7 @@ struct LiteParams {
   float dct_luma_cap = 1.0f;     // with dct_grain: most share of luma noise variance removed anywhere   // with dct_grain: least share of luma noise variance removed everywhere
   bool dct_chroma_all = false;   // colour passes use the total merged noise everywhere (not only lost frames)   // see lkrl_api.h; push slot = grain^2 (dct_x.glsl)
   float dct_luma = 1.0f, dct_chroma = 2.0f;   // thresholds, multiples of the noise level
-  float dct_grain_rel = 0.0f, dct_grain_rho = 0.15f, dct_grain_tilt = 0.0f;   // night grain mode (lkrl_api.h SolveParams)
+  float dct_grain_rel = 0.0f, dct_grain_rho = 0.15f, dct_grain_tilt = 0.0f, dct_grain_sub = 0.0f;   // night grain mode (lkrl_api.h SolveParams)
   bool dct_chroma_norm = false;
   float dct_dark_level = 0.02f, dct_dark_cap = 8.0f, dct_dark_luma = 0.25f;
   float wb[3] = {1.0f, 1.0f, 1.0f};

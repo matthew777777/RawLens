@@ -26,7 +26,7 @@ void main() {
   int i = Y * pc.W + X, HW = pc.H * pc.W;
   if (pc.mode == 0) {
     vec3 c = vec3(z[i], z[HW + i], z[2 * HW + i]);
-    pk[i] = uvec2(packHalf2x16(c.xy), packHalf2x16(vec2(c.z, 0.0)));
+    pk[i] = uvec2(packHalf2x16(c.xy), packHalf2x16(vec2(c.z, (c.x + c.y + c.z) * (1.0 / 3.0))));   // + luma
     float l = (c.x + c.y + c.z) * (1.0 / 3.0);
     int xl = Y * pc.W + max(X - 1, 0), xr = Y * pc.W + min(X + 1, pc.W - 1);
     int yu = max(Y - 1, 0) * pc.W + X, yd = min(Y + 1, pc.H - 1) * pc.W + X;
@@ -34,23 +34,88 @@ void main() {
     return;
   }
   int n = pc.LB;
-  // Line along y: sum of the across-x d2 at (X, Y + t); line along x: across-y d2 at (X + t, Y).
-  float sy = 0.0, ay = 0.0, sx = 0.0, ax = 0.0;
+  // Line along y: sums of the across-x d2 at (X, Y + t); line along x: across-y d2 at (X + t, Y).
+  // Strength from the whole 2 n + 1 window (as before); gate: both half windows (t <= 0, t >= 0) carry
+  // the line with the same polarity and similar strength, i.e. it continues on BOTH sides of the pixel. The
+  // whole-window test alone passed just past a line's end (half of it still on the line) and the
+  // along-line filter then drew the line out into the background (railing bars poking below their
+  // bottom rail, IMG_20210228_133623 2x). Inside a continuous line the gate is 1: same result as before.
+  vec2 sy = vec2(0.0), ay = vec2(0.0), sx = vec2(0.0), ax = vec2(0.0);   // (t <= 0, t >= 0)
   [[dont_unroll]] for (int t = -n; t <= n; ++t) {
     float a = unpackHalf2x16(dd[clamp(Y + t, 0, pc.H - 1) * pc.W + X]).x;
     float b = unpackHalf2x16(dd[Y * pc.W + clamp(X + t, 0, pc.W - 1)]).y;
-    sy += a; ay += abs(a); sx += b; ax += abs(b);
+    vec2 m = vec2(t <= 0 ? 1.0 : 0.0, t >= 0 ? 1.0 : 0.0);
+    sy += m * a; ay += m * abs(a); sx += m * b; ax += m * abs(b);
   }
   vec3 c0 = vec3(z[i], z[HW + i], z[2 * HW + i]);
   float l = max((c0.x + c0.y + c0.z) * (1.0 / 3.0), 0.0);
   float Lf = float(2 * n + 1);
   float sd = sqrt(6.0 / Lf) * sqrt(max(pc.a * l + pc.b, 1e-12));
   float inv = 1.0 / (pc.tau - pc.robk);
-  float wy = clamp((abs(sy) / max(ay, 1e-12) - pc.robk) * inv, 0.0, 1.0) * clamp(abs(sy) / Lf / (pc.clip * sd) - 1.0, 0.0, 1.0);
-  float wx = clamp((abs(sx) / max(ax, 1e-12) - pc.robk) * inv, 0.0, 1.0) * clamp(abs(sx) / Lf / (pc.clip * sd) - 1.0, 0.0, 1.0);
+  // whole window (the centre sample is in both halves: subtract it once)
+  float a0 = unpackHalf2x16(dd[i]).x, b0 = unpackHalf2x16(dd[i]).y;
+  float Sy = sy.x + sy.y - a0, Ay = ay.x + ay.y - abs(a0), Sx = sx.x + sx.y - b0, Ax = ax.x + ax.y - abs(b0);
+  float wy = clamp((abs(Sy) / max(Ay, 1e-12) - pc.robk) * inv, 0.0, 1.0) * clamp(abs(Sy) / Lf / (pc.clip * sd) - 1.0, 0.0, 1.0);
+  float wx = clamp((abs(Sx) / max(Ax, 1e-12) - pc.robk) * inv, 0.0, 1.0) * clamp(abs(Sx) / Lf / (pc.clip * sd) - 1.0, 0.0, 1.0);
+  // Half-window strength ratio (not each half's coherence: lattice beads on a pole over foliage made
+  // the 9-px halves incoherent and the beads came back, 184641). Past a line's end one half is only
+  // background (ratio ~ 0); inside a line both halves carry it (ratio ~ 1, beads only modulate it).
+  float ry = min(abs(sy.x), abs(sy.y)) / max(max(abs(sy.x), abs(sy.y)), 1e-12);
+  float rx = min(abs(sx.x), abs(sx.y)) / max(max(abs(sx.x), abs(sx.y)), 1e-12);
+  wy *= sy.x * sy.y > 0.0 ? clamp((ry - 0.2) / 0.3, 0.0, 1.0) : 0.0;
+  wx *= sx.x * sx.y > 0.0 ? clamp((rx - 0.2) / 0.3, 0.0, 1.0) : 0.0;
   float w = max(wx, wy);
   if (w <= 0.0) return;
   bool alongX = wx > wy;
+  float wl = 0.0;   // luma strength: w after the lattice-share / depth tests (chroma keeps w)
+  // Crossing texture (2026-11-20, as dln_apply): lattice dots sit on the line only, real detail crossing
+  // it (shutter slats behind fence bars, IMG_20210228_133623 2x) continues beside it. Along-line second
+  // differences of luma on the line vs 3 px to each side: correlation rho per side, w *= clamp((0.7 -
+  // min(rho)) / 0.4). Crossing detail is in step on BOTH sides; foliage beside a pole is uncorrelated, and
+  // near the edge of a thick pole (184641: 2 px still lands on the beaded pole; 4 px cost fence detail) only one side is.
+  {
+    float eon = 0.0; vec2 e2 = vec2(0.0), ex = vec2(0.0);
+    ivec2 ax = alongX ? ivec2(1, 0) : ivec2(0, 1), nx2 = alongX ? ivec2(0, 3) : ivec2(3, 0);
+    ivec2 hiI = ivec2(pc.W - 1, pc.H - 1), P0 = ivec2(X, Y);
+    vec3 pc0 = vec3(0.0), pu = vec3(0.0), pd = vec3(0.0);   // (t - 1, t, t + 1) luma, rolling
+    vec4 lat = vec4(0.0), bas = vec4(0.0);   // along-line d2 projections (period 4 cos / sin, period 2, sum), basis sums
+    float l2 = 0.0;
+    [[dont_unroll]] for (int t = -n; t <= n; ++t) {
+      ivec2 c = clamp(P0 + t * ax, ivec2(0), hiI), u = clamp(P0 + t * ax + nx2, ivec2(0), hiI), d = clamp(P0 + t * ax - nx2, ivec2(0), hiI);
+      pc0 = vec3(pc0.yz, unpackHalf2x16(pk[c.y * pc.W + c.x].y).y);
+      pu = vec3(pu.yz, unpackHalf2x16(pk[u.y * pc.W + u.x].y).y);
+      pd = vec3(pd.yz, unpackHalf2x16(pk[d.y * pc.W + d.x].y).y);
+      if (t >= 2 - n) {
+        float a0 = 2.0 * pc0.y - pc0.x - pc0.z, au = 2.0 * pu.y - pu.x - pu.z, ad = 2.0 * pd.y - pd.x - pd.z;
+        eon += a0 * a0; e2 += vec2(au * au, ad * ad); ex += a0 * vec2(au, ad);
+        int tm = (t - 1) & 3;   // d2 sits at t - 1; cos / sin(pi t / 2) without trig: 1 0 -1 0 / 0 1 0 -1
+        vec4 bv = vec4(tm == 0 ? 1.0 : (tm == 2 ? -1.0 : 0.0), tm == 1 ? 1.0 : (tm == 3 ? -1.0 : 0.0), (tm & 1) == 0 ? 1.0 : -1.0, 1.0);
+        lat += a0 * bv; bas += bv; l2 += a0 * a0;
+      }
+    }
+    vec2 rho = ex * inversesqrt(max(eon * e2, vec2(1e-24)));
+    w *= clamp((0.7 - min(rho.x, rho.y)) / 0.4, 0.0, 1.0);
+    if (w <= 0.0) return;
+    // Lattice share (2026-11-20): the dots repeat every 2 or 4 px along the line; real detail does not.
+    // The dark GAP between bright railing bars passes every test above (its neighbours 3 px out are
+    // the smooth bars) and the filter flattened the wooden fence / flowers seen through it (133623 2x:
+    // vertical detail behind the rail -25 % vs LK-R). On the along-line second difference d2 (slow
+    // changes along a thick pole removed: on luma itself they hid the dots, 184641 top pole):
+    // f = energy at periods 4 and 2 / AC energy of d2; w *= ramp. Mean leakage removed exactly.
+    float N = bas.w, mu = lat.w / N;
+    float c4 = lat.x - mu * bas.x, s4 = lat.y - mu * bas.y, c2 = lat.z - mu * bas.z;
+    float eac = max(l2 - lat.w * mu, 1e-20);
+    float f = (2.0 * (c4 * c4 + s4 * s4) + c2 * c2) / (N * eac);
+    wl = w * clamp((f - 0.4) / 0.2, 0.0, 1.0);   // 0.3: fence -5 %; 0.5: pole dots back a little
+    // Depth: lattice dots only ripple the line (rms of the period-2 / 4 part of d2 well below the line's
+    // own across-line d2); two twigs crossing a white bar 4-5 px apart look periodic but cut it nearly
+    // through (133623: LK-R keeps them, the filter flattened them). q = rms / contrast.
+    float q = sqrt(max(2.0 * (c4 * c4 + s4 * s4) + c2 * c2, 0.0)) / N / max(abs(alongX ? Sx : Sy) / Lf, 1e-12);
+    wl *= clamp((1.5 - q) / 0.7, 0.0, 1.0);   // 0.3..0.6: bar twigs +25 % but pole dots x2.5
+    // Luma only: the colour dots on thin lines (pink / teal on twigs against the sky, dry grass stalks,
+    // 184641) have no 2 / 4 px period, and real colour hardly varies along a line, so the chroma
+    // average below keeps the full w (gating it brought those dots back).
+  }
   // Luma: the 7-tap lattice notch. Chroma (U = R - Y, V = B - Y): a box of 2 m + 1 taps along the line
   // (pc.rpow = m, default 6). The R / B planes at 2x put irregular blue / teal dots on a thin trunk against
   // the sky (period not 2 or 4, so the notch misses them); real colour hardly varies along a straight
@@ -68,7 +133,7 @@ void main() {
   vec3 nt = acc * (1.0 / 16.0);
   float l0 = 0.25 * c0.x + 0.5 * c0.y + 0.25 * c0.z;
   float ln = 0.25 * nt.x + 0.5 * nt.y + 0.25 * nt.z;
-  float lo = mix(l0, ln, w);
+  float lo = mix(l0, ln, wl);
   vec2 u0 = vec2(c0.x - l0, c0.z - l0), ub = cs / float(2 * mc + 1);
   vec2 uo = mix(u0, ub, w);
   float R = lo + uo.x, B = lo + uo.y;

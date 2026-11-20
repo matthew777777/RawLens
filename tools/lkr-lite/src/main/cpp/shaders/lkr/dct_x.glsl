@@ -33,6 +33,7 @@ layout(push_constant) uniform P {
   float dark_level, dark_cap, dark_luma;
   float luma_cap, chroma_all, luma_floor, grain2;
   float grain_rel2, grain_rho, chroma_norm, grain_tilt;
+  float grain_sub;
 } pc;
 
 const float C4 = 0.35355339, C1 = 0.98078528, C2 = 0.92387953, C3 = 0.83146961,
@@ -178,7 +179,20 @@ void main() {
   t = live ? pc.k_c2 * cn * pc.sigma2 * nv[iy * pc.nx + ix] : 0.0;
 #endif
 #if CH == 0
-  if (pc.grain_rel2 > 0.0 && pc.grain_tilt > 0.0) {
+  if (pc.grain_rel2 > 0.0 && pc.grain_sub > 0.0) {
+    // Grain mode, detail-keeping gain (2026-11-20, user: night trees smeared): spectral subtraction with a
+    // floor, g^2 = max(1 - beta (1 - rho) N / c^2, rho), N = this coefficient's noise variance (tilted as
+    // below). Pure noise -> rho of its variance (the kept grain), clean blocks (rho = 1) untouched, real
+    // detail kept: c^2 = 5 N loses ~10-30 % amplitude instead of the Wiener-type t = N (1 - rho) / rho's
+    // 44-62 % (moving foliage merges fewer frames, so its N is high and the old rule smeared it).
+    float tot = pc.sigma2 * totalLevel;
+    float rho = clamp(pc.grain_rel2 * ymean * ymean / max(tot, 1e-20), pc.grain_rho, 1.0);
+    for (int j = 0; j < 8; ++j) {
+      float nf = tot * exp(pc.grain_tilt * (1.0 - float(r + j) / 7.0));
+      float c2 = v[j] * v[j];
+      v[j] *= sqrt(max(1.0 - pc.grain_sub * (1.0 - rho) * nf / max(c2, 1e-20), rho));
+    }
+  } else if (pc.grain_rel2 > 0.0 && pc.grain_tilt > 0.0) {
     // Grain shaping: coarse frequencies (mottle) shrink harder, the finest keep more -- film / DSLR grain
     // is fine, blotchy luma looks digital. Threshold x exp(tilt (1 - 2 f)), f = (r + j) / 14 in 0..1.
     for (int j = 0; j < 8; ++j) v[j] = shrink(v[j], t * exp(pc.grain_tilt * (1.0 - float(r + j) / 7.0)));

@@ -29,7 +29,36 @@ void main() {
     vec4 p1 = E(ivec2(round(p + float(d) * ev))), p2 = E(ivec2(round(p - float(d) * ev)));
     if (abs(dot(p1.xy, ev)) <= pc.tau || abs(dot(p2.xy, ev)) <= pc.tau || p1.z <= pc.robk || p2.z <= pc.robk) return;
   }
+  // Lattice share (2026-11-20, as dln_apply / axn_apply): the dots this pass removes repeat every 2 or
+  // 4 px along the edge; real detail along it does not (133623 2x: the wooden band above the white rail
+  // lost its slats, along-band detail -30 % vs LK-R). Along-edge luma d2 over 17 nearest taps:
+  // f = energy at periods 4 and 2 / AC energy; luma moves by wl = ramp(f), chroma keeps the full smoothing.
+  float wl;
+  {
+    ivec2 hiI = ivec2(pc.W - 1, pc.H - 1);
+    vec4 lat = vec4(0.0), bas = vec4(0.0);
+    vec3 rl = vec3(0.0);
+    float l2 = 0.0;
+    [[dont_unroll]] for (int t = -8; t <= 8; ++t) {
+      ivec2 c = clamp(ivec2(floor(p + float(t) * ev + 0.5)), ivec2(0), hiI);
+      int k = c.y * pc.W + c.x;
+      rl = vec3(rl.yz, (z[k] + z[HW + k] + z[2 * HW + k]) * (1.0 / 3.0));
+      if (t >= -6) {
+        float g2 = 2.0 * rl.y - rl.x - rl.z;
+        int tm = (t - 1) & 3;
+        vec4 bv = vec4(tm == 0 ? 1.0 : (tm == 2 ? -1.0 : 0.0), tm == 1 ? 1.0 : (tm == 3 ? -1.0 : 0.0), (tm & 1) == 0 ? 1.0 : -1.0, 1.0);
+        lat += g2 * bv; bas += bv; l2 += g2 * g2;
+      }
+    }
+    float N = bas.w, mu = lat.w / N;
+    float c4 = lat.x - mu * bas.x, s4 = lat.y - mu * bas.y, c2 = lat.z - mu * bas.z;
+    float f = (2.0 * (c4 * c4 + s4 * s4) + c2 * c2) / (N * max(l2 - lat.w * mu, 1e-20));
+    wl = clamp((f - 0.4) / 0.2, 0.0, 1.0);   // 0.55 / 0.7: band no better, top-pole dots x2-3
+    // (An on-edge test, gradient here vs max within +-2 px across, gave the band +10 % but top-pole
+    // dots x2: removed.)
+  }
   float inv2s2 = 0.5 / max(pc.rpow * pc.rpow, 1e-6);
+  vec3 r0 = vec3(z[i], z[HW + i], z[2 * HW + i]), r;
   [[dont_unroll]] for (int c = 0; c < 3; ++c) {
     int b = c * HW; float acc = 0.0, ws = 0.0;
     [[dont_unroll]] for (int t = -4; t <= 4; ++t) {
@@ -38,6 +67,8 @@ void main() {
       float w = exp(-float(t * t) * inv2s2);
       acc += w * mix(mix(z[k], z[k + 1], f.x), mix(z[k + pc.W], z[k + pc.W + 1], f.x), f.y); ws += w;
     }
-    zo[b + i] = acc / ws;
+    r[c] = acc / ws;
   }
+  r -= vec3((1.0 - wl) * dot(r - r0, vec3(1.0 / 3.0)));   // luma back towards the input by 1 - wl
+  zo[i] = r.x; zo[HW + i] = r.y; zo[2 * HW + i] = r.z;
 }
