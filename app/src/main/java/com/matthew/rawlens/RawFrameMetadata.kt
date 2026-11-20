@@ -130,6 +130,8 @@ data class RawFrameMetadata(
     val whiteBalanceFallback: Boolean = false,
     /** Sensor limit used to distinguish analog from digital noise gain. */
     val maxAnalogSensitivityIso: Int? = null,
+    /** Manual ISO past the sensor max ([DigitalGain]); 1 = none. */
+    val digitalGain: Float = 1f,
     /** Verified session-specific geometry; independent of the vendor's stale mode/result tags. */
     val sensorReadoutProfile: String? = null,
     /** Paired physical capture calibration, in pre-correction active-array coordinates. */

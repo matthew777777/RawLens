@@ -201,6 +201,12 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         })
         val programIsoMinButton = Button(this)
         val programIsoMaxButton = Button(this)
+        val programDigitalGainButton = Button(this)
+        fun digitalGainText(ev: Float) = "Digital gain: " + when {
+            ev <= 0f -> "Off"
+            ev >= ProgramAeProfile.MAX_DIGITAL_GAIN_EV -> "Maximum"
+            else -> "+${ev.toInt()} EV"
+        }
         val programShutterMinButton = Button(this)
         val programShutterMaxButton = Button(this)
         val programLockButton = Button(this)
@@ -226,6 +232,8 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             programLockButton.isEnabled = manualSensor
             programIsoMinButton.isEnabled = manualSensor
             programIsoMaxButton.isEnabled = manualSensor
+            programDigitalGainButton.text = digitalGainText(programSettings.digitalGainEv)
+            programDigitalGainButton.isEnabled = manualSensor
             programShutterMinButton.isEnabled = manualSensor
             programShutterMaxButton.isEnabled = manualSensor
             programMeteringButton.isEnabled = manualSensor
@@ -241,6 +249,16 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             p.kit.choose("ISO min", listOf(0, 100, 200, 400, 800), programSettings.isoMin,
                 { programIsoBoundText(it, isMin = true) }) { value ->
                 programSettings = programSettings.copy(isoMin = value)
+                refreshProgramButtons(); applyProgramSettings()
+            }
+        }
+        programDigitalGainButton.setOnClickListener {
+            // rawr-style: brightening past the highest real ISO and shutter, applied after
+            // RAW; DNGs carry it as BaselineExposure.
+            p.kit.choose("Digital gain past max ISO",
+                listOf(0f, 1f, 2f, 3f, 4f, ProgramAeProfile.MAX_DIGITAL_GAIN_EV),
+                programSettings.digitalGainEv, { digitalGainText(it) }) { value ->
+                programSettings = programSettings.copy(digitalGainEv = value)
                 refreshProgramButtons(); applyProgramSettings()
             }
         }
@@ -285,6 +303,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         }
         content.addView(programIsoMinButton)
         content.addView(programIsoMaxButton)
+        content.addView(programDigitalGainButton)
         content.addView(programShutterMinButton)
         content.addView(programShutterMaxButton)
         content.addView(programBiasLabel)

@@ -22,7 +22,9 @@ data class SceneLinearColorMetadata(
     val colorMatrix1: ImmutableDoubleValues?,
     val colorMatrix2: ImmutableDoubleValues?,
     val referenceIlluminant1: Int?,
-    val referenceIlluminant2: Int?
+    val referenceIlluminant2: Int?,
+    /** Manual digital gain past the sensor ISO max, applied as exposure. */
+    val digitalGainEv: Double = 0.0
 ) {
     companion object {
         fun from(metadata: RawFrameMetadata): SceneLinearColorMetadata = SceneLinearColorMetadata(
@@ -38,7 +40,8 @@ data class SceneLinearColorMetadata(
             colorMatrix1 = metadata.colorMatrix1,
             colorMatrix2 = metadata.colorMatrix2,
             referenceIlluminant1 = metadata.referenceIlluminant1,
-            referenceIlluminant2 = metadata.referenceIlluminant2
+            referenceIlluminant2 = metadata.referenceIlluminant2,
+            digitalGainEv = DigitalGain.ev(metadata.digitalGain)
         )
     }
 }
@@ -114,7 +117,10 @@ object SceneLinearColorProcessor {
      */
     val WHITE_WINDOW_OFF = floatArrayOf(1e10f, 2e10f)
 
-    fun resolve(metadata: SceneLinearColorMetadata, exposureEv: Double = 0.0): ResolvedSceneLinearTransform {
+    fun resolve(metadata: SceneLinearColorMetadata, exposureEv: Double = 0.0): ResolvedSceneLinearTransform =
+        resolveTotal(metadata, exposureEv + metadata.digitalGainEv)
+
+    private fun resolveTotal(metadata: SceneLinearColorMetadata, exposureEv: Double): ResolvedSceneLinearTransform {
         require(exposureEv.isFinite() && exposureEv in -16.0..16.0) {
             "Technical exposure must be finite and within -16..+16 EV"
         }

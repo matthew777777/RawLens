@@ -391,6 +391,7 @@ class RawCameraController(
     private var rawCameraIds: List<String> = emptyList()
     private var activePhysicalCameraId: String? = null
     private var selectedIso: Int? = null
+        set(value) { field = value; DigitalGain.requestedIso = value }
     private var selectedExposureNanos: Long? = null
     private var selectedWbKelvin: Int? = null
     @Volatile private var selectedWbPreset: Int = CaptureRequest.CONTROL_AWB_MODE_AUTO
@@ -4151,7 +4152,7 @@ class RawCameraController(
             return
         }
         val range = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
-        val values = ISO_STEPS.filter(range::contains)
+        val values = ISO_STEPS.filter { it >= range.lower && it <= range.upper * DigitalGain.MAX_FACTOR }
         selectedIso = nextValue(selectedIso, values)
         controlsChanged()
     }
@@ -5156,9 +5157,10 @@ class RawCameraController(
             if (!supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)) return null
             val range = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
                 ?: return null
+            val maxIso = range.upper * DigitalGain.MAX_FACTOR
             ManualControlRange(
-                range.lower.toLong(), range.upper.toLong(),
-                (selectedIso ?: lastIso).coerceIn(range.lower, range.upper).toLong(),
+                range.lower.toLong(), maxIso.toLong(),
+                (selectedIso ?: lastIso).coerceIn(range.lower, maxIso).toLong(),
                 selectedIso == null
             )
         }
@@ -5726,6 +5728,7 @@ class RawCameraController(
             manualSensorSupported =
                 supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
         ))
+        DigitalGain.autoGain = if (sensorExposure?.programDriven == true) program.digitalGain else 1f
         if (sensorExposure != null) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             builder.set(CaptureRequest.SENSOR_SENSITIVITY, sensorExposure.iso)
@@ -7593,7 +7596,7 @@ class RawCameraController(
         }
         if (selectedWbKelvin != null && CameraWhiteBalance.setting(c, selectedWbKelvin!!) == null) selectedWbKelvin = null
         c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.let { range ->
-            selectedIso = selectedIso?.coerceIn(range.lower, range.upper)
+            selectedIso = selectedIso?.coerceIn(range.lower, range.upper * DigitalGain.MAX_FACTOR)
         } ?: run { selectedIso = null }
         c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)?.let { range ->
             selectedExposureNanos = selectedExposureNanos?.coerceIn(range.lower, range.upper)
@@ -7618,8 +7621,10 @@ class RawCameraController(
         val lens = zoomLabel(selectedCameraId)
         val flashAvailable = lapisSessionSpec?.dcg!=true && c?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
         onControls(
-            if(lapisSessionSpec?.dcg==true) "ISO $lastIso · A" else selectedIso?.let { "ISO $it" }
-                ?: if (hasPreviewMetadata) "ISO $lastIso" else "ISO A",
+            if(lapisSessionSpec?.dcg==true) "ISO $lastIso · A" else selectedIso?.let { sel ->
+                val max = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.upper
+                if (max != null && sel > max) DigitalGain.isoLabel(max, sel.toFloat() / max) else "ISO $sel"
+            } ?: if (hasPreviewMetadata) DigitalGain.isoLabel(lastIso, DigitalGain.autoGain) else "ISO A",
             if(lapisSessionSpec?.dcg==true) formatExposure(lastExposureNanos)+" · A" else selectedExposureNanos?.let(::formatExposure)
                 ?: if (hasPreviewMetadata) formatExposure(lastExposureNanos) else "S A",
             whiteBalanceLabel(),
@@ -8038,7 +8043,7 @@ class RawCameraController(
         private const val MIN_WB_KELVIN = 2000
         private const val MAX_WB_KELVIN = 10000
         private const val FOCUS_DISTANCE_SCALE = 1_000f
-        private val ISO_STEPS = listOf(100, 200, 400, 800, 1600, 3200)
+        private val ISO_STEPS = listOf(100, 200, 400, 800, 1600, 3200, 6400)
         private val SHUTTER_STEPS = listOf(
             1_000_000_000L / 1000, 1_000_000_000L / 500, 1_000_000_000L / 250,
             1_000_000_000L / 125, 1_000_000_000L / 60, 1_000_000_000L / 30,

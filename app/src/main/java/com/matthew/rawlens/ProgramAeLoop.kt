@@ -21,6 +21,9 @@ internal class ProgramAeLoop {
     var shutterNanos: Long? = null
     var isoLimited = false
     var shutterLimited = false
+    /** Digital gain on top of [iso] x [shutterNanos] once both are maxed ([DigitalGain]). */
+    var digitalGain = 1f
+    private var maxDigitalGain = 1.0
     var lastUpdateMs = Long.MIN_VALUE
     /** Metered mean of the last sample (debug readout). */
     var brightness = Float.NaN
@@ -62,6 +65,7 @@ internal class ProgramAeLoop {
         brightness = Float.NaN
         targetTotal = 0.0
         filteredTotal = 0.0
+        digitalGain = 1f
         frameIndex = 0
         lastUpdateMs = Long.MIN_VALUE
     }
@@ -102,7 +106,11 @@ internal class ProgramAeLoop {
         val protectedGain = if (profile.metering == ProgramMetering.HIGHLIGHT_WEIGHTED || lighting != ActiveDLighting.OFF)
             RawProgramMeter.protectedGain(sample, gain.gain, lighting) else gain.gain
         val current = currentIso.toDouble() * currentShutterNanos
-        val maxTotal = limits.isoMax.toDouble() * limits.shutterMaxNanos
+        // Past the highest ISO and shutter the rest becomes digital gain (rawr-style),
+        // capped per lens. The metered raw never includes that gain, so the AGC
+        // keeps measuring against the physical exposure and stays stable.
+        maxDigitalGain = Math.pow(2.0, profile.digitalGainEv.toDouble())
+        val maxTotal = limits.isoMax.toDouble() * limits.shutterMaxNanos * maxDigitalGain
         targetTotal = (current * protectedGain).coerceIn(1.0, maxTotal)
         val (lIso, lShutter) = ProgramAeSolver.resolveLockedValues(
             profile, limits, iso ?: currentIso, shutterNanos ?: currentShutterNanos,
@@ -135,6 +143,9 @@ internal class ProgramAeLoop {
         val pair = split(filteredTotal, limits)
         isoLimited = pair.isoLimited
         shutterLimited = pair.shutterLimited
+        val physical = pair.iso.toDouble() * pair.shutterNanos
+        val extra = if (pair.isoLimited && physical > 0.0) filteredTotal / physical else 1.0
+        digitalGain = if (extra > 1.02) extra.coerceAtMost(maxDigitalGain).toFloat() else 1f
         val changed = iso != pair.iso || shutterNanos != pair.shutterNanos
         iso = pair.iso
         shutterNanos = pair.shutterNanos

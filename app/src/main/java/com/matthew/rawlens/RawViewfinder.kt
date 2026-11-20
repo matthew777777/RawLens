@@ -1594,6 +1594,11 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         }
         // B&W photo mode: project every matrix row onto luma so the existing
         // shaders output grey. Zero extra GPU work (no pass, no branch).
+        // Digital gain past the sensor ISO max (manual or PROGRAM AE): show it
+        // in both preview modes so the VF matches the saved still.
+        val digitalGain = DigitalGain.gainFor(result?.get(CaptureResult.SENSOR_SENSITIVITY),
+            c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.upper)
+        if (digitalGain > 1f && !renderJpeg) for (i in out.matrix.indices) out.matrix[i] *= digitalGain
         if (monoPreview) {
             foldLuma(out.matrix, LUMA_709)
             foldLuma(out.camToAces, LUMA_AP1)
@@ -1603,7 +1608,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         out.jpeg = renderJpeg
         out.displayP3 = previewP3
         out.lensGreenRow = VfGpuImport.lensGreenRow(channels)
-        out.exposureEv = previewExposureEv
+        out.exposureEv = previewExposureEv + DigitalGain.ev(digitalGain).toFloat()
         out.basicTone = basicTone
         out.agxPunchy = agxPunchy
         out.agxContrast = agxContrast

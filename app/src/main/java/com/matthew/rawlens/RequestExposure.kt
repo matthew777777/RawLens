@@ -4,7 +4,10 @@
 package com.matthew.rawlens
 
 /** Sensor pair a request drives directly with AE off. */
-internal data class SensorExposure(val iso: Int, val exposureNanos: Long)
+internal data class SensorExposure(val iso: Int, val exposureNanos: Long) {
+    /** PROGRAM AE chose this pair (its digital gain applies); not part of equality. */
+    var programDriven: Boolean = false
+}
 
 /**
  * Which exposure source a capture request uses: the user's manual ISO /
@@ -75,6 +78,7 @@ internal object RequestExposure {
             i.exposureRange?.first ?: i.lastExposureNanos,
             i.exposureRange?.last ?: i.lastExposureNanos
         )
-        return SensorExposure(iso, exposure)
+        return SensorExposure(iso, exposure).apply { programDriven = programDriving && i.selectedIso == null && i.selectedExposureNanos == null &&
+                !ettrExposure }
     }
 }

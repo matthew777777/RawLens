@@ -119,6 +119,10 @@ internal object DngCaptureMetadata {
         merge(root, TiffFields().apply {
             ascii(306, DngExifDirectory.dateTime(timeMillis))
             ascii(305, "RawLens")
+            // Manual ISO past the sensor max: the extra is digital gain, carried
+            // as BaselineExposure (unless a merge writer already set one).
+            val gainEv = DigitalGain.ev(metadata.digitalGain)
+            if (gainEv > 0.0 && 50730 !in root.entries) srationals(50730, doubleArrayOf(gainEv))
             // This names the embedded Camera2 matrices, not a vendor look/profile.
             if (50721 in root.entries && 50936 !in root.entries) {
                 ascii(50936, "RawLens Camera2 calibration")
