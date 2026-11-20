@@ -99,3 +99,31 @@ The mobile separable equivalent-kernel shader and integration are drafts: they
 still require CPU/GPU image parity, both-vendor before/after analysis and device
 timings before any quality or performance claim. The saved initial offline
 baseline has 240 successful jobs across A750, G615 and G720. No A740 was tested.
+
+## Step 4 on Vulkan: per-frame order-1 fit (2026-11-20, rejected)
+
+Tried in `merge_splat.comp` behind merge mode bits 64/128: a per-frame
+local-linear [1,x,y] ridge fit (ridge 0.25 px², clamped to the sample range)
+over each frame's own sites of a channel in the 7x7 gather, with the frame's
+Wronski kernel weights. It stores no normal equations: frames still average
+through num/den (cross-frame moments would cost about 7 extra floats per output
+pixel for green alone, roughly +340 MB at 12 MP 1x, which the phone merge budget cannot take).
+
+Known-truth bench (WronskiVsKernelNetBenchTest, v2 alignment, all merge
+features), PSNR:
+
+| variant | clean 1x / 2x | iso100 1x / 2x | dim 1x / 2x |
+|---|---|---|---|
+| current (detail green cubic, order-0 chroma) | 47.86 / 48.20 | 44.27 / 44.45 | 37.50 / 37.58 |
+| order-1 chroma | 47.90 / 48.20 | 44.31 / 44.45 | 37.52 / 37.58 |
+| order-1 chroma + steered order-1 green | 44.17 / 44.52 | 43.40 / 43.76 | 40.16 / 40.74 |
+
+- Chroma: neutral (+0.04 dB at 1x, 0 at 2x).
+- Green: equal to the old steered order-0 gather (IPOL clean 44.08). Order-1
+  adds no sharpness over it, so the Wronski kernel width is the limit, not the fit order. The dim gain
+  (+2.7 dB, flat error halved) comes from per-frame denoising and from
+  bypassing the grain-keeping green frame weights. This is the open grain-versus-noise
+  (grainRetention) decision, not a reconstruction win.
+- Cost even when switched off: the extra code took merge_splat from 32 to 64
+  work registers on Mali-G615/G720 (100 % -> 50 % occupancy), slowing every
+  merge. Reverted; no code kept.
