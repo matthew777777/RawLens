@@ -2633,10 +2633,29 @@ class MainActivity : Activity() {
         }, "EncodedVideoStop").start()
     }
 
+            if (saved != null && destination != null) saveGyroflowLog(destination.name, recorder.gcsvText)
     /**
      * Warps a finished direct take into `<stem>_STAB.mp4` in the same
      * recording folder (cache file, then one copy into a new destination).
      * Returns the status note and, for "Stabilized only" success (original
+    /** Writes `<stem>.gcsv` (Gyroflow IMU log) next to a saved `.craw`. Stop thread; never throws. */
+    private fun saveGyroflowLog(takeName: String, text: String?) {
+        if (text == null) return
+        val name = takeName.substringBeforeLast('.') + ".gcsv"
+        try {
+            val out = DirectRecordingOutput.create(this, name, "application/octet-stream")
+            val ok = try {
+                java.io.FileOutputStream(out.fileDescriptor).use { it.write(text.toByteArray(Charsets.US_ASCII)) }
+                out.finish(true)
+            } catch (e: Exception) {
+                out.close(); throw e
+            }
+            Log.i(LOG_TAG, "gyroflow log $name ok=$ok bytes=${text.length}")
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "gyroflow log $name failed: ${e.message}")
+        }
+    }
+
      * deleted), the URI to report as saved. Stop thread; never throws.
      */
     private fun stabilizeDirectTake(

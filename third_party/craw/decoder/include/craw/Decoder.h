@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Decoder for .CRAW frame payloads: codec 1 ("CRAW-Fast") and codec 2
-// ("CRAW-Live") (SPEC.md section 3).
+// Decoder for .CRAW frame payloads: 1 Balanced, 2 Live v1 — Legacy, 3 Live v2,
+// 4 Compact (SPEC.md section 3).
 // Treats input as untrusted: every length and offset is bounds-checked.
 #pragma once
 
+#include <craw/CodecNames.h>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -24,7 +25,7 @@ struct FrameInfo {
     Cfa cfa = Cfa::RGGB;
     uint16_t tile = 0, riceInit = 0;
     uint32_t crc = 0;
-    uint8_t codec = 1;    // 1 Fast, 2 Live, 3 Live v2, 4 Compact
+    uint8_t codec = 1;    // 1 Fast, 2 Live, 3 Live, 4 Compact — Offline
     bool hasCrc = true;   // frame CRC present (header flags bit 0 clear)
 };
 

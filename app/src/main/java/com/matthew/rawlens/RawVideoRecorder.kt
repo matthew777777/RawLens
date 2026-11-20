@@ -282,6 +282,15 @@ internal class RawVideoRecorder(
     private val captureResults = java.util.TreeMap<Long, CaptureResult>()
     private var audio: AudioPcmRecorder? = null
     private var motion: MotionRecorder? = null
+    private var gcsv: GcsvLog? = null
+
+    /**
+     * Gyroflow `.gcsv` text for the last stopped take (null without gyro).
+     * Valid after [stop] until the next [start]; the caller saves it next
+     * to the `.craw`.
+     */
+    @Volatile var gcsvText: String? = null
+        private set
     private var writerHandle: Long = 0L
     private var outputFile: File? = null
     private var directOutput: DirectRecordingOutput? = null
@@ -467,6 +476,8 @@ internal class RawVideoRecorder(
         lastShadingId = 0
         hasAudioStream = false
         hasMotionStream = false
+        gcsv = null
+        gcsvText = null
         nextSeq = 0L
         nextCommitSeq = 0L
         timeOriginNs = Long.MIN_VALUE
@@ -531,6 +542,7 @@ internal class RawVideoRecorder(
             if (rec.start()) {
                 motion = rec
                 hasMotionStream = true
+                gcsv = GcsvLog()
             }
         } else if (motionEnabled) {
             Log.w(TAG, "motion skipped: no context")
@@ -871,6 +883,12 @@ internal class RawVideoRecorder(
             teardown()
         }
         writeFailure?.let { throw java.io.IOException("Recording write failed", it) }
+        gcsvText = try {
+            gcsv?.render(android.os.Build.MODEL, android.os.Build.MANUFACTURER)
+        } catch (e: Exception) {
+            Log.w(TAG, "gcsv render failed: ${e.message}"); null
+        }
+        gcsv = null
         // Propagate finalization failures so callers retain, rather than publish,
         // a potentially incomplete local recording.
         // containerFrames = committed in-order frames (footer == encoded - latePurged).
@@ -1137,6 +1155,11 @@ internal class RawVideoRecorder(
                 resultWaitMsMax =
                     if (waitMs > resultWaitMsMax) waitMs else resultWaitMsMax * 0.999f + waitMs * 0.001f
                 stage = "frame metadata"
+                gcsv?.let { g ->
+                    if (g.rollingShutterSkewNs == 0L) {
+                        result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW)?.let { g.rollingShutterSkewNs = it }
+                    }
+                }
                 val frameJson =
                     CrawMetadata.frame(task.frameJson, result, timeOriginNs) {
                         val chars = videoRoute.characteristics
@@ -1437,6 +1460,7 @@ internal class RawVideoRecorder(
                     CrawWriter.writeGyro(
                         writerHandle, it.timestampsNs, it.axes, it.count
                     )
+                    gcsv?.addGyro(it.timestampsNs, it.axes, it.count)
                     gyroSamples.addAndGet(it.count.toLong())
                 }
             } catch (e: Exception) {
@@ -1452,6 +1476,7 @@ internal class RawVideoRecorder(
                     CrawWriter.writeAccel(
                         writerHandle, it.timestampsNs, it.axes, it.count
                     )
+                    gcsv?.addAccel(it.timestampsNs, it.axes, it.count)
                     accelSamples.addAndGet(it.count.toLong())
                 }
             } catch (e: Exception) {
