@@ -133,6 +133,22 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 "On: also cleans luma noise in shadows down to a fine, even grain; mid-tones and highlights " +
                 "are left untouched. Off: luma is not touched."
         ))
+        content.addView(settingsButton("LK-R HDR").apply {
+            fun refresh() { text = "LK-R HDR: ${mfsrSettings.lkrHdr.label}" }
+            refresh()
+            setOnClickListener {
+                p.kit.chooseEnum("LK-R HDR", mfsrSettings.lkrHdr, { it.label }) { picked ->
+                    applyMfsrSettings(mfsrSettings.copy(lkrHdr = picked))
+                    refresh()
+                }
+            }
+        })
+        content.addView(sectionDesc(
+            "Auto: when the moment you press shows blown highlights, the last frames of the burst are " +
+                "taken 2 EV darker (and one 1.5 EV brighter when the shadows need it) and merged with " +
+                "the ZSL frames: highlights keep detail, the JPEG / Ultra HDR is tone-mapped. On: always. " +
+                "Off: a normal burst. Same frame count, same merge time."
+        ))
         content.addView(settingsCheck("LK-R reference: middle of the burst", mfsrSettings.lkrMiddleReference).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrMiddleReference &&

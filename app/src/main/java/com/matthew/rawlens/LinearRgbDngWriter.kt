@@ -189,11 +189,17 @@ object LinearRgbDngWriter {
         stripRows: Int = DEFAULT_STRIP_ROWS,
         noiseProfileOverride: DoubleArray? = null,
         captureTimeMillis: Long? = null,
+        /**
+         * Level of the sensor clip in the samples (LK-R HDR bracket / highlight reconstruction, > 1):
+         * samples are written / [white] so the rebuilt highlights fit the 16-bit range, and
+         * BaselineExposure = log2([white]) keeps the rendering's brightness. 1 = unchanged file.
+         */
+        white: Float = 1f,
         fillRgbStrip: (startY: Int, rows: Int, rgb: FloatArray) -> Unit
     ) {
         require(stripRows > 0) { "Strip height must be positive" }
         val fields = headerFields(width, height, metadata, provenance,
-            noiseProfileOverride, captureTimeMillis)
+            noiseProfileOverride, captureTimeMillis, white)
         val stripCount = (height + stripRows - 1) / stripRows
         val band = FloatArray(Math.multiplyExact(Math.multiplyExact(width, stripRows), 3))
         TinyDngImageWriter.write(output, width, height,
@@ -204,6 +210,10 @@ object LinearRgbDngWriter {
             val startY = strip * stripRows
             val rows = minOf(stripRows, height - startY)
             fillRgbStrip(startY, rows, band)
+            if (white > 1f) {
+                val k = 1f / white
+                for (j in 0 until width * rows * 3) band[j] *= k
+            }
             quantizeStrip(band, 0, width * rows,
                 Math.multiplyExact(Math.multiplyExact(width * rows, 3), 2))
         }
@@ -225,7 +235,8 @@ object LinearRgbDngWriter {
         metadata: RawFrameMetadata,
         provenance: MergeProvenance,
         noiseProfileOverride: DoubleArray?,
-        captureTimeMillis: Long?
+        captureTimeMillis: Long?,
+        white: Float = 1f
     ): HeaderFields {
         require(width > 0 && height > 0) { "Linear RGB frame must have positive dimensions" }
         require(metadata.cameraId == provenance.sourceCameraId) {
@@ -258,6 +269,7 @@ object LinearRgbDngWriter {
             srationals(50721, matrix)
             rationals(50728, neutral)
             shorts(50778, metadata.referenceIlluminant1 ?: 21)
+            if (white > 1f) srationals(50730, doubleArrayOf(kotlin.math.log2(white.toDouble())))
         }
         // A non-positive exposure carries no information; omit rather than
         // write a zero-second tag. Same truthfulness rule as the ISO range.
@@ -291,12 +303,18 @@ object LinearRgbDngWriter {
         // else falls back to the reference model, never to fabrication.
         val mergedProfile = noiseProfileOverride
             ?.takeIf { it.size == 6 && it.all(Double::isFinite) }
+        // Samples scaled by k = 1 / white: variance k^2 (S x + O) at x = x' / k -> S' = k S, O' = k^2 O.
+        fun scaled(p: DoubleArray): DoubleArray {
+            if (white <= 1f) return p
+            val k = 1.0 / white
+            return DoubleArray(p.size) { if (it % 2 == 0) p[it] * k else p[it] * k * k }
+        }
         if (mergedProfile != null) {
-            fields.doubles(51041, mergedProfile)
+            fields.doubles(51041, scaled(mergedProfile))
         } else metadata.cfaPattern?.let { pattern ->
             DngNoiseProfile.toRgb(metadata.noiseProfile?.toDoubleArray(), pattern,
                 metadata.blackLevels?.toFloatArray(), metadata.whiteLevel)
-                ?.let { fields.doubles(51041, it) }
+                ?.let { fields.doubles(51041, scaled(it)) }
         }
         // The provenance timestamp is sensor-nanos (monotonic), not wall
         // clock: EXIF dates come only from the saver's wall-clock

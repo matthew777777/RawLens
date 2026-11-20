@@ -121,7 +121,14 @@ class LkrPipelineDeviceTest {
                     stats[LkrBridge.STAT_MS_TILES], stats[LkrBridge.STAT_MS_GPU], stats[LkrBridge.STAT_MS_PRIOR],
                     stats[LkrBridge.STAT_PRIOR_CALLS].toInt(), stats[LkrBridge.STAT_BACKEND].toInt(),
                     stats[LkrBridge.STAT_SIGMA]))
-                Log.i(TAG, "%s noise a=%.3g b=%.3g".format(c.name, stats[LkrBridge.STAT_NOISE_A], stats[LkrBridge.STAT_NOISE_B]))
+                Log.i(TAG, "%s noise a=%.3g b=%.3g hdrWhite %.3f".format(c.name, stats[LkrBridge.STAT_NOISE_A],
+                    stats[LkrBridge.STAT_NOISE_B], stats[LkrBridge.STAT_HDR_WHITE]))
+                // Optional app develop (-e lkrJpeg 1): Ultra HDR JPEG through developMfsrJpeg with the merge's
+                // hdrWhite, colour metadata from <lkrDir>/ref.dng. Tag -e lkrTag names the file (A/B runs).
+                if (args.getString("lkrJpeg") == "1" && File(dir, "ref.dng").isFile) {
+                    developJpeg(context, File(dir, "ref.dng"), rgb!!, ow, oh, stats[LkrBridge.STAT_HDR_WHITE],
+                        File(context.getExternalFilesDir(null), "lkr_${dir.name}_${c.name}_${args.getString("lkrTag") ?: "x"}.jpg"))
+                }
                 // Raw float dump for desktop comparison (crop cases only: small).
                 if (c.crop != null && c.outW == 0) {
                     val out = File(context.getExternalFilesDir(null), "lkr_${c.name}.f32")
@@ -132,6 +139,39 @@ class LkrPipelineDeviceTest {
             }
         } finally {
             bufs.forEach { runCatching { HdrPlusVulkan.freeBuffer(it) } }
+        }
+    }
+
+    private fun developJpeg(context: android.content.Context, refDng: File, rgb: ByteBuffer, w: Int, h: Int,
+                            hdrWhite: Float, out: File) {
+        val ref = DngImportReader.read(refDng)
+        val meta = ref.frameMetadata(androidx.exifinterface.media.ExifInterface(refDng.absolutePath))
+            .copy(imageWidth = w, imageHeight = h)
+        val output = JpegOutputSettings(ultraHdr = true)
+        val settings = RawDevelopmentSettings(
+            adaptiveExposureStrength = adaptivePreviewStrength(CaptureExposureMode.AUTO, output),
+            adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(output))
+        val coordinator = RawDevelopmentCoordinator(context)
+        try {
+            val t0 = SystemClock.elapsedRealtime()
+            rgb.rewind()
+            rgb.order(ByteOrder.nativeOrder())
+            val dev = coordinator.developMfsrJpeg(rgb, w, h, meta, settings, output,
+                hdrWhite = hdrWhite.takeIf { it.isFinite() && it > 1f } ?: 1f)
+            val ms = SystemClock.elapsedRealtime() - t0
+            try {
+                android.os.ParcelFileDescriptor.open(out, android.os.ParcelFileDescriptor.MODE_READ_WRITE or
+                    android.os.ParcelFileDescriptor.MODE_CREATE or android.os.ParcelFileDescriptor.MODE_TRUNCATE).use { fd ->
+                    val gm = dev.gainmap
+                    if (gm != null) NativeUltraHdrWriter.encode(dev.bitmap, gm, fd, dev.settings)
+                    else NativeJpegEncoder.encode(dev.bitmap, fd, dev.settings)
+                }
+                Log.i(TAG, "develop ${w}x$h hdrWhite %.3f in $ms ms gainmap=${dev.gainmap != null} -> $out".format(hdrWhite))
+            } finally {
+                dev.bitmap.recycle(); dev.gainmap?.recycle()
+            }
+        } finally {
+            coordinator.close()
         }
     }
 

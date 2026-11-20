@@ -11,13 +11,11 @@ import com.matthew.rawlens.MainActivity.Companion.KEY_DYNAMIC_EXPOSURE
 
 import com.matthew.rawlens.MainActivity.Companion.KEY_FACE_PRIORITY
 
-import com.matthew.rawlens.MainActivity.Companion.KEY_SEQ_TRIO_ENABLED
 
 import com.matthew.rawlens.MainActivity.Companion.KEY_HDR_BRACKET_STOPS
+import com.matthew.rawlens.MainActivity.Companion.KEY_LKR_HDR_DEBUG
 
-import com.matthew.rawlens.MainActivity.Companion.KEY_HDR_SAVE_EACH_BRACKET
 
-import com.matthew.rawlens.MainActivity.Companion.KEY_HDR_SAVE_DEBUG_FRAMES
 
 
 import android.Manifest
@@ -401,22 +399,16 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             }
         })
         content.addView(SettingsSwitch(this).apply {
-            text = "Sequential trio 0 / −2 / 0 EV (shadow averaging + highlights)"
+            text = "Debug: LK-R HDR bracket (up to 8 frames: 0 EV frames, 2 × −2, 1 × +1.5 EV)"
             setTextColor(getColor(R.color.text_primary))
-            isChecked = seqTrioEnabled()
+            isChecked = lkrHdrDebugBracket()
             setOnCheckedChangeListener { _, enabled ->
-                lensPreferences().edit().putBoolean(KEY_SEQ_TRIO_ENABLED, enabled).apply()
-                setStatus(if (enabled) "SEQ TRIO 0/−2/0 ON" else "SEQ TRIO OFF")
+                lensPreferences().edit().putBoolean(KEY_LKR_HDR_DEBUG, enabled).apply()
+                setStatus(if (enabled) "HDR DEBUG" else "HDR ±${hdrBracketStops()} EV")
                 updateQuickControls()
             }
         })
-        content.addView(TextView(this).apply {
-            text = "Two 0 EV frames average shadows (~3 dB); the −2 EV frame " +
-                "rescues highlights. Same ISO, lightweight local alignment. " +
-                "Needs the HDR toggle on; overrides the ±2/±4 bracket range."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-        })
+        content.addView(sectionDesc("With the HDR toggle on, the shutter saves up to 8 DNGs (as many as the RAW queue holds, 6 on most phones: 3 × 0, 2 × −2, 1 × +1.5 EV; F00 = 0 EV reference, long frame last, max 1/8 s) for testing the LK-R HDR merge. Hold still-ish; no merge yet."))
         content.addView(sectionTitle("Face priority"))
         content.addView(sectionDesc("HAL face detection steers AF/AE to the largest face (sand box). Tap targets override faces; manual sensor modes ignore the regions but still show boxes."))
         content.addView(SettingsSwitch(this).apply {

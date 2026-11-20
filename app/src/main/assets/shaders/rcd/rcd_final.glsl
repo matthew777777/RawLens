@@ -12,6 +12,9 @@ uniform highp vec3 u_camera_white_normalized;
 // Wavelet path: emit pre-matrix camera RGB instead of ACEScg.
 uniform int u_camera_linear;
 uniform highp vec2 u_white_window;
+// LK-R HDR bracket merges: the sensor clip sits at this level (> 1) instead of 1; the white window and
+// its neutral target scale with it so recovered highlights are not flattened to white. 1 otherwise.
+uniform highp float u_white_scale;
 
 highp vec3 cc_white() { return max(u_camera_white_normalized, vec3(1e-4)); }
 // Balanced RGB for the chroma cleanup (texture cache serves the 3x3 / 5x5 taps).
@@ -26,9 +29,10 @@ void main() {
     ivec2 o = ivec2(gl_GlobalInvocationID.xy);
     if (o.x >= u_outsize.x || o.y >= u_outsize.y) return;
     vec3 cameraRgb = chroma_cleanup(fetch_bal(ivec2(0))) * cc_white();
-    vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), cameraRgb);
+    highp float ws = max(u_white_scale, 1.0);
+    vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x * ws), vec3(u_white_window.y * ws), cameraRgb);
     float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
-    if (u_camera_linear == 0) cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
+    if (u_camera_linear == 0) cameraRgb = mix(cameraRgb, u_camera_white_normalized * ws, whiteBlend);
     vec3 acescg = u_camera_to_acescg * cameraRgb;
     vec3 outRgb = (u_camera_linear != 0) ? cameraRgb : acescg;
     imageStore(img_out, o, vec4(outRgb, 1.0));

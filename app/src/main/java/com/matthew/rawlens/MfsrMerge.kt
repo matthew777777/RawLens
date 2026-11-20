@@ -74,7 +74,9 @@ internal object MfsrMerge {
          * overload covers that tail).
          */
         val refResult: android.hardware.camera2.CaptureResult?,
-        val mergeDetails: String = ""
+        val mergeDetails: String = "",
+        /** LK-R HDR bracket: level of the sensor clip in [rgb] (reference units, > 1); 1 = normal merge. */
+        val hdrWhite: Float = 1f
     ) {
         private val released = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -109,21 +111,25 @@ internal object MfsrMerge {
         metadataOf: (BufferedRawFrame) -> RawFrameMetadata
     ): List<MfsrFrame>? {
         if (frames.size < MfsrSettings.MIN_MERGE_FRAMES) return null
-        val usable = frames.mapIndexedNotNull { index, frame ->
+        val usable = describe(frames, metadataOf)
+        if (usable.size < MfsrSettings.MIN_MERGE_FRAMES) return null
+        val refOrder = selectSharpest(usable, middleReference, nativeSharpness) ?: return null
+        return refOrder.map { usable[it] }
+    }
+
+    /** Metadata + normalisation per frame, capture order; unusable frames are dropped (logged). */
+    fun describe(frames: List<BufferedRawFrame>, metadataOf: (BufferedRawFrame) -> RawFrameMetadata): List<MfsrFrame> =
+        frames.mapIndexedNotNull { index, frame ->
             try {
                 val metadata = metadataOf(frame)
                 val norm = metadata.normalizationOrNull() ?: return@mapIndexedNotNull null
-                frame.image.planes?.firstOrNull() ?: return@mapIndexedNotNull null
+                frame.view().buffer ?: return@mapIndexedNotNull null
                 MfsrFrame(frame, metadata, norm)
             } catch (failure: Exception) {
                 Log.w(LOG_TAG, "mfsr prepare: frame $index unusable", failure)
                 null
             }
         }
-        if (usable.size < MfsrSettings.MIN_MERGE_FRAMES) return null
-        val refOrder = selectSharpest(usable, middleReference, nativeSharpness) ?: return null
-        return refOrder.map { usable[it] }
-    }
 
     /**
      * HDR+ reference + blur rejection ([BurstSharpness]) over frames in
@@ -333,7 +339,7 @@ internal object MfsrMerge {
      */
     internal fun applyShadingAfterMerge(
         rgb: java.nio.FloatBuffer, w: Int, h: Int, model: LensShadingModel, scale: Int = 1,
-        highlightWb: FloatArray? = null
+        highlightWb: FloatArray? = null, white: Float = 1f
     ) {
         if (model.alreadyApplied) return
         ShardWorkers.forEachShard(h) { y0, y1 ->
@@ -343,7 +349,7 @@ internal object MfsrMerge {
                 val sx = x / scale
                 val sy = y / scale
                 val gG = 0.5f * (model.gainAt(sx, sy, CfaColor.GREEN, 0) + model.gainAt(sx, sy, CfaColor.GREEN, 1))
-                shadePixel(rgb, i, model.gainAt(sx, sy, CfaColor.RED), gG, model.gainAt(sx, sy, CfaColor.BLUE), highlightWb)
+                shadePixel(rgb, i, model.gainAt(sx, sy, CfaColor.RED), gG, model.gainAt(sx, sy, CfaColor.BLUE), highlightWb, white)
             }
         }
     }
@@ -357,17 +363,17 @@ internal object MfsrMerge {
      * G and leaves R / B -> pink (also bright unblown pixels pushed over 1 by the gain). Same rule as
      * lkrl FinishLook: smoothstep(0.85, 1) of the brightest channel (before shading against the raw clip,
      * after it against the file's 1.0), blend to neutral at the wb-space luma, capped at min(wb) so the
-     * clamped file stays neutral.
+     * clamped file stays neutral. [white] = the clip level of an HDR merge (all levels scale with it).
      */
-    private fun shadePixel(rgb: java.nio.FloatBuffer, i: Int, gR: Float, gG: Float, gB: Float, wb: FloatArray?) {
+    private fun shadePixel(rgb: java.nio.FloatBuffer, i: Int, gR: Float, gG: Float, gB: Float, wb: FloatArray?, white: Float = 1f) {
         val r0 = rgb.get(i); val g0 = rgb.get(i + 1); val b0 = rgb.get(i + 2)
         var r = r0 * gR; var g = g0 * gG; var b = b0 * gB
         if (wb != null) {
-            val v = maxOf(maxOf(r0, g0, b0) / HIGHLIGHT_CLIP, maxOf(r, g, b))
+            val v = maxOf(maxOf(r0, g0, b0) / HIGHLIGHT_CLIP, maxOf(r, g, b)) / white
             var m = ((v - 0.85f) / 0.15f).coerceIn(0f, 1f)
             m = m * m * (3f - 2f * m)
             if (m > 0f) {
-                val lum = minOf(0.25f * wb[0] * r + 0.5f * wb[1] * g + 0.25f * wb[2] * b, minOf(wb[0], wb[1], wb[2]))
+                val lum = minOf(0.25f * wb[0] * r + 0.5f * wb[1] * g + 0.25f * wb[2] * b, minOf(wb[0], wb[1], wb[2]) * white)
                 r += m * (lum / wb[0] - r); g += m * (lum / wb[1] - g); b += m * (lum / wb[2] - b)
             }
         }
@@ -380,7 +386,7 @@ internal object MfsrMerge {
      */
     internal fun applyShadingMapped(
         rgb: java.nio.FloatBuffer, w: Int, h: Int, model: LensShadingModel,
-        x0: Int, y0: Int, sx: Float, sy: Float, highlightWb: FloatArray? = null
+        x0: Int, y0: Int, sx: Float, sy: Float, highlightWb: FloatArray? = null, white: Float = 1f
     ) {
         if (model.alreadyApplied) return
         ShardWorkers.forEachShard(h) { ya, yb ->
@@ -390,7 +396,7 @@ internal object MfsrMerge {
                     val sxx = (x0 + (x + 0.5f) * sx).toInt()
                     val i = 3 * (y * w + x)
                     val gG = 0.5f * (model.gainAt(sxx, syy, CfaColor.GREEN, 0) + model.gainAt(sxx, syy, CfaColor.GREEN, 1))
-                    shadePixel(rgb, i, model.gainAt(sxx, syy, CfaColor.RED), gG, model.gainAt(sxx, syy, CfaColor.BLUE), highlightWb)
+                    shadePixel(rgb, i, model.gainAt(sxx, syy, CfaColor.RED), gG, model.gainAt(sxx, syy, CfaColor.BLUE), highlightWb, white)
                 }
             }
         }

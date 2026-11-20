@@ -164,7 +164,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                     merged.width, merged.height, merged.rgb.asFloatBuffer(),
                     merged.refMetadata,
                     provenance,
-                    captureId = captureId, gps = null
+                    captureId = captureId, gps = null, white = merged.hdrWhite
                 )
             }
             if (format.includesJpeg) {
@@ -172,13 +172,13 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 if (inputs.developedFormat == DevelopedFormat.JXL) {
                     val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
                         merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise),
-                        look = inputs.jpeg, jxl = inputs.jxl)
+                        look = inputs.jpeg, jxl = inputs.jxl, hdrWhite = merged.hdrWhite)
                     outputs += JxlSaver(appContext).save(developed, merged.refMetadata, null,
                         captureTimeMillis = captureId,
                         typeSuffix = CaptureFileNames.TYPE_MFSR)
                 } else {
                     val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
-                        merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg)
+                        merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg, hdrWhite = merged.hdrWhite)
                     try {
                         outputs += JpegSaver(appContext).save(developed, merged.refMetadata, null,
                             captureTimeMillis = captureId,
@@ -226,7 +226,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                     merged.width, merged.height, merged.rgb.asFloatBuffer(),
                     merged.refMetadata,
                     provenance,
-                    captureId = captureId, gps = null
+                    captureId = captureId, gps = null, white = merged.hdrWhite
                 )
             }
             if (format.includesJpeg) {
@@ -234,12 +234,12 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 if (inputs.developedFormat == DevelopedFormat.JXL) {
                     val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
                         merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise),
-                        look = inputs.jpeg, jxl = inputs.jxl)
+                        look = inputs.jpeg, jxl = inputs.jxl, hdrWhite = merged.hdrWhite)
                     outputs += JxlSaver(appContext).save(developed, merged.refMetadata, null,
                         captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_LKR)
                 } else {
                     val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
-                        merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg)
+                        merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg, hdrWhite = merged.hdrWhite)
                     try {
                         outputs += JpegSaver(appContext).save(developed, merged.refMetadata, null,
                             captureTimeMillis = captureId, typeSuffix = CaptureFileNames.TYPE_LKR, gps = null,

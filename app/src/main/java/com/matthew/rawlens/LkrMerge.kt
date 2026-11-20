@@ -59,7 +59,9 @@ internal object LkrMerge {
         /** Zoom: 1.5x / 2x solve the centre crop at x2; output stays the sensor size. Overrides scale / crop. */
         val zoom: LkrZoom = LkrZoom.X1,
         /** Keep the x2 solve: 1x -> whole frame at x2; 1.5x / 2x -> crop at x2, no downsample. */
-        val fullRes: Boolean = false
+        val fullRes: Boolean = false,
+        /** The frames are an LK-R HDR capture (0 EV reference first, then short / long frames). */
+        val hdrBracket: Boolean = false
     )
 
     fun mergeDecoded(
@@ -101,14 +103,22 @@ internal object LkrMerge {
         val ref = ordered[0]
         val w = ref.metadata.imageWidth
         val h = ref.metadata.imageHeight
-        val planes = ordered.map { it.frame.image.planes[0] }
+        val planes = ordered.map { it.frame.view() }
         val stride = planes[0].rowStride
         if (ordered.any { it.metadata.imageWidth != w || it.metadata.imageHeight != h } ||
             planes.any { it.rowStride != stride || it.pixelStride != 2 }) {
             Log.w(LOG_TAG, "live merge: mixed or unsupported RAW16 layouts, aborting")
             return null
         }
-        val sources = planes.map { it.buffer.duplicate().also { b -> b.rewind() } }
+        val sources = planes.map { it.buffer!!.duplicate().also { b -> b.rewind() } }
+        // Only an HDR capture merges with exposures: a normal burst stays bit-identical even if AE drifted.
+        val exposures = if (settings.hdrBracket) hdrExposures(ordered.map { it.frame.result }) else null
+        // Already staged at the shutter (tight RAW16 native copies): merge them
+        // directly; the caller frees them after this returns.
+        if (ordered.all { it.frame.staged != null }) {
+            return mergeBuffers(context, sources, w, h, w * 2, ref.norm, ref.metadata,
+                ref.frame.result, settings, stats, packedBits = 0, exposures = exposures)
+        }
         if (releaseInputs != null) {
             val t0 = SystemClock.elapsedRealtime()
             val staged = stageFrames(sources, w, h, stride / 2, stageBits(ref.norm.whiteLevel))
@@ -119,7 +129,8 @@ internal object LkrMerge {
                 releaseInputs()
                 try {
                     return mergeBuffers(context, staged.buffers, w, h, w * 2, ref.norm, ref.metadata,
-                        ref.frame.result, settings, stats, packedBits = if (staged.bits < 16) staged.bits else 0)
+                        ref.frame.result, settings, stats, packedBits = if (staged.bits < 16) staged.bits else 0,
+                        exposures = exposures)
                 } finally {
                     staged.buffers.forEach(SrpBridge::nativeFreeDirect)
                 }
@@ -127,8 +138,32 @@ internal object LkrMerge {
             Log.w(LOG_TAG, "lkr staging failed; merging the camera buffers in place")
         }
         return mergeBuffers(context, sources,
-            w, h, stride, ref.norm, ref.metadata, ref.frame.result, settings, stats)
+            w, h, stride, ref.norm, ref.metadata, ref.frame.result, settings, stats, exposures = exposures)
     }
+
+    /**
+     * Raw-domain exposure (ExposureTime x ISO) of each frame from its own capture result, for an HDR
+     * bracket (reference first); null when every frame has the reference's exposure (a normal burst) or a
+     * result lacks the values. "Same" = within one ISO step's rounding (the HAL reports what it applied).
+     */
+    internal fun hdrExposures(results: List<android.hardware.camera2.CaptureResult?>): FloatArray? {
+        val ex = FloatArray(results.size)
+        for ((i, r) in results.withIndex()) {
+            val t = r?.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME) ?: return null
+            val iso = r.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY) ?: return null
+            if (t <= 0L || iso <= 0) return null
+            ex[i] = (t.toDouble() * iso / 1e9).toFloat()
+        }
+        return if (isBracket(ex)) ex else null
+    }
+
+    /** True when some exposure differs from the reference's (frame 0) by more than the HAL's rounding. */
+    internal fun isBracket(exposures: FloatArray): Boolean =
+        exposures.size >= 2 && exposures.all { it > 0f } &&
+            exposures.any { kotlin.math.abs(kotlin.math.ln(it / exposures[0])) > BRACKET_LOG_TOLERANCE }
+
+    /** |ln ratio| above which two exposures count as different: 1/6 EV, far above HAL rounding, far below a bracket step. */
+    private val BRACKET_LOG_TOLERANCE = kotlin.math.ln(2.0).toFloat() / 6f
 
     private class Staged(val buffers: List<java.nio.ByteBuffer>, val bits: Int)
 
@@ -166,7 +201,8 @@ internal object LkrMerge {
         result: android.hardware.camera2.CaptureResult?,
         requested: Settings,
         stats: FloatArray,
-        packedBits: Int = -1
+        packedBits: Int = -1,
+        exposures: FloatArray? = null
     ): MfsrMerge.MfsrResult? {
         // Zoom: centre crop solved at x2; the native side area-resamples the
         // solve to the sensor size (1.5x), 2x already lands on it.
@@ -191,6 +227,8 @@ internal object LkrMerge {
             noiseSource?.let { WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), it) },
             noiseSource?.iso?.toFloat() ?: 0f)
         LkrBridge.nativeSetPrior(settings.network)
+        LkrBridge.nativeSetExposures(exposures)
+        if (exposures != null) Log.i(LOG_TAG, "lkr HDR bracket exposures (ref first): ${exposures.joinToString { "%.4g".format(it) }}")
         val t0 = SystemClock.elapsedRealtime()
         // packedBits >= 0: frames from LkrBridge.nativeStage (tight rows, packed when > 0).
         val diagnostics = LkrMergeDiagnostics(context)
@@ -219,6 +257,8 @@ internal object LkrMerge {
         val mergeMs = SystemClock.elapsedRealtime() - t0
         rgb.order(ByteOrder.nativeOrder())
         val ow = stats[LkrBridge.STAT_OUT_W].toInt()
+        // > 1: HDR bracket merge, or highlight reconstruction rebuilt clipped channels above the clip.
+        val hdrWhite = stats[LkrBridge.STAT_HDR_WHITE].takeIf { it.isFinite() && it > 1f } ?: 1f
         val oh = stats[LkrBridge.STAT_OUT_H].toInt()
         // Lens shading on the merged RGB, as MFSR does (sensor-resolution maps); blown highlights stay white
         // through the gains (the merge made them neutral; see MfsrMerge.shadePixel).
@@ -226,10 +266,10 @@ internal object LkrMerge {
         val region = settings.crop ?: intArrayOf(0, 0, w, h)
         RawPreDemosaicPipeline.lensShadingModel(metadata)?.let {
             if (region[0] == 0 && region[1] == 0 && ow == w && oh == h)
-                MfsrMerge.applyShadingAfterMerge(rgb.asFloatBuffer(), ow, oh, it, highlightWb = wb)
+                MfsrMerge.applyShadingAfterMerge(rgb.asFloatBuffer(), ow, oh, it, highlightWb = wb, white = hdrWhite)
             else
                 MfsrMerge.applyShadingMapped(rgb.asFloatBuffer(), ow, oh, it,
-                    region[0], region[1], region[2].toFloat() / ow, region[3].toFloat() / oh, highlightWb = wb)
+                    region[0], region[1], region[2].toFloat() / ow, region[3].toFloat() / oh, highlightWb = wb, white = hdrWhite)
         }
         rgb.rewind()
         Log.i(LOG_TAG, "lkr ${ow}x$oh s=${settings.scale} K=${buffers.size} tiles=${stats[LkrBridge.STAT_TILES].toInt()} " +
@@ -247,6 +287,7 @@ internal object LkrMerge {
                 append("- Tile processing: ${stats[LkrBridge.STAT_MS_TILES]} ms\n")
                 append("- GPU: ${stats[LkrBridge.STAT_MS_GPU]} ms\n")
                 append("- Prior time: ${stats[LkrBridge.STAT_MS_PRIOR]} ms\n")
-            })
+                if (hdrWhite > 1f) append("- HDR white (bracket / highlight reconstruction): ${"%.2f".format(hdrWhite)}x the reference clip\n")
+            }, hdrWhite = hdrWhite)
     }
 }

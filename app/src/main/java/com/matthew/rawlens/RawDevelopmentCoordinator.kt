@@ -781,7 +781,9 @@ class RawDevelopmentCoordinator(context: Context) {
         cfa: UnpackedRawCfa,
         metadata: RawFrameMetadata,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
-        outputSettings: JpegOutputSettings = JpegOutputSettings()
+        outputSettings: JpegOutputSettings = JpegOutputSettings(),
+        /** LK-R HDR merge: level of the sensor clip in [rgb] (MfsrResult.hdrWhite); 1 otherwise. */
+        hdrWhite: Float = 1f
     ): DevelopedJpeg {
         amaze.chromaCleanup = outputSettings.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
@@ -955,7 +957,9 @@ class RawDevelopmentCoordinator(context: Context) {
         cfa: UnpackedRawCfa,
         metadata: RawFrameMetadata,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
-        outputSettings: JpegOutputSettings = JpegOutputSettings()
+        outputSettings: JpegOutputSettings = JpegOutputSettings(),
+        /** LK-R HDR merge: level of the sensor clip in [rgb] (MfsrResult.hdrWhite); 1 otherwise. */
+        hdrWhite: Float = 1f
     ): DevelopedJpeg {
         amaze.chromaCleanup = outputSettings.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
@@ -1051,7 +1055,9 @@ class RawDevelopmentCoordinator(context: Context) {
         height: Int,
         metadata: RawFrameMetadata,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
-        outputSettings: JpegOutputSettings = JpegOutputSettings()
+        outputSettings: JpegOutputSettings = JpegOutputSettings(),
+        /** LK-R HDR merge: level of the sensor clip in [rgb] (MfsrResult.hdrWhite); 1 otherwise. */
+        hdrWhite: Float = 1f
     ): DevelopedJpeg {
         amaze.chromaCleanup = outputSettings.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
@@ -1063,7 +1069,8 @@ class RawDevelopmentCoordinator(context: Context) {
             rgb, width, height,
             transform.glslColumnMajorMatrix(),
             transform.glslCameraWhiteNormalized(),
-            cameraLinear = settings.denoise.captureSharpening.enabled
+            cameraLinear = settings.denoise.captureSharpening.enabled,
+            whiteScale = hdrWhite
         ) { output ->
             consumeCaptureSharpened(output, transform,
                 capturePattern(metadata),
@@ -1117,7 +1124,9 @@ class RawDevelopmentCoordinator(context: Context) {
     fun developMergedTextureJpeg(
         input: MergedTextureJpegInput,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
-        outputSettings: JpegOutputSettings = JpegOutputSettings()
+        outputSettings: JpegOutputSettings = JpegOutputSettings(),
+        /** LK-R HDR merge: level of the sensor clip in [rgb] (MfsrResult.hdrWhite); 1 otherwise. */
+        hdrWhite: Float = 1f
     ): DevelopedJpeg {
         amaze.chromaCleanup = outputSettings.chromaCleanup
         // Covers developMergedImagesJpeg too (it delegates here).
@@ -1154,7 +1163,9 @@ class RawDevelopmentCoordinator(context: Context) {
         acceptedFrames: Int,
         referenceMetadata: RawFrameMetadata,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
-        outputSettings: JpegOutputSettings = JpegOutputSettings()
+        outputSettings: JpegOutputSettings = JpegOutputSettings(),
+        /** LK-R HDR merge: level of the sensor clip in [rgb] (MfsrResult.hdrWhite); 1 otherwise. */
+        hdrWhite: Float = 1f
     ): DevelopedJpeg {
         amaze.chromaCleanup = outputSettings.chromaCleanup
         val egl = mergedEgl ?: Gles31AmazeProcessor.EglComputeContext().also { mergedEgl = it }
@@ -1276,7 +1287,8 @@ class RawDevelopmentCoordinator(context: Context) {
         metadata: RawFrameMetadata,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         look: JpegOutputSettings = JpegOutputSettings(),
-        jxl: JxlOutputSettings = JxlOutputSettings()
+        jxl: JxlOutputSettings = JxlOutputSettings(),
+        hdrWhite: Float = 1f
     ): DevelopedJxl {
         amaze.chromaCleanup = look.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
@@ -1351,7 +1363,8 @@ class RawDevelopmentCoordinator(context: Context) {
         metadata: RawFrameMetadata,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         look: JpegOutputSettings = JpegOutputSettings(),
-        jxl: JxlOutputSettings = JxlOutputSettings()
+        jxl: JxlOutputSettings = JxlOutputSettings(),
+        hdrWhite: Float = 1f
     ): DevelopedJxl {
         amaze.chromaCleanup = look.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
@@ -1425,7 +1438,8 @@ class RawDevelopmentCoordinator(context: Context) {
         metadata: RawFrameMetadata,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         look: JpegOutputSettings = JpegOutputSettings(),
-        jxl: JxlOutputSettings = JxlOutputSettings()
+        jxl: JxlOutputSettings = JxlOutputSettings(),
+        hdrWhite: Float = 1f
     ): DevelopedJxl {
         amaze.chromaCleanup = look.chromaCleanup
         MemoryLeakDiagnostics.stillCapture()
@@ -1437,7 +1451,8 @@ class RawDevelopmentCoordinator(context: Context) {
             rgb, width, height,
             transform.glslColumnMajorMatrix(),
             transform.glslCameraWhiteNormalized(),
-            cameraLinear = settings.denoise.captureSharpening.enabled
+            cameraLinear = settings.denoise.captureSharpening.enabled,
+            whiteScale = hdrWhite
         ) { output ->
             consumeCaptureSharpened(output, transform,
                 capturePattern(metadata),

@@ -417,6 +417,7 @@ class Gles31AmazeProcessor(
                             }, cameraWhiteNormalized[0], cameraWhiteNormalized[1], cameraWhiteNormalized[2]
                         )
                         GLES31.glUniform2f(GLES31.glGetUniformLocation(program, "u_white_window"), whiteWindow[0], whiteWindow[1])
+                        GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "u_white_scale"), 1f)
                         GLES31.glUniform1i(
                             GLES31.glGetUniformLocation(program, "u_camera_linear").also {
                                 check(it >= 0) { "rcd_final uniform 'u_camera_linear' is missing" }
@@ -470,6 +471,8 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
         cameraLinear: Boolean = false,
+        /** LK-R HDR merge: level of the sensor clip in [rgb] (> 1); 1 for normal merges. */
+        whiteScale: Float = 1f,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(width >= 2 && height >= 2) { "Sharp RGB needs positive dimensions" }
@@ -532,6 +535,7 @@ class Gles31AmazeProcessor(
                         }, cameraWhiteNormalized[0], cameraWhiteNormalized[1], cameraWhiteNormalized[2]
                     )
                     GLES31.glUniform2f(GLES31.glGetUniformLocation(program, "u_white_window"), 0.70f, 0.99f)
+                    GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "u_white_scale"), whiteScale)
                     GLES31.glUniform1i(
                         GLES31.glGetUniformLocation(program, "u_camera_linear").also {
                             check(it >= 0) { "rcd_final uniform 'u_camera_linear' is missing" }

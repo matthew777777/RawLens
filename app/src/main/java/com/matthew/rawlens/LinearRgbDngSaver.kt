@@ -40,12 +40,13 @@ class LinearRgbDngSaver(private val context: Context) {
         provenance: MergeProvenance,
         captureId: Long = System.currentTimeMillis(),
         gps: GpsLocation? = null,
-        noiseProfileOverride: DoubleArray? = null
+        noiseProfileOverride: DoubleArray? = null,
+        white: Float = 1f
     ): String {
         require(rgb.capacity() >= Math.multiplyExact(Math.multiplyExact(width, height), 3)) { "RGB buffer too small" }
         return publish(captureId) { out ->
             LinearRgbDngWriter.writeStriped(out, width, height, metadata, provenance, gps,
-                noiseProfileOverride = noiseProfileOverride, captureTimeMillis = captureId) { startY, rows, band ->
+                noiseProfileOverride = noiseProfileOverride, captureTimeMillis = captureId, white = white) { startY, rows, band ->
                 val src = rgb.duplicate()
                 src.position(startY * width * 3)
                 src.get(band, 0, rows * width * 3)

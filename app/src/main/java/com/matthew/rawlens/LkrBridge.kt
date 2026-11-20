@@ -38,6 +38,8 @@ internal object LkrBridge {
     const val STAT_OUT_W = 11
     const val STAT_OUT_H = 12
     const val STAT_BACKEND = 13
+    /** HDR bracket merges: output level of the sensor clip (> 1); 1 for a normal merge. */
+    const val STAT_HDR_WHITE = 14
     const val STATS_SIZE = 16
 
     /** Same full-resolution green-gradient score as BurstSharpness.measure; NaN for unsupported buffers. */
@@ -84,6 +86,16 @@ internal object LkrBridge {
         tuning: FloatArray?, outWidth: Int, outHeight: Int
     ): ByteBuffer?
 
+
+    /**
+     * HDR bracket for the NEXT merge on this thread: exposure (ExposureTime x ISO) of each frame in merge
+     * order, frame 0 = the reference; null = normal merge. The result is in reference units with the clip
+     * at [STAT_HDR_WHITE].
+     */
+    @JvmStatic external fun nativeSetExposures(exposures: FloatArray?)
+
+    /** LR tile edge the merge uses for a [w] x [h] frame at [scale] (LK-R HDR Auto: smallest clipped area). */
+    @JvmStatic external fun nativeAutoTileSize(w: Int, h: Int, scale: Int): Int
 
     /** Settings -> Merge -> "Network": learned post-fit prior (NPU: MediaTek MDLA / Qualcomm Hexagon via
      *  NNAPI; no NPU: Vulkan fallback). */

@@ -1988,15 +1988,8 @@ class MainActivity : Activity() {
             "Shutter mode=${captureModeLabel(useHdr, useBurst)} forceBurst=$forceBurst"
         )
         when {
-            useHdr && seqTrioEnabled() -> controller.captureSeqTrio(
-                saveEachBracket = lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false),
-                saveDebugFrames = lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false)
-            )
-            useHdr -> controller.captureHdrBracket(
-                saveEachBracket = lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false),
-                bracketStops = hdrBracketStops(),
-                saveDebugFrames = lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false)
-            )
+            useHdr && lkrHdrDebugBracket() -> controller.captureLkrHdrBracket()
+            useHdr -> controller.captureHdrBracket(bracketStops = hdrBracketStops())
             useBurst -> controller.captureBurst()
             else -> controller.capture()
         }
@@ -4139,13 +4132,11 @@ class MainActivity : Activity() {
 
     internal fun lensPreferences() = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    /** Debug: HDR shutter captures the LK-R HDR bracket (up to 8 frames: 0 EV frames, 2 x -2, 1 x +1.5 EV). */
+    internal fun lkrHdrDebugBracket(): Boolean = lensPreferences().getBoolean(KEY_LKR_HDR_DEBUG, false)
+
     internal fun hdrBracketStops(): Int =
         if (lensPreferences().getInt(KEY_HDR_BRACKET_STOPS, 2) == 4) 4 else 2
-
-    internal fun seqTrioEnabled(): Boolean =
-        // Temporary default while the standard HDR bracket merge is being repaired.
-        // Keep an explicitly saved choice; this only affects HDR, never HDR+ bursts.
-        lensPreferences().getBoolean(KEY_SEQ_TRIO_ENABLED, true)
 
     internal fun selectedLensIds(): Set<String> =
         lensPreferences().getStringSet(KEY_SELECTED_LENSES, emptySet())?.toSet().orEmpty()
@@ -4663,10 +4654,8 @@ class MainActivity : Activity() {
         const val KEY_BURST_CRAW_ENABLED = "burst_craw_enabled"
         const val KEY_RELEASE_MODE = "release_mode"
         const val KEY_HDR_ENABLED = "hdr_enabled"
-        const val KEY_HDR_SAVE_EACH_BRACKET = "hdr_save_each_bracket"
-        const val KEY_HDR_SAVE_DEBUG_FRAMES = "hdr_save_debug_frames"
         const val KEY_HDR_BRACKET_STOPS = "hdr_bracket_stops"
-        const val KEY_SEQ_TRIO_ENABLED = "seq_trio_enabled"
+        const val KEY_LKR_HDR_DEBUG = "lkr_hdr_debug_bracket"
         const val KEY_JPEG_ULTRA_HDR = "jpeg_ultra_hdr"
         const val KEY_JPEG_DISPLAY_P3 = "jpeg_display_p3"
         const val KEY_JPEG_QUALITY = "jpeg_quality"

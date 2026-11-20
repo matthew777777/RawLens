@@ -85,7 +85,13 @@ data class MfsrSettings(
      * active engine): merge at 2x (Wronski super-resolution, 12.5 -> 50 MP)
      * instead of the sensor grid.
      */
-    val mfsrFullRes: Boolean = false
+    val mfsrFullRes: Boolean = false,
+    /**
+     * LK-R HDR (Lecouat et al. 2022 on Lite): AUTO adds short (and a long) forward frame to the ZSL
+     * 0 EV frames when the press-moment frame shows they would help ([LkrHdrDecision]); ON always
+     * does; OFF never (the normal ZSL merge). Total frame count stays the same.
+     */
+    val lkrHdr: LkrHdrMode = LkrHdrMode.AUTO
 ) {
     /** Quick-tile / status label of the active engine. */
     val label: String get() = if (engine == MfsrEngine.LKR) "LK-R" else "MFSR"
@@ -106,7 +112,8 @@ data class MfsrSettings(
         "lkr_middle_reference" to lkrMiddleReference,
         "lkr_zoom" to lkrZoom.name,
         "lkr_full_res" to lkrFullRes,
-        "mfsr_full_res" to mfsrFullRes
+        "mfsr_full_res" to mfsrFullRes,
+        "lkr_hdr" to lkrHdr.name
     )
 
     /** True when the sharp merge is on with [which] as its engine (that engine's tile is active). */
@@ -141,7 +148,8 @@ data class MfsrSettings(
             lkrZoom = (LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1)
                 .let { if (it == LkrZoom.FULL_2X) LkrZoom.X1 else it },
             lkrFullRes = values["lkr_full_res"] as? Boolean ?: (values["lkr_zoom"] == LkrZoom.FULL_2X.name),
-            mfsrFullRes = values["mfsr_full_res"] as? Boolean ?: false
+            mfsrFullRes = values["mfsr_full_res"] as? Boolean ?: false,
+            lkrHdr = LkrHdrMode.entries.firstOrNull { it.name == values["lkr_hdr"] } ?: LkrHdrMode.AUTO
         )
 
         const val MIN_MERGE_FRAMES = 2
@@ -186,6 +194,9 @@ enum class LkrZoom(val factor: Float, val label: String) {
         return intArrayOf(((w - cw) / 2) and 1.inv(), ((h - ch) / 2) and 1.inv(), cw, ch)
     }
 }
+
+/** LK-R HDR capture mode (see [MfsrSettings.lkrHdr]). */
+enum class LkrHdrMode(val label: String) { AUTO("Auto"), ON("On"), OFF("Off") }
 
 /** Merge engine of the MFSR shutter path (see [MfsrSettings.engine]). */
 enum class MfsrEngine { MFSR, LKR }
