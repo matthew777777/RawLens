@@ -10,14 +10,12 @@ package com.matthew.rawlens
  * metered base exposure (shutter-only, DSLR-style). This planner generalizes
  * to arbitrary stop lists and multi-frame-per-stop bursts in the raymerge
  * style — e.g. stops [-3,-2,-1,0,+1] with 5/3/8/2/6 frames per stop (24
- * frames total) — while keeping the SR path constant-exposure: multi-EV
- * bursts route to the HDR path ([HdrRawMerge] + [HdrTileDeghost]), never to
- * [RawSrBurstPlanner] (whose 1.10 exposure-ratio gate intentionally rejects
- * mixed exposures per the HDR+ constant-exposure capture policy).
+ * frames total). Bracket frames are saved as separate DNGs, never merged
+ * in-app; they never reach [RawSrBurstPlanner] (whose 1.10 exposure-ratio
+ * gate rejects mixed exposures per the HDR+ constant-exposure policy).
  *
  * DSLR rule: bracketing changes shutter only; ISO stays at the metered base
- * so noise character matches across the stack and the merge's photon
- * weighting stays calibrated.
+ * so noise character matches across the stack.
  */
 object HdrBracketConfig {
     /** Classic handheld bracket around the metered base. */
@@ -33,18 +31,6 @@ object HdrBracketConfig {
      */
     val DENSE_STOPS = intArrayOf(-3, -2, -1, 0, 1)
     val DENSE_FRAMES_PER_STOP = intArrayOf(5, 3, 8, 2, 6)
-
-    /**
-     * Sequential-DCG trio: two 0 EV frames for ~3 dB shadow averaging plus
-     * one -2 EV frame for ~2 stops of highlight headroom, all at the same
-     * ISO (shutter-only, DSLR rule). Capture order is 0, -2, 0 so the
-     * short frame sits between the two longs; the merge picks the sharper
-     * 0 EV frame as the geometric reference.
-     */
-    val SEQ_TRIO_STOPS = intArrayOf(-2, 0)
-    val SEQ_TRIO_FRAMES_PER_STOP = intArrayOf(1, 2)
-    /** Capture order for the trio: 0 EV, -2 EV, 0 EV. */
-    val SEQ_TRIO_CAPTURE_ORDER = intArrayOf(0, -2, 0)
 
     const val MIN_STOPS = 2
     const val MAX_STOPS = 7
@@ -130,47 +116,6 @@ object HdrBracketConfig {
         return Plan(sortedStops, sortedCounts, frames)
     }
 
-    /**
-     * Plans the sequential-DCG trio (0, -2, 0 at fixed ISO). Unlike [plan],
-     * the capture sequence keeps the requested shutter order instead of
-     * darkest-first: the short frame between the two longs minimizes the
-     * worst-case motion gap for handheld use. [stops] stays sorted for
-     * coverage bookkeeping; only [Plan.frames] follows [captureOrder].
-     */
-    fun sequence(stops: IntArray, framesPerStop: IntArray, captureOrder: IntArray): Plan {
-        require(stops.size in MIN_STOPS..MAX_STOPS) {
-            "Bracket needs $MIN_STOPS..$MAX_STOPS stops, got ${stops.size}"
-        }
-        require(stops.all { it in -MAX_EV_ABS..MAX_EV_ABS }) {
-            "Bracket stops must lie in ±$MAX_EV_ABS EV"
-        }
-        require(stops.toSet().size == stops.size) { "Bracket stops must be distinct" }
-        require(framesPerStop.size == stops.size) { "framesPerStop must parallel stops" }
-        require(framesPerStop.all { it in 1..MAX_TOTAL_FRAMES }) { "framesPerStop out of range" }
-        val total = framesPerStop.sum()
-        require(total in MIN_STOPS..MAX_TOTAL_FRAMES) {
-            "Bracket needs $MIN_STOPS..$MAX_TOTAL_FRAMES total frames, got $total"
-        }
-        require(captureOrder.size == total) { "captureOrder must hold one EV per shutter" }
-        val remaining = framesPerStop.toMutableList()
-        val indexOf = stops.withIndex().associate { it.value to it.index }
-        for (ev in captureOrder) {
-            val slot = indexOf[ev] ?: throw IllegalArgumentException("captureOrder EV $ev not in stops")
-            require(remaining[slot] > 0) { "captureOrder overuses EV $ev" }
-            remaining[slot]--
-        }
-        val order = stops.indices.sortedBy { stops[it] }
-        val sortedStops = IntArray(stops.size) { stops[order[it]] }
-        val sortedCounts = IntArray(stops.size) { framesPerStop[order[it]] }
-        val frames = ArrayList<Frame>(total)
-        for (ev in captureOrder) frames.add(Frame(frames.size, ev))
-        return Plan(sortedStops, sortedCounts, frames)
-    }
-
-    /** The 0, -2, 0 sequential-DCG trio at fixed ISO. */
-    fun seqZeroMinusTwoZero(): Plan =
-        sequence(SEQ_TRIO_STOPS, SEQ_TRIO_FRAMES_PER_STOP, SEQ_TRIO_CAPTURE_ORDER)
-
     /** Classic ±[stops] EV bracket (3 frames) for back-compat callers. */
     fun classic(stops: Int): Plan {
         require(stops == 2 || stops == 4) { "Classic bracket must be ±2 or ±4 EV" }
@@ -186,61 +131,5 @@ object HdrBracketConfig {
         require(baseNanos > 0) { "Base exposure must be positive" }
         val factor = if (evStops < 0) 1.0 / (1 shl -evStops) else (1 shl evStops).toDouble()
         return (baseNanos * factor).toLong().coerceAtLeast(1L)
-    }
-
-    /**
-     * Reference frame for geometric alignment: the middle exposure by actual
-     * captured exposure (exposure*ISO), robust to shutter clamping. [exposures]
-     * parallels the captured frame list.
-     */
-    fun referenceIndex(exposures: List<Double>): Int {
-        require(exposures.size >= 2) { "Need at least two exposures" }
-        require(exposures.all { it.isFinite() && it > 0.0 }) { "Exposures must be finite and positive" }
-        return exposures.indices.sortedBy { exposures[it] }[exposures.size / 2]
-    }
-
-    /**
-     * EV of each captured frame relative to the reference, from actual
-     * exposure*ISO (handles clamped shutters). Null entries mark uncomputable
-     * frames (missing metadata).
-     */
-    fun evRelativeToReference(
-        exposures: List<Double?>,
-        reference: Int
-    ): List<Double?> {
-        if (reference !in exposures.indices) return exposures.map { null }
-        val ref = exposures[reference] ?: return exposures.map { null }
-        if (!ref.isFinite() || ref <= 0.0) return exposures.map { null }
-        return exposures.map { ev ->
-            if (ev == null || !ev.isFinite() || ev <= 0.0) null else kotlin.math.log2(ev / ref)
-        }
-    }
-
-    /**
-     * Raymerge-style F-list log line per frame: `F0[*B*] EV=0: Accepted …`.
-     * [isReference] marks the anchor with `[*B*]`.
-     */
-    fun frameLogLine(
-        index: Int,
-        evStops: Int,
-        verdict: String,
-        detail: String = "",
-        isReference: Boolean = false
-    ): String {
-        val anchor = if (isReference) "[*B*]" else ""
-        val tail = if (detail.isEmpty()) "" else " $detail"
-        return "F$index$anchor EV=${if (evStops > 0) "+$evStops" else "$evStops"}: $verdict$tail"
-    }
-
-    /**
-     * Coverage summary matching the raymerge footer: merged/kept counts plus
-     * the all-EVs-covered guarantee the JPEG path requires.
-     */
-    fun coverageSummary(plan: Plan, keptPerStop: Map<Int, Int>): String {
-        val kept = plan.stops.sumOf { keptPerStop[it] ?: 0 }
-        val total = plan.totalFrames
-        val coverage = if (plan.stops.all { (keptPerStop[it] ?: 0) > 0 }) "all EVs covered"
-        else "MISSING EVs: ${plan.stops.filter { (keptPerStop[it] ?: 0) == 0 }}"
-        return "Frames merged: $kept/$total ($coverage)"
     }
 }

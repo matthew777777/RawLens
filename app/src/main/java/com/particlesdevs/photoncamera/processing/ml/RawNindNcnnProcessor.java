@@ -40,8 +40,8 @@ import java.util.concurrent.TimeUnit;
  * corresponding path reports unavailable and the Kotlin side uses the plain
  * path. Same contract on emulator ABIs (native stub returns 0).
  *
- * Process-wide singleton loading on background threads, mirroring
- * FlowNetNcnnProcessor. Call {@link #start(Context)} from Application
+ * Process-wide singleton loading on background threads.
+ *  Call {@link #start(Context)} from Application
  * onCreate so Vulkan shader compilation never blocks the shutter path.
  */
 public final class RawNindNcnnProcessor {

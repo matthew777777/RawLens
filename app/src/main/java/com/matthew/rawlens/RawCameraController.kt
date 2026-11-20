@@ -31,7 +31,6 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import android.view.View
-import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import java.nio.ByteOrder
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ArrayBlockingQueue
@@ -2541,49 +2540,52 @@ class RawCameraController(
         }
     }
 
-    /** Captures the default handheld bracket (-2, 0, +2 EV) around the latest metered pair. */
-    fun captureHdrBracket(saveEachBracket: Boolean = false, bracketStops: Int = 2,
-                          saveDebugFrames: Boolean = false) {
-        captureBracket(HdrBracketConfig.classic(bracketStops), saveEachBracket, saveDebugFrames)
+    /** Captures the ±[bracketStops] EV bracket; every frame is saved as its own DNG. */
+    fun captureHdrBracket(bracketStops: Int = 2) {
+        captureBracket(HdrBracketConfig.classic(bracketStops))
     }
 
     /**
-     * Captures the sequential-DCG trio (0, -2, 0 at fixed ISO) around the
-     * latest metered pair: two 0 EV frames for shadow averaging plus one
-     * -2 EV frame for highlight headroom. Merges through [HdrSeqMerge]
-     * (lightweight local alignment + noise-aware rejection), never the
-     * FlowNet/deghost path.
+     * Debug capture for LK-R HDR (Lecouat et al. 2022, HDR+SR from raw bursts): up to 8 frames,
+     * 5 x 0 EV, 2 x -2 EV, 1 x +1.5 EV, shutter only (ISO, focus, AWB frozen), each saved as
+     * its own DNG (F00..F07). F00 is a 0 EV frame (the merge reference); the long frame is
+     * last and capped at [LKR_HDR_LONG_CAP_NS] so a handheld night frame does not blur.
      */
-    fun captureSeqTrio(saveEachBracket: Boolean = false, saveDebugFrames: Boolean = false) {
-        captureBracket(HdrBracketConfig.seqZeroMinusTwoZero(), saveEachBracket, saveDebugFrames)
+    fun captureLkrHdrBracket() {
+        // DNG-only regardless of the user's format: JPEG formats cap in-flight saves at
+        // MAX_IN_FLIGHT_JPEG_SAVES. The RAW reader also keeps RAW_PREVIEW_RESERVED_SLOTS (10) of its
+        // maxImages for the viewfinder stream, so a 16-image reader admits 6 frames: the bracket shrinks
+        // to what fits (fewer 0 EV frames, the -2 / -2 / +1.5 tail is kept).
+        val outputFormat = CaptureFormat.DNG_ONLY
+        val orientationSnapshot = deviceOrientationDegrees
+        postShutter {
+            if (captureInProgress.get() || !hasPreviewMetadata) {
+                onState("HDR WAIT")
+                return@postShutter
+            }
+            if (!supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)) {
+                onState("HDR NEEDS MANUAL")
+                return@postShutter
+            }
+            val count = (LKR_HDR_DEBUG_EVS.size downTo LKR_HDR_DEBUG_MIN_FRAMES)
+                .firstOrNull { hasProcessingCapacity(it, outputFormat) }
+            if (count == null) {
+                onState("QUEUE FULL")
+                return@postShutter
+            }
+            val evs = lkrHdrDebugEvs(count)
+            activeHdrBracket = true
+            activeHdrStops = 2
+            activeHdrFrameEvs = IntArray(evs.size) { kotlin.math.round(evs[it]).toInt() }
+            activeHdrFrameEvF = evs.copyOf()
+            pendingHdrFrames.ensureCapacity(evs.size)
+            Log.i(LOG_TAG, "LK-R HDR debug bracket evs=${evs.joinToString()}")
+            captureFrames(evs.size, outputFormat = outputFormat,
+                orientationSnapshot = orientationSnapshot)
+        }
     }
 
-    /**
-     * Captures an explicit-stop bracket (e.g. [-3,-2,-1,0,+1]) with one frame
-     * per stop around the latest metered pair. See [HdrBracketConfig].
-     */
-    fun captureBracketStops(stops: IntArray, saveEachBracket: Boolean = false,
-                            saveDebugFrames: Boolean = false) {
-        captureBracket(HdrBracketConfig.plan(stops.copyOf()), saveEachBracket, saveDebugFrames)
-    }
-
-    /**
-     * Captures a dense multi-frame-per-stop burst in the raymerge style (e.g.
-     * stops [-3,-2,-1,0,+1] with 5/3/8/2/6 frames per stop): extra shutters on
-     * the shadows where photon noise dominates. All frames merge through the
-     * HDR path with per-frame alignment + deghost; the JPEG requires every EV
-     * covered (see [HdrBracketConfig.coverageSummary]).
-     */
-    fun captureBracketedBurst(stops: IntArray, framesPerStop: IntArray,
-                              saveEachBracket: Boolean = false,
-                              saveDebugFrames: Boolean = false) {
-        captureBracket(HdrBracketConfig.plan(stops.copyOf(), framesPerStop.copyOf()),
-            saveEachBracket, saveDebugFrames)
-    }
-
-    /** Shared shutter for [captureHdrBracket], [captureBracketStops], and [captureBracketedBurst]. */
-    fun captureBracket(plan: HdrBracketConfig.Plan, saveEachBracket: Boolean = false,
-                       saveDebugFrames: Boolean = false) {
+    private fun captureBracket(plan: HdrBracketConfig.Plan) {
         val outputFormat = captureFormat
         val orientationSnapshot = deviceOrientationDegrees
         postShutter {
@@ -3814,7 +3816,7 @@ class RawCameraController(
 
         // DSLR-style exposure bracketing changes shutter only. Freeze the last settled focus
         // position and AWB state so focus breathing or per-frame colour adaptation cannot become
-        // false motion/chroma during FlowNet registration and radiance merging.
+        // false motion/chroma between bracket frames.
         val focus = selectedFocusDistanceDiopters
             ?: latestPreviewResult?.get(CaptureResult.LENS_FOCUS_DISTANCE)
         if (focus != null && focus.isFinite()) {
@@ -6483,10 +6485,8 @@ class RawCameraController(
                 saveDualRaw(pair)
             }
             if (activeHdrBracket) {
-                val saveEachBracket = activeHdrSaveEachBracket
-                val saveDebugFrames = activeHdrSaveDebugFrames
                 resetHdrBracketState()
-                saveHdrBracket(pendingHdrFrames.toList(), saveEachBracket, saveDebugFrames)
+                saveHdrBracket(pendingHdrFrames.toList())
                 pendingHdrFrames.clear()
             }
             finishCapture()
@@ -6672,24 +6672,19 @@ class RawCameraController(
                 cameraHandler.post { if (isCurrent(generation)) onState("RAW HDR TEST MEMORY LIMIT") }
             }
         }
-        try { writer.execute(job) } catch (_: RejectedExecutionException) {
+        // DNG-only output: the parallel DNG worker, so the pair never waits
+        // behind a long HDR+/MFSR merge on the serial writer.
+        try { dngWriter.execute(job) } catch (_: RejectedExecutionException) {
             job.cancelBeforeRun(); onState("QUEUE FULL")
         }
     }
 
-    private fun saveHdrBracket(
-        pending: List<PendingHdrFrame>,
-        saveEachBracket: Boolean,
-        saveDebugFrames: Boolean
-    ) {
+    private fun saveHdrBracket(pending: List<PendingHdrFrame>) {
         val c = characteristics ?: return pending.forEach { RawImageOwnership.release(it.image) }
         if (pending.size < 2) return pending.forEach { RawImageOwnership.release(it.image) }
         val ownership = CloseOnceOwner(pending) { RawImageOwnership.release(it.image) }
         val orientation = activeOutputOrientation
         val cameraId = selectedCameraId ?: "unknown"
-        val outputFormat = activeCaptureFormat
-        val outputSettings = activeJpegOutputSettings
-        val denoise = activeDenoiseSettings
         // One identifier for the whole set, independent of serialization/development latency.
         val captureId = System.currentTimeMillis()
         // One fix for the whole set: every bracket shares the same geotag.
@@ -6699,36 +6694,43 @@ class RawCameraController(
         val captureDngBackend = dngWriterBackend()
         val captureDngOverrides = dngMetadataOverrides(cameraId)
         val captureDngCompression = dngCompression()
-        val captureDevelopedFormat = activeDevelopedFormat
-        val captureJxlSettings = activeJxlOutputSettings
-        val captureFocusView = developFocusView
         beginPendingSave()
         pendingFrameSaveCount.addAndGet(pending.size)
-        if (!saveEachBracket && outputFormat.includesJpeg) beginJpegProcessing()
         val saveGeneration = lifecycleGeneration
         fun reportSaveState(message: String) {
             cameraHandler.post { if (isCurrent(saveGeneration)) onState(message) }
         }
-        val releasedOwnership = AutoCloseable {
+        // The job unpacks every bracket into its own buffers first; the camera
+        // frames (and the shutter) are handed back then, not after the merge.
+        val framesReleased = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun releaseFrames() {
+            if (!framesReleased.compareAndSet(false, true)) return
             try { ownership.close() } finally {
-                postSaveCompletion(pending.size)
+                cameraHandler.post {
+                    pendingFrameSaveCount.addAndGet(-pending.size)
+                    closeRetiredRawReaders()
+                    if (running && !destroyed) {
+                        refreshCaptureAvailability()
+                        resumeRawZslIfIdle()
+                        publishRawZslStatus()
+                    }
+                }
             }
+        }
+        val releasedOwnership = AutoCloseable {
+            try { releaseFrames() } finally { postSaveCompletion(0) }
         }
         val input = HdrBracketSaveInput(
             characteristics = c, orientation = orientation, cameraId = cameraId,
-            outputFormat = outputFormat, outputSettings = outputSettings, denoise = denoise,
             captureId = captureId, gps = captureGps,
             dngBackend = captureDngBackend, dngOverrides = captureDngOverrides,
-            dngCompression = captureDngCompression, developedFormat = captureDevelopedFormat,
-            jxl = captureJxlSettings, focusView = captureFocusView,
-            saveEachBracket = saveEachBracket, saveDebugFrames = saveDebugFrames
+            dngCompression = captureDngCompression
         )
         val job = OwnedCaptureJob(releasedOwnership) {
-            HdrBracketSaveJob(context, pending, input, saveJobHost(report = ::reportSaveState)).run()
+            HdrBracketSaveJob(context, pending, input, saveJobHost(::releaseFrames, ::reportSaveState)).run()
         }
         try { writer.execute(job) } catch (_: RejectedExecutionException) {
             job.cancelBeforeRun()
-            if (!saveEachBracket && outputFormat.includesJpeg) endJpegProcessing()
             reportSaveState("QUEUE FULL")
         }
     }

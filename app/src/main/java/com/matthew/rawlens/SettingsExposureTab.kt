@@ -61,7 +61,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
@@ -370,20 +369,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             textSize = 11f
         })
         content.addView(sectionTitle("HDR brackets"))
-        content.addView(sectionDesc("Merged HDR saves one DNG by default; optionally keep every bracket. Frame-level debug output lives under the Debug tab."))
-        content.addView(SettingsSwitch(this).apply {
-            text = "HDR: save all 3 brackets as separate DNGs (do not merge)"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false)
-            setOnCheckedChangeListener { _, enabled ->
-                lensPreferences().edit().putBoolean(KEY_HDR_SAVE_EACH_BRACKET, enabled).apply()
-                setStatus(if (lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false))
-                    "HDR DBG ×3"
-                else if (enabled) "HDR ×3 DNG" else "HDR MERGED")
-                preloadFlowNetForMergedHdr()
-                updateQuickControls()
-            }
-        })
+        content.addView(sectionDesc("HDR captures a 3-frame bracket and saves every frame as its own DNG (IMG_<time>_F00/F01/F02). No merge."))
         content.addView(SettingsSwitch(this).apply {
             text = "HDR bracket range: −4 / 0 / +4 EV"
             setTextColor(getColor(R.color.text_primary))

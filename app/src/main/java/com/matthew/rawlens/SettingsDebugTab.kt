@@ -9,7 +9,6 @@ import com.matthew.rawlens.MainActivity.Companion.KEY_RAW_VF_DEBUG_OVERLAY
 
 import com.matthew.rawlens.MainActivity.Companion.KEY_DEBUG_OVERLAY
 
-import com.matthew.rawlens.MainActivity.Companion.KEY_HDR_SAVE_DEBUG_FRAMES
 
 
 import android.Manifest
@@ -53,7 +52,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
@@ -70,23 +68,6 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
         rawZslSettingsStatus = null
         sidecarSettingsStatus = null
         content.removeAllViews()
-        content.addView(sectionTitle("HDR debug frames"))
-        content.addView(SettingsSwitch(this).apply {
-            text = "Save debug HDR frames"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false)
-            setOnCheckedChangeListener { _, enabled ->
-                lensPreferences().edit().putBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, enabled).apply()
-                setStatus(if (enabled) "HDR DBG ×3"
-                    else "HDR DBG OFF")
-                preloadFlowNetForMergedHdr()
-                updateQuickControls()
-            }
-        })
-        content.addView(TextView(this).apply {
-            text = "Debug saves all 3 source DNGs and a merged DNG with matching filenames, plus JPEG when selected. Overrides do not merge; uses extra storage."
-            setTextColor(getColor(R.color.text_primary))
-        })
         content.addView(sectionTitle("Camera diagnostics"))
         // The two debug overlays stack on the same corner: enabling one
         // switches the other off. The guard stops the programmatic

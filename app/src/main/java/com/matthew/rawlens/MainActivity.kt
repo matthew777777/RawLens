@@ -46,7 +46,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
@@ -297,7 +296,6 @@ class MainActivity : Activity() {
                 .putBoolean(KEY_HDR_ENABLED, hdrEnabled)
                 .apply()
         }
-        preloadFlowNetForMergedHdr()
         preloadRawNindIfEnabled()
         hdrPlusSettings = HdrPlusSettings.fromPreferences(lensPreferences().all)
         captureExposureMode = CaptureExposureMode.entries.getOrElse(
@@ -2588,8 +2586,27 @@ class MainActivity : Activity() {
             } catch (failure: Exception) {
                 Log.e(LOG_TAG, "Recording finalization failed at ${destination?.uri}", failure)
             }
+            if (saved != null && destination != null) saveGyroflowLog(destination.name, recorder.gcsvText)
             runOnUiThread { finishVideoStop(stats, saved, rollingVf, rearmPreview, afterStop) }
         }, "VideoStop").start()
+    }
+
+    /** Writes `<stem>.gcsv` (Gyroflow IMU log) next to a saved `.craw`. Stop thread; never throws. */
+    private fun saveGyroflowLog(takeName: String, text: String?) {
+        if (text == null) return
+        val name = takeName.substringBeforeLast('.') + ".gcsv"
+        try {
+            val out = DirectRecordingOutput.create(this, name, "application/octet-stream")
+            val ok = try {
+                java.io.FileOutputStream(out.fileDescriptor).use { it.write(text.toByteArray(Charsets.US_ASCII)) }
+                out.finish(true)
+            } catch (e: Exception) {
+                out.close(); throw e
+            }
+            Log.i(LOG_TAG, "gyroflow log $name ok=$ok bytes=${text.length}")
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "gyroflow log $name failed: ${e.message}")
+        }
     }
 
     private fun stopEncodedVideoRecording(rearmPreview: Boolean = true, afterStop: (() -> Unit)? = null) {
@@ -2633,29 +2650,10 @@ class MainActivity : Activity() {
         }, "EncodedVideoStop").start()
     }
 
-            if (saved != null && destination != null) saveGyroflowLog(destination.name, recorder.gcsvText)
     /**
      * Warps a finished direct take into `<stem>_STAB.mp4` in the same
      * recording folder (cache file, then one copy into a new destination).
      * Returns the status note and, for "Stabilized only" success (original
-    /** Writes `<stem>.gcsv` (Gyroflow IMU log) next to a saved `.craw`. Stop thread; never throws. */
-    private fun saveGyroflowLog(takeName: String, text: String?) {
-        if (text == null) return
-        val name = takeName.substringBeforeLast('.') + ".gcsv"
-        try {
-            val out = DirectRecordingOutput.create(this, name, "application/octet-stream")
-            val ok = try {
-                java.io.FileOutputStream(out.fileDescriptor).use { it.write(text.toByteArray(Charsets.US_ASCII)) }
-                out.finish(true)
-            } catch (e: Exception) {
-                out.close(); throw e
-            }
-            Log.i(LOG_TAG, "gyroflow log $name ok=$ok bytes=${text.length}")
-        } catch (e: Exception) {
-            Log.w(LOG_TAG, "gyroflow log $name failed: ${e.message}")
-        }
-    }
-
      * deleted), the URI to report as saved. Stop thread; never throws.
      */
     private fun stabilizeDirectTake(
@@ -3292,7 +3290,6 @@ class MainActivity : Activity() {
             val nextMode = HdrShutterExclusivity.modeAfterBracketEnabled(captureExposureMode)
             if (nextMode != captureExposureMode) applyCaptureExposureMode(nextMode)
         }
-        preloadFlowNetForMergedHdr()
         Log.i(LOG_TAG, "HDR enabled=$hdrEnabled")
         setStatus(if (hdrEnabled) "HDR ON" else "HDR OFF")
         updateQuickControls()
@@ -3305,16 +3302,6 @@ class MainActivity : Activity() {
         lensPreferences().edit().putBoolean(KEY_HDR_ENABLED, false).apply()
         Log.i(LOG_TAG, "HDR enabled=false")
         updateQuickControls()
-    }
-
-    internal fun preloadFlowNetForMergedHdr() {
-        if (hdrEnabled &&
-            (!lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false) ||
-                lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false))) {
-            // Model loading and Vulkan pipeline creation are asynchronous and can be slow on
-            // first use. Start as soon as HDR is enabled instead of after capture.
-            FlowNetNcnnProcessor.start(applicationContext)
-        }
     }
 
     private fun releaseModeLabel(mode: Int) = when (mode) {

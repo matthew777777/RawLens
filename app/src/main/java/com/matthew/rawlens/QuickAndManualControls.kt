@@ -64,7 +64,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale

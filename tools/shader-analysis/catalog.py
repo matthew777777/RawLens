@@ -47,7 +47,6 @@ STAGES=[
  ('M','Burst: RTCS (rtcs_r*)',r'rtcs_'),
  ('N','Capture sharpening',r'capture_sharpening/'),
  ('O','MFSR (sr_spv)',r'sr_spv/'),
- ('Q','FlowNet ncnn layers',r'shader/flownet'),
  ('Z','Test/validation-only photo RCD candidates',r'photo_rcd/'),
 ]
 SKIP=r'^shaders/vf/vf_rcd(_f16)?$'  # unspecialized uber, use per-stage rows

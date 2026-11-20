@@ -227,32 +227,15 @@ if(RAWLENS_ENABLE_JXL AND NOT _rawlens_jxl_src STREQUAL "")
     target_link_libraries(jxlEncoder PRIVATE jxl jxl_threads)
 endif()
 
-# PhotonCamera FlowNet-v2/ncnn port: model runtime + custom correlation layers.
-# Prebuilt mode links the ABI-specific ncnn static libraries; source-only
-# mode builds the same against upstream ncnn from a pinned source archive
-# (CPU-only). See app/src/main/cpp/flownet/UPSTREAM.md.
-set(PHOTON_FLOW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flownet")
+# ncnn runtime for the RawNIND denoisers. Prebuilt mode links the
+# ABI-specific ncnn static libraries; source-only mode builds against
+# upstream ncnn from a pinned source archive (CPU-only).
 set(PHOTON_NCNN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ncnn/${ANDROID_ABI}")
 set(PHOTON_NCNN_LIB "${PHOTON_NCNN_DIR}/lib")
 if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a" AND RAWLENS_PREBUILT_NATIVE)
-    set(FLOW_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/flownet-generated")
-    file(MAKE_DIRECTORY "${FLOW_GEN_DIR}")
-    find_program(PYTHON3_EXECUTABLE python3 REQUIRED)
-    set(FLOW_VULKAN_SOURCES "")
-    set(FLOW_VULKAN_LIBS "")
+    set(NCNN_VULKAN_LIBS "")
     if(EXISTS "${PHOTON_NCNN_LIB}/libSPIRV.a")
-        foreach(shader flownetcorrfused flownetcorrlookup flownetupsample)
-            execute_process(
-                COMMAND "${PYTHON3_EXECUTABLE}" "${PHOTON_FLOW_DIR}/gen_shader_header.py"
-                    "${PHOTON_FLOW_DIR}/layer/vulkan/shader/${shader}.comp" "${shader}_comp_data"
-                OUTPUT_FILE "${FLOW_GEN_DIR}/${shader}_comp.h"
-                COMMAND_ERROR_IS_FATAL ANY)
-        endforeach()
-        set(FLOW_VULKAN_SOURCES
-            "${PHOTON_FLOW_DIR}/layer/vulkan/flownetupsample_vulkan.cpp"
-            "${PHOTON_FLOW_DIR}/layer/vulkan/flownetcorrlookup_vulkan.cpp"
-            "${PHOTON_FLOW_DIR}/layer/vulkan/flownetcorrfused_vulkan.cpp")
-        set(FLOW_VULKAN_LIBS
+        set(NCNN_VULKAN_LIBS
             "${PHOTON_NCNN_LIB}/libglslang.a"
             "${PHOTON_NCNN_LIB}/libMachineIndependent.a"
             "${PHOTON_NCNN_LIB}/libGenericCodeGen.a"
@@ -260,24 +243,17 @@ if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a" AND RAWLENS_PREBUILT_NATIVE)
             "${PHOTON_NCNN_LIB}/libOSDependent.a"
             "${PHOTON_NCNN_LIB}/libSPIRV.a")
     endif()
-    add_library(ncnnMl SHARED
-        "${CMAKE_CURRENT_SOURCE_DIR}/ncnnMl.cpp"
-        "${PHOTON_FLOW_DIR}/layer/flownetupsample.cpp"
-        "${PHOTON_FLOW_DIR}/layer/flownetcorrlookup.cpp"
-        "${PHOTON_FLOW_DIR}/layer/flownetcorrfused.cpp"
-        ${FLOW_VULKAN_SOURCES})
-    target_include_directories(ncnnMl PRIVATE
-        "${PHOTON_NCNN_DIR}/include/ncnn" "${FLOW_GEN_DIR}"
-        "${PHOTON_FLOW_DIR}" "${PHOTON_FLOW_DIR}/layer" "${PHOTON_FLOW_DIR}/layer/vulkan")
+    add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/ncnnMl.cpp")
+    target_include_directories(ncnnMl PRIVATE "${PHOTON_NCNN_DIR}/include/ncnn")
     target_compile_options(ncnnMl PRIVATE -fno-rtti -fno-exceptions)
-    target_link_libraries(ncnnMl PRIVATE "${PHOTON_NCNN_LIB}/libncnn.a" ${FLOW_VULKAN_LIBS} android log)
+    target_link_libraries(ncnnMl PRIVATE "${PHOTON_NCNN_LIB}/libncnn.a" ${NCNN_VULKAN_LIBS} android log)
     set_target_properties(ncnnMl PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     target_link_options(ncnnMl PRIVATE "-Wl,-z,max-page-size=16384")
 elseif(RAWLENS_PREBUILT_NATIVE)
     # Fallback for an ABI without prebuilt archives (unreachable while
     # app/build.gradle.kts filters to ARM ABIs): keep the historical
     # lightweight stub so compiling upstream ncnn for it stays pure bloat-free.
-    add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/flownet_stub.cpp")
+    add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/ncnn_stub.cpp")
     target_link_libraries(ncnnMl PRIVATE log)
 else()
     # Source-only build: compile the real JNI
@@ -286,7 +262,7 @@ else()
     # tools/sr-vulkan/src/main/cpp-ncnn/CMakeLists.txt). CPU-only: Vulkan
     # needs glslang, which source builds do not vendor; the bridge
     # selects CPU automatically (NCNN_VULKAN guards + backend env
-    # overrides), so KernelNet, FlowNet, and RawNIND all run.
+    # overrides), so RawNIND runs.
     set(NCNN_SHA "c6b351b56fbe32e0381ae00331e3df649b20d7b7")
     set(NCNN_URL "https://github.com/Tencent/ncnn/archive/${NCNN_SHA}.tar.gz")
     set(NCNN_SHA256 "a48593360583c333ffb70f7167845a29c491e37248fb6bb6a6f5f7db01b7c241")
@@ -301,15 +277,10 @@ else()
     if(NCNN_VULKAN)
         message(FATAL_ERROR "rawlens: source-only build requires NCNN_VULKAN=OFF")
     endif()
-    add_library(ncnnMl SHARED
-        "${CMAKE_CURRENT_SOURCE_DIR}/ncnnMl.cpp"
-        "${PHOTON_FLOW_DIR}/layer/flownetupsample.cpp"
-        "${PHOTON_FLOW_DIR}/layer/flownetcorrlookup.cpp"
-        "${PHOTON_FLOW_DIR}/layer/flownetcorrfused.cpp")
+    add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/ncnnMl.cpp")
     target_include_directories(ncnnMl PRIVATE
         "${ncnn_SOURCE_DIR}/src"
-        "${ncnn_BINARY_DIR}/src"
-        "${PHOTON_FLOW_DIR}" "${PHOTON_FLOW_DIR}/layer")
+        "${ncnn_BINARY_DIR}/src")
     target_compile_options(ncnnMl PRIVATE -fno-rtti -fno-exceptions)
     target_link_libraries(ncnnMl PRIVATE ncnn android log)
     set_target_properties(ncnnMl PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
@@ -317,7 +288,7 @@ else()
     # Wiring assertion: source-only builds must link the real bridge, never
     # the stub. Fails the build instead of silently shipping dead ML.
     get_target_property(_ncnnml_srcs ncnnMl SOURCES)
-    if(_ncnnml_srcs MATCHES "flownet_stub")
+    if(_ncnnml_srcs MATCHES "ncnn_stub")
         message(FATAL_ERROR "rawlens: source-only build would use the ncnn stub")
     endif()
 endif()
