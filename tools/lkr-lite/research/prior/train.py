@@ -43,6 +43,7 @@ def load_pairs(d, clean=False):
             z = np.load(f)
             np.save(cx, z['x']); np.save(cy, z['y']); np.save(cn, np.float32(z['noise']))
             if 'c' in z: np.save(f[:-4] + '.c.npy', z['c'])
+            if 'ns' in z: np.save(f[:-4] + '.ns.npy', z['ns'])
             del z
         x = np.load(cx, mmap_mode='r'); y = np.load(cy, mmap_mode='r')
         c = None
@@ -53,7 +54,12 @@ def load_pairs(d, clean=False):
         s = np.float32(np.sqrt(float(np.load(cn)) * 0.18))   # noise sigma at mid grey (relative)
         hf = f[:-4] + '.h.npy'   # hard-patch mining map (add_hardness.py / gen_pairs.hardness)
         h = np.load(hf) if os.path.exists(hf) else None
-        out.append((x, y, s, h, c))
+        nf = f[:-4] + '.ns.npy'   # per-pixel noise gain where the merge lost frames (gen_pairs v2), else 1
+        if not os.path.exists(nf) and os.path.exists(cn):   # cache made before the ns field existed
+            zz = np.load(f)
+            if 'ns' in zz.files: np.save(nf, zz['ns'])
+        ns = np.load(nf, mmap_mode='r') if os.path.exists(nf) else None
+        out.append((x, y, s, h, c, ns))
     return out
 
 
@@ -82,11 +88,11 @@ def batch(pairs, rng, n, p, dev, hard=None, hard_frac=0.0, grain=None):
     for _ in range(n):
         if hard is not None and hard.p is not None and rng.random() < hard_frac:
             pi, cy, cx = hard.pick(rng)
-            x, y, s, _, c = pairs[pi]; H = x.shape[0]
+            x, y, s, _, c, ns = pairs[pi]; H = x.shape[0]
             jit = lambda c: int(np.clip(c - p // 2 + rng.integers(-p // 4, p // 4 + 1), 32, H - 32 - p))
             i, j = jit(cy) // 4 * 4, jit(cx) // 4 * 4
         else:
-            x, y, s, _, c = pairs[rng.integers(len(pairs))]
+            x, y, s, _, c, ns = pairs[rng.integers(len(pairs))]
             H = x.shape[0]
             # even offsets keep the Bayer / 2x lattice phase (the zipper is lattice-locked)
             i = int(rng.integers(32, H - 32 - p) // 4 * 4); j = int(rng.integers(32, H - 32 - p) // 4 * 4)
@@ -99,13 +105,18 @@ def batch(pairs, rng, n, p, dev, hard=None, hard_frac=0.0, grain=None):
         else:
             yy = y[i:i + p, j:j + p].astype(np.float32)
         b = np.sqrt(np.clip(yy, 0, None))
-        k = int(rng.integers(4)); a, b = np.rot90(a, k), np.rot90(b, k)
-        if rng.random() < 0.5: a, b = a[:, ::-1], b[:, ::-1]
-        xs.append(np.ascontiguousarray(a).transpose(2, 0, 1)); ys.append(np.ascontiguousarray(b).transpose(2, 0, 1)); ss.append((s, g))
+        # noise channel: sigma x the merge's per-pixel noise gain (lost frames -> more noise there), so the
+        # network does not over-smooth moving foliage nor under-clean it
+        sm = s * (np.asarray(ns[i:i + p, j:j + p], np.float32) if ns is not None else np.ones((p, p), np.float32))
+        k = int(rng.integers(4)); a, b, sm = np.rot90(a, k), np.rot90(b, k), np.rot90(sm, k)
+        if rng.random() < 0.5: a, b, sm = a[:, ::-1], b[:, ::-1], sm[:, ::-1]
+        xs.append(np.ascontiguousarray(a).transpose(2, 0, 1)); ys.append(np.ascontiguousarray(b).transpose(2, 0, 1)); ss.append((np.ascontiguousarray(sm), g))
     x = torch.from_numpy(np.stack(xs)).to(dev); y = torch.from_numpy(np.stack(ys)).to(dev)
-    nc = 2 if grain is not None else 1
-    s = torch.tensor([v[:nc] for v in ss], device=dev, dtype=torch.float32).view(-1, nc, 1, 1).expand(-1, nc, p, p).contiguous()
-    return x, y, s
+    sig = torch.from_numpy(np.stack([v[0] for v in ss]))[:, None]
+    if grain is not None:
+        gch = torch.tensor([v[1] for v in ss], dtype=torch.float32).view(-1, 1, 1, 1).expand(-1, 1, p, p)
+        sig = torch.cat([sig, gch], 1)
+    return x, y, sig.contiguous().to(dev)
 
 
 def highpass(t):
@@ -121,6 +132,11 @@ def local_energy(t, r=4):
     return torch.sqrt(F.avg_pool2d(h * h, 2 * r + 1, stride=1, padding=r, count_include_pad=False) + 1e-6)
 
 
+def luma_texture(t, r=4):
+    """Local RMS of the fine scale of luma (the mean of R, G, B in sqrt space)."""
+    return local_energy(t.mean(1, keepdim=True), r)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('pairs'); ap.add_argument('out')
@@ -131,6 +147,7 @@ def main():
     ap.add_argument('--init', default=None, help='start from this checkpoint (fine-tune)')
     ap.add_argument('--clean', action='store_true', help='denoiser: train to the clean truth (needs gen_pairs c)')
     ap.add_argument('--grain', type=float, nargs=2, default=None, help='with --clean: luma grain share range, e.g. 0 0.6 (2nd input)')
+    ap.add_argument('--texfloor', type=float, default=0.0, help='one-sided luma texture term: penalise only output texture BELOW the target (anti-smearing that cannot be won by adding noise), e.g. 1')
     ap.add_argument('--energy', type=float, default=0.0, help='weight of the local fine-energy match (anti-smearing), e.g. 1')
     ap.add_argument('--hard', type=float, default=0.0, help='share of crops from hard-patch mining (Gharbi 2016), e.g. 0.5')
     a = ap.parse_args()
@@ -155,6 +172,7 @@ def main():
         o = m(x, s)
         loss = F.l1_loss(o, y) + 2.0 * F.l1_loss(highpass(o), highpass(y))
         if a.energy > 0: loss = loss + a.energy * F.l1_loss(local_energy(o), local_energy(y))
+        if a.texfloor > 0: loss = loss + a.texfloor * F.relu(luma_texture(y) - luma_texture(o)).mean()
         opt.zero_grad(); loss.backward()
         gn = torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)
         if not (torch.isfinite(loss) and torch.isfinite(gn)):   # skip a bad step (a NaN run 2026-11-20 at step ~4300)

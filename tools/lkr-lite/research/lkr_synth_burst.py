@@ -57,7 +57,12 @@ def rgb_unprocessed(path, seed):
     """sRGB photo (jpg/png) -> linear camera-like RGB (Brooks et al. 2019 'unprocessing', simplified):
     inverse sRGB gamma, then divide by a random white balance so the raw has a camera-like cast."""
     from PIL import Image
-    im = np.asarray(Image.open(path).convert('RGB')).astype('f4') / 255.0
+    return unprocess(np.asarray(Image.open(path).convert('RGB')), seed)
+
+
+def unprocess(u8, seed):
+    """rgb_unprocessed on an 8-bit array (or a crop of one: same pixels, much less work)."""
+    im = u8.astype('f4') / 255.0
     lin = np.where(im <= 0.04045, im / 12.92, ((im + 0.055) / 1.055) ** 2.4)
     rng = np.random.default_rng(seed)
     wb = np.array([rng.uniform(1.8, 2.4), 1.0, rng.uniform(1.4, 1.9)], 'f4')   # R, G, B gains undone
@@ -93,6 +98,13 @@ def main():
     ap.add_argument('--rail-period', type=float, default=9.0, help='bar period, HR px')
     ap.add_argument('--noise-a', type=float, default=2.05e-5)
     ap.add_argument('--noise-b', type=float, default=1.4e-6)
+    ap.add_argument('--ev', type=float, nargs='+', default=None,
+                    help='exposure bracket: EV per frame (frame 0 = reference, e.g. 0 0 0 0 0 -2 -2 1.5); shutter only, '
+                         'same noise model, clipped at white; ExposureTime in each DNG is scaled to match')
+    ap.add_argument('--hdr-stops', type=float, default=0.0,
+                    help='> 0: contrast-expand the scene so its brightest 0.1 %% sits this many stops above clip at 0 EV '
+                         '(median stays mid-grey); gt keeps the unclipped values')
+    ap.add_argument('--clean-out', default=None, help='also write the same burst without noise here (training pairs: one run)')
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
     S, K = a.size, a.frames
@@ -100,17 +112,31 @@ def main():
     x0, y0 = a.at
 
     # ---- ground-truth layers on the HR grid (output scale 2) ----
-    src = rgb_unprocessed(a.source, a.seed) if a.source.lower().endswith(('.jpg', '.jpeg', '.png')) else half_rgb(a.source)
+    # Photos: only the two crops used are unprocessed (2026-11-20: the whole photo took ~28 s per burst).
+    if a.source.lower().endswith(('.jpg', '.jpeg', '.png')):
+        from PIL import Image
+        src = np.asarray(Image.open(a.source).convert('RGB'))
+        conv = lambda c: unprocess(c, a.seed)
+    else:
+        src = half_rgb(a.source)
+        conv = lambda c: c
     sy, sx = a.src_at[::-1] if a.src_at else ((src.shape[0] - HR) // 2, (src.shape[1] - HR) // 2)
-    bg = src[sy:sy + HR, sx:sx + HR].copy()
+    bg = conv(src[sy:sy + HR, sx:sx + HR]).copy()
     if a.flat_bg >= 0:
         bg[:] = np.float32(a.flat_bg)
     bg *= 0.35 / max(np.median(bg[..., 1]), 1e-6)            # mid-grey exposure
     if a.no_clip:   # training scenes: keep highlights below clipping (the truth is never clipped)
         bg *= min(1.0, 0.85 / max(float(np.percentile(bg.max(-1), 99.9)), 1e-6))
+    if a.hdr_stops > 0:   # HDR scene: power-law expansion, median 0.18, brightest 0.1 % at 2^stops x clip
+        lum = bg.mean(-1)
+        top, med = max(float(np.percentile(lum, 99.9)), 1e-6), max(float(np.median(lum)), 1e-6)
+        ln = np.clip(lum / top, 1e-6, None)
+        hi = 0.85 * 2.0 ** a.hdr_stops   # short frames at -stops keep the brightest detail below clip
+        gam = np.log(0.18 / hi) / np.log(med / top)
+        bg *= (hi * ln ** gam / np.maximum(lum, 1e-9))[..., None]
     yy, xx = np.mgrid[0:HR, 0:HR].astype('f4')
     # person: textured ellipse, strongly blue, own texture from another part of the source
-    ptex = src[(sy + HR // 2) % (src.shape[0] - HR):, :][:HR, :HR]
+    ptex = conv(src[(sy + HR // 2) % (src.shape[0] - HR):, :][:HR, :HR])
     # fine-textured clothing, mean level close to the bars (the real hard case), blue tint
     lum = ptex.mean(-1, keepdims=True)
     ptex = (lum / max(float(np.median(lum)), 1e-6)) * a.person_level * np.array([0.6, 0.9, 1.6], 'f4')
@@ -197,13 +223,18 @@ def main():
                 X, Y = 2 * pj + ox - cx, 2 * pi + oy - cy
                 sx = np.cos(th) * X - np.sin(th) * Y + cx + dx
                 sy = np.sin(th) * X + np.cos(th) * Y + cy + dy
-                out[oy::2, ox::2] = map_coordinates(plane, [(sy - oy) / 2, (sx - ox) / 2], order=3, mode='nearest')
+                # bilinear: the background only steers the global alignment (cubic took ~24 s per burst)
+                out[oy::2, ox::2] = map_coordinates(plane, [(sy - oy) / 2, (sx - ox) / 2], order=1, mode='nearest')
         return out
 
     os.makedirs(a.out, exist_ok=True)
+    if a.clean_out: os.makedirs(a.clean_out, exist_ok=True)
     masks, shifts = [], []
     ly, lx = np.mgrid[0:S, 0:S].astype('f4')
+    evs = list(a.ev) if a.ev else [0.0] * K
+    assert len(evs) == K, f'--ev needs {K} values'
     for k in range(K):
+        ek = 2.0 ** evs[k]
         dx, dy = (0.0, 0.0) if k == 0 else rng.normal(0, a.tremor, 2)
         th = 0.0 if k == 0 else np.deg2rad(rng.normal(0, a.rot))
         px, py = pc[0] + 2 * a.person_speed * k, pc[1]
@@ -231,19 +262,28 @@ def main():
         # The rest of the frame moves with the same camera (rotation about the square's
         # centre): otherwise the global alignment sees a static frame and rejects the square.
         frame = moved_template(tnorm, dx, dy, th) if k > 0 else tnorm.copy()
-        frame[y0:y0 + S, x0:x0 + S] = np.clip(mos, 0, 1)
-        clean = np.clip(frame, 0, None)
+        frame[y0:y0 + S, x0:x0 + S] = mos
+        clean = np.clip(frame * ek, 0, 1)   # exposure, then the sensor clips
         noisy = clean + rng.normal(0, 1, clean.shape).astype('f4') * np.sqrt(a.noise_a * clean + a.noise_b)
-        codes = np.clip(np.round(noisy * (wl - blv) + blv), 0, wl).astype('<u2')
-        dst = os.path.join(a.out, f'f{k:03}.dng')
-        shutil.copyfile(a.template, dst)
-        mm_tif = tifffile.memmap(dst, page=0, mode='r+')
-        mm_tif[...] = codes
-        mm_tif.flush()
-        del mm_tif
+        outs = [(a.out, noisy)] + ([(a.clean_out, clean)] if a.clean_out else [])
+        for od, img in outs:
+            codes = np.clip(np.round(img * (wl - blv) + blv), 0, wl).astype('<u2')
+            dst = os.path.join(od, f'f{k:03}.dng')
+            shutil.copyfile(a.template, dst)
+            mm_tif = tifffile.memmap(dst, page=0, mode='r+')
+            mm_tif[...] = codes
+            mm_tif.flush()
+            del mm_tif
+            if evs[k] != 0.0:   # the merge reads exposure ratios from ExposureTime (rational, IFD0)
+                with tifffile.TiffFile(dst, mode='r+') as tf:
+                    tg = tf.pages[0].tags.get('ExposureTime')
+                    if tg is not None:
+                        n0, d0 = tg.value
+                        tg.overwrite((int(round(n0 * ek)), int(d0)))
         print(f'frame {k}: shift ({dx:+.2f}, {dy:+.2f}) LR px, rot {np.rad2deg(th):+.3f} deg', flush=True)
-    np.savez_compressed(os.path.join(a.out, 'labels.npz'), gt=gt.astype('f4'), masks=np.array(masks),
-                        region=np.array([x0, y0, S]), rail=rail > 0.5, shifts=np.array(shifts))
+    for od in [a.out] + ([a.clean_out] if a.clean_out else []):
+        np.savez_compressed(os.path.join(od, 'labels.npz'), gt=gt.astype('f4'), masks=np.array(masks),
+                            region=np.array([x0, y0, S]), rail=rail > 0.5, shifts=np.array(shifts))
     print('wrote', a.out)
 
 

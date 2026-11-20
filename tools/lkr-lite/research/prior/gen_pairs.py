@@ -58,6 +58,7 @@ def main():
     ap.add_argument('sources'); ap.add_argument('template'); ap.add_argument('out')
     ap.add_argument('--count', type=int, default=400); ap.add_argument('--poles', action='store_true', help='every scene: thin bright tilted lines (pole highlights)'); ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--noise', type=float, nargs=2, default=[5e-6, 3e-4], help='noise a range (log-uniform); night: 3e-4 3e-3')
+    ap.add_argument('--motion', type=float, default=0.4, help='share of scenes with a moving, non-rigid subject (lost frames: the noise map ns)')
     ap.add_argument('--s', type=int, default=2, help='Lite output scale: 2 -> 1024 x 1024 pairs, 1 -> 512 x 512 (truth box-averaged 2 x 2)')
     a = ap.parse_args()
     a.sources, a.template, a.out = (os.path.abspath(os.path.expanduser(v)) for v in (a.sources, a.template, a.out))
@@ -78,9 +79,14 @@ def main():
         sx, sy = int(rng.integers(0, W - 1024)), int(rng.integers(0, H - 1024))
         nl = float(np.exp(rng.uniform(np.log(a.noise[0]), np.log(a.noise[1]))))   # noise a (signal-dependent)
         args = [sys.executable, '-I', SYN, a.template, src, None, '--frames', '8', '--size', '512',
-                '--src-at', str(sx), str(sy), '--no-person', '--no-clip', '--person-speed', '0', '--seed', str(i),
+                '--src-at', str(sx), str(sy), '--no-clip', '--seed', str(i),
                 '--tremor', f'{rng.uniform(1, 4):.2f}', '--blur', f'{rng.uniform(0.2, 0.5):.2f}',
                 '--noise-a', f'{nl:.3g}', '--noise-b', f'{nl * 0.05:.3g}']
+        if rng.random() < a.motion:   # moving subject, wobbling like branches in wind: the merge loses frames there
+            args += ['--person-speed', f'{rng.uniform(0.5, 3.0):.2f}', '--person-wobble', f'{rng.uniform(0.0, 1.0):.2f}',
+                     '--person-level', f'{rng.uniform(0.04, 0.25):.2f}', '--person-stripes', f'{rng.choice([0.0, 5.0, 7.0, 11.0])}']
+        else:
+            args += ['--no-person', '--person-speed', '0']
         if a.poles:   # pole highlights: thin bright slightly tilted lines over natural (sometimes defocused) backgrounds
             args += ['--rail-tilt', f'{rng.choice([-1, 1]) * rng.uniform(0.5, 4):.2f}', '--rail-width', f'{rng.uniform(1.0, 2.5):.2f}',
                      '--rail-period', f'{rng.uniform(25, 70):.1f}', '--rail-level', f'{rng.uniform(0.4, 0.8):.2f}']
@@ -96,12 +102,12 @@ def main():
             # Lite(noisy) - Lite(clean) is Lite's own grain. Target = truth + that grain: the prior gets no
             # credit for removing grain, only for the zipper / dots / colour errors.
             outs = {}
-            for tag, na, nb in (('noisy', nl, nl * 0.05), ('clean', 0.0, 0.0)):
+            # One synth run writes both bursts (same motion; the clean one without noise).
+            ar = list(args); ar[5] = os.path.join(td, 'burst_noisy'); ar += ['--clean-out', os.path.join(td, 'burst_clean')]
+            r = subprocess.run(ar, capture_output=True, text=True, cwd=td)
+            if r.returncode != 0: print('synth failed', r.stderr[-300:]); n += 1; continue
+            for tag in ('noisy', 'clean'):
                 burst = os.path.join(td, 'burst_' + tag)
-                ar = list(args); ar[5] = burst
-                ar[ar.index('--noise-a') + 1] = f'{na:.3g}'; ar[ar.index('--noise-b') + 1] = f'{nb:.3g}'
-                r = subprocess.run(ar, capture_output=True, text=True, cwd=td)
-                if r.returncode != 0: print('synth failed', r.stderr[-300:]); break
                 env = dict(os.environ, LKRL_TRACE_PREFIX=os.path.join(td, 't_' + tag))
                 r = subprocess.run([LITE, burst, os.path.join(td, tag + '.dng'), '--s', str(a.s), '--tile', '512', '--crop', '512', '512',   # one tile: its trace is the pair
                                      '--at', '1536', '1024',
@@ -109,6 +115,8 @@ def main():
                 hyb = os.path.join(td, f't_{tag}_tile_0_0-hybrid.f32')
                 if r.returncode != 0 or not os.path.exists(hyb): print('lite failed'); break
                 outs[tag] = np.transpose(np.fromfile(hyb, np.float32).reshape(3, 512 * a.s, 512 * a.s), (1, 2, 0))
+                nsf = os.path.join(td, f't_{tag}_tile_0_0-noise-scale.f32')   # per-pixel noise gain (lost frames, >= 1)
+                if tag == 'noisy': ns = np.fromfile(nsf, np.float32).reshape(512 * a.s, 512 * a.s) if os.path.exists(nsf) else None
                 if tag == 'clean':
                     g = np.load(os.path.join(burst, 'labels.npz'))['gt'].astype(np.float32)   # 1024 x 1024 (2x)
                     if a.s == 1: g = g.reshape(512, 2, 512, 2, 3).mean((1, 3))   # sensor-scale truth
@@ -123,7 +131,8 @@ def main():
                 print(f'rejected pair (gain {k:.2f}, fine error {fine:.3f})'); continue   # clipped / misaligned
             y = g + (x - xc)   # truth + Lite's own grain
             np.savez(dst, x=x.astype(np.float16), y=y.astype(np.float16), c=g.astype(np.float16),   # c: clean truth (denoiser)
-                     noise=np.float32(nl), hard=hardness(x, y))
+                     noise=np.float32(nl), hard=hardness(x, y),
+                     **({'ns': ns.astype(np.float16)} if ns is not None else {}))
         n += 1
         if n % 10 == 0: print(n, flush=True)
 
