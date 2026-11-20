@@ -66,6 +66,8 @@ class WronskiVsKernelNetBenchTest {
             // 512 px truth is too small for 32/64 px tiles (as Sr2xTruthTest).
             factors = lv?.factors ?: listOf(1, 2, 4, 4), tileSizes = lv?.tileSizes ?: listOf(16, 16, 16, 8),
             searchRadii = lv?.searchRadii, alignV2 = v2,
+            // BENCH_GRAIN: grain retention sweep (default the app's 1).
+            grainRetention = System.getenv("BENCH_GRAIN")?.toFloatOrNull() ?: PipelineConfig.DEFAULT_GRAIN_RETENTION,
             kernelParams = tuning.kernelParams(fin), kernelPreprocessing = "gat",
             kernelAlpha = al, kernelBeta = be,
             robustnessParams = tuning.robustnessParams(haveNoiseLut = false, s3 = false), robustnessEnabled = true,
