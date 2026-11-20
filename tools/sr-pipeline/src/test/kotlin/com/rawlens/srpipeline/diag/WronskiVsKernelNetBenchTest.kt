@@ -99,6 +99,29 @@ class WronskiVsKernelNetBenchTest {
     // draws the disc's texture displaced by motion[k] (object motion).
     private val cx = 330.0; private val cy = 330.0; private val discR = 35.0
 
+    // Texture patch (oil-painting metric): low-contrast random texture with a
+    // dense spectrum, 1200 waves log-uniform over 0.04-0.75 cycles/px,
+    // amplitude 0.004 (0.1/f)^0.5, pixel aperture applied exactly (sinc per
+    // axis), so frames and truth sample the same continuous texture. Patch
+    // [356, 492) x [36, 172) sensor px; TextureTransfer measures the 128 px
+    // inside it. Replaces the scene there (static, not under the disc).
+    private val texWaves: Array<DoubleArray> = run {
+        val rng = java.util.Random(77)
+        Array(1200) {
+            val f = 0.04 * Math.pow(0.75 / 0.04, rng.nextDouble())
+            val th = rng.nextDouble() * Math.PI
+            val fx = f * kotlin.math.cos(th); val fy = f * kotlin.math.sin(th)
+            fun sinc(x: Double) = if (kotlin.math.abs(x) < 1e-9) 1.0 else kotlin.math.sin(Math.PI * x) / (Math.PI * x)
+            doubleArrayOf(fx, fy, rng.nextDouble() * 2 * Math.PI, 0.004 * Math.sqrt(0.1 / f) * sinc(fx) * sinc(fy))
+        }
+    }
+    private fun inTexPatch(u: Double, v: Double) = u >= 356.0 && u < 492.0 && v >= 36.0 && v < 172.0
+    private fun texPatch(u: Double, v: Double): Double {
+        var s = 0.42
+        for (w in texWaves) s += w[3] * kotlin.math.cos(2 * Math.PI * (w[0] * u + w[1] * v) + w[2])
+        return s
+    }
+
     private fun frameWithMotion(t: Sr2xTruthTest, sx: Double, sy: Double, mx: Double, my: Double,
                                 a: Double, b: Double, seed: Long, blurLen: Double = 0.0): Array<FloatArray> {
         val rng = java.util.Random(seed)
@@ -112,7 +135,8 @@ class WronskiVsKernelNetBenchTest {
                 val inside = hypot(u - mx - cx, v - my - cy) < discR
                 // The disc carries a different texture (scene mirrored) so a
                 // misaligned merge ghosts visibly.
-                s += (if (inside) 0.75 - 0.6 * (t.box(2 * cx - (u - mx), v - my) - 0.42) else t.box(u, v)) / taps
+                s += (if (inside) 0.75 - 0.6 * (t.box(2 * cx - (u - mx), v - my) - 0.42)
+                      else if (inTexPatch(u, v)) texPatch(u, v) else t.box(u, v)) / taps
             }
             val g = t.gains[(y and 1) * 2 + (x and 1)]
             val vv = (s * g).coerceIn(0.0, 1.0)
@@ -125,7 +149,8 @@ class WronskiVsKernelNetBenchTest {
         val n = t.n * scale
         return Array(n) { i -> Array(n) { j ->
             val u = (j + 0.5) / scale - 0.5; val v = (i + 0.5) / scale - 0.5
-            val s = if (hypot(u - cx, v - cy) < discR) 0.75 - 0.6 * (t.box(2 * cx - u, v) - 0.42) else t.box(u, v)
+            val s = if (hypot(u - cx, v - cy) < discR) 0.75 - 0.6 * (t.box(2 * cx - u, v) - 0.42)
+                else if (inTexPatch(u, v)) texPatch(u, v) else t.box(u, v)
             FloatArray(3) { c -> (s * chGain[c]).toFloat() }
         } }
     }
@@ -220,6 +245,10 @@ class WronskiVsKernelNetBenchTest {
                         }
                         println("BENCH %-6s %-6s %dx %-12s PSNR %6.2f  detail %6.2f  swept %6.2f  disc %6.2f  trail %6.2f  trailP99 %.4f  flatErr %.5f".format(
                             scene, label, scale, k, all, detail(img, truth), swept, discP, trailP, trailP99, flat))
+                        // Texture-only 128x128 sensor-px region (no edge, chart or disc):
+                        // per-band transfer / residual, the oil-painting metric.
+                        println("TEX   %-6s %-6s %dx %-12s %s".format(scene, label, scale, k,
+                            TextureTransfer.format(TextureTransfer.measure(img, truth, scale, 360, 40, 128))))
                     }
                 }
             }

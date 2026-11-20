@@ -8,7 +8,7 @@ class ColourDiffCliTest {
         "--backend", "vulkan", "--spv-dir", "/tmp/spv", "--kernel", "kernelnet", *flags))
 
     @Test fun `grain retention supports default and explicit opt out without consuming scale`() {
-        assertEquals(1f,plan().grainRetention,0f)
+        assertEquals(0.5f,plan().grainRetention,0f)
         for(value in listOf(0f,.5f,1f)) {
             val p=plan("--grain-retention",value.toString(),"--scale","2")
             assertEquals(value,p.grainRetention,0f)

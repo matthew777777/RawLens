@@ -96,7 +96,7 @@ private fun usage(): String = """
                      zipper correction (default: auto for Vulkan KernelNet with valid AsShotNeutral)
       --grain-retention F
                      uniform sensor-grain retention for Vulkan KernelNet colour differences, 0..1
-                     (default 1: six evenly spaced luma frames; 0: average all frames)
+                     (default 0.5, as the app; 1: six evenly spaced luma frames; 0: average all frames)
       --continuous-motion on|off
                      KernelNet's continuous motion handling for Wronski (default on, as the app; off = IPOL parity)
       --blur-gamma G     down-weight blurry frames by (detail energy / reference)^G, 0 = off (default 1, as the app)

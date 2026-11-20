@@ -159,7 +159,12 @@ data class PipelineConfig(
     val grainRetention: Float = DEFAULT_GRAIN_RETENTION,
 ) {
     companion object {
-        const val DEFAULT_GRAIN_RETENTION = 1f
+        /**
+         * Owner choice 2026-11-20: 0.5 (was 1). Known-truth bench, static,
+         * PSNR 1x clean/iso100/dim: 1 = 47.86/44.27/37.50, 0.5 =
+         * 48.13/44.85/38.30, 0 = 47.75/44.96/38.83; owner A/B on hdrplus 133623.
+         */
+        const val DEFAULT_GRAIN_RETENTION = 0.5f
     }
 }
 
