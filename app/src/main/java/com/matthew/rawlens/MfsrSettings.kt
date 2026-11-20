@@ -44,6 +44,13 @@ data class MfsrSettings(
      */
     val zipperFix: Boolean = true,
     /**
+     * Two-band reconstruction (sr-pipeline TwoBandReconstruction on Vulkan):
+     * low band = wide Gaussian, high band = narrow Gaussian residual with an
+     * overlapped DCT Wiener, no per-frame kernels. Needs the zipper fix
+     * (colour differences); off = the Wronski kernel merge.
+     */
+    val twoBand: Boolean = true,
+    /**
      * Merge engine behind the same shutter / ZSL / save path: Wronski MFSR
      * (sr-pipeline) or LK-Reloaded (tools/lkr-lite = LK-R Lite, after Lecouat et al. 2021).
      * Each engine has its own quick tile (MFSR, LK-R); turning one on
@@ -92,6 +99,7 @@ data class MfsrSettings(
         "mfsr_s3" to s3,
         "mfsr_learned_noise" to learnedNoise,
         "mfsr_zipper_fix" to zipperFix,
+        "mfsr_two_band" to twoBand,
         "mfsr_engine" to engine.name,
         "lkr_dct_prior" to lkrDctPrior,
         "lkr_network" to lkrNetwork,
@@ -121,6 +129,7 @@ data class MfsrSettings(
             s3 = values["mfsr_s3"] as? Boolean ?: true,
             learnedNoise = values["mfsr_learned_noise"] as? Boolean ?: true,
             zipperFix = values["mfsr_zipper_fix"] as? Boolean ?: true,
+            twoBand = values["mfsr_two_band"] as? Boolean ?: true,
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,
             lkrDctPrior = values["lkr_dct_prior"] as? Boolean ?: false,
             // Default: on for phones with an NPU (nearly free there; colour-only since d1affb09, no luma

@@ -51,6 +51,17 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 }
             }
         })
+        content.addView(settingsCheck("Two-band reconstruction", mfsrSettings.twoBand).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.twoBand) {
+                    if (applyMfsrSettings(mfsrSettings.copy(twoBand = checked))) {
+                        setStatus(if (checked) "MFSR TWO-BAND • ON" else "MFSR TWO-BAND • OFF")
+                    } else {
+                        isChecked = mfsrSettings.twoBand
+                    }
+                }
+            }
+        })
         content.addView(settingsCheck("Learned noise model", mfsrSettings.learnedNoise).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.learnedNoise) {

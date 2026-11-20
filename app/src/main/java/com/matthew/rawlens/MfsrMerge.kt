@@ -11,6 +11,7 @@ import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
 import com.rawlens.srpipeline.stages.HotPixels
+import com.rawlens.srpipeline.stages.TwoBandReconstruction
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
@@ -642,7 +643,10 @@ internal object MfsrMerge {
             // RawTherapee capture sharpening: auto radius from the reference
             // CFA, measured now so the frame need not stay alive (RT measures
             // it on the raw too). Output pixels at 2x are half as large.
-            val captureRadius = runCatching { RtCaptureSharpen.autoRadiusBayer(first) * scale }
+            // Two-band sharpens inside its DCT Wiener (deconvolution matched
+            // to its own narrow kernel), so RT runs only on the Wronski path.
+            val twoBand = settings.twoBand && settings.zipperFix
+            val captureRadius = if (twoBand) Float.NaN else runCatching { RtCaptureSharpen.autoRadiusBayer(first) * scale }
                 .getOrDefault(Float.NaN)
             // Noise model: never the vendor NoiseProfile (owner rule). Our own
             // estimate from the reference frame (SceneNoise: same-CFA Haar
@@ -721,8 +725,10 @@ internal object MfsrMerge {
                 blurGamma = 1f,
                 // Subtract a neutral black floor above the metadata black.
                 blackPedestal = true,
+                // Two-band reconstruction (needs colourDiff; ignored without it).
+                twoBand = if (twoBand) TwoBandReconstruction.Params() else null,
             )
-            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=wronski continuousMotion=on s3=%s zipperFix=%s".format(snr, fin.tileSize, settings.s3, settings.zipperFix))
+            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=wronski continuousMotion=on s3=%s zipperFix=%s twoBand=%s".format(snr, fin.tileSize, settings.s3, settings.zipperFix, twoBand))
             fun asset(name: String): ByteArray =
                 context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
             val fft = asset("fft")
@@ -755,6 +761,9 @@ internal object MfsrMerge {
                     noiseAcc = asset("noise_acc"),
                     noiseEven = asset("noise_even"),
                     caWarp = asset("ca_warp"),
+                    mergeTwoBand = asset("merge_twoband"),
+                    twoBandResolve = asset("twoband_resolve"),
+                    twoBandDct = asset("twoband_dct"),
                 ),
                 output = nativeOut
             )
@@ -774,7 +783,8 @@ internal object MfsrMerge {
             }
             // RawTherapee capture sharpening (defaults: auto radius and
             // contrast, 20 iterations) on the GPU; skipped on any failure.
-            try {
+            // Wronski path only: two-band already applied its matched sharpening.
+            if (!twoBand) try {
                 val wb = zipperWb(neutral)
                 VulkanHub.open().use { vk ->
                     val st = RtCaptureSharpenVulkan.apply(vk, { name -> context.assets.open("spirv/$name").use { it.readBytes() } },

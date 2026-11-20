@@ -82,7 +82,10 @@ class WronskiVsKernelNetBenchTest {
             ghostGrow = k == Kernel.WRONSKI_GHOST || k in all,
             blurGamma = if (k in all) (System.getenv("BENCH_BLUR_GAMMA")?.toFloatOrNull() ?: 1f) else 0f,
             twoBand = if (k == Kernel.TWOBAND) com.rawlens.srpipeline.stages.TwoBandReconstruction.Params(
-                sigmaHigh = System.getenv("BENCH_TB_HIGH")?.toDoubleOrNull() ?: 0.35) else null,
+                sigmaHigh = System.getenv("BENCH_TB_HIGH")?.toDoubleOrNull() ?: 0.35,
+                confK = System.getenv("BENCH_TB_CONFK")?.toDoubleOrNull() ?: 0.05,
+                deconvStrength = System.getenv("BENCH_TB_DECONV")?.toDoubleOrNull() ?: 0.25,
+                gainCap = System.getenv("BENCH_TB_CAP")?.toDoubleOrNull() ?: 1.5) else null,
         )
     }
 

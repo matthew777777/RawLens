@@ -37,7 +37,25 @@ class TwoBandReconstruction(
     data class Params(
         val sigmaLow: Double = 1.0,
         val sigmaHigh: Double = 0.35,
-        val confK: Double = 0.5,
+        /**
+         * Coverage fade c = Nw / (Nw + confK) on the high band. 0.5 faded the
+         * whole high band to ~0.77 on a normal 8-frame burst (bench fit
+         * T = L + c N (1 - L), c 0.74-0.79 in every band); 0.05 fades holes only.
+         */
+        val confK: Double = 0.05,
+        /**
+         * Merge-matched sharpening: Wiener-deconvolve H^strength of the narrow
+         * kernel H in the high-band DCT (0 = off, 1 = full inverse). Same as
+         * deconvolving a Gaussian of sigmaHigh * sqrt(strength).
+         */
+        // Known-truth bench (real pipeline, cap 1.5), PSNR / texture 0.5-0.7 c/px at 1x:
+        //   strength 0    clean 45.02 / 0.53   dim 39.25 / 0.38
+        //   strength 0.25 clean 44.96 / 0.60   dim 38.97 / 0.43   (2x 0.68)
+        //   strength 0.5  clean 44.64 / 0.67   dim 38.58 / 0.48
+        //   strength 1    clean 43.71 / 0.78   dim 37.56 / 0.59
+        val deconvStrength: Double = 0.25,
+        /** Largest per-coefficient deconvolution gain. */
+        val gainCap: Double = 1.5,
         val denoise: Boolean = true,
         val grainFloor: Double = 0.0,
         /**
@@ -181,6 +199,7 @@ class TwoBandReconstruction(
 
     /** Overlapped (step 4) 8x8 DCT empirical Wiener with per-block noise variance from nv. */
     private fun dctWiener(src: DoubleArray, nv: DoubleArray, nw: Int, nh: Int, floorFrac: Double): DoubleArray {
+        val sig = params.sigmaHigh * kotlin.math.sqrt(params.deconvStrength.coerceAtLeast(0.0))
         val b = 8
         val c = Array(b) { k -> DoubleArray(b) { x -> (if (k == 0) sqrt(1.0 / b) else sqrt(2.0 / b)) * cos(PI * (2 * x + 1) * k / (2 * b)) } }
         val out = DoubleArray(nw * nh); val wsum = DoubleArray(nw * nh)
@@ -196,7 +215,12 @@ class TwoBandReconstruction(
                 for (k in 0 until b) for (l in 0 until b) { var s = 0.0; for (y in 0 until b) s += c[l][y] * tmp[y][k]; blk[l][k] = s }
                 for (l in 0 until b) for (k in 0 until b) {
                     val e = blk[l][k] * blk[l][k]
-                    blk[l][k] *= if (e > 1e-30) max(floorFrac, max(0.0, e - sv) / e) else 1.0
+                    var g = if (e > 1e-30) max(floorFrac, max(0.0, e - sv) / e) else 1.0
+                    if (sig > 0) {
+                        val fx = k * scale / 16.0; val fy = l * scale / 16.0
+                        g = min(g / exp(-2 * PI * PI * sig * sig * (fx * fx + fy * fy)), params.gainCap)
+                    }
+                    blk[l][k] *= g
                 }
                 for (y in 0 until b) for (k in 0 until b) { var s = 0.0; for (l in 0 until b) s += c[l][y] * blk[l][k]; tmp[y][k] = s }
                 for (y in 0 until b) for (x in 0 until b) { var s = 0.0; for (k in 0 until b) s += c[k][x] * tmp[y][k]

@@ -5,8 +5,15 @@
 // {0, 4}: the four phase dispatches give the step-4 overlap of the CPU
 // reference without atomics (blocks of one phase are disjoint).
 // Input den = (hf, nv, -) per output pixel; output aux += (win * hf', win).
-// Per-block noise = mean nv; gain = max(floor, (e - nv) / e) per coefficient.
-// push: pad[2] = outW, pad[3] = outH, pad[4] = blocks per row, alpha = floor.
+// Per-block noise = mean nv; Wiener gain w = max(floor, (e - nv) / e) per
+// coefficient. Merge-matched sharpening (beta = sigma > 0): the high band was
+// blurred by the narrow splat Gaussian H(f) = exp(-2 pi^2 sigma^2 f^2) per
+// axis (f in cycles per sensor px = k / 16 * scale); Wiener deconvolution
+// divides by it: gain = min(w / H, gainCap). Noise-only coefficients (w ~ 0)
+// stay suppressed, so only detail the burst actually measured is restored.
+// push: pad[2] = outW, pad[3] = outH, pad[4] = blocks per row, alpha = floor,
+//   beta = sigma (sensor px, 0 = no deconvolution), robustness = scale,
+//   pad[5] = gain cap (float bits).
 layout(local_size_x = 64) in;
 
 struct HmsrPush {
@@ -50,7 +57,13 @@ void main() {
   t = 0.0;
   for (uint y = 0u; y < 8u; ++y) t += basis(ly, y) * s_b[y * 8u + lx];
   const float e = t * t;
-  t *= e > 1e-30 ? max(p.alpha, max(0.0, e - nv) / e) : 1.0;
+  float g = e > 1e-30 ? max(p.alpha, max(0.0, e - nv) / e) : 1.0;
+  if (p.beta > 0.0) {
+    const vec2 fs = vec2(float(lx), float(ly)) * (p.robustness / 16.0);
+    const float h = exp(-19.7392088 * p.beta * p.beta * dot(fs, fs));
+    g = min(g / h, uintBitsToFloat(p.pad[5]));
+  }
+  t *= g;
   barrier();
   s_a[lid] = t; barrier();
   // inverse cols: s_b[y][k] = sum_l C[l][y] coef[l][k]   (y = ly, k = lx)

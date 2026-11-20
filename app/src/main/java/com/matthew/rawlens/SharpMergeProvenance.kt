@@ -25,6 +25,7 @@ internal fun sharpMergeProvenance(
             append("- High-frequency rejection: ${settings.s3}\n")
             append("- Learned noise requested: ${settings.learnedNoise}\n")
             append("- Colour-difference zipper fix: ${settings.zipperFix}\n")
+            append("- Reconstruction: ${if (settings.twoBand && settings.zipperFix) "two-band" else "Wronski kernels"}\n")
         }
         append("\nBase Frame Selection:\n- Mode: $referenceSelection\n")
         val index = frames.indexOfFirst { it.timestampNanos == ref.timestampNanos }

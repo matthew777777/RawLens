@@ -127,6 +127,7 @@ class SrpPipelineFullresDeviceTest {
             val fin = BurstConfig.finalize(snr)
             // -e rawlensSrpAlignV2 true: alignment v2 (binomial pyramid, candidate hand-off, flow median).
             val alignV2 = args.getString("rawlensSrpAlignV2") == "true"
+            val twoBand = args.getString("rawlensSrpTwoBand") == "true"
             val levels = if (alignV2) BurstConfig.alignV2Levels(fin.tileSize, h, w)
                 else BurstConfig.AlignLevels(listOf(1, 2, 4, 4), fin.tileSizes, List(4) { if (it == 0) 1 else 4 })
             val factors = levels.factors
@@ -152,7 +153,9 @@ class SrpPipelineFullresDeviceTest {
                 memoryTight = true,
                 // -e rawlensSrpColourDiff true: the app's default zipper-fix
                 // colour-difference merge (WB 1,1: same cost as the app).
-                colourDiff = if (args.getString("rawlensSrpColourDiff") == "true") floatArrayOf(1f, 1f) else null,
+                colourDiff = if (twoBand || args.getString("rawlensSrpColourDiff") == "true") floatArrayOf(1f, 1f) else null,
+                // -e rawlensSrpTwoBand true: the app's default two-band reconstruction (implies colourDiff).
+                twoBand = if (twoBand) com.rawlens.srpipeline.stages.TwoBandReconstruction.Params() else null,
             )
             Log.i("SrpFullresDevice", "fullres ${w}x$h snr=%.2f tile=%d".format(snr, fin.tileSize))
             val fft = assetBytes("fft")
@@ -180,7 +183,10 @@ class SrpPipelineFullresDeviceTest {
                     mergeSplat = assetBytes("merge_splat"),
                     fft = fft, corr = assetBytes("corr"), greyFft = assetBytes("grey_fft"), greyFir = assetBytes("grey_fir"),
                     // -e rawlensSrpResident true: resident grey + GPU moving pyramid.
-                    pyrDown = if (args.getString("rawlensSrpResident") == "true") assetBytes("pyr_down") else null),
+                    pyrDown = if (args.getString("rawlensSrpResident") == "true") assetBytes("pyr_down") else null,
+                    mergeTwoBand = if (twoBand) assetBytes("merge_twoband") else null,
+                    twoBandResolve = if (twoBand) assetBytes("twoband_resolve") else null,
+                    twoBandDct = if (twoBand) assetBytes("twoband_dct") else null),
                 // Native output like MfsrMerge: a 2x frame (600 MB) cannot be a heap direct buffer.
                 output = SrpBridge.nativeFloats((w * srpScale).toInt() * (h * srpScale).toInt() * 3),
             )

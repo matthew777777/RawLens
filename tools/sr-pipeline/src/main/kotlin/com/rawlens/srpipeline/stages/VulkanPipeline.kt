@@ -380,14 +380,16 @@ object VulkanPipeline {
         // kerngrad, which exact-size residents cannot express).
         val frameRes = SrpBridge.createResident(handle, (w * h).toLong())
         require(frameRes != 0L) { "VulkanPipeline: resident frame alloc failed" }
-        val kernPreRes = if (config.mobilePolynomial) 0L else SrpBridge.createResident(handle, (w * h).toLong())
-        require(config.mobilePolynomial || kernPreRes != 0L) { "VulkanPipeline: resident kernPre alloc failed" }
-        val kernGreyRes = if (config.mobilePolynomial) 0L else SrpBridge.createResident(handle, (gw * gh).toLong())
-        require(config.mobilePolynomial || kernGreyRes != 0L) { "VulkanPipeline: resident kernGrey alloc failed" }
-        val kernGradsRes = if (config.mobilePolynomial) 0L else SrpBridge.createResident(handle, ((gw - 1) * (gh - 1) * 2).toLong())
-        require(config.mobilePolynomial || kernGradsRes != 0L) { "VulkanPipeline: resident kernGrads alloc failed" }
-        val kernCovRes = if (config.mobilePolynomial) 0L else SrpBridge.createResident(handle, (gw * gh * 4).toLong())
-        require(config.mobilePolynomial || kernCovRes != 0L) { "VulkanPipeline: resident kernCov alloc failed" }
+        // Two-band has no per-frame kernels: skip their residents (w*h + grid floats).
+        val noKernels = config.mobilePolynomial || twoBand != null
+        val kernPreRes = if (noKernels) 0L else SrpBridge.createResident(handle, (w * h).toLong())
+        require(noKernels || kernPreRes != 0L) { "VulkanPipeline: resident kernPre alloc failed" }
+        val kernGreyRes = if (noKernels) 0L else SrpBridge.createResident(handle, (gw * gh).toLong())
+        require(noKernels || kernGreyRes != 0L) { "VulkanPipeline: resident kernGrey alloc failed" }
+        val kernGradsRes = if (noKernels) 0L else SrpBridge.createResident(handle, ((gw - 1) * (gh - 1) * 2).toLong())
+        require(noKernels || kernGradsRes != 0L) { "VulkanPipeline: resident kernGrads alloc failed" }
+        val kernCovRes = if (noKernels) 0L else SrpBridge.createResident(handle, (gw * gh * 4).toLong())
+        require(noKernels || kernCovRes != 0L) { "VulkanPipeline: resident kernCov alloc failed" }
         val polynomialLutRes = if(config.mobilePolynomial) SrpBridge.createResident(handle,MobilePolynomial.table.size.toLong()).also { r ->
             require(r != 0L) { "polynomial LUT allocation failed" }
             checkRc("polynomial LUT",SrpBridge.uploadResident(handle,r,pack(MobilePolynomial.table),MobilePolynomial.table.size.toLong()))
@@ -896,6 +898,9 @@ object VulkanPipeline {
                 val p = IntArray(32)
                 p[11] = ox; p[12] = oy; p[13] = outW; p[14] = outH; p[15] = bpr
                 p[7] = java.lang.Float.floatToRawIntBits(twoBand.grainFloor.toFloat())
+                p[8] = java.lang.Float.floatToRawIntBits((twoBand.sigmaHigh * kotlin.math.sqrt(twoBand.deconvStrength.coerceAtLeast(0.0))).toFloat())
+                p[9] = java.lang.Float.floatToRawIntBits(config.scale)
+                p[16] = java.lang.Float.floatToRawIntBits(twoBand.gainCap.toFloat())
                 // One workgroup per block; > 65535 blocks run as several row bands.
                 var first = 0
                 while (first < bpc) {
@@ -976,10 +981,10 @@ object VulkanPipeline {
             if (tbFlowRes != 0L) SrpBridge.freeResident(handle, tbFlowRes)
             if (evenAccRes != 0L) SrpBridge.freeResident(handle, evenAccRes)
             SrpBridge.freeResident(handle, frameRes)
-            SrpBridge.freeResident(handle, kernPreRes)
-            SrpBridge.freeResident(handle, kernGreyRes)
-            SrpBridge.freeResident(handle, kernGradsRes)
-            SrpBridge.freeResident(handle, kernCovRes)
+            if (kernPreRes != 0L) SrpBridge.freeResident(handle, kernPreRes)
+            if (kernGreyRes != 0L) SrpBridge.freeResident(handle, kernGreyRes)
+            if (kernGradsRes != 0L) SrpBridge.freeResident(handle, kernGradsRes)
+            if (kernCovRes != 0L) SrpBridge.freeResident(handle, kernCovRes)
             if (polynomialLutRes != 0L) SrpBridge.freeResident(handle, polynomialLutRes)
             if (hfRes != 0L) SrpBridge.freeResident(handle, hfRes)
             SrpBridge.freeResident(handle, sRes)

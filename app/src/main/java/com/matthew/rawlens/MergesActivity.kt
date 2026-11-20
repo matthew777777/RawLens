@@ -390,6 +390,7 @@ class MergesActivity : Activity() {
             .putString(KEY_MERGE_LKR_ZOOM, lkrZoom.name)
             .putBoolean("mfsr_s3", tuningMfsr.s3)
             .putBoolean("mfsr_zipper_fix", tuningMfsr.zipperFix)
+            .putBoolean("mfsr_two_band", tuningMfsr.twoBand)
             .putBoolean("mfsr_learned_noise", tuningMfsr.learnedNoise)
             .putBoolean("lkr_dct_prior", tuningMfsr.lkrDctPrior)
             .putBoolean("hdr_plus_scene_auto_migrated", true)
