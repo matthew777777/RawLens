@@ -30,6 +30,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.TextView
+import android.graphics.drawable.GradientDrawable
+import android.util.TypedValue
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
@@ -68,31 +70,35 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean, retestAf: Boolean
     // that — while later invocations keep the floating progress dialog.
     var progressDialog: AlertDialog? = null
     var progressOverlay: View? = null
+    var progressText: TextView? = null
     if (firstRun) {
-        // Already immersive from onCreate; the overlay just covers the UI.
-        progressOverlay = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(getColor(R.color.surface))
+        // First launch: a small card over the dimmed viewfinder instead of
+        // a full black page — the scrim still eats touches while routes are
+        // probed, since the AF probe stops the camera.
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = getDrawable(R.drawable.glass_button)
+            setPadding(dp(20), dp(14), dp(20), dp(14))
+            addView(ProgressBar(this@showLensDiscovery).apply { isIndeterminate = true },
+                LinearLayout.LayoutParams(dp(24), dp(24)))
+            progressText = TextView(this@showLensDiscovery).apply {
+                text = "Setting up lenses…"
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(dp(12), 0, 0, 0)
+            }
+            addView(progressText)
+        }
+        progressOverlay = FrameLayout(this).apply {
+            setBackgroundColor(0x66000000)
             elevation = 32f
             isClickable = true
             isFocusableInTouchMode = true
-            setPadding(dp(32), 0, dp(32), 0)
-            addView(ProgressBar(this@showLensDiscovery).apply { isIndeterminate = true })
-            addView(TextView(this@showLensDiscovery).apply {
-                text = "Finding RAW lenses"
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 18f
-                typeface = Typeface.DEFAULT_BOLD
-                gravity = Gravity.CENTER
-                setPadding(0, dp(16), 0, dp(8))
-            })
-            addView(TextView(this@showLensDiscovery).apply {
-                text = "Checking every Camera2 ID for RAW support (rear and front).\nThis usually takes a few seconds…"
-                setTextColor(getColor(R.color.text_secondary))
-                textSize = 13f
-                gravity = Gravity.CENTER
-            })
+            addView(card, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            ).apply { marginStart = dp(24); marginEnd = dp(24) })
         }.also { overlay ->
             blockBackKey(overlay)
             findViewById<ViewGroup>(android.R.id.content)
@@ -115,7 +121,10 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean, retestAf: Boolean
         // Active AF scan probe for routes never probed: characteristics lie
         // both ways (AF state runs without the lens moving, or the lens moves
         // with no AF state machine), so open each one and look.
-        val toProbe = discovered.filter {
+        // Only on an explicit "Re-test autofocus": an automatic probe stops the
+        // camera, races its reopen (open error 2 / device closed) and made the
+        // lens page hang after a clean install. Unprobed routes stay UNKNOWN.
+        val toProbe = if (firstRun || !retestAf) emptyList() else discovered.filter {
             it.kind != LensRouteKind.UNAVAILABLE && it.af == AfVerdict.UNKNOWN
         }
         val canProbe = toProbe.isNotEmpty() &&
@@ -126,6 +135,7 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean, retestAf: Boolean
             runOnUiThread {
                 controllerIfReady?.let { restart = it.isRunning(); it.stop() }
                 progressDialog?.setMessage("Testing autofocus on ${toProbe.size} route(s)…\nPoint the camera at something with detail.")
+                progressText?.text = "Setting up lenses… point at something with detail"
                 stopped.countDown()
             }
             stopped.await()
@@ -145,6 +155,10 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean, retestAf: Boolean
             progressDialog?.dismiss()
             progressOverlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
             progressOverlay = null
+            if (firstRun) {
+                showFirstRunLensList(lenses)
+                return@runOnUiThread
+            }
             val missingSaved = selectedLensIds()
                 .filterNot { savedId -> lenses.any { it.id == savedId } }
                 .map { unavailableLens(it) }
@@ -153,6 +167,231 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean, retestAf: Boolean
             showLensSelection(lenses + missingSaved, firstRun)
         }
     }
+}
+
+/**
+ * First-run lens list: one plain row per available route, nothing
+ * preselected, and a single Done button. The full picker (duplicates,
+ * manual IDs, profiles, AF re-test) stays under Settings → Lenses.
+ */
+internal fun MainActivity.showFirstRunLensList(lenses: List<DiscoveredLens>) {
+    val available = lenses.filter { it.kind != LensRouteKind.UNAVAILABLE }
+        .sortedWith(compareBy<DiscoveredLens> { it.role == LensRole.FRONT }
+            .thenBy { it.opticalMetric }.thenBy { it.id })
+    if (available.isEmpty()) {
+        showLensSelection(lenses, firstRun = true)
+        return
+    }
+    val rearMetrics = available.filter { it.role != LensRole.FRONT }.map { it.opticalMetric }
+    val checked = mutableSetOf<String>()
+    val selectable = TypedValue().also {
+        theme.resolveAttribute(android.R.attr.selectableItemBackground, it, true)
+    }.resourceId
+
+    val done = Button(this).apply {
+        text = "Choose at least one lens"
+        RawLensUi.styleButton(this, false)
+        isEnabled = false
+    }
+    fun refreshDone() {
+        val n = checked.size
+        done.isEnabled = n > 0
+        RawLensUi.styleButton(done, n > 0)
+        done.text = if (n == 0) "Choose at least one lens"
+            else "Continue with $n lens${if (n == 1) "" else "es"}"
+    }
+
+    // Same rounded-card column as the Settings pages: headings start cards,
+    // rows inside one card get hairline dividers.
+    val column = SettingsCardColumn(this).apply { setPadding(0, 0, 0, dp(16)) }
+    fun heading(label: String) = TextView(this).apply {
+        text = label
+        textSize = 12f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        isAllCaps = true
+        letterSpacing = 0.12f
+        tag = SettingsCardColumn.SECTION_TAG
+        setTextColor(getColor(R.color.text_secondary))
+        setPadding(dp(16), dp(22), dp(16), dp(8))
+    }
+    fun row(lens: DiscoveredLens): View {
+        val front = lens.role == LensRole.FRONT
+        val zoom = if (front) "F"
+            else LensZoom.display(lens.opticalMetric, rearMetrics, LensZoom.focalLabels(this))
+        val box = SettingsCheckBox(this).apply {
+            isClickable = false
+            isFocusable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(selectable)
+            minimumHeight = dp(72)
+            setPadding(dp(16), dp(12), dp(8), dp(12))
+            isClickable = true
+            isFocusable = true
+            contentDescription = "$zoom ${lens.title}, camera ${lens.id}"
+            // Zoom badge: the same tinted rounded square as the Settings page list.
+            addView(TextView(context).apply {
+                text = zoom
+                gravity = Gravity.CENTER
+                textSize = 13f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(getColor(R.color.accent))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(12).toFloat()
+                    setColor(getColor(R.color.accent_soft))
+                }
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(14) })
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(TextView(context).apply {
+                    text = lens.title
+                    textSize = 15f
+                    setTextColor(getColor(R.color.text_primary))
+                })
+                addView(TextView(context).apply {
+                    text = listOfNotNull(
+                        "Camera ${lens.id}",
+                        lens.megapixels?.let { "%.0f MP".format(it) }
+                    ).joinToString(" · ")
+                    textSize = 13f
+                    setTextColor(getColor(R.color.text_secondary))
+                    setPadding(0, dp(3), 0, 0)
+                })
+            }, LinearLayout.LayoutParams(0, wrapContent(), 1f))
+            addView(box)
+            setOnClickListener {
+                box.isChecked = !box.isChecked
+                if (box.isChecked) checked += lens.id else checked -= lens.id
+                isSelected = box.isChecked
+                refreshDone()
+            }
+        }
+    }
+    var dismissList: () -> Unit = {}
+    DeviceLensProfiles.matching().firstOrNull()?.let { profile ->
+        column.addView(heading("Recommended for this phone"))
+        column.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(selectable)
+            minimumHeight = dp(72)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            isClickable = true
+            isFocusable = true
+            addView(TextView(context).apply {
+                text = "Use the ${profile.name} setup"
+                textSize = 15f
+                setTextColor(getColor(R.color.accent))
+            })
+            addView(TextView(context).apply {
+                text = "${profile.lenses.joinToString(" · ") { it.name }} — from rawr's tested profile"
+                textSize = 13f
+                setTextColor(getColor(R.color.text_secondary))
+                setPadding(0, dp(3), 0, 0)
+            })
+            setOnClickListener {
+                DeviceLensProfiles.apply(this@showFirstRunLensList, profile)
+                controller.reloadLenses()
+                dismissList()
+                ImmersiveMode.apply(window)
+                setStatus("${profile.name.uppercase()} LENSES LOADED")
+                updateFlow.showPendingConsent()
+            }
+        })
+    }
+    val (frontLenses, rearLenses) = available.partition { it.role == LensRole.FRONT }
+    if (rearLenses.isNotEmpty()) {
+        column.addView(heading("Rear"))
+        rearLenses.forEach { column.addView(row(it)) }
+    }
+    if (frontLenses.isNotEmpty()) {
+        column.addView(heading("Front"))
+        frontLenses.forEach { column.addView(row(it)) }
+    }
+
+    val root = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setBackgroundColor(getColor(R.color.surface))
+        elevation = 32f
+        isClickable = true
+        isFocusableInTouchMode = true
+        setPadding(dp(16), dp(28), dp(16), dp(20))
+    }
+    root.addView(TextView(this).apply {
+        text = "Choose your lenses"
+        textSize = 24f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        isAccessibilityHeading = true
+        setTextColor(getColor(R.color.text_primary))
+        setPadding(dp(16), 0, dp(16), 0)
+    })
+    root.addView(TextView(this).apply {
+        text = "Each lens becomes a button in the viewfinder. Some phones list the same lens twice."
+        textSize = 13f
+        setTextColor(getColor(R.color.text_secondary))
+        setPadding(dp(16), dp(6), dp(16), 0)
+    })
+    root.addView(ScrollView(this).apply {
+        isVerticalScrollBarEnabled = false
+        addView(column)
+    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+    root.addView(TextView(this).apply {
+        text = "You can change this anytime in Settings → Lenses."
+        textSize = 12f
+        gravity = Gravity.CENTER
+        setTextColor(getColor(R.color.text_muted))
+        setPadding(0, dp(4), 0, dp(10))
+    })
+    root.addView(done, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, wrapContent()))
+    refreshDone()
+    blockBackKey(root)
+    findViewById<ViewGroup>(android.R.id.content).addView(root, ViewGroup.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    root.requestFocus()
+    dismissList = { (root.parent as? ViewGroup)?.removeView(root) }
+    done.setOnClickListener {
+        if (checked.isEmpty()) return@setOnClickListener
+        lensPreferences().edit()
+            .putStringSet(KEY_SELECTED_LENSES, checked.toSet())
+            .putBoolean(KEY_LENS_SETUP_COMPLETE, true)
+            .apply()
+        controller.reloadLenses()
+        (root.parent as? ViewGroup)?.removeView(root)
+        ImmersiveMode.apply(window)
+        setStatus("${checked.size} RAW LENS${if (checked.size == 1) "" else "ES"} ADDED")
+        updateFlow.showPendingConsent()
+    }
+}
+
+/** Settings → Lenses → Load device profile: pick, confirm, apply, reopen the camera. */
+internal fun MainActivity.pickDeviceLensProfile(onApplied: () -> Unit) {
+    val profiles = DeviceLensProfiles.matching()
+    if (profiles.isEmpty()) return
+    fun confirm(profile: DeviceLensProfiles.Profile) {
+        RawLensDialogBuilder(this)
+            .setTitle("Load ${profile.name}?")
+            .setMessage(profile.description + "\n\nLenses: " +
+                profile.lenses.joinToString(", ") { it.name } +
+                "\n\nReplaces the lens list, names, RAW size/format, vendor keys and fixed levels " +
+                "of these lenses. Other settings stay.")
+            .setPositiveButton("Load") { _, _ ->
+                DeviceLensProfiles.apply(this, profile)
+                controller.reloadLenses()
+                setStatus("${profile.name.uppercase()} LENSES LOADED")
+                onApplied()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+    if (profiles.size == 1) confirm(profiles.first())
+    else RawLensDialogBuilder(this)
+        .setTitle("Load device profile")
+        .setItems(profiles.map { it.name }.toTypedArray()) { _, which -> confirm(profiles[which]) }
+        .setNegativeButton("Cancel", null)
+        .show()
 }
 
 /** Overlay pages are modal: the back key must not escape onboarding. */
@@ -219,21 +458,25 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         orientation = LinearLayout.VERTICAL
         setPadding(dp(20), dp(8), dp(20), 0)
     }
-    container.addView(TextView(this).apply {
+    // Everything scrolls as one list: the summary and quick actions sit
+    // above the lens cards, rarely used actions in "More" below them.
+    val top = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    val more = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    top.addView(TextView(this).apply {
         text = "$opticCount lens${if (opticCount == 1) "" else "es"} · $routeCount route${if (routeCount == 1) "" else "s"}"
         setTextColor(getColor(R.color.text_primary))
         textSize = 15f
         typeface = Typeface.DEFAULT_BOLD
     })
-    container.addView(TextView(this).apply {
-        text = "Phones often expose one lens through several camera IDs (routes). Check one route per lens; each checked entry becomes a button in the viewfinder switcher, widest first."
+    top.addView(TextView(this).apply {
+        text = "Some phones reach one lens through several camera IDs. Tick one per lens; each becomes a viewfinder button."
         setTextColor(getColor(R.color.text_secondary))
         textSize = 12f
         setPadding(0, dp(4), 0, dp(8))
     })
     // Switcher label style: zoom factors (0.6×, 1×, 3×) or 35 mm-equivalent focal lengths.
     val zoomTitles = mutableListOf<Pair<TextView, DiscoveredLens>>()
-    container.addView(LinearLayout(this).apply {
+    top.addView(LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(0, 0, 0, dp(8))
@@ -273,10 +516,20 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     val clearParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
     quickRow.addView(selectAll, selectParams)
     quickRow.addView(clear, clearParams)
-    container.addView(quickRow)
-    container.addView(selectionSummary)
-    container.addView(LinearLayout(this).apply {
+    top.addView(quickRow)
+    top.addView(selectionSummary)
+    more.addView(TextView(this).apply {
+        text = "More"
+        textSize = 12f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        isAllCaps = true
+        letterSpacing = 0.12f
+        setTextColor(getColor(R.color.text_secondary))
+        setPadding(0, dp(20), 0, dp(8))
+    })
+    more.addView(LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
+        setPadding(0, 0, 0, dp(8))
         addView(Button(context).apply {
             text = "Export profiles ZIP"
             styleQuickButton(this)
@@ -298,11 +551,31 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         gravity = Gravity.CENTER
         setPadding(0, dp(2), 0, dp(10))
     }
-    container.addView(copyReport, LinearLayout.LayoutParams(
+    var closeSelectionLater: () -> Unit = {}
+    if (!firstRun && DeviceLensProfiles.matching().isNotEmpty()) more.addView(TextView(this).apply {
+        text = "Load device profile"
+        setTextColor(getColor(R.color.accent))
+        textSize = 12f
+        typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER
+        setPadding(0, dp(2), 0, dp(10))
+        setOnClickListener { pickDeviceLensProfile { closeSelectionLater() } }
+    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, wrapContent()))
+    if (!firstRun) more.addView(TextView(this).apply {
+        text = "Viewfinder order & names"
+        setTextColor(getColor(R.color.accent))
+        textSize = 12f
+        typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER
+        setPadding(0, dp(2), 0, dp(10))
+        setOnClickListener { showLensOrderPage(pickerLenses, ::zoomOf) }
+    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, wrapContent()))
+    more.addView(copyReport, LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT, wrapContent()
     ))
     // Set by whichever page variant is shown below, so the retest link can close it.
     var closeSelection: () -> Unit = {}
+    closeSelectionLater = { closeSelection() }
     val retestAf = TextView(this).apply {
         text = "Re-test autofocus"
         setTextColor(getColor(R.color.accent))
@@ -315,7 +588,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
             showLensDiscovery(firstRun, retestAf = true)
         }
     }
-    container.addView(retestAf, LinearLayout.LayoutParams(
+    more.addView(retestAf, LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT, wrapContent()
     ))
     copyReport.setOnClickListener {
@@ -345,6 +618,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         setPadding(0, 0, 0, dp(8))
     }
     listScroll.addView(listBody)
+    listBody.addView(top)
 
     fun refreshQuickState() {
         val values = checked.values
@@ -588,13 +862,14 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
     listBody.addView(addManual)
     listBody.addView(manualEntries)
     listBody.addView(virtualLensSection(lenses, ::zoomOf) { id -> checked[id] == true })
-    container.addView(listScroll)
-    container.addView(TextView(this).apply {
+    more.addView(TextView(this).apply {
         text = "Use direct physical IDs first. Greyed routes remain selectable for features unavailable directly, such as Xiaomi sensor modes or zoom."
         setTextColor(getColor(R.color.text_muted))
         textSize = 11f
         setPadding(0, dp(8), 0, dp(4))
     })
+    listBody.addView(more)
+    container.addView(listScroll)
 
     selectAll.setOnClickListener {
         // One route per physical lens (the recommended one); saved-but-missing entries keep their state.

@@ -1003,17 +1003,17 @@ class MainActivity : Activity() {
             lensPreferences().edit().putBoolean("processing_notifications_asked", true).apply()
             requestPermissions(notificationPermission.toTypedArray(), 4109)
         }
-        if (WelcomeFlow.shouldDeferUpdateConsent(
-                lensPreferences().getBoolean(KEY_LENS_SETUP_COMPLETE, false)
-            )
-        ) {
-            // First run: lens discovery owns the screen, so the
-            // keep-up-to-date ask waits until it is off screen instead of
-            // layering over it (fired from showLensSelection's dismiss
-            // paths and the no-lenses alert below).
-            updateFlow.pendingConsent = true
+        // The keep-up-to-date ask is no longer part of first-run setup: it
+        // waits until the user has come back a few times (FirstUseAsks).
+        val launchCount = lensPreferences().getInt(FirstUseAsks.KEY_LAUNCH_COUNT, 0) + 1
+        lensPreferences().edit().putInt(FirstUseAsks.KEY_LAUNCH_COUNT, launchCount).apply()
+        val askUpdates = FirstUseAsks.shouldAskUpdates(launchCount)
+        if (!lensPreferences().getBoolean(KEY_LENS_SETUP_COMPLETE, false)) {
+            // Lens discovery owns the screen, so a due ask waits until it is
+            // off screen (fired from showLensSelection's dismiss paths).
+            updateFlow.pendingConsent = askUpdates
             showLensDiscovery(firstRun = true)
-        } else {
+        } else if (askUpdates) {
             updateFlow.showConsent()
         }
         viewfinder.addOnLayoutChangeListener { view, left, top, right, bottom,
@@ -1877,6 +1877,60 @@ class MainActivity : Activity() {
     /** Top-right status line: always short, never a file name (see [StatusText]). */
     internal fun setStatus(message: String) {
         if (::status.isInitialized) status.text = StatusText.compact(message)
+        maybeAskOnFirstUse(message)
+    }
+
+    /**
+     * Optional asks fired the first time their feature is used, instead of
+     * during setup (see [FirstUseAsks]). Each shows at most once.
+     */
+    private fun maybeAskOnFirstUse(message: String) {
+        if (isFinishing || isDestroyed) return
+        val prefs = lensPreferences()
+        if (FirstUseAsks.isSidecarBurstSave(message) &&
+            SidecarTreeAccess.needsFirstInstallPrompt(this)
+        ) {
+            SidecarTreeAccess.markFirstInstallPrompted(this)
+            window.decorView.post { showFolderAsk() }
+            return
+        }
+        if (FirstUseAsks.shouldAskLocation(
+                message,
+                asked = prefs.getBoolean(FirstUseAsks.KEY_LOCATION_ASKED, false),
+                gpsOn = gpsEnabled()
+            )
+        ) {
+            prefs.edit().putBoolean(FirstUseAsks.KEY_LOCATION_ASKED, true).apply()
+            window.decorView.post { showLocationAsk() }
+        }
+    }
+
+    private fun showLocationAsk() {
+        if (isFinishing || isDestroyed) return
+        RawLensDialogBuilder(this)
+            .setTitle("Tag photos with location?")
+            .setMessage("Adds GPS to new photos and MP4 videos. Stays on your phone. " +
+                "You can change this anytime in Settings.")
+            .setPositiveButton("Tag location") { _, _ ->
+                if (GpsLocationProvider.permissions().any {
+                        checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
+                    }) setGpsEnabled(true)
+                else requestPermissions(GpsLocationProvider.permissions(), LOCATION_PERMISSION)
+            }
+            .setNegativeButton("Not now", null)
+            .show()
+    }
+
+    private fun showFolderAsk() {
+        if (isFinishing || isDestroyed) return
+        RawLensDialogBuilder(this)
+            .setTitle("Keep burst files together?")
+            .setMessage("Bursts also save gyro files used by HDR+ and MFSR merges. " +
+                "Pick your photo folder (DCIM) so they land next to the DNGs. " +
+                "Without it they go to Downloads and still import fine.")
+            .setPositiveButton("Choose folder") { _, _ -> pickSidecarFolder() }
+            .setNegativeButton("Use Downloads", null)
+            .show()
     }
 
     private fun triggerCapture(shutter: View, forceBurst: Boolean) {

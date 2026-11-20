@@ -189,6 +189,7 @@ class RawCameraController(
     private val vendorKeysByKey: (settingsKey: String?) -> VendorKeyProfile = { VendorKeyProfile() }
 ) {
     private val virtualLensStore = VirtualLensStore(context)
+    private val lensListStore = LensListStore(context)
     @Volatile internal var onPhotoCaptureAccepted: (() -> Unit)? = null
 
     /**
@@ -706,6 +707,8 @@ class RawCameraController(
                 val openId = resolveOpenCameraId(cameraId)
                 openId != null && openId !in ladder.unopenableOpenIds
             }.sortedWith(compareBy<String> { isFrontCamera(it) }.thenBy { opticalMetric(it) })
+                // Settings → Lenses order wins; lenses it doesn't know keep widest-first.
+                .let { LensListStore.applyOrder(it, lensListStore.order()) }
             val id = selectedCameraId?.takeIf(rawCameraIds::contains)
                 ?: preferredCameraId()?.takeIf(rawCameraIds::contains)
                 ?: rawCameraIds.firstOrNull()
@@ -4866,7 +4869,7 @@ class RawCameraController(
         val options=rawCameraIds.map { id ->
             if(extended && id=="0") LensOption(id,"${mainLabel()} · 12.5 MP",id==selectedCameraId && mode==LapisRootProfile.Mode.NORMAL,
                 "normal","Main camera, 12.5 megapixel RAW")
-            else LensOption(id,zoomLabel(id),id==selectedCameraId)
+            else LensOption(id,lensListStore.name(id) ?: zoomLabel(id),id==selectedCameraId)
         }.toMutableList()
         if(extended) {
             val at=options.indexOfFirst { it.cameraId=="0" }+1

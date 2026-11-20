@@ -345,4 +345,5 @@ class LensDiscoveryGroupingTest {
         assertEquals("4", recommendRoute(listOf(vendor, direct)).id)
     }
 
+
 }

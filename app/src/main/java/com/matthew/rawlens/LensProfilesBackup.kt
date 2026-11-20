@@ -15,7 +15,10 @@ internal object LensProfilesBackup {
         VirtualLensStore.PREFS_NAME, RawSizePreferenceStore.PREFS_NAME,
         RawFormatPreferenceStore.PREFS_NAME
     )
-    val selectionKeys = setOf("selected_lens_ids", "lens_setup_complete")
+    val selectionKeys = setOf(
+        "selected_lens_ids", "lens_setup_complete",
+        LensListStore.KEY_ORDER, LensListStore.KEY_NAMES,
+    )
     private const val ENTRY = "rawlens-lens-profiles-v1.json"
     private const val LIMIT = 2 * 1024 * 1024
 
@@ -49,6 +52,7 @@ internal object LensProfilesBackup {
                     when (key) {
                         "selected_lens_ids" -> value is Set<*>
                         "lens_setup_complete" -> value is Boolean
+                        LensListStore.KEY_ORDER, LensListStore.KEY_NAMES -> value is String
                         else -> false
                     }
                 } else value is String) { "Invalid lens profile value" }
