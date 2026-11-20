@@ -30,9 +30,9 @@ float L(int x, int y) {
   return num_[(uint(y) * p.pad[2] + uint(x)) * 3u + 1u];
 }
 
-void main() {
-  const uint id = gl_GlobalInvocationID.x;
-  if (id >= p.pixelCount) return;
+// One output item; SrpBridge.dispatchRes caps the grid at 65535 groups,
+// so main() grid-strides (2x outputs exceed 65535 * 256 = 2^24 items).
+void process(const uint id) {
   const uint pass = p.pad[0];
   if (pass == 0u) {
     for (uint c = 0u; c < 3u; ++c) {
@@ -56,4 +56,9 @@ void main() {
     const vec4 a = aux_[id];
     num_[id*3u + 1u] += a.y > 1e-9 ? a.x / a.y : den_[id*3u];
   }
+}
+
+void main() {
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount; id += gl_NumWorkGroups.x * gl_WorkGroupSize.x)
+    process(id);
 }

@@ -51,9 +51,9 @@ vec4 flowWeights(float t) {
   return vec4(u*u*u, 4.0 - 6.0*t*t + 3.0*t*t*t, 1.0 + 3.0*t + 3.0*t*t - 3.0*t*t*t, t*t*t) / 6.0;
 }
 
-void main() {
-  const uint id = gl_GlobalInvocationID.x;
-  if (id >= p.pixelCount) return;
+// One output item; SrpBridge.dispatchRes caps the grid at 65535 groups,
+// so main() grid-strides (2x outputs exceed 65535 * 256 = 2^24 items).
+void process(const uint id) {
   const uint outW = p.pad[2];
   const int W = int(p.width), H = int(p.height);
   const uint ts = p.tileSize, nTx = p.pad[1], nTy = p.pad[3];
@@ -124,4 +124,9 @@ void main() {
   num_[id*3u] += val.r; num_[id*3u+1u] += val.g; num_[id*3u+2u] += val.b;
   den_[id*3u] += acc.r; den_[id*3u+1u] += acc.g; den_[id*3u+2u] += acc.b;
   aux_[id] += nar;
+}
+
+void main() {
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount; id += gl_NumWorkGroups.x * gl_WorkGroupSize.x)
+    process(id);
 }
