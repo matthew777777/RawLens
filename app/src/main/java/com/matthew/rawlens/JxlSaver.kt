@@ -54,10 +54,11 @@ class JxlSaver(private val context: Context) {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IOException("Could not create pending JXL media entry")
         val insertedAt = SystemClock.elapsedRealtime()
+        var rgb: java.nio.ByteBuffer? = null
         try {
-            val rgb = JxlPixelPack.packRgb(
+            rgb = JxlPixelPack.packRgb(
                 developed.halfRgba, developed.width, developed.height, settings
-            )
+            ) { HdrPlusVulkan.allocBuffer(it.toLong()) }
             val packedAt = SystemClock.elapsedRealtime()
             val boxes = JxlMetadataBoxes.build(
                 metadata = metadata,
@@ -102,9 +103,11 @@ class JxlSaver(private val context: Context) {
                     "total=${publishedAt - startedAt}ms"
             )
             return displayName
-        } catch (failure: Exception) {
+        } catch (failure: Throwable) {
             resolver.delete(uri, null, null)
             throw failure
+        } finally {
+            rgb?.let(HdrPlusVulkan::freeBuffer)
         }
     }
 

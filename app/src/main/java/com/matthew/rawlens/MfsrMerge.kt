@@ -134,14 +134,14 @@ internal object MfsrMerge {
     private fun selectSharpest(frames: List<MfsrFrame>, middleReference: Boolean, nativeSharpness: Boolean): List<Int>? {
         return try {
             val sharpness = frames.map { sharp ->
-                val plane = sharp.frame.image.planes[0]
-                val shorts = plane.buffer.duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+                val plane = sharp.frame.view()
+                val shorts = plane.buffer!!.duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
                 val rowShorts = plane.rowStride / 2
                 val colShorts = plane.pixelStride / 2
                 val pattern = sharp.norm.sensorPattern
                 val norm = sharp.norm
                 if (nativeSharpness && plane.pixelStride == 2) {
-                    val score = LkrBridge.nativeSharpness(plane.buffer.duplicate().also { it.rewind() },
+                    val score = LkrBridge.nativeSharpness(plane.buffer!!.duplicate().also { it.rewind() },
                         sharp.metadata.imageWidth, sharp.metadata.imageHeight, rowShorts,
                         dngCodesFor(pattern), norm.blackLevels.toFloatArray())
                     if (score.isFinite()) return@map score
@@ -301,8 +301,8 @@ internal object MfsrMerge {
      * for HotPixels.confirm before the frame is decoded (no extra full decode).
      */
     private fun liveVerifier(sharp: MfsrFrame, w: Int, h: Int): (Int, Int) -> Float {
-        val plane = sharp.frame.image.planes[0]
-        val shorts = plane.buffer.duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+        val plane = sharp.frame.view()
+        val shorts = plane.buffer!!.duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
         val rowShorts = plane.rowStride / 2
         val colShorts = plane.pixelStride / 2
         val norm = sharp.norm
@@ -566,12 +566,12 @@ internal object MfsrMerge {
      * return), never retained across frames.
      */
     fun decodeSharp(sharp: MfsrFrame): Array<FloatArray> {
-        val plane = sharp.frame.image.planes[0]
+        val plane = sharp.frame.view()
         val layout = RawPlaneLayout(
             sharp.metadata.imageWidth, sharp.metadata.imageHeight,
             plane.rowStride, plane.pixelStride, 0, 0
         )
-        val cfa = RawSensorUnpacker.unpackNormalized(plane.buffer.duplicate(), layout, sharp.norm)
+        val cfa = RawSensorUnpacker.unpackNormalized(plane.buffer!!.duplicate(), layout, sharp.norm)
         // C19: lens shading is NOT applied per frame any more. Gains up to
         // 4x+ in the corners scaled noise variance by gain^2 while GAT, SNR
         // and the robustness LUT assumed raw sensor noise (corner frames got
@@ -833,7 +833,8 @@ internal object MfsrMerge {
             "budget ${mb(javaBudget.toDouble())}MB")
         if (systemBudget != null && native > systemBudget) {
             Log.e(LOG_TAG, "sharp merge skipped: ${w}x$h needs ~${mb(native)}MB, " +
-                "only ${mb(systemBudget.toDouble())}MB free above the low-memory threshold")
+                "only ${mb(systemBudget.toDouble())}MB free above the low-memory threshold " +
+                "(${MergeMemoryBudget.describeSystem(context)})")
             return false
         }
         if (java > javaBudget) {

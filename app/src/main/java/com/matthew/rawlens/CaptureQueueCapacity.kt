@@ -15,8 +15,9 @@ internal object CaptureQueueCapacity {
 
     /** Merge jobs serialize development; their source images occupy reader slots only until merge. */
     fun acceptsMerge(pendingJobs: Int, pendingFrames: Int, requestedFrames: Int,
-                     readerSlots: Int, previewReserve: Int): Boolean =
-        pendingJobs in 0 until 3 && accepts(pendingFrames, requestedFrames,
+                     readerSlots: Int, previewReserve: Int,
+                     maxJobs: Int = MergeMemoryBudget.FALLBACK_MERGE_QUEUE): Boolean =
+        pendingJobs in 0 until maxJobs && accepts(pendingFrames, requestedFrames,
             Int.MAX_VALUE, readerSlots, previewReserve)
 
     fun ringFits(pendingFrames: Int, ringCapacity: Int, readerSlots: Int, previewReserve: Int): Boolean =

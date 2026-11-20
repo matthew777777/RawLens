@@ -22,8 +22,17 @@ internal data class BufferedRawFrame(
      * derived) may be stale. Penalized in scoring, logged per burst, never
      * silent.
      */
-    val metadataApproximate: Boolean = false
-)
+    val metadataApproximate: Boolean = false,
+    /**
+     * Native copy of the RAW plane made by [MergeInputStaging]. When set,
+     * [image] has already gone back to the camera and must not be read;
+     * merge code reads [view] instead.
+     */
+    val staged: RawImageView? = null
+) {
+    /** The RAW plane to read: the staged copy when present, else the live Image. */
+    fun view(): RawImageView = staged ?: RawImageView.of(image)
+}
 
 /** Owns every Image added to it. Evicted and rejected images are closed
  * immediately; unselected frames stay buffered as pre-roll for the next

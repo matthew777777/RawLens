@@ -58,16 +58,25 @@ object JxlPixelPack {
      * `JxlEncoderAddImageFrame`. [rgbaHalf] holds width*height*4 half
      * samples in native order, row-major top-down.
      */
-    fun packRgb(rgbaHalf: ByteBuffer, width: Int, height: Int, settings: JxlOutputSettings): ByteBuffer {
+    fun packRgb(
+        rgbaHalf: ByteBuffer,
+        width: Int,
+        height: Int,
+        settings: JxlOutputSettings,
+        // ART charges allocateDirect to the Java heap; the app passes a
+        // native allocator so 72-144 MB frames don't OOM the 512 MB heap.
+        allocate: (Int) -> ByteBuffer = { ByteBuffer.allocateDirect(it) }
+    ): ByteBuffer {
         val resolved = settings.resolved()
         require(width > 0 && height > 0) { "Invalid JXL frame size ${width}x$height" }
         require(rgbaHalf.remaining() >= width * height * 8) {
             "RGBA half-float input too small: ${rgbaHalf.remaining()} bytes"
         }
         val pixels = width * height
-        val output = ByteBuffer
-            .allocateDirect(pixels * 3 * bytesPerSample(resolved))
-            .order(ByteOrder.nativeOrder())
+        val bytes = Math.multiplyExact(pixels * 3, bytesPerSample(resolved))
+        val output = allocate(bytes).order(ByteOrder.nativeOrder())
+        output.clear()
+        output.limit(bytes)
         val source = rgbaHalf.duplicate().order(ByteOrder.nativeOrder())
         if (dataType(resolved) == DATA_TYPE_UINT16) {
             // 16-bit uint only: container range matches the output depth.

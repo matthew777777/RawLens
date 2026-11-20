@@ -2900,7 +2900,31 @@ class RawCameraController(
     private fun hasMergeCapacity(outputFormat: CaptureFormat): Boolean =
         CaptureQueueCapacity.acceptsMerge(pendingMergeCount.get(), pendingFrameSaveCount.get(),
             zslSelectedFrameCount(outputFormat), rawReaderMaxImages,
-            SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS)
+            SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS,
+            maxJobs = mergeQueueLimit(zslSelectedFrameCount(outputFormat)))
+
+    /** RAM-derived merge queue depth ([MergeMemoryBudget.mergeQueueLimit]). */
+    private fun mergeQueueLimit(frames: Int): Int {
+        val pending = pendingMergeCount.get()
+        if (pending == 0) return 1 // idle: always admit; skip the memory query
+        val reader = rawReader ?: return MergeMemoryBudget.FALLBACK_MERGE_QUEUE
+        val px = reader.width.toLong() * reader.height
+        // LK-R Full 2x outputs 4x the pixels (LkrMerge: FULL_2X, or full-res at 1x zoom).
+        val outputScale = lkrOutputScale(mfsrSettings)
+        val limit = MergeMemoryBudget.mergeQueueLimit(
+            MergeMemoryBudget.systemHeadroomBytes(context), pending, px, frames, outputScale)
+        if (limit != lastMergeQueueLimit) {
+            lastMergeQueueLimit = limit
+            Log.i(LOG_TAG, "merge queue limit $limit (in flight $pending, ${frames}x${px / 1_000_000}MP, " +
+                MergeMemoryBudget.describeSystem(context) + ")")
+        }
+        return limit
+    }
+    @Volatile private var lastMergeQueueLimit = -1
+
+    private fun lkrOutputScale(settings: MfsrSettings): Int =
+        if (settings.enabled && settings.engine == MfsrEngine.LKR &&
+            (settings.lkrZoom == LkrZoom.FULL_2X || (settings.lkrFullRes && settings.lkrZoom == LkrZoom.X1))) 2 else 1
 
     private fun photoMergeFitsReader(count: Int): Boolean = CaptureQueueCapacity.accepts(
         pendingFrameSaveCount.get(), count, MAX_ZSL_FRAMES,
@@ -3235,17 +3259,8 @@ class RawCameraController(
         val saveGeneration = lifecycleGeneration
         pendingMergeCount.incrementAndGet()
         pendingFrameSaveCount.addAndGet(selected.size)
-        val inputsReleased = AtomicBoolean(false)
-        fun releaseInputs() {
-            if (!inputsReleased.compareAndSet(false, true)) return
-            selected.forEach { RawImageOwnership.release(it.image) }
-            cameraHandler.post {
-                pendingFrameSaveCount.addAndGet(-selected.size)
-                closeRetiredRawReaders()
-                refreshCaptureAvailability()
-                resumeRawZslIfIdle()
-            }
-        }
+        val inputs = mergeInputs(selected, keepSourceBurst = settings.keepSourceBurst)
+        fun releaseInputs() = inputs.release()
         beginPendingSave()
         if (outputFormat.includesJpeg) beginJpegProcessing()
         val releasedOwnership = AutoCloseable {
@@ -3254,7 +3269,7 @@ class RawCameraController(
         val job = OwnedCaptureJob(releasedOwnership) {
             try {
                 HdrPlusZslSaveJob(context, zslMergeJobHost(saveGeneration, ::releaseInputs)).run(
-                    selected, settings, c, orientation, cameraId,
+                    inputs.frames(), settings, c, orientation, cameraId,
                     outputFormat, outputSettings, captureDenoiseSettings,
                     captureTimeMillis, captureGps = captureGps, saveSettings = saveSettings
                 )
@@ -3300,8 +3315,51 @@ class RawCameraController(
             override fun hdrPlusProcessor(): HdrPlusMerge = this@RawCameraController.hdrPlusProcessor()
             override fun gyroRunning(): Boolean = motionTracker.isRunning()
             override fun releaseInputs() = releaseInputs.invoke()
+            // The retained AMaZE session holds its EGL context, programs and
+            // ~220 MB of scratch textures between saves; on Adreno the context
+            // also pins ~300 MB of driver pool. Merges are gated on measured
+            // headroom, so free it first (logcat 2026-11-19, Redmi K30 Pro:
+            // idle gfx 33 -> 372 -> 658 MB, HDR+/MFSR refused for headroom).
+            override fun releaseDevelopCaches() {
+                val developer = rawDeveloper ?: return
+                rawDeveloper = null
+                try {
+                    developer.close()
+                } catch (failure: RuntimeException) {
+                    Log.w(LOG_TAG, "Could not release develop caches before merge", failure)
+                }
+                Runtime.getRuntime().gc()
+                Log.i(LOG_TAG, "Released develop caches before merge")
+            }
         }
     }
+
+    /**
+     * Single background thread that copies each merge burst out of the RAW
+     * reader right after the shutter, so the ZSL ring refills and the next
+     * photo can be taken while earlier merges are still queued or running.
+     */
+    private val mergeInputStager: java.util.concurrent.ExecutorService by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "RawLensMergeStage").apply { isDaemon = true }
+        }
+    }
+
+    /**
+     * Inputs of one queued merge. Camera buffers come back (and the shutter
+     * re-arms) as soon as staging copies them, or when the merge releases
+     * them if they could not be staged. keepSourceBurst saves the source
+     * DNGs from the live Images, so those bursts are not staged.
+     */
+    private fun mergeInputs(selected: List<BufferedRawFrame>, keepSourceBurst: Boolean, outputScale: Int = 1): MergeInputs =
+        MergeInputs(context, selected, mergeInputStager.takeUnless { keepSourceBurst }, outputScale) {
+            cameraHandler.post {
+                pendingFrameSaveCount.addAndGet(-selected.size)
+                closeRetiredRawReaders()
+                refreshCaptureAvailability()
+                resumeRawZslIfIdle()
+            }
+        }
 
     private fun zslMergeSaveSettings(cameraId: String) = ZslMergeSaveSettings(
         dngBackend = dngWriterBackend(),
@@ -3331,17 +3389,9 @@ class RawCameraController(
         val saveGeneration = lifecycleGeneration
         pendingMergeCount.incrementAndGet()
         pendingFrameSaveCount.addAndGet(selected.size)
-        val inputsReleased = AtomicBoolean(false)
-        fun releaseInputs() {
-            if (!inputsReleased.compareAndSet(false, true)) return
-            selected.forEach { RawImageOwnership.release(it.image) }
-            cameraHandler.post {
-                pendingFrameSaveCount.addAndGet(-selected.size)
-                closeRetiredRawReaders()
-                refreshCaptureAvailability()
-                resumeRawZslIfIdle()
-            }
-        }
+        val inputs = mergeInputs(selected, keepSourceBurst = settings.keepSourceBurst,
+            outputScale = lkrOutputScale(settings))
+        fun releaseInputs() = inputs.release()
         beginPendingSave()
         if (outputFormat.includesJpeg) beginJpegProcessing()
         val releasedOwnership = AutoCloseable {
@@ -6692,12 +6742,29 @@ class RawCameraController(
         beginPendingSave()
         pendingFrameSaveCount.addAndGet(2)
         val owner = CloseOnceOwner(frames) { RawImageOwnership.release(it.image) }
-        val released = AutoCloseable { try { owner.close() } finally { postSaveCompletion(2) } }
+        // Frames go back right after the GPU merge (before the DNG write); the
+        // ZSL/RAW viewfinder stream cannot restart while they are held.
+        val framesReleased = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun releaseFrames() {
+            if (!framesReleased.compareAndSet(false, true)) return
+            try { owner.close() } finally {
+                cameraHandler.post {
+                    pendingFrameSaveCount.addAndGet(-2)
+                    closeRetiredRawReaders()
+                    if (running && !destroyed) {
+                        refreshCaptureAvailability()
+                        resumeRawZslIfIdle()
+                        publishRawZslStatus()
+                    }
+                }
+            }
+        }
+        val released = AutoCloseable { try { releaseFrames() } finally { postSaveCompletion(0) } }
         val job = OwnedCaptureJob(released) {
             try {
                 DualRawSaver.save(context,c,ordered[0].image,ordered[0].result,
                     ordered[1].image,ordered[1].result,orientation,captureTime,gps,
-                    cameraId)
+                    cameraId, onInputsConsumed = ::releaseFrames)
                 cameraHandler.post { if (isCurrent(generation)) onState("RAW HDR TEST DNG SAVED") }
             } catch (failure: Exception) {
                 Log.e("RawLensDualRaw","Merge/save failed",failure)

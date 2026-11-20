@@ -18,7 +18,8 @@ internal object DualRawSaver {
     @Synchronized
     fun save(context: Context, c: CameraCharacteristics,
              high: Image, highResult: TotalCaptureResult, low: Image, lowResult: TotalCaptureResult,
-             orientation: Int, captureTime: Long, gps: GpsLocation?, cameraId: String): String {
+             orientation: Int, captureTime: Long, gps: GpsLocation?, cameraId: String,
+             onInputsConsumed: () -> Unit = {}): String {
         check(DualRawVulkan.available) { "Vulkan dual RAW library unavailable" }
         require(high.width == low.width && high.height == low.height && low.width % 2 == 0)
         for ((image, result) in listOf(high to highResult, low to lowResult)) {
@@ -97,9 +98,16 @@ internal object DualRawSaver {
                 check(code == 0) { "Vulkan merge failed ($code)" }
             } }
         } finally { DualRawVulkan.close() }
+        // Everything below reads only the merged output: the camera frames go
+        // back now so the viewfinder/ZSL stream restarts before the DNG write.
+        val width = low.width
+        val height = low.height
+        val startGapNs = abs(low.timestamp - high.timestamp)
+        val midpointGapNs = abs(low.timestamp + le / 2 - high.timestamp - he / 2)
+        onInputsConsumed()
         Log.i("RawLensDualRaw", "Merged high=$highIso/$he low=$lowIso/$le " +
-            "startGapMs=${abs(low.timestamp-high.timestamp)/1e6} " +
-            "midpointGapMs=${abs(low.timestamp+le/2-high.timestamp-he/2)/1e6} " +
+            "startGapMs=${startGapNs/1e6} " +
+            "midpointGapMs=${midpointGapNs/1e6} " +
             "setupMs=${timing[0]} submitFenceMs=${timing[1]} readbackMs=${timing[2]} scale=$scale headroom=$headroom")
         val name = CaptureFileNames.fileName(captureTime,"DUAL","dng")
         val values = ContentValues().apply {
@@ -116,7 +124,7 @@ internal object DualRawSaver {
             // DngCreator.setLocation equivalent).
             checkNotNull(resolver.openOutputStream(uri,"w")).use { out ->
                 output.position(0)
-                DualRawDngWriter.write(out, output, low.width, low.height, frameMetadata,
+                DualRawDngWriter.write(out, output, width, height, frameMetadata,
                     headroom.toDouble(), orientation, gps, captureTime)
             }
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING,0)

@@ -478,7 +478,8 @@ class HdrPlusMerge(context: Context) {
         val mb = MergeMemoryBudget::mb
         if (n < HdrPlusSettings.MIN_MERGE_FRAMES) {
             Log.e(LOG_TAG, "HDR+ skipped: ${width}x$height needs " +
-                "${mb(bytes(HdrPlusSettings.MIN_MERGE_FRAMES, false))}MB, budget ${mb(budget.toDouble())}MB")
+                "${mb(bytes(HdrPlusSettings.MIN_MERGE_FRAMES, false))}MB, budget ${mb(budget.toDouble())}MB " +
+                "(${MergeMemoryBudget.describeSystem(appContext)})")
             return null
         }
         val start = (refIndex - n / 2).coerceIn(0, frameCount - n)

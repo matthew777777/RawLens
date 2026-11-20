@@ -35,6 +35,13 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
         fun releaseInputs()
         /** Gyro tracker running: per-frame gyro is reported only then. */
         fun gyroRunning(): Boolean
+        /**
+         * Frees the shared developer's idle GPU session (AMaZE EGL context,
+         * retained scratch textures, merged-develop context) before a merge
+         * measures its memory headroom. Writer thread only; the developer is
+         * recreated lazily for the save tail.
+         */
+        fun releaseDevelopCaches() {}
     }
 
     private data class HdrPlusFrameInput(
@@ -72,6 +79,8 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             val saver = DngSaver(context)
             val backend = saveSettings.dngBackend
             val overrides = saveSettings.dngOverrides
+            // Source DNGs need the live Images: the controller never stages these bursts.
+            check(selected.none { it.staged != null }) { "keepSourceBurst needs camera Images" }
             selected.forEachIndexed { index, frame ->
                 val metadata = RawFrameMetadataFactory.capture(
                     cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides
@@ -94,13 +103,13 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             }
         }
         val inputs = selected.map { frame ->
-            val metadata = RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides)
+            val metadata = RawFrameMetadataFactory.capture(cameraId, frame.view(), c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides)
             val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
                 ?: throw UnsupportedOperationException("HDR+ RAW geometry is not supported")
             val normalization = metadata.normalizationOrNull()
                 ?: throw UnsupportedOperationException("HDR+ normalization metadata is missing")
             metadata.rawDevelopmentUnsupportedReason?.let { error(it) }
-            val plane = frame.image.planes.single()
+            val plane = frame.view()
             HdrPlusFrameInput(
                 frame = frame, metadata = metadata, result = frame.result,
                 layout = RawPlaneLayout(metadata.imageWidth, metadata.imageHeight,
@@ -110,16 +119,18 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             )
         }
         val referenceIndex = inputs.size / 2
+        host.releaseDevelopCaches()
         host.reportSaveState("HDR+ MERGING")
         val tMerge0 = SystemClock.elapsedRealtime()
         val mergedRaw = try {
             host.hdrPlusProcessor().merge(
                 inputs.map {
                     HdrPlusMerge.FrameInput(
-                        it.frame.image, it.layout, it.crop, it.normalization,
+                        it.frame.image.takeIf { _ -> it.frame.staged == null }, it.layout, it.crop, it.normalization,
                         timestampNanos = it.frame.timestampNanos,
                         gyroRadiansPerSecond = it.frame.motionRadiansPerSecond,
-                        sensitivityIso = it.metadata.sensitivityIso ?: 0
+                        sensitivityIso = it.metadata.sensitivityIso ?: 0,
+                        pixels = it.frame.staged?.buffer?.duplicate()?.also { b -> b.rewind() }
                     )
                 },
                 referenceIndex, settings,
@@ -323,6 +334,8 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
             val saver = DngSaver(context)
             val backend = saveSettings.dngBackend
             val overrides = saveSettings.dngOverrides
+            // Source DNGs need the live Images: the controller never stages these bursts.
+            check(selected.none { it.staged != null }) { "keepSourceBurst needs camera Images" }
             selected.forEachIndexed { index, frame ->
                 val metadata = RawFrameMetadataFactory.capture(
                     cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides
