@@ -75,7 +75,8 @@ void main() {
   // pc.rpow < 0 (shift-and-add step): clipped samples enter with a tiny weight so an all-clipped HR
   // pixel averages to blown instead of 0 (taps are still checked below), without pulling single colour
   // channels of the pixels around a glint (full weight gave RGB blobs next to highlights).
-  if (pc.rpow < 0.0 && yv(int(o)) >= pc.clip) wk = 1e-3;
+  // rpow -2 (HDR bracket): far smaller, the short frames' exposure weights are ~0.01-0.03 there.
+  if (pc.rpow < 0.0 && yv(int(o)) >= pc.clip) wk = pc.rpow < -1.5 ? 1e-6 : 1e-3;
   if (wk == 0.0 || (pc.mode != 2 && pc.rpow >= 0.0 && yv(int(o)) >= pc.clip)) return;
   int base = bayerChannel(i, j) * pc.H * pc.W;
   float invn = 1.0 / float(ADJ_S * ADJ_S);

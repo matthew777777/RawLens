@@ -73,10 +73,13 @@ struct NoiseModelRef {
   float iso = 0;
 };
 thread_local NoiseModelRef g_noise_model;
+// HDR bracket exposures for the NEXT merge on this thread (nativeSetExposures, consumed by Merge):
+// one value per frame in frame order (frame 0 = reference), empty = normal merge.
+thread_local std::vector<float> g_exposure;
 
 // stats layout (float[16]): tiles, sigma, a, b, ms_noise, ms_coarse, ms_tiles,
 // ms_gpu, ms_prior, ms_total, prior_calls, out_w, out_h, backend (0 none,
-// 4 DCT x-step), reserved...
+// 4 DCT x-step), hdr_white (1 = normal merge), reserved...
 jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_px, jintArray cfa_j,
               jfloatArray black_j, jfloat white, jfloatArray wb_j, jint s, jint tile, jint overlap,
               jintArray crop_j, jboolean dct, jfloatArray stats_j, jfloatArray tuning_j, jint out_w_req,
@@ -181,6 +184,12 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     };
   }
   prm.s = s;
+  prm.exposure.swap(g_exposure);
+  g_exposure.clear();
+  if (!prm.exposure.empty() && prm.exposure.size() != size_t(K)) {
+    LKR_LOG("hdr: %d exposures for %d frames, ignored", int(prm.exposure.size()), int(K));
+    prm.exposure.clear();
+  }
   prm.solve.dct_prior = dct;
 #ifdef __ANDROID__
   {   // A/B: debug.lkr.prior = 1 / 0 forces the shadow-luma DCT denoise on / off
@@ -275,12 +284,13 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
     std::memcpy(out, rgb.data(), bytes);
     std::vector<float>().swap(rgb);
   }
-  if (stats_j && env->GetArrayLength(stats_j) >= 14) {
-    const float sv[14] = {float(st.tiles), st.sigma, st.a, st.b, float(st.ms_noise), float(st.ms_coarse),
+  if (stats_j && env->GetArrayLength(stats_j) >= 15) {
+    const float sv[15] = {float(st.tiles), st.sigma, st.a, st.b, float(st.ms_noise), float(st.ms_coarse),
                           float(st.ms_tiles), float(st.ms_gpu), float(st.ms_prior), float(st.ms_total),
-                          float(st.prior_calls), float(ow), float(oh), backend};
-    env->SetFloatArrayRegion(stats_j, 0, 14, sv);
+                          float(st.prior_calls), float(ow), float(oh), backend, st.hdr_white};
+    env->SetFloatArrayRegion(stats_j, 0, 15, sv);
   }
+  if (st.hdr_white > 1.0f) LKR_LOG("hdr: white %.3f (output level of the clip)", st.hdr_white);
   if (!st.gpu_profile.empty())
     LKR_LOG("gpu profile (sum of %d workers, ms): %s", st.workers, st.gpu_profile.c_str());
   LKR_LOG("mode: %s", dct ? "DCT x-step" : "no prior");
@@ -344,6 +354,13 @@ static std::vector<int> PrewarmTileEdges() {
   return {lkrl::AutoTileSize(4080, 3060, 1, 16, 4), 2 * lkrl::AutoTileSize(2040, 1530, 2, 16, 2)};
 }
 
+// LR tile edge the merge picks for a w x h frame at scale s (as prewarm): the LK-R HDR Auto rule
+// (LkrHdrDecision) uses one tile's area as the smallest clipped region worth short frames.
+extern "C" JNIEXPORT jint JNICALL Java_com_matthew_rawlens_LkrBridge_nativeAutoTileSize(JNIEnv*, jclass, jint w, jint h,
+                                                                                       jint s) {
+  return lkrl::AutoTileSize(w, h, s, 16, s >= 2 ? 2 : 4);
+}
+
 // A usable NPU for the prior (MDLA / Hexagon through NNAPI): Settings -> Network defaults to this.
 extern "C" JNIEXPORT jboolean JNICALL Java_com_matthew_rawlens_LkrBridge_nativeHasNpu(JNIEnv*, jclass) {
   return lkrl::PriorNpuAvailable() ? JNI_TRUE : JNI_FALSE;
@@ -359,6 +376,16 @@ extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetPr
       for (int t : PrewarmTileEdges())
         if (!lkrl::PriorPrewarm(t, t, &err)) { __android_log_print(ANDROID_LOG_WARN, "LkrPrior", "prewarm %d: %s", t, err.c_str()); break; }
     }).detach();
+}
+
+// HDR bracket exposures (ExposureTime x ISO, any common unit) for the next merge on the calling thread,
+// one per frame in merge order, frame 0 = reference; null = normal merge.
+extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetExposures(JNIEnv* env, jclass,
+                                                                                      jfloatArray ex) {
+  g_exposure.clear();
+  if (!ex) return;
+  g_exposure.resize(size_t(env->GetArrayLength(ex)));
+  if (!g_exposure.empty()) env->GetFloatArrayRegion(ex, 0, jsize(g_exposure.size()), g_exposure.data());
 }
 
 // Learned noise model for the next merge on the calling thread (path null = none).

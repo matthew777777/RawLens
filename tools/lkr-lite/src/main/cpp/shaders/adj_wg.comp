@@ -62,7 +62,8 @@ void scatter3x3(int c, ivec2 lo, ivec2 da, vec2 fa, ivec2 db, vec2 fb, ivec2 dc,
 void doSample(int k, int i, int j) {
   int o = (k * pc.h + i) * pc.w + j;
   float wk = wt[o];
-  if (pc.rpow < 0.0 && yv(int(o)) >= pc.clip) wk = 1e-3;
+  // rpow -2 (HDR bracket): far smaller, the short frames' exposure weights are ~0.01-0.03 there.
+  if (pc.rpow < 0.0 && yv(int(o)) >= pc.clip) wk = pc.rpow < -1.5 ? 1e-6 : 1e-3;
   if (wk == 0.0 || (pc.mode != 2 && pc.rpow >= 0.0 && yv(int(o)) >= pc.clip)) return;
   int c = bayerChannel(i, j);
   int base = c * pc.H * pc.W;

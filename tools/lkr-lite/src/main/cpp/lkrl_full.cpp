@@ -4,6 +4,7 @@
 #include "lkrl_prior.h"
 
 #include <algorithm>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
@@ -157,6 +158,27 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     }
     std::rotate(frames.begin() + prm.holdout, frames.begin() + prm.holdout + 1, frames.end());
   }
+  // HDR bracket: exposure of each frame relative to the reference (frame 0).
+  std::vector<float> erel(size_t(K), 1.0f);
+  bool hdr = false;
+  if (!prm.exposure.empty()) {
+    if (int(prm.exposure.size()) != K || holdout) {
+      if (err) *err = "exposure needs one value per frame and no holdout";
+      return false;
+    }
+    for (int k = 0; k < K; ++k) {
+      if (!(prm.exposure[size_t(k)] > 0.0f)) { if (err) *err = "exposure must be > 0"; return false; }
+      erel[size_t(k)] = prm.exposure[size_t(k)] / prm.exposure[0];
+      if (std::fabs(erel[size_t(k)] - 1.0f) > 0.02f) hdr = true;
+    }
+    if (!hdr) std::fill(erel.begin(), erel.end(), 1.0f);
+  }
+  // Clip level in reference units: the shortest frame's (samples above it are clipped somewhere);
+  // clipped samples are written just above it so the solver's ">= clip" test excludes them.
+  float emin = 1.0f;
+  for (float e : erel) emin = std::min(emin, e);
+  const float hdr_clip = prm.solve.clip / emin, hdr_mark = 1.02f * hdr_clip;
+  S.hdr_white = hdr ? hdr_clip : 1.0f;
   int ox = -1, oy = -1;
   for (int k = 0; k < 4; ++k)
     if (cfa[k] == 0) { ox = k & 1; oy = k >> 1; }
@@ -190,7 +212,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   const int s = prm.s;
 
   // 0) Sharpest frame as the reference (moved to index 0; the rest keep order).
-  if (prm.sharpest_ref && !prm.paper_parity && K > 1 && !holdout) {
+  if (prm.sharpest_ref && !prm.paper_parity && K > 1 && !holdout && !hdr) {
     std::vector<double> sharp(size_t(K), 0.0);
     std::vector<std::thread> pool;
     const int nthr = std::max(1, std::min(K, int(std::thread::hardware_concurrency()) / 2));
@@ -259,6 +281,12 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     return u[u.size() / 2];
   };
   auto alignmentGrey = [&](const RawFrame& frame, int* bw, int* bh) {
+    if (hdr) {   // bracket: near-clipped bins (raw units) carry no exposure-consistent signal -> NaN, skipped by LK
+      std::vector<float> v = BinnedGrey(frame, g, bin, black, white, bw, bh);
+      const float lim = 0.8f * prm.solve.clip;
+      for (float& x : v) if (x >= lim) x = std::numeric_limits<float>::quiet_NaN();
+      return v;
+    }
     if (!prm.paper_parity) return BinnedGrey(frame, g, bin, black, white, bw, bh);
     // Paper section 3.4: coarse forward-additive LK on bilinear-demosaiced
     // grayscale, rather than averaging Bayer cells before demosaicking.
@@ -284,7 +312,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         for (int k = 1 + tt; k < K; k += nthr) {
           int w2, h2;
           std::vector<float> mov = alignmentGrey(frames[k], &w2, &h2);
-          if (!prm.paper_parity) {
+          if (hdr) {   // bracket: known exposure ratio (clipped areas would bias a median ratio)
+            gain[k] = 1.0f / erel[size_t(k)];
+            for (float& v : mov) v *= gain[k];
+          } else if (!prm.paper_parity) {
             const float mm = median_of(mov);
             if (mref > 0 && mm > 0) {
               const float gk = mref / mm;
@@ -384,6 +415,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   }
   sp.noise_a = S.a;
   sp.noise_b = S.b;
+  if (hdr) { sp.clip = hdr_clip; sp.exposure = erel; }
   sp.holdout = holdout;
   if (holdout) {
     S.holdout_w = g.w;
@@ -558,7 +590,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       for (int k = 0; k < K; ++k) {
         float* fk = tf.data() + size_t(k) * n * n;
         LoadTile(frames[k], g, gx, gy, n, n, black, white, fk);
-        if (gain[k] != 1.0f)   // clipped samples stay clipped (>= clip -> 1)
+        if (hdr) {   // reference units; clipped samples (any frame, the reference too) marked above hdr_clip
+          const float gk = 1.0f / erel[size_t(k)];
+          for (size_t i = 0; i < size_t(n) * n; ++i) fk[i] = fk[i] >= prm.solve.clip ? hdr_mark : fk[i] * gk;
+        } else if (gain[k] != 1.0f)   // clipped samples stay clipped (>= clip -> 1)
           for (size_t i = 0; i < size_t(n) * n; ++i) fk[i] = fk[i] >= prm.solve.clip ? 1.0f : fk[i] * gain[k];
       }
       const double tl1 = now_ms();
@@ -577,6 +612,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
           for (int jj = 0; jj < g2; ++jj) {
             const float* r0 = t + size_t(2 * ii) * n + 2 * jj;
             o[size_t(ii) * g2 + jj] = 0.25f * (r0[0] + r0[1] + r0[n] + r0[n + 1]);
+            if (hdr && std::max(std::max(r0[0], r0[1]), std::max(r0[n], r0[n + 1])) >= hdr_clip)   // clipped: masked in LK
+              o[size_t(ii) * g2 + jj] = std::numeric_limits<float>::quiet_NaN();
           }
       };
       LkRef tref;
@@ -996,6 +1033,9 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   {
     static const float lfc_env = std::getenv("LKRL_LFC") ? float(std::atof(std::getenv("LKRL_LFC"))) : -1.0f;
     const float lk = lfc_env >= 0.0f ? lfc_env : prm.lfc_k;
+    // Last NaN guard, always, before the image-wide pass that would spread it (tiles replace theirs).
+    for (size_t i = 0, n3 = size_t(*out_w) * *out_h * 3; i < n3; ++i)
+      if (!std::isfinite(rgb_data[i])) rgb_data[i] = 0.0f;
     if (lk > 0.0f) {
       const double tl = now_ms();
       const float wbf[3] = {wb[0], wb[1], wb[2]};

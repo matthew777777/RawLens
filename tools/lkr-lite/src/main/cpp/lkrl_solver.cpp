@@ -206,6 +206,66 @@ uint16_t ToHalf(float f) {
   if (rem > 0x1000u || (rem == 0x1000u && (h & 1u))) ++h;
   return uint16_t(h);
 }
+// HDR bracket start image: the reference mosaic with its clipped samples (>= clip) filled from the
+// other frames at the same scene point (inverse tile affine, same-parity Bayer sub-grid, bilinear),
+// each in reference units already, weighted by its inverse noise variance a y / e + b / e^2.
+// Samples no frame sees unclipped stay clipped. Only the start (demosaic) uses it; the data term
+// keeps the reference's own samples.
+static std::vector<float> HdrFillReference(const float* frames, int K, int h, int w, const std::vector<float>& p,
+                                           const std::vector<float>& e, float clip, float na, float nb,
+                                           std::vector<uint8_t>* unfilled) {
+  std::vector<float> out(frames, frames + size_t(h) * w);
+  // Lower bound: the reference is clipped here, so the scene is at least the reference's clip level
+  // (clip x the shortest exposure, reference units). A darker sample from another frame is not this
+  // scene: lamp flicker caught off by a short frame (IMG_20261120_151412_514: an LED tube at ~1 % of
+  // its normal-frame level at 1/400 s) or motion. Such samples do not fill (3 sigma below 0.9 x that).
+  float emin = 1.0f;
+  for (float v : e) emin = std::min(emin, std::max(v, 1e-3f));
+  const double ref_clip = double(clip) * emin;
+  for (int i = 0; i < h; ++i)
+    for (int j = 0; j < w; ++j) {
+      const size_t o = size_t(i) * w + j;
+      if (out[o] < clip) continue;
+      const bool self_clip = out[o] >= 1.015f * clip;   // clipped itself (not only the colour ring)
+      double sw = 0.0, sv = 0.0;
+      for (int k = 1; k < K; ++k) {
+        const float* A = p.data() + size_t(k) * 6;
+        const double det = double(A[0]) * A[4] - double(A[1]) * A[3];
+        if (std::fabs(det) < 1e-9) continue;
+        const double rx = j + 0.5 - A[2], ry = i + 0.5 - A[5];   // reference point minus translation
+        const double ux = (A[4] * rx - A[1] * ry) / det - 0.5, uy = (-A[3] * rx + A[0] * ry) / det - 0.5;
+        const double fx = (ux - (j & 1)) * 0.5, fy = (uy - (i & 1)) * 0.5;   // same-parity sub-grid
+        const int x0 = int(std::floor(fx)), y0 = int(std::floor(fy));
+        const int sw2 = (w - (j & 1) + 1) / 2, sh2 = (h - (i & 1) + 1) / 2;
+        if (x0 < 0 || y0 < 0 || x0 + 1 >= sw2 || y0 + 1 >= sh2) continue;
+        const double ax = fx - x0, ay = fy - y0;
+        const float* fk = frames + size_t(k) * h * w;
+        double v = 0.0;
+        bool ok = true;
+        for (int dy = 0; dy < 2 && ok; ++dy)
+          for (int dx = 0; dx < 2; ++dx) {
+            const float t = fk[size_t(2 * (y0 + dy) + (i & 1)) * w + 2 * (x0 + dx) + (j & 1)];
+            if (!(t < clip)) { ok = false; break; }
+            v += t * (dx ? ax : 1.0 - ax) * (dy ? ay : 1.0 - ay);
+          }
+        if (!ok) continue;
+        const double ek = std::max(double(e[size_t(k)]), 1e-3), yy = std::max(v, 0.0);
+        if (self_clip && v < 0.9 * ref_clip - 3.0 * std::sqrt(std::max(na * yy / ek + nb / (ek * ek), 0.0))) continue;
+        const double wk = (na * yy + nb) / std::max(na * yy / ek + nb / (ek * ek), 1e-20);
+        sw += wk; sv += wk * v;
+      }
+      if (sw > 0.0) out[o] = float(sv / sw);
+      else if (self_clip) {
+        // No frame saw it unclipped: start from the lower bound (the reference's clip level), as a normal
+        // burst would. The clipped mark (~4x that) made the RCD start ring next to it (R -0.8 beside a
+        // lamp tube, red / blue edges). The solver marks these white after the solve (unfilled mask).
+        out[o] = float(ref_clip);
+        if (unfilled) (*unfilled)[o] = 1;
+      }
+    }
+  return out;
+}
+
 float HalfRound(float f) {   // value of ToHalf(f) as float (clip level as the fp16 frames see it)
   const uint16_t h = ToHalf(f);
   const uint32_t sign = uint32_t(h & 0x8000u) << 16, e = (h >> 10) & 0x1f, m = h & 0x3ff;
@@ -247,8 +307,8 @@ bool solve6(double A[6][6], double b[6], double x[6]) {   // Gaussian eliminatio
 
 LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   if (!gpu_ || !gpu_->ok()) return;
-  LKRL_PIPE(resid, 6); LKRL_PIPE(werr, 3); LKRL_PIPE(wavg, 2); LKRL_PIPE(wminh, 3); LKRL_PIPE(wminv, 3);
-  LKRL_PIPE(adj, 7); LKRL_PIPE(adj_s1, 7); LKRL_PIPE(adj_s2, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 4); LKRL_PIPE(le_tensor, 2); LKRL_PIPE(le_blur, 2); LKRL_PIPE(le_apply, 3); LKRL_PIPE(dln_apply, 3); LKRL_PIPE(axn_apply, 3); LKRL_PIPE(gcf_apply, 3); LKRL_PIPE(canc_apply, 5); LKRL_PIPE(rcd_start, 4); LKRL_PIPE(prior_conv, 4); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 3);
+  LKRL_PIPE(resid, 6); LKRL_PIPE(werr, 3); LKRL_PIPE(wavg, 2); LKRL_PIPE(wminh, 3); LKRL_PIPE(wminv, 5);
+  LKRL_PIPE(adj, 7); LKRL_PIPE(adj_s1, 7); LKRL_PIPE(adj_s2, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 4); LKRL_PIPE(le_tensor, 2); LKRL_PIPE(le_blur, 2); LKRL_PIPE(le_apply, 3); LKRL_PIPE(dln_apply, 3); LKRL_PIPE(axn_apply, 3); LKRL_PIPE(gcf_apply, 3); LKRL_PIPE(canc_apply, 5); LKRL_PIPE(rcd_start, 4); LKRL_PIPE(prior_conv, 4); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 5);
 #define LKRL_KPIPE(name, nb) name##_ = gpu_->pipeline(spv::name, sizeof(spv::name), nb, sizeof(KPush))
   LKRL_KPIPE(kresid, 5); LKRL_KPIPE(ktdet, 4); LKRL_KPIPE(kth, 5); LKRL_KPIPE(kt, 6); LKRL_KPIPE(ktv, 8);
   LKRL_KPIPE(ktd, 8); LKRL_KPIPE(kguide, 6); LKRL_KPIPE(kminh, 3); LKRL_KPIPE(kmin, 5);
@@ -378,28 +438,123 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   const int rcd_mode = prm.start_notch > 0 ? (rcd_env > 0 ? 1 : 0) : rcd_env;   // the notch is host-side
   const float mhc_mix = rcd_mode > 0 ? 1.0f : (prm.mhc_mix >= 0.0f ? prm.mhc_mix : (s == 1 ? 0.75f : 1.0f));
   const float jacobi_damp = prm.jacobi_damp >= 0.0f ? prm.jacobi_damp : 0.0f;
+  // HDR bracket, physical lower bound (2026-11-20, real bracket IMG_20261120_151412_514): where the
+  // reference is clipped the scene is at least its clip level (reference units: clip x the shortest
+  // exposure). A frame's sample there that is darker (3 sigma below 0.9 x that) is not this scene: lamp
+  // flicker caught off by a 1/400 s frame (LED tube at ~1 % of its normal level) or motion. Frame k's LR
+  // point u maps to the reference at A u + t.
+  std::vector<float> frames_lb;
+  if (int(prm.exposure.size()) == K && std::any_of(prm.exposure.begin(), prm.exposure.end(), [](float v) { return std::fabs(v - 1.0f) > 1e-3f; })) {
+    const float cl = HalfRound(prm.clip);
+    float emin = 1.0f;
+    for (float v : prm.exposure) emin = std::min(emin, std::max(v, 1e-3f));
+    const double ref_clip = double(cl) * emin;
+    frames_lb.assign(frames, frames + nLR);
+    std::vector<uint8_t> rc(size_t(h) * w);   // reference sample clipped itself
+    for (size_t o = 0; o < rc.size(); ++o) rc[o] = frames[o] >= 1.015f * cl;
+    // Pass 1: per clipped reference sample, how many bracket samples of its colour land there and how many
+    // are impossibly dark. Flicker contradicts nearly all of them over the lamp; sub-pixel misalignment at
+    // the edge of a clipped sky with branches only a few (real bracket HDR 3 window: dropping on any single
+    // contradiction blew out recovered sky detail). Contradicted = > half of those in the 5 x 5 window.
+    std::vector<uint16_t> n_all(size_t(h) * w, 0), n_con(size_t(h) * w, 0);
+    // The reference sample of the SAME CFA colour nearest to where frame k's sample (i, j) lands: the
+    // bound holds per colour (near the sun the reference's blue clips while red is legitimately darker).
+    auto refPos = [&](int k, int i, int j, int* ii, int* jj) {
+      const float* A = p.data() + size_t(k) * 6;
+      const double x = A[0] * (j + 0.5) + A[1] * (i + 0.5) + A[2], yv = A[3] * (j + 0.5) + A[4] * (i + 0.5) + A[5];
+      const int pi = i & 1, pj = j & 1;   // same parity = same colour (RGGB; the two greens count as one)
+      *ii = 2 * int(std::floor((yv - 0.5 - pi) * 0.5 + 0.5)) + pi;
+      *jj = 2 * int(std::floor((x - 0.5 - pj) * 0.5 + 0.5)) + pj;
+      return *ii >= 0 && *jj >= 0 && *ii < h && *jj < w;
+    };
+    for (int k = 1; k < K; ++k) {
+      if (std::fabs(prm.exposure[size_t(k)] - 1.0f) <= 1e-3f) continue;
+      const double ek = std::max(double(prm.exposure[size_t(k)]), 1e-3);
+      const float* fk = frames + size_t(k) * h * w;
+      for (int i = 0; i < h; ++i)
+        for (int j = 0; j < w; ++j) {
+          const float v = fk[size_t(i) * w + j];
+          int ii, jj;
+          if (v >= cl || !refPos(k, i, j, &ii, &jj) || !rc[size_t(ii) * w + jj]) continue;
+          const size_t o = size_t(ii) * w + jj;
+          ++n_all[o];
+          const double yy = std::max(double(v), 0.0);
+          if (v < 0.9 * ref_clip - 3.0 * std::sqrt(std::max(prm.noise_a * yy / ek + prm.noise_b / (ek * ek), 0.0)))
+            ++n_con[o];
+        }
+    }
+    std::vector<uint8_t> con(size_t(h) * w, 0);
+    for (int i = 0; i < h; ++i)
+      for (int j = 0; j < w; ++j) {
+        if (!n_con[size_t(i) * w + j]) continue;
+        int a = 0, c = 0;
+        for (int di = -2; di <= 2; ++di)
+          for (int dj = -2; dj <= 2; ++dj) {
+            const int ii = i + di, jj = j + dj;
+            if (ii < 0 || jj < 0 || ii >= h || jj >= w) continue;
+            a += n_all[size_t(ii) * w + jj]; c += n_con[size_t(ii) * w + jj];
+          }
+        con[size_t(i) * w + j] = 2 * c > a;
+      }
+    // Pass 2: there and 2 px around, the bracket frames (exposure != 1) are dropped: the area merges
+    // like a normal burst (the reference's clipped samples become white in the finish), no mixed
+    // sources, no colour from the frames that saw another scene.
+    std::vector<uint8_t> drop(size_t(h) * w, 0);
+    for (int i = 0; i < h; ++i)
+      for (int j = 0; j < w; ++j)
+        if (con[size_t(i) * w + j])
+          for (int di = -2; di <= 2; ++di)
+            for (int dj = -2; dj <= 2; ++dj) {
+              const int ii = i + di, jj = j + dj;
+              if (ii >= 0 && jj >= 0 && ii < h && jj < w) drop[size_t(ii) * w + jj] = 1;
+            }
+    for (int k = 1; k < K; ++k) {
+      if (std::fabs(prm.exposure[size_t(k)] - 1.0f) <= 1e-3f) continue;
+      float* fk = frames_lb.data() + size_t(k) * h * w;
+      for (int i = 0; i < h; ++i)
+        for (int j = 0; j < w; ++j) {
+          int ii, jj;
+          if (refPos(k, i, j, &ii, &jj) && drop[size_t(ii) * w + jj] && fk[size_t(i) * w + j] < cl)
+            fk[size_t(i) * w + j] = 1.01f * cl;   // invalid, not "clipped itself" (no white fill from it)
+        }
+    }
+    frames = frames_lb.data();
+  }
   PackHalf(frames, nLR, y.as<uint32_t>());   // fp16 frames, two per uint (shaders: yv())
   std::memcpy(pb.map, p.data(), p.size() * 4);
   std::memcpy(db.map, dloc.data(), dloc.size() * 4);
+  // HDR bracket: the start images demosaic the reference with its clipped samples filled from the
+  // other frames (the data term still excludes them). frames stays the reference elsewhere.
+  std::vector<float> ref_fused;
+  std::vector<uint8_t> hdr_unfilled;   // reference samples clipped in every frame (white after the solve)
+  const float* ref_start = frames;
+  if (int(prm.exposure.size()) == K && std::any_of(prm.exposure.begin(), prm.exposure.end(), [](float v) { return std::fabs(v - 1.0f) > 1e-3f; })) {
+    hdr_unfilled.assign(size_t(h) * w, 0);
+    ref_fused = HdrFillReference(frames, K, h, w, p, prm.exposure, HalfRound(prm.clip), prm.noise_a, prm.noise_b, &hdr_unfilled);
+    ref_start = ref_fused.data();
+    trace("hdr-reference.f32", ref_start, size_t(h) * w * 4);
+  }
+  Buffer& yref = buf(ref_fused.empty() ? 16 : (size_t(h) * w + 1) / 2 * 4, true);
+  if (!ref_fused.empty()) PackHalf(ref_start, size_t(h) * w, yref.as<uint32_t>());
   {
     std::vector<float> rgb(size_t(3) * h * w), up(nHR);
     // Edge-directed start at 2x (RcdRggb, 2026-11-19): with the luma-guided chroma it removes the blue
     // trunk fringe; luma detail equal (+0.5..1 %). LKRL_RCD=0 = MHC, =1 also at 1x.
     // LKRL_RCD: 2 (default) = GPU RCD (rcd_start.comp, the app's vf_rcd), 1 = CPU RcdRggb, 0 = MHC.
-    if (rcd_mode == 0 && mhc_mix > 0.0f) MhcCoherentRggb(frames, h, w, rgb.data());
-    if (rcd_mode == 1) RcdRggb(frames, h, w, rgb.data());
+    if (rcd_mode == 0 && mhc_mix > 0.0f) MhcCoherentRggb(ref_start, h, w, rgb.data());
+    if (rcd_mode == 1) RcdRggb(ref_start, h, w, rgb.data());
     // z0 (weights / first motion steps) = LK-R's own start, pure MHC; only the merge starts from
     // the MHC + bilinear mix. Mixed z0 lowered chrome glints (IMG_20261107) vs LK-R.
     static const int z0_mhc = std::getenv("LKRL_Z0MHC") ? std::atoi(std::getenv("LKRL_Z0MHC")) : 1;
     if (z0_mhc && mhc_mix < 1.0f) {
       std::vector<float> m(rgb.size()), u0(nHR);
-      if (mhc_mix > 0.0f) m = rgb; else MhcCoherentRggb(frames, h, w, m.data());
+      if (mhc_mix > 0.0f) m = rgb; else MhcCoherentRggb(ref_start, h, w, m.data());
       UpsampleBilinear(m.data(), 3, h, w, s, u0.data());
       std::memcpy(z0.map, u0.data(), nHR * 4);
     }
     if (mhc_mix < 1.0f) {
       std::vector<float> bil(rgb.size());
-      DemosaicBilinear(frames, h, w, bil.data());
+      DemosaicBilinear(ref_start, h, w, bil.data());
       const float a = mhc_mix;
       for (size_t o = 0; o < rgb.size(); ++o) rgb[o] = a > 0.0f ? a * rgb[o] + (1.0f - a) * bil[o] : bil[o];
     }
@@ -449,6 +604,10 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   q.a = prm.noise_a; q.b = prm.noise_b; q.clip = HalfRound(prm.clip); q.robk = prm.robust_k;
   q.tau = prm.robust_tau; q.rpow = std::max(prm.robust_pow, 1.0f);
   q.scale = float(std::ldexp(1.0, 28) / K);   // |r| <= 1, <= 4 s^2 taps per frame and HR pixel
+  // HDR bracket: samples (and residuals) reach the clip level (> 1) in reference units.
+  const bool hdr_in = int(prm.exposure.size()) == K &&
+                      std::any_of(prm.exposure.begin(), prm.exposure.end(), [](float v) { return std::fabs(v - 1.0f) > 1e-3f; });
+  if (hdr_in) q.scale /= std::ceil(std::max(prm.clip, 1.0f));
   q.dscale = q.scale;
 
   const uint32_t gx = uint32_t(K) * div_up(uint32_t(w), 16), gy = div_up(uint32_t(h), 16);
@@ -457,7 +616,22 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   VkDescriptorSet sAvg = gpu_->set(wavg_, {&e, &r});      // r is dead after werr: holds pre-spread weights
   VkDescriptorSet sAvgRes = gpu_->set(wavg_, {&e, &wrawb});   // residual weights for the guide AND test
   VkDescriptorSet sMinH = gpu_->set(wminh_, {&r, &e, &vm});
-  VkDescriptorSet sMinV = gpu_->set(wminv_, {&e, &wt, &vm});
+  // HDR: per-frame exposure e_k (+ the weight normaliser at index K) for wvalid / wminv.
+  const bool hdr = hdr_in;
+  Buffer& fx = buf(size_t(K + 2) * 4, true);
+  float hdr_fmax = 1.0f;
+  {
+    float* f = fx.as<float>();
+    for (int k = 0; k < K; ++k) {
+      f[k] = hdr ? std::max(prm.exposure[size_t(k)], 1e-3f) : 1.0f;
+      hdr_fmax = std::max(hdr_fmax, f[k] * f[k]);   // read-noise limit of the inverse-variance ratio
+    }
+    f[K] = hdr_fmax;
+    float emin = 1.0f;
+    for (int k = 0; k < K; ++k) emin = std::min(emin, f[k]);
+    f[K + 1] = hdr ? prm.clip * emin : 0.0f;   // reference's clip level (prm.clip = the shortest frame's)
+  }
+  VkDescriptorSet sMinV = gpu_->set(wminv_, {&e, &wt, &vm, &y, &fx});
   // adj.comp built for this scale (half the Mali registers at 1x); LKRL_ADJ_GENERIC = the pc.s build (A/B).
   static const bool adj_generic = std::getenv("LKRL_ADJ_GENERIC") && std::atoi(std::getenv("LKRL_ADJ_GENERIC")) != 0;
   const Pipeline& adjP = adj_generic ? adj_ : (s == 2 ? adj_s2_ : adj_s1_);
@@ -485,7 +659,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     kG = gpu_->set(kguide_, {&gm, &gv, &pb, &wrawb, &db, &wtr});
     kMH = gpu_->set(kminh_, {&wrawb, &wtr, &kebuf});
     kM = gpu_->set(kmin_, {&rrt, &kebuf, &s3, &wl, &s5});
-    kV = gpu_->set(wvalid_, {&wl, &vm, &wt});
+    kV = gpu_->set(wvalid_, {&wl, &vm, &wt, &y, &fx});
   }
   KPush kq{};
   kq.h = h; kq.w = w; kq.s = s; kq.K = K; kq.H = H; kq.W = W; kq.kOff = LB; kq.mode = 0;
@@ -600,7 +774,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     gpu_->begin();
   if (rcd_mode == 2) {   // GPU RCD start: reference frame (fp16, frame 0 of y) -> LR RGB -> x s into z
     Buffer &rcdS = buf(size_t(h) * w * 16), &rcdC = buf(size_t(h) * w * 16);
-    VkDescriptorSet rS = gpu_->set(rcd_start_, {&y, &rcdS, &rcdC, &z});
+    VkDescriptorSet rS = gpu_->set(rcd_start_, {ref_fused.empty() ? &y : &yref, &rcdS, &rcdC, &z});
     Push rq = q;
     for (int m = 0; m < 4; ++m) {
       rq.mode = m;
@@ -642,7 +816,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       if (avg) { gpu_->fill(z, 0); need_cov = true; }
       if (need_cov) gpu_->fill(cov, 0);
       Push m = q; m.mode = need_cov ? 1 : 0;
-      if (avg) m.rpow = -1.0f;   // average: clipped samples count (all-clipped pixels stay blown, not 0)
+      if (avg) m.rpow = hdr_in ? -2.0f : -1.0f;   // average: clipped samples count (all-clipped pixels stay blown, not 0)
       static const float freq_c = std::getenv("LKRL_FREQ") ? float(std::atof(std::getenv("LKRL_FREQ"))) : 0.0f;
       if (avg && freq_c > 0.0f && K > 1) {
         // Frequency-domain robustness (HDR+ / IPOL merge, per sample): every frame enters with weight 1
@@ -751,7 +925,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       const float omega = omega_env > 0.0f ? omega_env : (s == 1 ? 1.6f : 1.0f);
       u.rpow = omega;
       static const int avg_r = std::getenv("LKRL_AVGR") ? std::atoi(std::getenv("LKRL_AVGR")) : -1;
-      if (avg) { u.a = 0.0f; u.rpow = -1.0f; u.robk = 0.0f; u.LB = avg_r >= 0 ? avg_r : (s == 1 ? 0 : 1); }
+      if (avg) { u.a = 0.0f; u.rpow = hdr_in ? -2.0f : -1.0f; u.robk = 0.0f; u.LB = avg_r >= 0 ? avg_r : (s == 1 ? 0 : 1); }
       if (!avg && trace_j==1) trace("update-push.bin",&u,sizeof(u));
       // Colour-difference fit (default since 2026-11-17; cdupd.comp): solve G, R-G, B-G instead of
       // R, G, B. Synthetic ground truth (tilted / straight bars, perfect motion): the independent fit
@@ -1022,6 +1196,98 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   if (!submit()) return fail("final submit");
   if (hyb_done) z_out->assign(hybO.as<float>(), hybO.as<float>() + nHR);
   else z_out->assign(z.as<float>(), z.as<float>() + nHR);
+  // NaN safety net (2026-11-20). A merge that overflows the int32 fixed-point accumulators (an exposure
+  // bracket merged without its exposures) produced NaN, which the later passes (LFC, DCT) spread into
+  // blank areas. Any bad output pixel (below) takes the reference frame's own colour at that point
+  // (mean of its same-colour raw samples in the 3 x 3 LR neighbourhood, clipped samples at the clip
+  // level): a local, plausible value, never NaN. Normal merges are unchanged (no non-finite pixels).
+  {
+    const size_t HWp = size_t(H) * W;
+    float* zo = z_out->data();
+    const float cl = HalfRound(prm.clip);
+    // Bad = non-finite, dilated by 6 px: the overflow also leaves finite garbage next to each NaN and the
+    // GPU post passes (gcf, canc) ran before this and smeared it into rings ~5 px out (2 px left visible
+    // rings on My/HDR merged without exposures). No value-range test: merged lamps legitimately exceed
+    // 2 x clip (a range test boxed every street light of IMG_20260921_194618_520).
+    std::vector<uint8_t> bm(HWp, 0);
+    bool any = false;
+    for (size_t q = 0; q < HWp; ++q)
+      for (int c = 0; c < 3; ++c) {
+        const float v = zo[c * HWp + q];
+        if (!std::isfinite(v)) { bm[q] = 1; any = true; break; }
+      }
+    if (any) {
+      std::vector<uint8_t> d(bm);
+      for (int Y = 0; Y < H; ++Y)
+        for (int X = 0; X < W; ++X)
+          if (bm[size_t(Y) * W + X])
+            for (int dy = -6; dy <= 6; ++dy)
+              for (int dx = -6; dx <= 6; ++dx) {
+                const int yy = Y + dy, xx = X + dx;
+                if (yy >= 0 && xx >= 0 && yy < H && xx < W) d[size_t(yy) * W + xx] = 1;
+              }
+      bm.swap(d);
+    }
+    size_t bad = 0;
+    for (size_t q = 0; q < HWp && any; ++q) {
+      if (!bm[q]) continue;
+      ++bad;
+      const int i = std::min(int(q / W) / s, h - 1), j = std::min(int(q % W) / s, w - 1);
+      float sum[3] = {0, 0, 0}, cnt[3] = {0, 0, 0};
+      for (int di = -1; di <= 1; ++di)
+        for (int dj = -1; dj <= 1; ++dj) {
+          const int ii = std::clamp(i + di, 0, h - 1), jj = std::clamp(j + dj, 0, w - 1);
+          const float v = ref_start[size_t(ii) * w + jj];
+          if (!std::isfinite(v)) continue;
+          const int c = (ii & 1) == 0 ? ((jj & 1) == 0 ? 0 : 1) : ((jj & 1) == 0 ? 1 : 2);   // RGGB
+          sum[c] += std::min(v, cl); cnt[c] += 1.0f;
+        }
+      for (int c = 0; c < 3; ++c) zo[c * HWp + q] = cnt[c] > 0.0f ? sum[c] / cnt[c] : 0.0f;
+    }
+    if (bad) {
+      if (st) st->nonfinite += bad;
+      std::fprintf(stderr, "lkr-lite: NaN safety net replaced %zu bad pixels in a %dx%d tile\n", bad, W, H);
+    }
+  }
+  // HDR bracket: where no frame saw the scene unclipped (bare lamps, the sun) the solve has no data and
+  // neighbouring edge samples pulled z down to ~ the reference's clip level, coloured (real bracket
+  // IMG_20261120_151412_514: a ceiling tube at 1/4 of white, magenta with blue / orange beads). Such
+  // pixels are at least the shortest frame's clip: set them clipped (all planes) so the finish turns
+  // them neutral white like any clipped area. Mask = reference samples that clipped themselves and no
+  // frame filled (HdrFillReference).
+  if (!ref_fused.empty()) {
+    const float cl = HalfRound(prm.clip);
+    // Soft: strength f = clamp(2 x binomial 3 x 3 of the mask) (often only the green sites of a lamp clip:
+    // the raw mask is a checkerboard; a hard fill gave a dotted / jagged line). z = max(z, f x white),
+    // white = neutral after white balance.
+    std::vector<float> f(size_t(h) * w, 0.0f);
+    for (int i = 0; i < h; ++i)
+      for (int j = 0; j < w; ++j) {
+        float a = 0.0f;
+        for (int di = -1; di <= 1; ++di)
+          for (int dj = -1; dj <= 1; ++dj) {
+            const int ii = std::clamp(i + di, 0, h - 1), jj = std::clamp(j + dj, 0, w - 1);
+            a += float((2 - std::abs(di)) * (2 - std::abs(dj))) * hdr_unfilled[size_t(ii) * w + jj];
+          }
+        f[size_t(i) * w + j] = std::min(1.0f, a * (2.0f / 16.0f));
+      }
+    const size_t HWp = size_t(H) * W;
+    float* zo = z_out->data();
+    const float v = 1.02f * cl;
+    for (int Y = 0; Y < H; ++Y)
+      for (int X = 0; X < W; ++X) {
+        // bilinear of the LR strength at the HR pixel centre
+        const float fy = std::clamp((Y + 0.5f) / s - 0.5f, 0.0f, float(h - 1)), fx = std::clamp((X + 0.5f) / s - 0.5f, 0.0f, float(w - 1));
+        const int y0 = int(fy), x0 = int(fx), y1 = std::min(y0 + 1, h - 1), x1 = std::min(x0 + 1, w - 1);
+        const float ay = fy - y0, ax = fx - x0;
+        const float st = (1 - ay) * ((1 - ax) * f[size_t(y0) * w + x0] + ax * f[size_t(y0) * w + x1]) +
+                         ay * ((1 - ax) * f[size_t(y1) * w + x0] + ax * f[size_t(y1) * w + x1]);
+        if (st <= 0.0f) continue;
+        const size_t q = size_t(Y) * W + X;
+        // neutral after white balance (equal camera RGB turned magenta); G reaches the clip mark at st = 1
+        for (int c = 0; c < 3; ++c) zo[c * HWp + q] = std::max(zo[c * HWp + q], st * v * prm.wb[1] / std::max(prm.wb[c], 1e-3f));
+      }
+  }
   if (!zavg.empty()) {   // luma of the fit (z), chroma (wb-space R-Y, B-Y) of the average
     const size_t HW = size_t(H) * W;
     const float* wb = prm.wb;
@@ -1192,6 +1458,11 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       const double a = double(c1[i]) + c1[HW + i] + c1[2 * HW + i];
       const double b = double(cw[i]) + cw[HW + i] + cw[2 * HW + i];
       const float rho = a > 0 ? float(std::min(b / a, 1.0)) : 1.0f;
+      if (hdr) {   // weights carry each frame's inverse noise variance / hdr_fmax: below 1 where the long frame cleans shadows
+        const double inf = a > 0 ? b * hdr_fmax / a : 1.0;   // merged information vs plain coverage of usable samples
+        (*noise_scale)[i] = std::clamp(float(std::sqrt(0.8 / std::max(inf, 1e-3))), 0.3f, 2.0f * std::sqrt(float(K)));
+        continue;
+      }
       (*noise_scale)[i] = std::min(std::sqrt(std::max(0.8f / std::max(rho, 1e-3f), 1.0f)), std::sqrt(float(K)));
     }
   }

@@ -22,6 +22,7 @@ struct LiteParams {
   std::string schedule;   // G = motion step + weight refresh, J = merge step; leading G align to the reference-only image
   float noise_a = 0, noise_b = 0;     // our own fit: var = a y + b (normalised raw units)
   float clip = 0.98f;
+  std::vector<float> exposure;   // HDR: per-frame exposure / reference's (SolveParams::exposure); empty = equal
   float robust_k = 3.0f, robust_pow = 1.0f, robust_tau = 0.1f;
   int robust_spread = 3;
   // Reference-guide confidence (LK-R --guide): > 0 = strength (LK-R default 2). Needs even h, w.
@@ -84,6 +85,7 @@ struct LiteParams {
 struct LiteStats {
   double ms_total = 0, ms_gpu = 0, ms_host = 0, ms_prior = 0;
   int submits = 0, prior_calls = 0;
+  size_t nonfinite = 0;   // output pixels the NaN safety net replaced (0 in a healthy merge)
   std::string profile;
 };
 

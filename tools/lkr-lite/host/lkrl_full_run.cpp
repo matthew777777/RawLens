@@ -17,6 +17,30 @@
 #include "lkrl_tuning.h"
 #include "srp_dng.h"
 
+// ExposureTime (33434, RATIONAL) x ISO (34855, SHORT) from IFD0 of a little-endian DNG; 0 if absent.
+static double DngExposure(const std::string& path) {
+  FILE* f = std::fopen(path.c_str(), "rb");
+  if (!f) return 0.0;
+  auto rd = [&](long off, void* d, size_t n) { return std::fseek(f, off, SEEK_SET) == 0 && std::fread(d, 1, n, f) == n; };
+  uint8_t h[8];
+  double t = 0.0, iso = 0.0;
+  if (rd(0, h, 8) && h[0] == 'I' && h[1] == 'I') {
+    uint32_t ifd; std::memcpy(&ifd, h + 4, 4);
+    uint16_t n = 0;
+    if (rd(long(ifd), &n, 2))
+      for (int i = 0; i < n; ++i) {
+        uint8_t e[12];
+        if (!rd(long(ifd) + 2 + 12 * i, e, 12)) break;
+        uint16_t tag, type; uint32_t cnt, val;
+        std::memcpy(&tag, e, 2); std::memcpy(&type, e + 2, 2); std::memcpy(&cnt, e + 4, 4); std::memcpy(&val, e + 8, 4);
+        if (tag == 33434 && type == 5) { uint32_t r[2]; if (rd(long(val), r, 8) && r[1]) t = double(r[0]) / r[1]; }
+        if (tag == 34855) iso = type == 3 ? double(val & 0xffff) : double(val);
+      }
+  }
+  std::fclose(f);
+  return t > 0 ? t * (iso > 0 ? iso : 1.0) : 0.0;
+}
+
 int main(int argc, char** argv) {
   if (const char* pc = std::getenv("LKRL_PCACHE")) lkrl::Gpu::SetPipelineCacheFile(pc);   // app-like warm pipelines
   if (argc < 3) return 2;
@@ -28,6 +52,7 @@ int main(int argc, char** argv) {
   int reference = 0;
   int pack_bits = 0;
   bool profile = false;
+  int hdr_mode = 1;
   std::string model_error_path;
   for (int i = 3; i < argc; ++i) {
     std::string k = argv[i];
@@ -66,6 +91,7 @@ int main(int argc, char** argv) {
     else if (k == "--mean") prm.solve.mean_preserve = nx();
     else if (k == "--reference") reference = nx();
     else if (k == "--profile") profile = nx() != 0;
+    else if (k == "--hdr") hdr_mode = nx();   // 1 (default): exposure-bracket merge when the DNGs' exposures differ; 0: ignore
     else if (k == "--holdout") prm.holdout = nx();   // frame index (after --reference / --frames) kept out of the merge
     else if (k == "--smax") prm.smax_x = float(std::atof(argv[++i]));
     else if (k == "--notch") prm.solve.notch = nx() != 0;
@@ -151,6 +177,18 @@ int main(int argc, char** argv) {
                 packed[0].size() / 1048576.0, double(m.width) * m.height * 2 / 1048576.0);
   }
   const double ms_load = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  if (hdr_mode) {
+    std::vector<float> ex;
+    for (const auto& pth : paths) ex.push_back(float(DngExposure(pth)));
+    const bool all = std::all_of(ex.begin(), ex.end(), [](float v) { return v > 0; });
+    const bool mixed = all && std::any_of(ex.begin(), ex.end(), [&](float v) { return std::fabs(v / ex[0] - 1.0f) > 0.02f; });
+    if (mixed) {
+      prm.exposure = ex;
+      std::printf("HDR bracket, exposure / reference:");
+      for (float v : ex) std::printf(" %.3f", v / ex[0]);
+      std::printf("\n");
+    }
+  }
   const int cfa[4] = {m.cfa[0], m.cfa[1], m.cfa[2], m.cfa[3]};
   // DNG BlackLevel is in CFA cell order, already what MergeFull expects.
   // Averaging or rounding fractional offsets leaves a shadow colour cast.
@@ -189,7 +227,9 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "merge failed: %s\n", err.c_str());
     return 1;
   }
-  for (float& v : rgb) v = std::clamp(v, 0.0f, 1.0f);
+  // HDR: scale so the clip level is 1 and tell raw converters to brighten by the same factor.
+  const float hw = st.hdr_white;
+  for (float& v : rgb) v = std::clamp(v / hw, 0.0f, 1.0f);
   srp::DngColorMeta color;
   std::memcpy(color.color_matrix1, m.color_matrix1, sizeof(color.color_matrix1));
   color.has_color_matrix1 = m.color_matrix_present;
@@ -213,6 +253,12 @@ int main(int argc, char** argv) {
   if (!md.empty()) {
     srp::DngField f; f.tag = 272; f.type = 2; f.count = uint32_t(md.size() + 1);
     f.payload = reinterpret_cast<const uint8_t*>(md.c_str()); f.payload_size = md.size() + 1; fields.push_back(f);
+  }
+  int32_t be[2] = {int32_t(std::lround(std::log2(double(hw)) * 1000.0)), 1000};   // BaselineExposure (SRATIONAL)
+  if (hw > 1.0f) {
+    srp::DngField f; f.tag = 50730; f.type = 10; f.count = 1;
+    f.payload = reinterpret_cast<const uint8_t*>(be); f.payload_size = 8; fields.push_back(f);
+    std::printf("HDR white %.3f (BaselineExposure %+.2f EV)\n", hw, std::log2(double(hw)));
   }
   srp::DngWriteLinearRgb16(outp.c_str(), ow, oh, rgb.data(), fields.data(), fields.size(), &color, &err);
   FILE* f = std::fopen((outp + ".f32").c_str(), "wb");

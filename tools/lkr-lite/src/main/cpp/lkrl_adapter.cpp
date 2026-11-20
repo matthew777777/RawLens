@@ -82,6 +82,7 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
   lp.noise_a = prm.noise_a;
   lp.noise_b = prm.noise_b;
   lp.clip = prm.clip;
+  if (!prm.holdout && int(prm.exposure.size()) == K) lp.exposure = prm.exposure;
   lp.robust_k = prm.robust ? prm.robust_k : 0.0f;
   lp.robust_pow = prm.robust_pow;
   lp.robust_tau = prm.robust_tau;

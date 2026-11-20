@@ -384,7 +384,9 @@ double LkResidual(const LkRef& ref, const float* mov, const std::array<double, 6
       const double fx = p[0] * ux + p[1] * uy + p[2] - 0.5, fy = p[3] * ux + p[4] * uy + p[5] - 0.5;
       const int x0 = int(std::floor(fx)), y0 = int(std::floor(fy));
       if (!(x0 >= 0 && y0 >= 0 && x0 + 1 < w && y0 + 1 < h)) continue;
-      e += std::fabs(tap(r, size_t(y0) * w + x0, w, fx - x0, fy - y0) - mov[size_t(i) * w + j]);
+      const double d = std::fabs(tap(r, size_t(y0) * w + x0, w, fx - x0, fy - y0) - mov[size_t(i) * w + j]);
+      if (!std::isfinite(d)) continue;   // masked (NaN)
+      e += d;
       ++n;
     }
   return n ? e / n : 1e30;
@@ -445,6 +447,7 @@ std::array<double, 6> LkAffine(const LkRef& ref, const float* mov, int iters, co
           const size_t o = size_t(y0) * W + x0;
           const double wr = tap3(rg, o, W, 0, ax, ay), sx = tap3(rg, o, W, 1, ax, ay), sy = tap3(rg, o, W, 2, ax, ay);
           const double e = mrow[j] - wr;
+          if (!std::isfinite(e + sx + sy)) continue;   // NaN = masked (HDR bracket: clipped in either image)
           const double qxx = sx * sx, qxy = sx * sy, qyy = sy * sy, qex = sx * e, qey = sy * e;
           const double u2 = ux * ux;
           xx[0] += qxx; xx[1] += qxx * ux; xx[2] += qxx * u2;

@@ -8,8 +8,37 @@ layout(local_size_x = 256) in;
 layout(std430, binding = 0) readonly buffer WL { float wl[]; };
 layout(std430, binding = 1) readonly buffer VM { float vm[]; };
 layout(std430, binding = 2) writeonly buffer WT { float wt[]; };
+layout(std430, binding = 3) readonly buffer Y { uint yh[]; };
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+// HDR bracket: fe[k] = frame k's exposure / the reference's, fe[K] = normaliser (max e^2).
+// Samples are in reference units (y / e), so frame k's noise is a y / e + b / e^2: weight by
+// the inverse-variance ratio to the reference (Hasinoff 2010; Lecouat 2022 Eq. 7). 1 for e = 1.
+layout(std430, binding = 4) readonly buffer FE { float fe[]; };
+float exposureWeight(int k, int o) {
+  float e = fe[k];
+  if (e == 1.0) return 1.0 / fe[pc.K];
+  float yy = max(yv(o), 0.0);
+  float vr = pc.a * yy + pc.b;
+  return vr / max(pc.a * yy / e + pc.b / (e * e), 1e-20) / fe[pc.K];
+}
+// fe[K + 1] = the reference's own clip level (reference units; 0 = not a bracket). Where frame k's
+// samples within 2 px reach it, the reference is clipped there and cannot judge frame k: its motion
+// rejection (guide / temporal tests against the reference) is skipped. Only the short frames get here.
+bool refClipped(int k, int i, int j) {
+  float rc = fe[pc.K + 1];
+  if (rc <= 0.0) return false;
+  int base = k * pc.h * pc.w;
+  for (int di = -2; di <= 2; ++di)
+    for (int dj = -2; dj <= 2; ++dj) {
+      float v = yv(base + clamp(i + di, 0, pc.h - 1) * pc.w + clamp(j + dj, 0, pc.w - 1));
+      if (v >= 0.9 * rc && v < pc.clip) return true;
+    }
+  return false;
+}
 void main() {
   int i = int(gl_GlobalInvocationID.x);
   if (i >= pc.K * pc.h * pc.w) return;
-  wt[i] = wl[i] * vm[i];
+  int hw = pc.h * pc.w, kk = i / hw, rr = i - kk * hw;
+  float v = (kk > 0 && refClipped(kk, rr / pc.w, rr - (rr / pc.w) * pc.w) ? 1.0 : wl[i]) * vm[i];
+  wt[i] = v > 0.0 ? v * exposureWeight(i / (pc.h * pc.w), i) : 0.0;
 }

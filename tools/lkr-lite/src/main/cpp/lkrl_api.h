@@ -160,6 +160,11 @@ struct SolveParams {
   bool debug_maps = false;   // fill SolveStats::dbg (LKR_DEBUG_MAPS)
   bool notch = true;           // remove Bayer-period (zipper/maze) structure from colour + grain
   float clip = 0.98f;          // normalised level at/above which a raw sample is treated as clipped
+  // HDR bracket (Lecouat et al. 2022): exposure of each merged frame relative to the reference
+  // (frame 0), e.g. 1 1 1 1 1 0.25 0.25 2.83. Samples arrive already divided by it (reference
+  // units; clipped samples above `clip`); the merge weights each frame by its own noise
+  // variance a y / e + b / e^2. Empty = equal exposures (the default merge, unchanged).
+  std::vector<float> exposure;
   float grain = 0.4f;          // add back grain * (removed detail), luminance only (neutral)
   std::array<float, 3> wb{1.0f, 1.0f, 1.0f};   // white balance for the luminance grain
   bool gather = false;

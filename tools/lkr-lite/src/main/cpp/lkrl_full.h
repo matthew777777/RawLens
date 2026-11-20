@@ -97,6 +97,12 @@ struct FullParams {
   // merge, aligned to the finished image and compared with it through the forward model.
   // FullStats::holdout receives the maps. -1 = off. Needs >= 3 frames.
   int holdout = -1;
+  // HDR bracket (Lecouat et al. 2022 on Lite): exposure of each input frame in any common unit
+  // (e.g. ExposureTime x ISO), frame 0 = reference. Empty, or all equal = the normal merge. Mixed:
+  // samples are divided by exposure / reference's, clipped samples are excluded per frame, each
+  // frame is weighted by its own noise; the result is in reference units with highlights up to
+  // FullStats::hdr_white (> 1). Not combined with holdout or sharpest_ref.
+  std::vector<float> exposure;
   bool auto_local_lambda = true;   // scale solve.local_lambda by (noise / 0.0025)^2, cap 5   // init local motion with sr-pipeline align.comp (coarse-to-fine)
 };
 
@@ -112,7 +118,8 @@ struct FullStats {
   double ms_init = 0, ms_finish = 0, ms_blend = 0;   // sums over tiles: solver CPU start, FinishLook, output blend
   double ms_solve = 0, ms_prep = 0, ms_load = 0;   // ms_load: LoadTile part of ms_prep
   int workers = 0;
-  int ref_index = 0;   // input frame used as the reference (sharpest_ref)   // tile workers actually running (own Vulkan context each)   // sums over tiles: solver wall, tile load + per-tile LK
+  int ref_index = 0;
+  float hdr_white = 1.0f;   // HDR bracket: output level of the clip (divide by it for a 0..1 image); 1 otherwise   // input frame used as the reference (sharpest_ref)   // tile workers actually running (own Vulkan context each)   // sums over tiles: solver wall, tile load + per-tile LK
   float prior_gain = 0, grain = 0;   // look actually used
   float sigma_look = 0;
   float local_lambda = 0;              // noise level the look was chosen from
