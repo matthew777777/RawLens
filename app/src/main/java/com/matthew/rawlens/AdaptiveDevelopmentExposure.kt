@@ -237,7 +237,10 @@ object AdaptiveDevelopmentExposure {
             }
             index += stride
         }
-        return analyzeSamples(samples, count, tuning, weights, excludeClipped = singleFrame)
+        val noise = HdrPlusSceneNoise.sampleNormalized(cfa.width, cfa.height, CLIP_LEVEL) { x, y ->
+            cfa.values[y * cfa.width + x]
+        }?.let { HdrPlusSceneNoise.fit(listOf(it)) }
+        return analyzeSamples(samples, count, tuning, weights, excludeClipped = singleFrame, noise = noise)
     }
 
     /**
@@ -304,11 +307,7 @@ object AdaptiveDevelopmentExposure {
         val samples = workspace.samples
         val bounded = tuning.bounded()
         val weights = if (bounded.centerWeight > 0f) workspace.weights else null
-        var count = 0
-        var index = 0
-        while (index < pixelCount) {
-            val x = index % crop.width
-            val y = index / crop.width
+        fun valueAt(x: Int, y: Int): Float {
             val planeX = crop.left + x
             val planeY = crop.top + y
             val sensorX = layout.sensorOriginX + planeX
@@ -322,6 +321,14 @@ object AdaptiveDevelopmentExposure {
                     sensorX, sensorY, normalization.sensorPattern.colorAt(sensorX, sensorY)
                 )
             }
+            return value
+        }
+        var count = 0
+        var index = 0
+        while (index < pixelCount) {
+            val x = index % crop.width
+            val y = index / crop.width
+            val value = valueAt(x, y)
             if (value.isFinite() && value > SHADOW_FLOOR) {
                 samples[count] = value
                 if (weights != null) {
@@ -334,7 +341,9 @@ object AdaptiveDevelopmentExposure {
             }
             index += stride
         }
-        return analyzeSamples(samples, count, tuning, weights, excludeClipped = singleFrame)
+        val noise = HdrPlusSceneNoise.sampleNormalized(crop.width, crop.height, CLIP_LEVEL, ::valueAt)
+            ?.let { HdrPlusSceneNoise.fit(listOf(it)) }
+        return analyzeSamples(samples, count, tuning, weights, excludeClipped = singleFrame, noise = noise)
     }
 
     /**
@@ -457,7 +466,9 @@ object AdaptiveDevelopmentExposure {
         tuning: AdaptiveExposureTuning = AdaptiveExposureTuning(),
         weights: FloatArray? = null,
         /** Single-frame sensor samples only: merged RGB may carry valid values above 1. */
-        excludeClipped: Boolean = false
+        excludeClipped: Boolean = false,
+        /** The frame's own blind noise fit (never a vendor profile); null = histogram gates only. */
+        noise: HdrPlusNoiseModel? = null
     ): AdaptiveExposureResult {
         // AE-1: the log-average takes log2 of every sample between p5 and p95,
         // so a zero there made it -inf (max lift, HDR-scene ceiling) and a
@@ -519,12 +530,20 @@ object AdaptiveDevelopmentExposure {
         // backlit interior fires it (dim mids, small bright tail); night
         // streets and uniform LDR content do not.
         val dynamicRangeEv = log2(highlight.coerceAtLeast(1e-6) / midLevel.coerceAtLeast(1e-9))
-        val hdrScene = dynamicRangeEv > HDR_SCENE_RANGE_EV && highlightBroad > LOW_KEY_UPPER
+        // Noise-limited midtones (measured SNR below ISO 12232's "acceptable"
+        // level) mean a night/low-light frame, whatever its histogram says:
+        // lit lamps put p95 above the low-key level, so the HDR detector and
+        // night tier used to fire on night streets and lift the noise floor
+        // up to +1.8 EV. Daytime backlit scenes measure SNR 19-46 at ISO 50.
+        val noiseLimited = noise != null &&
+            midLevel / noise.sigma(midLevel) < ACCEPTABLE_MIDTONE_SNR
+        val hdrScene = !noiseLimited &&
+            dynamicRangeEv > HDR_SCENE_RANGE_EV && highlightBroad > LOW_KEY_UPPER
         val maxPositiveEv = if (hdrScene) HDR_SCENE_MAX_EV else MAX_CORRECTION_EV
 
         val median = percentile(samples, count, 0.50).toDouble()
         val upper = percentile(samples, count, 0.90).toDouble()
-        val lowKey = median < LOW_KEY_MEDIAN && upper < LOW_KEY_UPPER
+        val lowKey = noiseLimited || (median < LOW_KEY_MEDIAN && upper < LOW_KEY_UPPER)
         // A daytime HDR scene is low-key by histogram but must still lift: its
         // broad mass carries the room while only tiny tails clip.
         if (lowKey && correction > 0.0 && !hdrScene) correction *= LOW_KEY_POSITIVE_SCALE
@@ -536,7 +555,7 @@ object AdaptiveDevelopmentExposure {
         // lit instead of crushed black. Uniform streets (sep ~0) and day content
         // never enter the window. This applies to ETTR captures too: sensor
         // headroom does not determine display placement. Non-darkening via max().
-        if (lowKey && !hdrScene && correction > 0.0) {
+        if (lowKey && !noiseLimited && !hdrScene && correction > 0.0) {
             val spikeLevel = spikeGuardLevel.coerceAtLeast(1e-6)
             val broadLevel = highlightBroad.coerceAtLeast(1e-6)
             if (log2(spikeLevel / broadLevel) >= NIGHT_SEP_MIN_EV) {
@@ -671,6 +690,10 @@ object AdaptiveDevelopmentExposure {
     private const val LOW_KEY_MEDIAN = 0.012
     private const val LOW_KEY_UPPER = 0.05
     private const val LOW_KEY_POSITIVE_SCALE = 0.25
+    // ISO 12232:2019 noise-based speed: midtone SNR 10 = "acceptable" image
+    // quality (40 = "excellent"). Below it the frame is noise-limited and
+    // develops low-key (no HDR-scene or night-tier lift).
+    private const val ACCEPTABLE_MIDTONE_SNR = 10.0
     // Night-tier relief (single frame, e.g. lit platform or bus interior):
     // the p99 spike must stand this far clear of the p95 broad mass before
     // the tier applies, so uniform night and day content stay bit-exact.

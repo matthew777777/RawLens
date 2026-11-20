@@ -10,6 +10,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AdaptiveDevelopmentExposureTest {
+    /** Same histogram (dark mids, 8% lamps): only the measured noise differs. */
+    private fun lampScene(a: Double, b: Double): UnpackedRawCfa {
+        val w = 512; val h = 512
+        val rng = java.util.Random(7)
+        val values = FloatArray(w * h) { i ->
+            val x = i % w; val y = i / w
+            val lamp = (x / 32 + (y / 32) * 16) % 12 == 0
+            val level = if (lamp) 0.3 else 0.01
+            (level + rng.nextGaussian() * kotlin.math.sqrt(a * level + b)).toFloat()
+        }
+        return UnpackedRawCfa(w, h, BayerPattern.RGGB, values, RawCrop(0, 0, w, h))
+    }
+
+    @Test fun noiseLimitedNightFrameDevelopsLowKey() {
+        val clean = AdaptiveDevelopmentExposure.analyze(lampScene(1e-6, 1e-9), singleFrame = true)
+        val night = AdaptiveDevelopmentExposure.analyze(lampScene(2e-4, 1e-6), singleFrame = true)
+        // Clean dark interior with lamps: the HDR-scene lift stays.
+        assertEquals(1.5, clean.correctionEv, 0.05)
+        // Same scene at midtone SNR ~6: noise-limited, low-key damped (x0.25).
+        assertTrue(night.lowKey)
+        assertEquals(clean.correctionEv * 0.25, night.correctionEv, 0.1)
+    }
+
     @Test fun largeBayerMeterMustNotLockToOneColumnParity() {
         val width = 512
         val height = 512 // historical stride = 4: misses both odd-column sites

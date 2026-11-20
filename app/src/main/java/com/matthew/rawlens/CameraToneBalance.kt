@@ -12,7 +12,7 @@ import kotlin.math.pow
  * RapidRAW's local detail base is not ported. Near-black protection avoids a milky noise floor.
  */
 internal object CameraToneBalance {
-    const val DEFAULT_SHADOW_LIFT = .2f
+    const val DEFAULT_SHADOW_LIFT = 0f
     const val KEY_SHADOW_LIFT = "jpeg_shadow_lift"
     const val KEY_HIGHLIGHT_RECOVERY = "jpeg_highlight_recovery"
 

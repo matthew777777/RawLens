@@ -75,6 +75,37 @@ object HdrPlusSceneNoise {
     }
 
     /**
+     * [sample] for already normalized data (black-subtracted, over the code
+     * range) read through [value] (x, y). Same lattice and diagonal Haar;
+     * samples touching black (<= 0) or [clip] are skipped.
+     */
+    fun sampleNormalized(width: Int, height: Int, clip: Float,
+                         value: (Int, Int) -> Float): Samples? {
+        if (width < 4 || height < 4) return null
+        val nx = minOf(GRID, width / 4)
+        val ny = minOf(GRID, height / 4)
+        val level = DoubleArray(nx * ny * 4)
+        val coefficient = DoubleArray(nx * ny * 4)
+        var count = 0
+        for (gy in 0 until ny) for (gx in 0 until nx) {
+            val x = (gx.toLong() * (width / 4) / nx).toInt() * 4
+            val y = (gy.toLong() * (height / 4) / ny).toInt() * 4
+            for (phase in 0..3) {
+                val px = x + phase % 2
+                val py = y + phase / 2
+                val a = value(px, py).toDouble()
+                val b = value(px + 2, py).toDouble()
+                val c = value(px, py + 2).toDouble()
+                val d = value(px + 2, py + 2).toDouble()
+                if (!(minOf(a, b, c, d) > 0.0) || !(maxOf(a, b, c, d) < clip)) continue
+                level[count] = (a + b + c + d) / 4.0
+                coefficient[count++] = (a - b - c + d) / 2.0
+            }
+        }
+        return Samples(level.copyOf(count), coefficient.copyOf(count))
+    }
+
+    /**
      * Fits variance = a*level + b over the pooled samples of the burst.
      * Samples are split into equal-population brightness bins (cube-root
      * rule, so both the bin count and the per-bin population grow with the

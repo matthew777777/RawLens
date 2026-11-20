@@ -67,7 +67,7 @@ class CameraToneBalanceTest {
             JpegOutputSettings(shadowLift = 0f, highlightRecovery = 0f)), 0f)
         val resolved = JpegOutputSettings(shadowLift = Float.NaN,
             highlightRecovery = Float.POSITIVE_INFINITY).resolvedForPlatform()
-        assertEquals(.2f, resolved.shadowLift, 0f)
+        assertEquals(CameraToneBalance.DEFAULT_SHADOW_LIFT, resolved.shadowLift, 0f)
         assertEquals(0f, resolved.highlightRecovery, 0f)
         val a = JpegOutputSettings(toneMapper = PhotoToneMapper.SIGMOID)
         val b = a.copy(highlightRecovery = 1f)
