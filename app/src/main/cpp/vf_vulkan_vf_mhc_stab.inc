@@ -894,9 +894,12 @@ Java_com_matthew_rawlens_VfStab_stabUploadNative(
     const jlong yCap = env->GetDirectBufferCapacity(yBuf);
     const jlong uCap = env->GetDirectBufferCapacity(uBuf);
     const jlong vCap = env->GetDirectBufferCapacity(vBuf);
+    // The last chroma sample needs only pxB bytes, not a full pixel stride:
+    // interleaved U/V planes (Qualcomm P010, px stride 4) end 2 bytes short of
+    // (w/2)*pxStride, which rejected every decoded frame ("planes too small").
     const int64_t yNeed = (int64_t)yStrideB * (height - 1) + (int64_t)width * pxB;
-    const int64_t uNeed = (int64_t)uStrideB * (height / 2 - 1) + (int64_t)(width / 2) * uPxB;
-    const int64_t vNeed = (int64_t)vStrideB * (height / 2 - 1) + (int64_t)(width / 2) * vPxB;
+    const int64_t uNeed = (int64_t)uStrideB * (height / 2 - 1) + (int64_t)(width / 2 - 1) * uPxB + pxB;
+    const int64_t vNeed = (int64_t)vStrideB * (height / 2 - 1) + (int64_t)(width / 2 - 1) * vPxB + pxB;
     if (yCap < yNeed || uCap < uNeed || vCap < vNeed) {
         LOGW("vf-vk: stab upload planes too small");
         return VFVK_BAD_ARGUMENT;

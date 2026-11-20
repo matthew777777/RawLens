@@ -856,8 +856,13 @@ class EncodedVideoStabilizer(private val appContext: Context) {
                 buf.clear()
                 val sample = extractor.readSampleData(buf, 0)
                 if (sample < 0) break
+                // Media3 Mp4Muxer (sample copy off) keeps a reference to
+                // the buffer until it flushes: each sample needs its own.
+                buf.position(0).limit(sample)
+                val owned = ByteBuffer.allocateDirect(sample).put(buf)
+                owned.flip()
                 info.set(0, sample, extractor.sampleTime, extractor.sampleFlags)
-                muxer.writeSampleData(pass.audioMuxTrack, buf, info)
+                muxer.writeSampleData(pass.audioMuxTrack, owned, info)
                 copied++
                 extractor.advance()
             }
