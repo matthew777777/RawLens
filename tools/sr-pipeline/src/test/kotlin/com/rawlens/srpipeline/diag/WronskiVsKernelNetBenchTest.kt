@@ -210,7 +210,8 @@ class WronskiVsKernelNetBenchTest {
                     val m = 24 * scale
                     val sweptMax = hypot(7 * 4.0, 7 * 2.5) + discR + 4
                     for (k in Kernel.values().filter { if (kernelSel == null) it != Kernel.CM_ONLY && it != Kernel.DETAIL_ONLY else it.name in kernelSel }) {
-                        val img = run(handle, frames, cfg(k, fin, al, be, scale.toFloat()))
+                        val merged = run(handle, frames, cfg(k, fin, al, be, scale.toFloat()))
+                        fun report(img: Array<Array<FloatArray>>, k: String) {
                         val all = psnr(img, truth) { y, x -> y in m until img.size - m && x in m until img.size - m }
                         val swept = psnr(img, truth) { y, x ->
                             val u = (x + 0.5) / scale - 0.5; val v = (y + 0.5) / scale - 0.5
@@ -243,12 +244,19 @@ class WronskiVsKernelNetBenchTest {
                                 val d = (img[y][x][1] - truth[y][x][1]).toDouble(); s += d * d; c++ }
                             sqrt(s / c)
                         }
-                        println("BENCH %-6s %-6s %dx %-12s PSNR %6.2f  detail %6.2f  swept %6.2f  disc %6.2f  trail %6.2f  trailP99 %.4f  flatErr %.5f".format(
+                        println("BENCH %-6s %-6s %dx %-18s PSNR %6.2f  detail %6.2f  swept %6.2f  disc %6.2f  trail %6.2f  trailP99 %.4f  flatErr %.5f".format(
                             scene, label, scale, k, all, detail(img, truth), swept, discP, trailP, trailP99, flat))
                         // Texture-only 128x128 sensor-px region (no edge, chart or disc):
                         // per-band transfer / residual, the oil-painting metric.
-                        println("TEX   %-6s %-6s %dx %-12s %s".format(scene, label, scale, k,
+                        println("TEX   %-6s %-6s %dx %-18s %s".format(scene, label, scale, k,
                             TextureTransfer.format(TextureTransfer.measure(img, truth, scale, 360, 40, 128))))
+                        }
+                        report(merged, k.name)
+                        // BENCH_DECONV=l1,l2,...: merge-matched deconvolution sweep on this result.
+                        System.getenv("BENCH_DECONV")?.split(',')?.mapNotNull { it.toDoubleOrNull() }?.forEach { lam ->
+                            report(com.rawlens.srpipeline.stages.MergeDeconvolution.applyRgb(merged,
+                                com.rawlens.srpipeline.stages.MergeDeconvolution.taps(scale.toFloat(), lam)), "${k.name}+dc$lam")
+                        }
                     }
                 }
             }
