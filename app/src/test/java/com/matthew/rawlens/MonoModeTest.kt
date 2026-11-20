@@ -4,12 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MonoModeTest {
-    @Test fun cleanIsDefaultAndMigratesAuto() {
-        assertEquals(MonoMode.CLEAN, MonoSettings().mode)
-        for (value in listOf(null, "AUTO", "DIRECT", "unknown")) {
+    @Test fun offIsDefaultAndOldNamesMigrateToClean() {
+        assertEquals(MonoMode.OFF, MonoSettings().mode)
+        for (value in listOf(null, "unknown", "OFF")) {
+            assertEquals(MonoMode.OFF, MonoMode.fromPreference(value))
+        }
+        for (value in listOf("AUTO", "DIRECT", "CLEAN")) {
             assertEquals(MonoMode.CLEAN, MonoMode.fromPreference(value))
         }
-        assertEquals(MonoMode.OFF, MonoMode.fromPreference("OFF"))
         assertEquals(MonoMode.DETAIL, MonoMode.fromPreference("DETAIL"))
     }
     @Test fun cycleContainsOnlyExplicitModes() {

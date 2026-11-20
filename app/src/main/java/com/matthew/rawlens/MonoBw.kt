@@ -22,7 +22,7 @@ import kotlin.math.roundToInt
  *
  * DETAIL keeps full resolution (ratio-corrected flat mosaic, see
  * assets/spirv/mono.vk.glsl); CLEAN is rwmono `bin luma` (2x2 average,
- * half linear resolution, about 1 stop cleaner). Clean is the default.
+ * half linear resolution, about 1 stop cleaner). Off is the default.
  * Noise is measured on the frame ([MonoNoise]); no Camera2 noise profile is used.
  */
 enum class MonoMode(val label: String, val token: String) {
@@ -40,14 +40,14 @@ enum class MonoMode(val label: String, val token: String) {
         const val KEY_KEEP_COLOR_DNG = "mono_keep_color_dng"
         // "DIRECT" = pre-rename name of CLEAN (2026-11-18).
         fun fromPreference(value: String?): MonoMode =
-            if (value == "DIRECT" || value == "AUTO") CLEAN else entries.firstOrNull { it.name == value } ?: CLEAN
+            if (value == "DIRECT" || value == "AUTO") CLEAN else entries.firstOrNull { it.name == value } ?: OFF
         fun read(prefs: SharedPreferences): MonoMode = fromPreference(prefs.getString(PREFERENCE_KEY, null))
     }
 }
 
 /** Frozen-at-shutter B&W choice carried with [JpegOutputSettings]. */
 data class MonoSettings(
-    val mode: MonoMode = MonoMode.CLEAN,
+    val mode: MonoMode = MonoMode.OFF,
     /** Also save the normal colour (Bayer) DNG next to the B&W DNG. */
     val keepColorDng: Boolean = false,
 ) {
