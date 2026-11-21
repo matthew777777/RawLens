@@ -342,6 +342,16 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc("Temporal + spatial 4x4 DCT Wiener on the GPU, applied to the Bayer data before it is written to .craw. Noise is measured from the frames themselves. The denoise is baked into the file. Off by default; applies to the next take; N/A in Encoded Video."))
+        content.addView(SettingsSwitch(this).apply {
+            text = "Save Gyroflow file (.gcsv)"
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = lensPreferences().getBoolean(MainActivity.KEY_VIDEO_RAW_GCSV, true)
+            setOnCheckedChangeListener { _, enabled ->
+                lensPreferences().edit().putBoolean(MainActivity.KEY_VIDEO_RAW_GCSV, enabled).apply()
+                setStatus(if (enabled) "GYROFLOW FILE ON" else "GYROFLOW FILE OFF")
+            }
+        })
+        content.addView(sectionDesc("Writes <take>.gcsv next to each .craw so Gyroflow can stabilize it directly. Gyro is always stored inside the .craw too, so the desktop decoder can rebuild the .gcsv later. On by default; N/A in Encoded Video."))
         content.addView(sectionTitle("Locks on record"))
         content.addView(SettingsSwitch(this).apply {
             text = "Lock exposure on record"

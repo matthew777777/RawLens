@@ -2634,7 +2634,8 @@ class MainActivity : Activity() {
             } catch (failure: Exception) {
                 Log.e(LOG_TAG, "Recording finalization failed at ${destination?.uri}", failure)
             }
-            if (saved != null && destination != null) saveGyroflowLog(destination.name, recorder.gcsvText)
+            if (saved != null && destination != null &&
+                lensPreferences().getBoolean(KEY_VIDEO_RAW_GCSV, true)) saveGyroflowLog(destination.name, recorder.gcsvText)
             runOnUiThread { finishVideoStop(stats, saved, rollingVf, rearmPreview, afterStop) }
         }, "VideoStop").start()
     }
@@ -4600,6 +4601,7 @@ class MainActivity : Activity() {
         const val KEY_ENCODED_VIDEO_FPS = "encoded_video_fps"
         const val KEY_ENCODED_VIDEO_RES = "encoded_video_res"
         const val KEY_ENCODED_VIDEO = "encoded_video_enabled"
+        const val KEY_VIDEO_RAW_GCSV = "video_raw_gcsv"
         const val KEY_ENCODED_VIDEO_PROFILE = "encoded_video_profile"
         const val KEY_SAVE_LOCATION = "save_location_gps"
         const val PREFS_NAME = SettingsBackup.STORE_MAIN
