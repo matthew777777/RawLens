@@ -126,6 +126,9 @@ data class MfsrSettings(
         busy -> "MERGING"
         available == false -> "UNAVAILABLE"
         available == null || (zsl && buffered < activeFrameCount(count)) -> "WARMING"
+        // LK-R shows its HDR mode (quick-tile long-press cycles it): "AUTO HDR ×8", "HDR ×8", "×8" = off.
+        which == MfsrEngine.LKR && lkrHdr == LkrHdrMode.AUTO -> "AUTO HDR ×${activeFrameCount(count)}"
+        which == MfsrEngine.LKR && lkrHdr == LkrHdrMode.ON -> "HDR ×${activeFrameCount(count)}"
         else -> "×${activeFrameCount(count)}"
     }
 

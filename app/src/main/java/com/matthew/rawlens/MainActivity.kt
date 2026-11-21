@@ -873,6 +873,11 @@ class MainActivity : Activity() {
         hdrPlusQuick.setOnLongClickListener { cycleHdrPlusQuality(); true }
         mfsrQuick.setOnClickListener { toggleSharpMerge(MfsrEngine.MFSR) }
         lkrQuick.setOnClickListener { toggleSharpMerge(MfsrEngine.LKR) }
+        lkrQuick.setOnLongClickListener { tile ->
+            tile.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            cycleLkrHdr()
+            true
+        }
         wireLkrZoomChip()
         ettrQuick.setOnClickListener { toggleEttr() }
         hdrQuick.setOnClickListener { toggleHdrEnabled() }
@@ -3451,6 +3456,18 @@ class MainActivity : Activity() {
      * HQ frequency). Works whether HDR+ is on or off; the choice persists
      * for the next capture.
      */
+    /** LK-R quick-tile long-press: HDR Auto -> On -> Off (Settings -> Merge -> LK-R HDR). */
+    private fun cycleLkrHdr() {
+        val next = when (mfsrSettings.lkrHdr) {
+            LkrHdrMode.AUTO -> LkrHdrMode.ON
+            LkrHdrMode.ON -> LkrHdrMode.OFF
+            LkrHdrMode.OFF -> LkrHdrMode.AUTO
+        }
+        if (applyMfsrSettings(mfsrSettings.copy(lkrHdr = next))) {
+            setStatus("LK-R HDR • ${next.label.uppercase()}")
+        }
+    }
+
     private fun cycleHdrPlusQuality() {
         val settings = when {
             hdrPlusSettings.autoQuality ->
@@ -4584,6 +4601,7 @@ class MainActivity : Activity() {
         const val KEY_VIDEO_BINNING = "video_binning"
         /** RAW Video (.craw) temporal 4x4 DCT denoise on the GPU before encode. Default off. */
         const val KEY_VIDEO_RAW_DCT_DENOISE = "video_raw_dct_denoise"
+        const val KEY_VIDEO_RAW_GCSV = "video_raw_gcsv"
         /** Binning output: [BINNING_RGB] (best quality) or [BINNING_CFA] (cheap half-res Bayer). */
         const val KEY_VIDEO_BINNING_MODE = "video_binning_mode"
         const val BINNING_RGB = "rgb"
@@ -4601,7 +4619,6 @@ class MainActivity : Activity() {
         const val KEY_ENCODED_VIDEO_FPS = "encoded_video_fps"
         const val KEY_ENCODED_VIDEO_RES = "encoded_video_res"
         const val KEY_ENCODED_VIDEO = "encoded_video_enabled"
-        const val KEY_VIDEO_RAW_GCSV = "video_raw_gcsv"
         const val KEY_ENCODED_VIDEO_PROFILE = "encoded_video_profile"
         const val KEY_SAVE_LOCATION = "save_location_gps"
         const val PREFS_NAME = SettingsBackup.STORE_MAIN

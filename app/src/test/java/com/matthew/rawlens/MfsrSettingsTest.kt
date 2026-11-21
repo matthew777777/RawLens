@@ -42,7 +42,7 @@ class MfsrSettingsTest {
         val settings = MfsrSettings(enabled = true, engine = MfsrEngine.LKR)
         for (count in 2..59) assertEquals(count, settings.activeFrameCount(count))
         assertEquals(59, settings.activeFrameCount(80))
-        assertEquals("LK-R\n×40", settings.quickText(MfsrEngine.LKR, 40, 40, true, false))
+        assertEquals("LK-R\nAUTO HDR ×40", settings.quickText(MfsrEngine.LKR, 40, 40, true, false))
         for (z in listOf(LkrZoom.X1_5, LkrZoom.X2, LkrZoom.FULL_2X))
             assertEquals(30, settings.copy(lkrZoom = z).activeFrameCount(40))
     }
@@ -99,7 +99,10 @@ class MfsrSettingsTest {
 
     @Test fun eachEngineHasItsOwnTile() {
         val lkr = MfsrSettings(enabled = true, engine = MfsrEngine.LKR)
-        assertEquals("LK-R\n×12", lkr.quickText(MfsrEngine.LKR, 12, 12, true, false))
+        assertEquals("LK-R\nAUTO HDR ×12", lkr.quickText(MfsrEngine.LKR, 12, 12, true, false))
+        assertEquals("LK-R\nHDR ×12", lkr.copy(lkrHdr = LkrHdrMode.ON).quickText(MfsrEngine.LKR, 12, 12, true, false))
+        assertEquals("LK-R\n×12", lkr.copy(lkrHdr = LkrHdrMode.OFF).quickText(MfsrEngine.LKR, 12, 12, true, false))
+        assertEquals("MFSR\n×12", lkr.copy(engine = MfsrEngine.MFSR).quickText(MfsrEngine.MFSR, 12, 12, true, false))
         assertEquals("MFSR\nOFF", lkr.quickText(MfsrEngine.MFSR, 12, 12, true, false))
         assertTrue(lkr.isOn(MfsrEngine.LKR))
         assertFalse(lkr.isOn(MfsrEngine.MFSR))
