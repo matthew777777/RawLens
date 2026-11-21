@@ -132,7 +132,7 @@ internal fun MainActivity.refreshFeatureTags(ettrEnabled: Boolean) {
         "HDR+".takeIf { hdrPlusSettings.enabled },
         mfsrSettings.label.takeIf { mfsrSettings.enabled },
         "ETTR".takeIf { ettrEnabled },
-        "HDR".takeIf { hdrEnabled },
+        "BRACKETS".takeIf { hdrEnabled },
         "BURST".takeIf { releaseMode == 1 },
         "${timerSeconds}S".takeIf { timerSeconds > 0 },
     )

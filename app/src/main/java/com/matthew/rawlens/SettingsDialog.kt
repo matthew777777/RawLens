@@ -120,7 +120,7 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
         "General" to "RAW capture, viewfinder, location, backup & restore",
         "Photo" to "File format and photo output",
         "Video" to "RAW and encoded video, audio, stabilization, monitoring",
-        "Exposure" to "PROGRAM auto exposure, HDR brackets, face priority",
+        "Exposure" to "PROGRAM auto exposure, exposure brackets, face priority",
         "Burst" to "Zero shutter lag, gyro sidecars, offline merges",
         "Merge" to "HDR+, MFSR and LK-R burst merges",
         "Details" to "JPEG cleanup, AI RAW denoise, wavelet denoise, capture sharpening",

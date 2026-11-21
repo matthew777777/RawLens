@@ -18,7 +18,7 @@ class StatusTextTest {
     }
 
     @Test fun shortMessagesPassThrough() {
-        listOf("READY", "SAVED DNG", "ZSL ×8", "HDR ×3 SAVED", "TIMER • 5S", "CALIB SAVED").forEach {
+        listOf("READY", "SAVED DNG", "ZSL ×8", "BRACKETS ×3 SAVED", "TIMER • 5S", "CALIB SAVED").forEach {
             assertEquals(it, StatusText.compact(it))
         }
     }

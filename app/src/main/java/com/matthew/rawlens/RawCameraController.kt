@@ -2578,11 +2578,11 @@ class RawCameraController(
         val orientationSnapshot = deviceOrientationDegrees
         postShutter {
             if (captureInProgress.get() || !hasPreviewMetadata) {
-                onState("HDR WAIT")
+                onState("BRACKETS WAIT")
                 return@postShutter
             }
             if (!supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)) {
-                onState("HDR NEEDS MANUAL")
+                onState("BRACKETS NEED MANUAL")
                 return@postShutter
             }
             val count = (LKR_HDR_DEBUG_EVS.size downTo LKR_HDR_DEBUG_MIN_FRAMES)
@@ -2608,11 +2608,11 @@ class RawCameraController(
         val orientationSnapshot = deviceOrientationDegrees
         postShutter {
             if (captureInProgress.get() || !hasPreviewMetadata) {
-                onState("HDR WAIT")
+                onState("BRACKETS WAIT")
                 return@postShutter
             }
             if (!supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)) {
-                onState("HDR NEEDS MANUAL")
+                onState("BRACKETS NEED MANUAL")
                 return@postShutter
             }
             activeHdrBracket = true

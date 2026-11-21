@@ -386,16 +386,16 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             setTextColor(getColor(R.color.text_secondary))
             textSize = 11f
         })
-        content.addView(sectionTitle("HDR brackets"))
-        content.addView(sectionDesc("HDR captures a 3-frame bracket and saves every frame as its own DNG (IMG_<time>_F00/F01/F02). No merge."))
+        content.addView(sectionTitle("Exposure brackets"))
+        content.addView(sectionDesc("Brackets captures a 3-frame exposure bracket and saves every frame as its own DNG (IMG_<time>_F00/F01/F02). No merge."))
         content.addView(SettingsSwitch(this).apply {
-            text = "HDR bracket range: −4 / 0 / +4 EV"
+            text = "Bracket range: −4 / 0 / +4 EV"
             setTextColor(getColor(R.color.text_primary))
             isChecked = hdrBracketStops() == 4
             setOnCheckedChangeListener { _, enabled ->
                 val stops = if (enabled) 4 else 2
                 lensPreferences().edit().putInt(KEY_HDR_BRACKET_STOPS, stops).apply()
-                setStatus("HDR ±${stops} EV")
+                setStatus("BRACKETS ±${stops} EV")
                 updateQuickControls()
             }
         })
@@ -405,11 +405,11 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             isChecked = lkrHdrDebugBracket()
             setOnCheckedChangeListener { _, enabled ->
                 lensPreferences().edit().putBoolean(KEY_LKR_HDR_DEBUG, enabled).apply()
-                setStatus(if (enabled) "HDR DEBUG" else "HDR ±${hdrBracketStops()} EV")
+                setStatus(if (enabled) "HDR DEBUG" else "BRACKETS ±${hdrBracketStops()} EV")
                 updateQuickControls()
             }
         })
-        content.addView(sectionDesc("With the HDR toggle on, the shutter saves up to 8 DNGs (as many as the RAW queue holds, 6 on most phones: 3 × 0, 2 × −2, 1 × +1.5 EV; F00 = 0 EV reference, long frame last, max 1/8 s) for testing the LK-R HDR merge. Hold still-ish; no merge yet."))
+        content.addView(sectionDesc("With the Brackets toggle on, the shutter saves up to 8 DNGs (as many as the RAW queue holds, 6 on most phones: 3 × 0, 2 × −2, 1 × +1.5 EV; F00 = 0 EV reference, long frame last, max 1/8 s) for testing the LK-R HDR merge. Hold still-ish; no merge yet."))
         content.addView(sectionTitle("Face priority"))
         content.addView(sectionDesc("HAL face detection steers AF/AE to the largest face (sand box). Tap targets override faces; manual sensor modes ignore the regions but still show boxes."))
         content.addView(SettingsSwitch(this).apply {

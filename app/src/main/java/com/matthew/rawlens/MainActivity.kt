@@ -3345,7 +3345,7 @@ class MainActivity : Activity() {
             if (nextMode != captureExposureMode) applyCaptureExposureMode(nextMode)
         }
         Log.i(LOG_TAG, "HDR enabled=$hdrEnabled")
-        setStatus(if (hdrEnabled) "HDR ON" else "HDR OFF")
+        setStatus(if (hdrEnabled) "BRACKETS ON" else "BRACKETS OFF")
         updateQuickControls()
     }
 
@@ -4463,8 +4463,8 @@ class MainActivity : Activity() {
                 "Hardware AE metering ${aeMeteringMode.label}. Tap to switch; hold to change crop."
             setQuickTileState(aeMetering, aeMeteringMode != AeMeteringMode.AUTO)
         }
-        hdr.text = "HDR\n${if (hdrEnabled) "ON" else "OFF"}"
-        hdr.contentDescription = "HDR bracket ${if (hdrEnabled) "on" else "off"}. Tap to toggle."
+        hdr.text = "BRACKETS\n${if (hdrEnabled) "ON" else "OFF"}"
+        hdr.contentDescription = "Exposure brackets ${if (hdrEnabled) "on" else "off"}. Tap to toggle."
         timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
         release.text = if (dualRawEnabled) "RELEASE\nRAW HDR TEST" else "RELEASE\n${if (releaseMode == 1) "BURST 6" else "SINGLE"}"
         val sharpAvailable = !dualRawEnabled &&

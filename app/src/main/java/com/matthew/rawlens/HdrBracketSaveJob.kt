@@ -53,13 +53,13 @@ internal class HdrBracketSaveJob(
             }
             Log.i(LOG_TAG, "HDR set=${input.captureId} sources=${names.joinToString()} " +
                 "sensorTimestamps=${pending.map { it.image.timestamp }}")
-            host.reportSaveState("HDR ×${names.size} SAVED")
+            host.reportSaveState("BRACKETS ×${names.size} SAVED")
         } catch (failure: OutOfMemoryError) {
             Log.e(LOG_TAG, "HDR bracket save ran out of memory", failure)
-            host.reportSaveState("HDR SAVE ERROR")
+            host.reportSaveState("BRACKETS SAVE ERROR")
         } catch (failure: Exception) {
             Log.e(LOG_TAG, "HDR bracket save failed", failure)
-            host.reportSaveState("HDR SAVE ERROR")
+            host.reportSaveState("BRACKETS SAVE ERROR")
         }
     }
 
