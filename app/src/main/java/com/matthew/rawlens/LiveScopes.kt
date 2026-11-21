@@ -48,7 +48,7 @@ internal class LiveScopes(
     private val lutCache = ScopeLutCache()
     @Volatile private var mode = initialMode
     private var lastSampleMs = Long.MIN_VALUE
-    /** Scope cost telemetry accumulators (see noteScopeSample); camera thread only. */
+    /** Scope cost telemetry accumulators (see noteScopeSample); one scan at a time (scanInFlight). */
     private var lutAccumNs = 0L
     private var scanAccumNs = 0L
     private var samples = 0
@@ -131,7 +131,10 @@ internal class LiveScopes(
         host.onFocusPeakingActive(false)
     }
 
-    fun close() = peakingWorker.close()
+    fun close() {
+        peakingWorker.close()
+        scanExecutor.shutdown()
+    }
 
     /**
      * Sampling a full-resolution Bayer buffer is CPU work.  A live scope only needs a few
@@ -170,15 +173,38 @@ internal class LiveScopes(
             ?: result?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL))
             ?.takeIf { it.size == 4 && it.all(Float::isFinite) }
             ?.let { levels -> IntArray(4) { levels[it].toInt() } }
-        val scanStartNs = System.nanoTime()
-        guard.run("scope") {
-            if (mode == ScopeMode.WAVEFORM) {
-                RawWaveformSampler.sample(image, cameraCharacteristics, lut, 0.0, dynamicBlack, dynamicWhite)?.let(host::onRawWaveform)
-            } else {
-                RawHistogramSampler.sample(image, cameraCharacteristics, lut, 0.0, dynamicBlack, dynamicWhite)?.let(host::onRawHistogram)
+        val lutNs = System.nanoTime() - lutStartNs
+        val scopeMode = mode
+        fun scan() {
+            val scanStartNs = System.nanoTime()
+            guard.run("scope") {
+                if (scopeMode == ScopeMode.WAVEFORM) {
+                    RawWaveformSampler.sample(image, cameraCharacteristics, lut, 0.0, dynamicBlack, dynamicWhite)?.let(host::onRawWaveform)
+                } else {
+                    RawHistogramSampler.sample(image, cameraCharacteristics, lut, 0.0, dynamicBlack, dynamicWhite)?.let(host::onRawHistogram)
+                }
             }
+            noteScopeSample(now, lutNs, System.nanoTime() - scanStartNs)
         }
-        noteScopeSample(now, scanStartNs - lutStartNs, System.nanoTime() - scanStartNs)
+        // Live samples scan on a background worker under a frame lease, so the 4-8 ms Bayer scan
+        // (longer on low-end CPUs) never delays the camera thread's next frame. Saved frames
+        // (force) and frames without a lease scan inline as before.
+        val lease = if (force) null else RawImageOwnership.borrow(image)
+        if (lease == null) { scan(); return }
+        if (!scanInFlight.compareAndSet(false, true)) { lease.close(); return }
+        try {
+            scanExecutor.execute {
+                try { scan() } finally { lease.close(); scanInFlight.set(false) }
+            }
+        } catch (t: java.util.concurrent.RejectedExecutionException) {
+            lease.close(); scanInFlight.set(false)
+        }
+    }
+
+    private val scanInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val scanExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); r.run() },
+            "LiveScopeScan").apply { isDaemon = true }
     }
 
     /**
@@ -187,7 +213,7 @@ internal class LiveScopes(
      * (waveform vs histogram, AgX LUT on/off) is attributable in field logs.
      * Camera thread only.
      */
-    private fun noteScopeSample(nowMs: Long, lutNs: Long, scanNs: Long) {
+    @Synchronized private fun noteScopeSample(nowMs: Long, lutNs: Long, scanNs: Long) {
         lutAccumNs += lutNs
         scanAccumNs += scanNs
         samples++

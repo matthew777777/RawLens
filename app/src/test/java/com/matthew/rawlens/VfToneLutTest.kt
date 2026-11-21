@@ -60,6 +60,16 @@ class VfToneLutTest {
         }
     }
 
+    @Test fun scopeLutTiming() {
+        if (System.getenv("VF_LUT_SWEEP") == null) return
+        for (m in PhotoToneMapper.entries) {
+            val s = JpegOutputSettings(toneMapper = m)
+            repeat(20) { AgxDisplayTransform.buildScopeLut(s, exposureEv = 0.3) }
+            val t0 = System.nanoTime(); repeat(50) { AgxDisplayTransform.buildScopeLut(s, exposureEv = 0.3) }
+            println("SCOPE $m %.2f ms".format((System.nanoTime() - t0) / 50e6))
+        }
+    }
+
     @Test fun shaperRoundTrips() {
         for (x in floatArrayOf(0f, 1e-4f, .18f, 1f, 50f))
             assertTrue(abs(VfToneLut.inverseShaper(VfToneLut.shaper(x)) - x) <= 1e-4f * (1f + x))

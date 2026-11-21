@@ -962,10 +962,13 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         // live preview is enough to attribute growth to the viewfinder in a session log.
         if (now >= memSampleNextMs) {
             memSampleNextMs = now + MemoryLeakDiagnostics.PERIODIC_INTERVAL_MS
-            MemoryLeakDiagnostics.sample(
-                "raw-vf-preview",
-                extra = "vf=${statVfWidth}x${statVfHeight} gpu=$statGpuPath engine=$engineMode"
-            )
+            // Debug.getMemoryInfo takes 30-80 ms: on the camera thread it dropped a VF frame
+            // every 30 s. Sample on a background thread instead.
+            val extra = "vf=${statVfWidth}x${statVfHeight} gpu=$statGpuPath engine=$engineMode"
+            Thread({
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                runCatching { MemoryLeakDiagnostics.sample("raw-vf-preview", extra = extra) }
+            }, "vf-mem-sample").apply { isDaemon = true }.start()
         }
         try {
             val plane = image.planes[0]
