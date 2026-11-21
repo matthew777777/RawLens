@@ -649,11 +649,12 @@ internal object MfsrMerge {
             // RawTherapee capture sharpening: auto radius from the reference
             // CFA, measured now so the frame need not stay alive (RT measures
             // it on the raw too). Output pixels at 2x are half as large.
-            // Two-band sharpens inside its DCT Wiener (deconvolution matched
-            // to its own narrow kernel), so RT runs only on the Wronski path.
+            // Two-band sharpens inside its DCT Wiener (deconvolution of its own
+            // narrow kernel + the optics, at the RT auto radius in sensor px),
+            // so RT runs only on the Wronski path.
             val twoBand = settings.twoBand && settings.zipperFix
-            val captureRadius = if (twoBand) Float.NaN else runCatching { RtCaptureSharpen.autoRadiusBayer(first) * scale }
-                .getOrDefault(Float.NaN)
+            val opticsRadius = runCatching { RtCaptureSharpen.autoRadiusBayer(first) }.getOrDefault(Float.NaN)
+            val captureRadius = if (twoBand) Float.NaN else opticsRadius * scale
             // Noise model: never the vendor NoiseProfile (owner rule). Our own
             // estimate from the reference frame (SceneNoise: same-CFA Haar
             // MADs per brightness bin, Poisson-Gaussian fit, all four planes);
@@ -732,7 +733,9 @@ internal object MfsrMerge {
                 // Subtract a neutral black floor above the metadata black.
                 blackPedestal = true,
                 // Two-band reconstruction (needs colourDiff; ignored without it).
-                twoBand = if (twoBand) TwoBandReconstruction.Params() else null,
+                twoBand = if (twoBand) TwoBandReconstruction.Params(
+                    opticsSigma = if (opticsRadius.isFinite() && opticsRadius > 0f) minOf(opticsRadius.toDouble(), 0.6) else 0.5)
+                    else null,
             )
             Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=wronski continuousMotion=on s3=%s zipperFix=%s twoBand=%s".format(snr, fin.tileSize, settings.s3, settings.zipperFix, twoBand))
             fun asset(name: String): ByteArray =

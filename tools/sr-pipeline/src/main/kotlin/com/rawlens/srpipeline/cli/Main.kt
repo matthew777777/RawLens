@@ -622,7 +622,9 @@ private fun merge(plan: Plan) {
                             steer = q.getOrNull(5) != "0",
                             maxStretch = q.getOrNull(6)?.toDouble() ?: 2.0,
                             phaseInvariant = q.getOrNull(7) != "0",
-                            featherRadius = q.getOrNull(8)?.toInt() ?: 2) } ?: com.rawlens.srpipeline.stages.TwoBandReconstruction.Params())
+                            featherRadius = q.getOrNull(8)?.toInt() ?: 2,
+                            gainCap = q.getOrNull(9)?.toDouble() ?: 2.0,
+                            opticsSigma = q.getOrNull(10)?.toDouble() ?: 0.5) } ?: com.rawlens.srpipeline.stages.TwoBandReconstruction.Params())
                     else config, handle,
                     AlignGpu.Spirvs(
                         align = spv(dir, "align"),

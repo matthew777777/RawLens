@@ -61,7 +61,10 @@ void main() {
   if (p.beta > 0.0) {
     const vec2 fs = vec2(float(lx), float(ly)) * (p.robustness / 16.0);
     const float h = exp(-19.7392088 * p.beta * p.beta * dot(fs, fs));
-    g = min(g / h, uintBitsToFloat(p.pad[5]));
+    // Boost weighted by the posterior signal share w as well: clear detail
+    // (w ~ 1) gets the full 1/H, coefficients near the noise barely any
+    // (plain w / H boosted half-noise coefficients: bench dim -2.9 dB).
+    g = min(g * (1.0 + (1.0 / h - 1.0) * g), uintBitsToFloat(p.pad[5]));
   }
   t *= g;
   barrier();

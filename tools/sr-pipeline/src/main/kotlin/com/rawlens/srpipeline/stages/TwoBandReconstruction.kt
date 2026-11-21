@@ -55,7 +55,18 @@ class TwoBandReconstruction(
         //   strength 1    clean 43.71 / 0.78   dim 37.56 / 0.59
         val deconvStrength: Double = 0.25,
         /** Largest per-coefficient deconvolution gain. */
-        val gainCap: Double = 1.5,
+        val gainCap: Double = 2.0,
+        /**
+         * Optical blur (lens + pixel aperture) as a Gaussian sigma in sensor
+         * px, deconvolved together with the merge kernel in the same
+         * noise-gated Wiener (blurs add in variance:
+         * sigma^2 = deconvStrength sigmaHigh^2 + opticsSigma^2). 0 = merge only.
+         * 133623 1x static crop (2-px energy row / col, sky noise): 0 4.65 /
+         * 3.92, 0.13; 0.5 5.63 / 4.26, 0.21; 0.7 6.57 / 4.84, 0.30 (Wronski
+         * merge 4.62 / 4.15, sky 0.27). The app passes the per-shot RT auto
+         * radius (capped at 0.6: above it the sky is noisier than the old merge).
+         */
+        val opticsSigma: Double = 0.5,
         val denoise: Boolean = true,
         val grainFloor: Double = 0.0,
         /**
@@ -230,7 +241,8 @@ class TwoBandReconstruction(
 
     /** Overlapped (step 4) 8x8 DCT empirical Wiener with per-block noise variance from nv. */
     private fun dctWiener(src: DoubleArray, nv: DoubleArray, nw: Int, nh: Int, floorFrac: Double): DoubleArray {
-        val sig = params.sigmaHigh * kotlin.math.sqrt(params.deconvStrength.coerceAtLeast(0.0))
+        val sig = kotlin.math.sqrt(params.deconvStrength.coerceAtLeast(0.0) * params.sigmaHigh * params.sigmaHigh +
+            params.opticsSigma * params.opticsSigma)
         val b = 8
         val c = Array(b) { k -> DoubleArray(b) { x -> (if (k == 0) sqrt(1.0 / b) else sqrt(2.0 / b)) * cos(PI * (2 * x + 1) * k / (2 * b)) } }
         val out = DoubleArray(nw * nh); val wsum = DoubleArray(nw * nh)
@@ -249,7 +261,7 @@ class TwoBandReconstruction(
                     var g = if (e > 1e-30) max(floorFrac, max(0.0, e - sv) / e) else 1.0
                     if (sig > 0) {
                         val fx = k * scale / 16.0; val fy = l * scale / 16.0
-                        g = min(g / exp(-2 * PI * PI * sig * sig * (fx * fx + fy * fy)), params.gainCap)
+                        g = min(g * (1 + (1 / exp(-2 * PI * PI * sig * sig * (fx * fx + fy * fy)) - 1) * g), params.gainCap)
                     }
                     blk[l][k] *= g
                 }

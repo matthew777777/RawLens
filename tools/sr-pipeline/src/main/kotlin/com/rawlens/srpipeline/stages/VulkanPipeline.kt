@@ -932,7 +932,8 @@ object VulkanPipeline {
                 val p = IntArray(32)
                 p[11] = ox; p[12] = oy; p[13] = outW; p[14] = outH; p[15] = bpr
                 p[7] = java.lang.Float.floatToRawIntBits(twoBand.grainFloor.toFloat())
-                p[8] = java.lang.Float.floatToRawIntBits((twoBand.sigmaHigh * kotlin.math.sqrt(twoBand.deconvStrength.coerceAtLeast(0.0))).toFloat())
+                p[8] = java.lang.Float.floatToRawIntBits(kotlin.math.sqrt(twoBand.deconvStrength.coerceAtLeast(0.0) *
+                    twoBand.sigmaHigh * twoBand.sigmaHigh + twoBand.opticsSigma * twoBand.opticsSigma).toFloat())
                 p[9] = java.lang.Float.floatToRawIntBits(config.scale)
                 p[16] = java.lang.Float.floatToRawIntBits(twoBand.gainCap.toFloat())
                 // One workgroup per block; > 65535 blocks run as several row bands.
