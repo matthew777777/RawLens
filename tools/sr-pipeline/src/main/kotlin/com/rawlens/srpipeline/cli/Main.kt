@@ -620,7 +620,9 @@ private fun merge(plan: Plan) {
                             sigmaLow = q.getOrNull(3)?.toDouble() ?: 1.0,
                             deconvStrength = q.getOrNull(4)?.toDouble() ?: 0.25,
                             steer = q.getOrNull(5) != "0",
-                            maxStretch = q.getOrNull(6)?.toDouble() ?: 2.0) } ?: com.rawlens.srpipeline.stages.TwoBandReconstruction.Params())
+                            maxStretch = q.getOrNull(6)?.toDouble() ?: 2.0,
+                            phaseInvariant = q.getOrNull(7) != "0",
+                            featherRadius = q.getOrNull(8)?.toInt() ?: 2) } ?: com.rawlens.srpipeline.stages.TwoBandReconstruction.Params())
                     else config, handle,
                     AlignGpu.Spirvs(
                         align = spv(dir, "align"),
@@ -652,6 +654,7 @@ private fun merge(plan: Plan) {
                         twoBandResolve = if (plan.twoBandGpu) spv(dir, "twoband_resolve") else null,
                         twoBandDct = if (plan.twoBandGpu) spv(dir, "twoband_dct") else null,
                         twoBandTensor = if (plan.twoBandGpu) spv(dir, "twoband_tensor") else null,
+                        robFeather = if (plan.twoBandGpu) spv(dir, "rob_feather") else null,
                     ),
                     frameObserver = cache?.let { c -> { f, flow, r -> c.record(f,flow,r) } }
                         ?: twoBand?.let { t -> { f, flow, r -> t.record(f, flow, r) } },

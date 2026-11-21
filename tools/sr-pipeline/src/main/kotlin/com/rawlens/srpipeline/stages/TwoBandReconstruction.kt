@@ -82,6 +82,20 @@ class TwoBandReconstruction(
          */
         val steer: Boolean = true,
         val maxStretch: Double = 2.0,
+        /**
+         * GPU only: where the weight field alternates on the green quincunx
+         * (motion-rejected areas with one or two frames), blend the high band
+         * toward its [1 2 1]^2 filter by that alternation (twoband_resolve
+         * pass 3): even, organic grain instead of a pixel checkerboard.
+         */
+        val phaseInvariant: Boolean = true,
+        /**
+         * GPU only: feather each frame's robustness on the guide grid (erode
+         * then average over this many cells, rob_feather.comp) so rejection
+         * boundaries are smooth ramps, not the square morphology's blocks.
+         * Never raises a weight. 0 = off.
+         */
+        val featherRadius: Int = 2,
     )
 
     private class Samples {

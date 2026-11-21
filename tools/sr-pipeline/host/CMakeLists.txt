@@ -98,6 +98,7 @@ srp_spv(merge_twoband)
 srp_spv(twoband_resolve)
 srp_spv(twoband_dct)
 srp_spv(twoband_tensor)
+srp_spv(rob_feather)
 
 add_executable(srp_proof_dispatch proof_dispatch.cpp)
 target_link_libraries(srp_proof_dispatch PRIVATE srp_core)

@@ -97,6 +97,8 @@ object VulkanPipeline {
         val twoBandDct: ByteArray? = null,
         /** twoband_tensor.comp: edge steering field (TwoBandReconstruction.Params.steer). */
         val twoBandTensor: ByteArray? = null,
+        /** rob_feather.comp: feathered robustness (TwoBandReconstruction.Params.featherRadius). */
+        val robFeather: ByteArray? = null,
     )
 
 
@@ -356,10 +358,11 @@ object VulkanPipeline {
         // accumulators (sum g r, sum (g r)^2, sum r, sum r^2).
         val twoBand = config.twoBand?.takeIf { config.bayer && config.colourDiff != null }
         if (twoBand != null) require(spirvs.mergeTwoBand != null && spirvs.twoBandResolve != null && spirvs.twoBandDct != null &&
-            (!twoBand.steer || spirvs.twoBandTensor != null)) {
+            (!twoBand.steer || spirvs.twoBandTensor != null) && (twoBand.featherRadius == 0 || spirvs.robFeather != null)) {
             "VulkanPipeline: two-band needs merge_twoband / twoband_resolve / twoband_dct" }
         val tbAuxRes = if (twoBand != null) SrpBridge.createResident(handle, 4L * outW * outH) else 0L
         val tbRobRes = if (twoBand != null) SrpBridge.createResident(handle, (gw * gh).toLong()) else 0L
+        val tbRobTmp = if (twoBand != null && twoBand.featherRadius > 0) SrpBridge.createResident(handle, (gw * gh).toLong()) else 0L
         var tbFlowRes = 0L
         if (twoBand != null) require(tbAuxRes != 0L && tbRobRes != 0L) { "VulkanPipeline: two-band alloc failed" }
         val evening = twoBand == null && config.noiseEvening && config.bayer && config.colourDiff != null &&
@@ -648,6 +651,16 @@ object VulkanPipeline {
                 checkRc("tbFlow", SrpBridge.uploadResident(handle, tbFlowRes, packInto(mergeFlowFlat, mergeFlow), 2L * ftx * fty))
                 rBuf.rewind()
                 checkRc("tbRob", SrpBridge.uploadResident(handle, tbRobRes, rBuf, (gw * gh).toLong()))
+                if (twoBand.featherRadius > 0 && !reference) timed("tbFeather") {
+                    // min x -> tmp, min y -> rob, mean x -> tmp, mean y -> rob.
+                    val n = (gw * gh).toLong()
+                    for ((k, op) in listOf(0 to 0, 0 to 1, 1 to 0, 1 to 1).withIndex()) {
+                        val fp = IntArray(32)
+                        fp[2] = gw * gh; fp[11] = op.first; fp[12] = op.second; fp[13] = gw; fp[14] = gh; fp[15] = twoBand.featherRadius
+                        val (src, dst) = if (k % 2 == 0) tbRobRes to tbRobTmp else tbRobTmp to tbRobRes
+                        checkRc("tbFeather$k", SrpBridge.dispatchRes(handle, spirvs.robFeather!!, longArrayOf(src, dst), longArrayOf(n, n), fp, n))
+                    }
+                }
                 val push = IntArray(32)
                 push[0] = w; push[1] = h; push[2] = outW * outH; push[5] = tile
                 push[6] = java.lang.Float.floatToRawIntBits(config.scale)
@@ -909,6 +922,10 @@ object VulkanPipeline {
             }
             checkRc("tbResolve0", SrpBridge.dispatchRes(handle, spirvs.twoBandResolve!!, res, sizes, push(0), (outW * outH).toLong()))
             checkRc("tbResolve1", SrpBridge.dispatchRes(handle, spirvs.twoBandResolve, res, sizes, push(1), (outW * outH).toLong()))
+            if (twoBand.phaseInvariant) {
+                checkRc("tbResolve3", SrpBridge.dispatchRes(handle, spirvs.twoBandResolve, res, sizes, push(3), (outW * outH).toLong()))
+                checkRc("tbResolve4", SrpBridge.dispatchRes(handle, spirvs.twoBandResolve, res, sizes, push(4), (outW * outH).toLong()))
+            }
             if (twoBand.denoise) for ((ox, oy) in listOf(0 to 0, 4 to 0, 0 to 4, 4 to 4)) {
                 val bpr = (outW - ox) / 8; val bpc = (outH - oy) / 8
                 if (bpr <= 0 || bpc <= 0) continue
@@ -995,6 +1012,7 @@ object VulkanPipeline {
             if (evenRRes != 0L) SrpBridge.freeResident(handle, evenRRes)
             if (tbAuxRes != 0L) SrpBridge.freeResident(handle, tbAuxRes)
             if (tbRobRes != 0L) SrpBridge.freeResident(handle, tbRobRes)
+            if (tbRobTmp != 0L) SrpBridge.freeResident(handle, tbRobTmp)
             if (tbFlowRes != 0L) SrpBridge.freeResident(handle, tbFlowRes)
             if (evenAccRes != 0L) SrpBridge.freeResident(handle, evenAccRes)
             SrpBridge.freeResident(handle, frameRes)

@@ -6,8 +6,19 @@
 //  1: high band hf = c (N/Nw - L - grad L . m/Nw), c = Nw / (Nw + confK),
 //     grad L from the neighbouring L (sensor px); noise variance of hf
 //     nv = (a L + b) * 0.5 / Nw * c^2 (sum w^2 ~ sum w / 2 for a Gaussian
-//     over uniformly placed samples). den <- (hf, nv, 0); aux <- 0 (the DCT
-//     passes accumulate into it).
+//     over uniformly placed samples). den <- (hf, nv, Nw); aux <- 0 (the DCT
+//     passes accumulate into aux.xy).
+//  3: phase-invariant high band where frames were rejected. With only one or
+//     two frames (motion rejection around people) the green samples keep the
+//     quincunx: hf is the raw sample (full noise, sharp) on green sites and a
+//     4-neighbour average (half the variance, soft) on R/B sites, a pixel
+//     checkerboard of sharpness and grain. Its measure is the checkerboard of
+//     the weight field itself, k = |Nw - mean4 Nw| / (Nw + mean4 Nw): ~0 where
+//     many frames cover every phase, ~0.9 with the reference alone. There
+//     hf <- (1 - k) hf + k B hf, B = [1 2 1] x [1 2 1] / 16 (zero response at
+//     the checkerboard frequency), nv propagated exactly through the same
+//     weights. Written to aux.zw (neighbours still read den).
+//  4: den.xy <- aux.zw, aux.zw <- 0.
 //  2: num.g <- L + (aux.y > 0 ? aux.x / aux.y : hf) (DCT-shrunk high band).
 // push: pixelCount, scale, pad[2] = outW, pad[3] = outH,
 //   alpha = confK, beta = noise a, robustness = noise b.
@@ -50,8 +61,31 @@ void process(const uint id) {
       hf = c * (a.x / a.y - l - dot(grad, a.zw) / a.y);
       nv = max(p.beta * max(l, 0.0) + p.robustness, 0.0) * 0.5 / a.y * c * c;
     }
-    den_[id*3u] = hf; den_[id*3u + 1u] = nv; den_[id*3u + 2u] = 0.0;
+    den_[id*3u] = hf; den_[id*3u + 1u] = nv; den_[id*3u + 2u] = a.y;
     aux_[id] = vec4(0.0);
+  } else if (pass == 3u) {
+    const int x = int(id % p.pad[2]), y = int(id / p.pad[2]);
+    const int W = int(p.pad[2]), H = int(p.pad[3]);
+    const float nw = den_[id*3u + 2u];
+    float m4 = 0.0;
+    for (int k = 0; k < 4; ++k) {
+      const ivec2 q = clamp(ivec2(x, y) + ivec2(k == 0 ? -1 : k == 1 ? 1 : 0, k == 2 ? -1 : k == 3 ? 1 : 0), ivec2(0), ivec2(W - 1, H - 1));
+      m4 += 0.25 * den_[(uint(q.y) * p.pad[2] + uint(q.x)) * 3u + 2u];
+    }
+    const float kc = nw + m4 > 1e-12 ? abs(nw - m4) / (nw + m4) : 0.0;
+    float hb = 0.0, vb = 0.0;
+    for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+      const uint j = (uint(clamp(y + dy, 0, H - 1)) * p.pad[2] + uint(clamp(x + dx, 0, W - 1))) * 3u;
+      const float wb = (dx == 0 ? 0.5 : 0.25) * (dy == 0 ? 0.5 : 0.25);
+      // Total weight on this neighbour: (1 - k) delta + k B.
+      const float wt = kc * wb + (dx == 0 && dy == 0 ? 1.0 - kc : 0.0);
+      hb += wt * den_[j];
+      vb += wt * wt * den_[j + 1u];
+    }
+    aux_[id].zw = vec2(hb, vb);
+  } else if (pass == 4u) {
+    den_[id*3u] = aux_[id].z; den_[id*3u + 1u] = aux_[id].w;
+    aux_[id].zw = vec2(0.0);
   } else {
     const vec4 a = aux_[id];
     num_[id*3u + 1u] += a.y > 1e-9 ? a.x / a.y : den_[id*3u];

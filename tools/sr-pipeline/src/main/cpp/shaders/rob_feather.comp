@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Feathered robustness for the two-band merge: erode, then average over the
+// same radius, as separable 1-D passes on the guide grid (w/2 x h/2).
+// The rejection masks (5x5 local min, square ghost growth) are rectangular
+// plateaus on the half-resolution grid, which read as blocks and 2 px stair
+// steps around moving people. min then mean over the same window is never
+// above the input at any point (each mean term is a min over a window that
+// contains the point), so no ghost is let back in; the boundary becomes a
+// smooth ramp instead of a staircase.
+// push: pad[0] = op (0 min, 1 mean), pad[1] = axis (0 x, 1 y), pad[2] = W,
+//   pad[3] = H, pad[4] = half width, pixelCount = W * H.
+// Buffers: 0 in, 1 out.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer In { float src[]; };
+layout(set = 0, binding = 1) writeonly buffer Out { float dst[]; };
+
+void process(const uint id) {
+  const int W = int(p.pad[2]), H = int(p.pad[3]), hw = int(p.pad[4]);
+  const int x = int(id % uint(W)), y = int(id / uint(W));
+  const bool isMin = p.pad[0] == 0u, alongX = p.pad[1] == 0u;
+  float m = isMin ? 1e30 : 0.0;
+  for (int k = -hw; k <= hw; ++k) {
+    const int xx = alongX ? clamp(x + k, 0, W - 1) : x;
+    const int yy = alongX ? y : clamp(y + k, 0, H - 1);
+    float v = src[uint(yy * W + xx)];
+    v = isnan(v) ? 0.0 : v;
+    m = isMin ? min(m, v) : m + v;
+  }
+  dst[id] = isMin ? m : m / float(2 * hw + 1);
+}
+
+void main() {
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount; id += gl_NumWorkGroups.x * gl_WorkGroupSize.x)
+    process(id);
+}

@@ -771,6 +771,7 @@ internal object MfsrMerge {
                     twoBandResolve = asset("twoband_resolve"),
                     twoBandDct = asset("twoband_dct"),
                     twoBandTensor = asset("twoband_tensor"),
+                    robFeather = asset("rob_feather"),
                 ),
                 output = nativeOut
             )
