@@ -10,6 +10,7 @@ import com.matthew.rawlens.MainActivity.Companion.KEY_DYNAMIC_EXPOSURE_BALANCE
 import com.matthew.rawlens.MainActivity.Companion.KEY_DYNAMIC_EXPOSURE
 
 import com.matthew.rawlens.MainActivity.Companion.KEY_FACE_PRIORITY
+import com.matthew.rawlens.MainActivity.Companion.KEY_AFC_POINT
 
 
 import com.matthew.rawlens.MainActivity.Companion.KEY_HDR_BRACKET_STOPS
@@ -422,6 +423,18 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
                     if (!enabled) "FACE OFF"
                     else if (controller.isFaceDetectSupported()) "FACE ON" else "FACE N/A"
                 )
+            }
+        })
+        content.addView(sectionTitle("Focus point"))
+        content.addView(sectionDesc("AF-C point: a tap moves the continuous-AF area to that spot and keeps tracking there (no lock, no 10 s timeout) until AE/AF reset or double-tap. Press-and-hold still locks AF-S ∞. Off = tap runs a one-shot AF-S lock. Lenses without AF regions or continuous AF fall back to AF-S."))
+        content.addView(SettingsSwitch(this).apply {
+            text = "AF-C with focus point"
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = lensPreferences().getBoolean(KEY_AFC_POINT, false)
+            setOnCheckedChangeListener { _, enabled ->
+                lensPreferences().edit().putBoolean(KEY_AFC_POINT, enabled).apply()
+                controller.setContinuousAfPointEnabled(enabled)
+                setStatus(if (enabled) "AF-C POINT" else "AF-S TAP")
             }
         })
         markActive(exposureTab)

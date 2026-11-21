@@ -52,10 +52,16 @@ internal class PhotoAutoFocus(private val host: Host) {
     private var lastState: Int? = null
     /** True while a tap lock is held as a manual distance (HAL ignored the CONT_PICTURE START). */
     private var manualHold = false
+    /** AF-C point mode: a tap moves the continuous-AF region instead of running a one-shot lock. */
+    var continuousPoint = false
+    /** True while a tapped region is steering continuous AF (cleared by reset / session / lock). */
+    var continuousPointActive = false
+        private set
 
     /** Stream configuration does not reset 3A. Explicitly clear an inherited lock. */
     fun onSessionReady() {
         resetForStop()
+        continuousPointActive = false
         // Tap regions are in the old session's coordinates; idle AF starts full-frame.
         host.afRegion = null
         if (!host.canSendOneShot() || host.selectedFocusDistanceDiopters != null) return
@@ -74,6 +80,8 @@ internal class PhotoAutoFocus(private val host: Host) {
         }
         if (!host.canSendOneShot() || host.captureBusy()) return
         val region = host.meteringRegion(viewX, viewY) ?: return
+        if (!indefinite && continuousPoint && startContinuousPoint(region, viewX, viewY, updateAe)) return
+        continuousPointActive = false
         cancelTimers()
         ++runId
         startFrame = null
@@ -119,6 +127,53 @@ internal class PhotoAutoFocus(private val host: Host) {
             host.publishPeakingActiveIfChanged()
         }
     }
+
+    /**
+     * AF-C with a focus point: stay in the idle continuous mode, move CONTROL_AF_REGIONS to the
+     * tap and keep tracking there (no lock, no timer). One CANCEL restarts the passive scan so a
+     * HAL sitting in PASSIVE_FOCUSED on the old subject re-evaluates the new region at once.
+     * False when the lens has no continuous mode or no AF regions (caller falls back to AF-S).
+     */
+    private fun startContinuousPoint(region: MeteringRectangle, viewX: Float, viewY: Float,
+                                     updateAe: Boolean): Boolean {
+        val idle = idleMode(host.afAvailableModes())
+        if (host.maxAfRegions() <= 0 ||
+            idle != CONTROL_AF_MODE_CONTINUOUS_PICTURE && idle != CONTROL_AF_MODE_CONTINUOUS_VIDEO) return false
+        // Leave any AF-S lock / ∞ hold first; its CANCEL runs in the mode that owns it.
+        if (active || aeLockIndefinite) {
+            cancelTimers()
+            if (active) try { host.sendAfTrigger(CONTROL_AF_TRIGGER_CANCEL, runId) } catch (_: Exception) {}
+            clearState()
+            dropManualHold()
+        }
+        host.selectedFocusDistanceDiopters = null // a tap overrides manual focus, as in AF-S
+        host.afRegion = region
+        if (updateAe && host.isAeMeteringSupported()) {
+            host.aeRegion = region
+            host.syncDevelopFocus(viewX, viewY)
+        }
+        continuousPointActive = true
+        host.onFocusLock(false, false, 0L)
+        host.publishControls()
+        try {
+            host.updateRepeatingRequest()
+            host.sendAfTrigger(CONTROL_AF_TRIGGER_CANCEL, runId)
+            host.onState("AF-C POINT")
+            Log.i(TAG, "Photo AF-C point region=$region")
+        } catch (failure: CameraAccessException) {
+            requestFailed(failure)
+        } catch (failure: IllegalStateException) {
+            requestFailed(failure)
+        } catch (failure: IllegalArgumentException) {
+            requestFailed(failure)
+        } finally {
+            host.publishPeakingActiveIfChanged()
+        }
+        return true
+    }
+
+    /** Drops the AF-C point (reset button, mode toggle); continuous AF goes back to full frame. */
+    fun clearContinuousPoint() { continuousPointActive = false }
 
     /** Some HALs abandon AUTO immediately after START but support continuous-picture locks.
      * Retry once with that advertised mode; only a real LOCKED result can succeed. */
@@ -256,6 +311,7 @@ internal class PhotoAutoFocus(private val host: Host) {
             clearState()
             dropManualHold()
             host.afRegion = null
+            continuousPointActive = false
             host.onFocusLock(false, false, 0L)
             host.updateRepeatingRequest()
             host.onMeteringReleased()
@@ -297,6 +353,7 @@ internal class PhotoAutoFocus(private val host: Host) {
     }
 
     private fun requestFailed(failure: Exception) {
+        continuousPointActive = false
         Log.w(TAG, "Photo AF request failed: ${failure.message}")
         releaseToContinuous()
         host.onState("FOCUS ERROR")

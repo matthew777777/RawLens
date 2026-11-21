@@ -185,6 +185,7 @@ class RawCameraController(
     private val bguViewfinder: VfEngine? = null,
     private val onRawExposureAssist: (RawExposureAssistFrame?) -> Unit = {},
     initialFacePriorityEnabled: Boolean = false,
+    initialContinuousAfPoint: Boolean = false,
     private val onFaces: (List<FaceOverlayBox>) -> Unit = { },
     private val vendorKeysByKey: (settingsKey: String?) -> VendorKeyProfile = { VendorKeyProfile() }
 ) {
@@ -488,7 +489,7 @@ class RawCameraController(
     private val faces = FaceTracking(FaceTrackingHost(), initialFacePriorityEnabled)
 
     // Camera2 photo continuous AF, tap scan and press-and-hold lock.
-    private val touchFocus = PhotoAutoFocus(PhotoAutoFocusHost())
+    private val touchFocus = PhotoAutoFocus(PhotoAutoFocusHost()).apply { continuousPoint = initialContinuousAfPoint }
     /** Last idle continuous-AF state/mode logged (transition-only trace). */
     /**
      * Idle continuous-AF trace (transitions only), fed every repeating
@@ -4128,6 +4129,7 @@ class RawCameraController(
         aeRegion = null
         updateDevelopFocus(null)
         touchFocus.clearAeLock()
+        touchFocus.clearContinuousPoint()
         if (hadTargets) updateRepeatingRequest(preserveRawZslBuffer = true)
         onMeteringReleased()
         onState("AE/AF RESET")
@@ -4206,6 +4208,17 @@ class RawCameraController(
         }
         if (!faces.setEnabled(enabled)) return
         updateRepeatingRequest(preserveRawZslBuffer = true)
+    }
+
+    /** Settings toggle: taps steer continuous AF (AF-C point) instead of a one-shot AF-S lock. */
+    fun setContinuousAfPointEnabled(enabled: Boolean) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setContinuousAfPointEnabled(enabled) }
+            return
+        }
+        if (touchFocus.continuousPoint == enabled) return
+        touchFocus.continuousPoint = enabled
+        if (touchFocus.continuousPointActive || touchFocus.active) resetMeteringTargets()
     }
 
     /** False before the first open, on lenses without face stats, or after a HAL rejection. */
@@ -5820,6 +5833,7 @@ class RawCameraController(
             ?.let { builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it)) }
         logAfRequest(wantedAfMode, afMode, manualFocus, when {
             !afRegionsSupported -> "unsupported"
+            afRegion != null && touchFocus.continuousPointActive -> "tap-afc"
             afRegion != null -> "tap"
             faceRegion != null -> "face"
             else -> "full-frame"

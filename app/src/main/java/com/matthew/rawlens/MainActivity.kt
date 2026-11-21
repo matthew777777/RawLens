@@ -660,6 +660,7 @@ class MainActivity : Activity() {
                 if (!videoRecording) rawExposureOverlay.update(frame)
             } },
             initialFacePriorityEnabled = lensPreferences().getBoolean(KEY_FACE_PRIORITY, false),
+            initialContinuousAfPoint = lensPreferences().getBoolean(KEY_AFC_POINT, false),
             onFaces = { boxes ->
                 runOnUiThread {
                     // Boxes arrive as full-box fractions scaled to box pixels;
@@ -4641,6 +4642,7 @@ class MainActivity : Activity() {
         const val KEY_DYNAMIC_EXPOSURE_AUTO_SHUTTER = "dynamic_exposure_auto_shutter"
         const val KEY_ETTR_ENABLED = "ettr_enabled"
         const val KEY_FACE_PRIORITY = "face_priority"
+        const val KEY_AFC_POINT = "afc_focus_point"
         const val KEY_ETTR_HEADROOM_EV = "ettr_headroom_ev"
         const val KEY_ETTR_ISO_LIMIT = "ettr_iso_limit"
         const val KEY_CAPTURE_EXPOSURE_MODE = "capture_exposure_mode"
