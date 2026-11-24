@@ -118,7 +118,7 @@ class WaveletDenoiseDeviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val stage = WaveletDenoiser(context)
         val dir = java.io.File(context.filesDir, "wavelet-noise")
-        val source = { iso: Int -> WaveletDenoiser.NoiseSource(iso, "device-test-${System.nanoTime() / 1000000000}") }
+        val source = { iso: Int -> RawNoiseModel.Source(iso, "device-test-${System.nanoTime() / 1000000000}") }
         val key = source(0).rawModeKey
         try {
             val w = 1024; val h = 768
@@ -127,7 +127,7 @@ class WaveletDenoiseDeviceTest {
             for ((i, iso) in listOf(100, 200, 400, 800, 1600, 3200, 1000).withIndex()) {
                 val buf = direct(frame(w, h, 20L + i, iso / 400f))
                 assertTrue(stage.process(buf, buf, w, h, settings, 0f, 0f, wb,
-                    noiseSource = WaveletDenoiser.NoiseSource(iso, key)))
+                    noiseSource = RawNoiseModel.Source(iso, key)))
             }
             val created = (dir.listFiles()?.toSet() ?: emptySet()) - before
             assertTrue("one store file per key", created.size == 1)
@@ -143,11 +143,11 @@ class WaveletDenoiseDeviceTest {
     @Test fun rawrUsesStoredPriorAndDoesNotTrainTwiceOnReplay() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val stage = WaveletDenoiser(context)
-        val dir = WaveletDenoiser.noiseDir(context)
+        val dir = RawNoiseModel.noiseDir(context)
         val key = "noise-prior-test-${System.nanoTime()}"
-        val low = WaveletDenoiser.NoiseSource(400, "$key-low", 800, 991L)
+        val low = RawNoiseModel.Source(400, "$key-low", 800, 991L)
         val high = low.copy(rawModeKey = "$key-high")
-        val paths = listOf(low, high).map { java.io.File(WaveletDenoiser.storePath(dir, it)!!) }
+        val paths = listOf(low, high).map { java.io.File(RawNoiseModel.storePath(dir, it)!!) }
         try {
             for ((index, path) in paths.withIndex()) {
                 val factor = if (index == 0) 1f else 4f
@@ -166,7 +166,7 @@ class WaveletDenoiseDeviceTest {
             val replay = direct(input)
             assertTrue(stage.process(replay, replay, 1024, 768, settings, 0f, 0f, wb, noiseSource = low))
             assertTrue("same capture trains once", paths[0].readLines().size == count)
-            val prediction = WaveletVulkan.predictNoise(paths[1].absolutePath, 400f)
+            val prediction = RawNoiseModel.predictNoise(paths[1].absolutePath, 400f)
             assertTrue("shared read-only prediction available", prediction != null)
         } finally {
             paths.forEach { it.delete() }

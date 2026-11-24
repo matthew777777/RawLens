@@ -35,6 +35,7 @@ namespace {
 
 struct Layer { uint32_t cin, cout, k, relu; std::vector<float> w, b; };   // w: OHWI (NNAPI CONV_2D filter)
 
+#ifndef __ANDROID__
 std::vector<uint8_t> ReadFile(const char* p) {
   std::vector<uint8_t> raw;
   if (FILE* f = p && *p ? std::fopen(p, "rb") : nullptr) {
@@ -44,6 +45,8 @@ std::vector<uint8_t> ReadFile(const char* p) {
   }
   return raw;
 }
+
+#endif
 
 std::vector<Layer> ParseLayers(const std::vector<uint8_t>& raw) {
   std::vector<Layer> out;

@@ -460,7 +460,7 @@ class RawDevelopmentCoordinator(context: Context) {
             }
             val black = (normalization.blackLevels[greenSites[0]] +
                 normalization.blackLevels[greenSites[1]]) * 0.5f
-            val noise = WaveletDenoiser.noiseAB(
+            val noise = RawNoiseModel.noiseAB(
                 metadata.noiseProfile?.toDoubleArray(), normalization.sensorPattern,
                 black, normalization.whiteLevel
             )
@@ -491,7 +491,7 @@ class RawDevelopmentCoordinator(context: Context) {
                     settings.bounded(), noise?.first ?: 0f, noise?.second ?: 0f, denoiseWb,
                     if (fused) WaveletDenoiser.SharpenRequest(sharpening, pattern, clipState) else null,
                     pattern,
-                    WaveletDenoiser.NoiseSource.of(metadata)
+                    RawNoiseModel.Source.of(metadata)
                 )
             } catch (failure: Exception) {
                 Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)

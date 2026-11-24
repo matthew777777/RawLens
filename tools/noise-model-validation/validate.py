@@ -91,7 +91,7 @@ def main():
     photon = [tuple(map(float, line.split())) for line in result.stdout.splitlines()]
     report = {'photon_revision': PIN, 'scope': 'shared-estimate model variance prediction; no image-quality claim',
               'cases': len(cases), 'groups': {},
-              'model_sha256': hashlib.sha256((ROOT / 'app/src/main/cpp/wavelet/noise_model.h').read_bytes()).hexdigest(),
+              'model_sha256': hashlib.sha256((ROOT / 'app/src/main/cpp/noise/noise_model.h').read_bytes()).hexdigest(),
               'reference_java_sha256': hashlib.sha256((HERE / 'PhotonIsoBin.java').read_bytes()).hexdigest()}
     for group in ('texture', 'heldout'):
         scores = {'rawlens': [], 'photon': [], 'legacy': []}

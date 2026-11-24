@@ -7,7 +7,7 @@ package com.matthew.rawlens
  * Fixed geometry and meter parameters of HDR+ auto. Decisions (strength,
  * path, frame rejection, reference) are not tuned here: they are derived per
  * burst from the measured noise model ([HdrPlusAutoSelect],
- * [HdrPlusMergeModel], [HdrPlusSceneNoise]).
+ * [HdrPlusMergeModel], [RawSceneNoise]).
  */
 object HdrPlusAutoTuning {
     /**

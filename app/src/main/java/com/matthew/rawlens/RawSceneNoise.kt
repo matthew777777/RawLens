@@ -9,6 +9,11 @@ import kotlin.math.abs
 import kotlin.math.cbrt
 import kotlin.math.sqrt
 
+/** Primitive signature: avoids boxing three Ints on every RAW sample in the hot loop. */
+internal fun interface RawCodeReader {
+    fun codeAt(x: Int, y: Int): Int
+}
+
 /**
  * Poisson-Gaussian sensor noise in normalized raw units (black-subtracted
  * code over the code range): variance(x) = a*x + b. Same convention as the
@@ -16,14 +21,14 @@ import kotlin.math.sqrt
  * signal levels the estimate was fitted on, i.e. the burst's own brightness
  * distribution; [bins] is their count (the estimate's confidence).
  */
-class HdrPlusNoiseModel(val a: Double, val b: Double, val bins: Int, val levels: DoubleArray) {
+class RawNoiseEstimate(val a: Double, val b: Double, val bins: Int, val levels: DoubleArray) {
     fun variance(level: Double): Double = a * maxOf(level, 0.0) + b
     fun sigma(level: Double): Double = sqrt(variance(level))
-    fun with(a: Double, b: Double): HdrPlusNoiseModel = HdrPlusNoiseModel(a, b, bins, levels)
+    fun with(a: Double, b: Double): RawNoiseEstimate = RawNoiseEstimate(a, b, bins, levels)
 }
 
 /** Learned prior refining a burst's blind estimate; null keeps the estimate. */
-fun interface HdrPlusNoisePrior {
+fun interface RawNoisePrior {
     fun refine(a: Double, b: Double, bins: Int): Pair<Double, Double>?
 }
 
@@ -32,7 +37,7 @@ fun interface HdrPlusNoisePrior {
  * (never from Camera2/DNG noise profiles). References and limitations:
  * docs/refactor/hdrplus-scene-auto.md.
  */
-object HdrPlusSceneNoise {
+object RawSceneNoise {
     /** Sampling budget per frame: at most GRID x GRID disjoint 4x4 patches. */
     private const val GRID = 64
     /** Gaussian sigma = MAD / this (median of |N(0,1)|). */
@@ -40,6 +45,29 @@ object HdrPlusSceneNoise {
 
     /** Same-CFA diagonal Haar samples of one frame: level and noise coefficient. */
     class Samples(val level: DoubleArray, val coefficient: DoubleArray)
+
+    /** Sparse same-phase Haar samples without repacking a strided/packed camera frame. */
+    internal fun sampleCodes(width: Int, height: Int, black: DoubleArray, white: Int,
+                             code: RawCodeReader): Samples? {
+        if (width < 4 || height < 4 || black.size != 4 || black.any { !it.isFinite() || it >= white }) return null
+        val nx = minOf(GRID, width / 4); val ny = minOf(GRID, height / 4)
+        val level = DoubleArray(nx * ny * 4); val coefficient = DoubleArray(level.size)
+        var count = 0
+        for (gy in 0 until ny) for (gx in 0 until nx) {
+            val x = (gx.toLong() * (width / 4) / nx).toInt() * 4
+            val y = (gy.toLong() * (height / 4) / ny).toInt() * 4
+            for (phase in 0..3) {
+                val px = x + phase % 2; val py = y + phase / 2
+                val a = code.codeAt(px, py).toDouble(); val b = code.codeAt(px + 2, py).toDouble()
+                val c = code.codeAt(px, py + 2).toDouble(); val d = code.codeAt(px + 2, py + 2).toDouble()
+                if (minOf(a,b,c,d) <= black[phase] || maxOf(a,b,c,d) >= white) continue
+                val range = white - black[phase]
+                level[count] = ((a+b+c+d)/4.0-black[phase])/range
+                coefficient[count++] = (a-b-c+d)/(2.0*range)
+            }
+        }
+        return Samples(level.copyOf(count), coefficient.copyOf(count))
+    }
 
     fun sample(packed: ByteBuffer, width: Int, height: Int,
                black: FloatArray, white: Float): Samples? {
@@ -112,7 +140,7 @@ object HdrPlusSceneNoise {
      * data); each bin's variance is its centered MAD, which ignores texture
      * as long as most of the bin is flat. Null when the burst cannot say.
      */
-    fun fit(frames: List<Samples?>, prior: HdrPlusNoisePrior? = null): HdrPlusNoiseModel? {
+    fun fit(frames: List<Samples?>, prior: RawNoisePrior? = null): RawNoiseEstimate? {
         if (frames.isEmpty() || frames.any { it == null }) return null
         val total = frames.sumOf { it!!.level.size }
         val bins = cbrt(total.toDouble()).toInt()
@@ -148,7 +176,7 @@ object HdrPlusSceneNoise {
         // Quantized flat data (MAD 0) carries no variance information.
         if (variances.any { !(it > 0.0) }) return null
         val (a, b) = fitLine(levels, variances) ?: return null
-        val model = HdrPlusNoiseModel(a, b, bins, levels)
+        val model = RawNoiseEstimate(a, b, bins, levels)
         val refined = prior?.refine(a, b, bins) ?: return model
         if (!refined.first.isFinite() || !refined.second.isFinite() ||
             refined.first < 0.0 || refined.second < 0.0 ||
@@ -184,7 +212,7 @@ object HdrPlusSceneNoise {
      * [HdrPlusMotionMeter.meanAbsDiffNormalized] on the same samples.
      */
     fun frameSigma(packed: ByteBuffer, width: Int, height: Int, black: FloatArray,
-                   range: Double, model: HdrPlusNoiseModel,
+                   range: Double, model: RawNoiseEstimate,
                    stride: Int = HdrPlusMotionMeter.SAMPLE_STRIDE): Double {
         if (!usable(packed, width, height, black, range) || stride <= 0) return Double.NaN
         val raw = packed.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer()
@@ -205,7 +233,7 @@ object HdrPlusSceneNoise {
      * every color contributes like it does in the dense per-cell difference.
      */
     fun cellSigma(packed: ByteBuffer, width: Int, height: Int, black: FloatArray,
-                  range: Double, model: HdrPlusNoiseModel): DoubleArray? {
+                  range: Double, model: RawNoiseEstimate): DoubleArray? {
         if (!usable(packed, width, height, black, range)) return null
         val raw = packed.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer()
         val cell = HdrPlusAutoTuning.MAP_BLOCK_PX
@@ -275,7 +303,7 @@ object HdrPlusSceneNoise {
             width.toLong() * height <= packed.remaining() / 2
 
     private fun sigmaAt(raw: ShortBuffer, index: Int, width: Int, black: FloatArray,
-                        range: Double, model: HdrPlusNoiseModel): Double {
+                        range: Double, model: RawNoiseEstimate): Double {
         val phase = ((index / width) and 1) * 2 + ((index % width) and 1)
         return model.sigma(((raw[index].toInt() and 65535) - black[phase]) / range)
     }

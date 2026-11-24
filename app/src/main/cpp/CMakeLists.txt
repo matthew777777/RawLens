@@ -316,12 +316,18 @@ endif()
 # Profiled wavelet denoise (Vulkan): 1:1 port of the upstream raw_denoise
 # (itself a port of darktable denoiseprofile). SPIR-V comes from app assets
 # (spirv/wavelet/); see assets UPSTREAM.md for provenance.
+# Backend-independent learned RAW noise model (CPU only, no Vulkan/denoiser link).
+add_library(rawLensNoise SHARED noise/noise_jni.cpp)
+set_target_properties(rawLensNoise PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_link_options(rawLensNoise PRIVATE "-Wl,-z,max-page-size=16384")
+
 set(WAVELET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/wavelet")
 add_library(rawLensWavelet SHARED
     "${WAVELET_DIR}/upstream/src/DenoisePipeline.cpp"
     "${WAVELET_DIR}/wavelet_host.cpp"
     "${WAVELET_DIR}/wavelet_jni.cpp")
 target_include_directories(rawLensWavelet PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/noise"
     "${WAVELET_DIR}"
     "${WAVELET_DIR}/upstream/include")
 target_compile_options(rawLensWavelet PRIVATE -Wall -Wextra -Werror=return-type)

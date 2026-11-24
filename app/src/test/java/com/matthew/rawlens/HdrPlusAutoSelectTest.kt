@@ -10,7 +10,7 @@ class HdrPlusAutoSelectTest {
     private val sigma = 0.01
     private val noiseOnly = 2 * sigma / sqrt(Math.PI)
     private val spatialReference = 0.05
-    private fun model(a: Double) = HdrPlusNoiseModel(a, a / 100, 5, doubleArrayOf(0.02, 0.05, 0.1, 0.2, 0.4))
+    private fun model(a: Double) = RawNoiseEstimate(a, a / 100, 5, doubleArrayOf(0.02, 0.05, 0.1, 0.2, 0.4))
 
     /** Four frames; every pair differs by [motion] x the noise-only difference. */
     private fun summary(a: Double = 5e-4, motion: Double = 1.0, hot: Double = 0.0, gyro: Double = 0.0) =

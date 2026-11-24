@@ -29,10 +29,10 @@ class HdrPlusLocalBurstTest {
         val range = rows.map { it[3].toDouble() - it.drop(4).map(String::toDouble).average() }
         fun black(i: Int) = rows[i].drop(4).map(String::toFloat).toFloatArray()
         val start = System.nanoTime()
-        val noise = HdrPlusSceneNoise.fit(frames.indices.map { i ->
-            HdrPlusSceneNoise.sample(frames[i], width, height, black(i), rows[i][3].toFloat()) })!!
-        val sigmas = frames.indices.map { i -> HdrPlusSceneNoise.frameSigma(frames[i], width, height, black(i), range[i], noise) }
-        val cells = frames.indices.map { i -> HdrPlusSceneNoise.cellSigma(frames[i], width, height, black(i), range[i], noise)!! }
+        val noise = RawSceneNoise.fit(frames.indices.map { i ->
+            RawSceneNoise.sample(frames[i], width, height, black(i), rows[i][3].toFloat()) })!!
+        val sigmas = frames.indices.map { i -> RawSceneNoise.frameSigma(frames[i], width, height, black(i), range[i], noise) }
+        val cells = frames.indices.map { i -> RawSceneNoise.cellSigma(frames[i], width, height, black(i), range[i], noise)!! }
         val noiseMs = (System.nanoTime() - start) / 1e6
         val stats = frames.indices.map { i -> HdrPlusMotionMeter.frameStats(frames[i], width, height, normalizationRange = range[i]) }
         val deltas = (1 until frames.size).map { i -> HdrPlusMotionMeter.meanAbsDiffNormalized(frames[i-1], frames[i], width*height, normalizationRange = range[i]) }
@@ -47,7 +47,7 @@ class HdrPlusLocalBurstTest {
             List(deltas.size) { Double.NaN }, hots, stats.map { it.meanLevel }, stats.map { it.sharpness },
             ratios, mw, mh, dense, noiseModel = noise,
             codeRange = range[frames.size / 2], frameNoiseSigma = sigmas, frameNoiseSigmaCells = cells,
-            spatialNoiseReference = HdrPlusSceneNoise.spatialNoiseReference(
+            spatialNoiseReference = RawSceneNoise.spatialNoiseReference(
                 frames[frames.size / 2], width, height, range[frames.size / 2]))
         // Auto plan plus both forced paths, for side-by-side native merges.
         for ((name, quality) in listOf("decision" to null, "decision-hq" to true, "decision-fast" to false)) {

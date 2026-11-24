@@ -168,7 +168,7 @@ object HdrPlusAutoSelect {
         val highQuality = manualQuality ?: (stillFrames >= 1.0)
 
         // Strength on the chosen path.
-        val gains = if (highQuality) HdrPlusMergeModel.frequencyGains(model!!, metering.codeRange)
+        val gains = if (highQuality) HdrPlusMergeModel.frequencyGains(model, metering.codeRange)
         else HdrPlusMergeModel.spatialGains(metering.spatialNoiseReference, sigmas[best])
         fun strengthAt(motion: Double): Float = if (gains == null) HdrPlusSettings.DEFAULT_STRENGTH
         else HdrPlusMergeModel.strengthFor(gains, HdrPlusMergeModel.targetGain(kept.size, motion))

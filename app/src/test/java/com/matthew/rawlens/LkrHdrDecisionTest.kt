@@ -6,8 +6,8 @@ import org.junit.Test
 
 class LkrHdrDecisionTest {
     private val tile = 0.015   // one 424 px tile of a 4080 x 3060 frame
-    private fun noise(a: Double, b: Double) = HdrPlusNoiseModel(a, b, 16, DoubleArray(0))
-    private fun stats(clip: Double, median: Double = 0.2, p10: Double = 0.05, n: HdrPlusNoiseModel? = noise(2e-5, 1e-7)) =
+    private fun noise(a: Double, b: Double) = RawNoiseEstimate(a, b, 16, DoubleArray(0))
+    private fun stats(clip: Double, median: Double = 0.2, p10: Double = 0.05, n: RawNoiseEstimate? = noise(2e-5, 1e-7)) =
         LkrHdrDecision.Stats(clip, median, p10, n)
 
     @Test fun offNeverBrackets() {

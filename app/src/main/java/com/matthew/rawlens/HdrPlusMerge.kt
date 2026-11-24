@@ -99,7 +99,7 @@ class HdrPlusMerge(context: Context) {
         searchDistance: Int = HdrPlusSettings.SEARCH_DISTANCE,
         alignOnce: Boolean = true,
         /** Reference frame's key into the learned per-device noise model; null = burst estimate only. */
-        noiseSource: WaveletDenoiser.NoiseSource? = null,
+        noiseSource: RawNoiseModel.Source? = null,
         /** Internal: true when [memoryPlan] already sized this call. */
         budgetChecked: Boolean = false
     ): UnpackedRawCfa? {
@@ -277,7 +277,7 @@ class HdrPlusMerge(context: Context) {
         height: Int,
         measureNoise: Boolean,
         refIndex: Int,
-        prior: HdrPlusNoisePrior?
+        prior: RawNoisePrior?
     ): HdrPlusMotionMeter.MotionSummary {
         val ranges = DoubleArray(frames.size) { i ->
             val blackMean = (blacks[i * 4] + blacks[i * 4 + 1] +
@@ -351,16 +351,16 @@ class HdrPlusMerge(context: Context) {
         // refined by the learned per-device prior), then the noise each
         // frame is expected to show on the meter's own sample grids.
         fun black(i: Int) = FloatArray(4) { blacks[i * 4 + it] }
-        val noise = if (!measureNoise) null else HdrPlusSceneNoise.fit(
-            frames.indices.map { i -> HdrPlusSceneNoise.sample(packed[i], width, height, black(i), whites[i]) },
+        val noise = if (!measureNoise) null else RawSceneNoise.fit(
+            frames.indices.map { i -> RawSceneNoise.sample(packed[i], width, height, black(i), whites[i]) },
             prior
         )
         val sigmas = if (noise == null) emptyList() else frames.indices.map { i ->
-            HdrPlusSceneNoise.frameSigma(packed[i], width, height, black(i), ranges[i], noise)
+            RawSceneNoise.frameSigma(packed[i], width, height, black(i), ranges[i], noise)
         }
         val cellSigmas = if (noise == null || fullMadDense.isEmpty()) emptyList()
         else frames.indices.mapNotNull { i ->
-            HdrPlusSceneNoise.cellSigma(packed[i], width, height, black(i), ranges[i], noise)
+            RawSceneNoise.cellSigma(packed[i], width, height, black(i), ranges[i], noise)
         }.takeIf { it.size == frames.size } ?: emptyList()
         if (noise != null) Log.i(LOG_TAG, String.format(java.util.Locale.US,
             "HDR+ noise: a=%.3g b=%.3g bins=%d learnedPrior=%s", noise.a, noise.b, noise.bins,
@@ -370,7 +370,7 @@ class HdrPlusMerge(context: Context) {
             stats.map { it.meanLevel }, stats.map { it.sharpness },
             fullRatios, mapX, mapY, fullMadDense, fullTexDense,
             noise, ranges[refIndex], sigmas, cellSigmas,
-            if (noise == null) Double.NaN else HdrPlusSceneNoise.spatialNoiseReference(
+            if (noise == null) Double.NaN else RawSceneNoise.spatialNoiseReference(
                 packed[refIndex], width, height, ranges[refIndex])
         )
     }
@@ -380,11 +380,11 @@ class HdrPlusMerge(context: Context) {
      * stage and MFSR) as prior for the burst's own estimate. Null when the
      * source is unknown; the prior itself declines when untrained for the ISO.
      */
-    private fun learnedPrior(source: WaveletDenoiser.NoiseSource?): HdrPlusNoisePrior? {
-        val path = source?.let { WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(appContext), it) }
+    private fun learnedPrior(source: RawNoiseModel.Source?): RawNoisePrior? {
+        val path = source?.let { RawNoiseModel.storePath(RawNoiseModel.noiseDir(appContext), it) }
             ?: return null
-        return HdrPlusNoisePrior { a, b, bins ->
-            WaveletVulkan.combineNoise(path, source.iso.toFloat(), a.toFloat(), b.toFloat(), bins)
+        return RawNoisePrior { a, b, bins ->
+            RawNoiseModel.combineNoise(path, source.iso.toFloat(), a.toFloat(), b.toFloat(), bins)
                 ?.let { it[0].toDouble() to it[1].toDouble() }
         }
     }
@@ -493,7 +493,7 @@ class HdrPlusMerge(context: Context) {
     private fun mergeWithinBudget(
         plan: MemoryPlan, frames: List<FrameInput>, refIndex: Int, settings: HdrPlusSettings,
         tileSize: Int, searchDistance: Int, alignOnce: Boolean,
-        noiseSource: WaveletDenoiser.NoiseSource?
+        noiseSource: RawNoiseModel.Source?
     ): UnpackedRawCfa? {
         val offset = plan.window.first
         val sub = frames.subList(plan.window.first, plan.window.last + 1)

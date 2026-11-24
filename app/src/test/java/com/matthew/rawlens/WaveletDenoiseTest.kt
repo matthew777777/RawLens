@@ -63,7 +63,7 @@ class WaveletDenoiseTest {
         val profile = doubleArrayOf(0.002, 0.00002, 0.004, 0.00004,
             0.006, 0.00006, 0.008, 0.00008)
         for ((black, white) in listOf(64f to 1023f, 256f to 4095f, 1024f to 16383f)) {
-            val actual = requireNotNull(WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, black, white))
+            val actual = requireNotNull(RawNoiseModel.noiseAB(profile, BayerPattern.RGGB, black, white))
             val range = white - black
             assertEquals(0.005f / range, actual.first, 0f)
             assertEquals((0.005f * black + 0.00005f) / (range * range), actual.second, 0f)
@@ -93,9 +93,9 @@ class WaveletDenoiseTest {
     }
 
     @Test fun noiseABBypassesWithoutValidProfile() {
-        assertNull(WaveletDenoiser.noiseAB(null, BayerPattern.RGGB, 64f, 1024f))
-        assertNull(WaveletDenoiser.noiseAB(DoubleArray(6), BayerPattern.RGGB, 64f, 1024f))
-        assertNull(WaveletDenoiser.noiseAB(DoubleArray(8), BayerPattern.RGGB, 64f, 64f))
+        assertNull(RawNoiseModel.noiseAB(null, BayerPattern.RGGB, 64f, 1024f))
+        assertNull(RawNoiseModel.noiseAB(DoubleArray(6), BayerPattern.RGGB, 64f, 1024f))
+        assertNull(RawNoiseModel.noiseAB(DoubleArray(8), BayerPattern.RGGB, 64f, 64f))
     }
 
     @Test fun profileSelectsBothGreenSitesForEveryCfa() {
@@ -104,26 +104,26 @@ class WaveletDenoiseTest {
             val edgeGreen = pattern == BayerPattern.GRBG || pattern == BayerPattern.GBRG
             val expected = (if (edgeGreen) 4.5f else 3f) to
                 (if (edgeGreen) 0.45f else 0.3f)
-            val actual = requireNotNull(WaveletDenoiser.noiseAB(profile, pattern, 64f, 1088f))
+            val actual = requireNotNull(RawNoiseModel.noiseAB(profile, pattern, 64f, 1088f))
             assertEquals(expected.first / 1024f, actual.first, 0f)
             assertEquals((expected.first * 64f + expected.second) / (1024f * 1024f), actual.second, 0f)
         }
         profile[2] = Double.NaN
-        assertNull(WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, 64f, 1088f))
+        assertNull(RawNoiseModel.noiseAB(profile, BayerPattern.RGGB, 64f, 1088f))
     }
 
     @Test fun invalidRawrCoefficientsBypass() {
         for (pair in listOf(-0.001 to 0.0001,
             Double.NaN to 0.0001, 0.001 to Double.POSITIVE_INFINITY)) {
             val profile = DoubleArray(8) { if (it % 2 == 0) pair.first else pair.second }
-            assertNull(WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, 64f, 1023f))
+            assertNull(RawNoiseModel.noiseAB(profile, BayerPattern.RGGB, 64f, 1023f))
         }
         val profile = DoubleArray(8) { if (it % 2 == 0) 0.001 else 0.0001 }
-        assertEquals(0f to 0f, WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, 64f, Float.POSITIVE_INFINITY))
-        assertEquals(0f to 0f, WaveletDenoiser.noiseAB(DoubleArray(8), BayerPattern.RGGB, 64f, 1023f))
+        assertEquals(0f to 0f, RawNoiseModel.noiseAB(profile, BayerPattern.RGGB, 64f, Float.POSITIVE_INFINITY))
+        assertEquals(0f to 0f, RawNoiseModel.noiseAB(DoubleArray(8), BayerPattern.RGGB, 64f, 1023f))
         val negativeOffset = DoubleArray(8) { if (it % 2 == 0) 0.001 else -0.0001 }
-        assertTrue(WaveletDenoiser.noiseAB(negativeOffset, BayerPattern.RGGB, 64f, 1023f) != null)
-        assertNull(WaveletDenoiser.noiseAB(profile, BayerPattern.RGGB, Float.NaN, 1023f))
+        assertTrue(RawNoiseModel.noiseAB(negativeOffset, BayerPattern.RGGB, 64f, 1023f) != null)
+        assertNull(RawNoiseModel.noiseAB(profile, BayerPattern.RGGB, Float.NaN, 1023f))
     }
 
     @Test fun cfaModelGreenPlaneMatchesNoiseProfile() {

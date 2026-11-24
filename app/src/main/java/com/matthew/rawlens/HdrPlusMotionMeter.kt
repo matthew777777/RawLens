@@ -66,7 +66,7 @@ object HdrPlusMotionMeter {
         val pairMadDense: List<DoubleArray> = emptyList(),
         val pairTexDense: List<DoubleArray> = emptyList(),
         /** Burst noise model (blind estimate, learned prior applied); null = unknown. */
-        val noiseModel: HdrPlusNoiseModel? = null,
+        val noiseModel: RawNoiseEstimate? = null,
         /** White minus mean black of the reference frame, in raw codes. */
         val codeRange: Double = Double.NaN,
         /** Per-frame mean noise sigma on the strided grid ([pairDeltas] units). */
@@ -74,7 +74,7 @@ object HdrPlusMotionMeter {
         /** Per-frame mean noise sigma per map cell ([pairMadDense] units). */
         val frameNoiseSigmaCells: List<DoubleArray> = emptyList(),
         /** Spatial-merge noise reference of the preferred reference frame
-         * ([HdrPlusSceneNoise.spatialNoiseReference]); NaN = unknown. */
+         * ([RawSceneNoise.spatialNoiseReference]); NaN = unknown. */
         val spatialNoiseReference: Double = Double.NaN
     ) {
         /** GCam-style one-line report for the merge log. */
@@ -332,7 +332,7 @@ object HdrPlusMotionMeter {
         mapCellsY: Int = 0,
         pairMadDense: List<DoubleArray> = emptyList(),
         pairTexDense: List<DoubleArray> = emptyList(),
-        noiseModel: HdrPlusNoiseModel? = null,
+        noiseModel: RawNoiseEstimate? = null,
         codeRange: Double = Double.NaN,
         frameNoiseSigma: List<Double> = emptyList(),
         frameNoiseSigmaCells: List<DoubleArray> = emptyList(),

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "../../app/src/main/cpp/wavelet/noise_model.h"
+#include "../../app/src/main/cpp/noise/noise_model.h"
 #include <cassert>
 #include <limits>
 
@@ -22,6 +22,11 @@ int main(int argc, char** argv) {
     const auto model = rawlens_noise::fit(loaded);
     assert(model.supports(400) && !model.supports(100));
     assert(std::fabs(model.predictA(400) / 8e-5f - 1) < 1e-5);
+    const rawlens_noise::Sample extra{800, 0.00016f, 0.000012f, 8, 800, 999};
+    assert(rawlens_noise::recordSample(path, extra));
+    assert(rawlens_noise::recordSample(path, extra));
+    const auto recorded = rawlens_noise::loadSamples(path);
+    assert(std::count_if(recorded.begin(), recorded.end(), [](const auto& s) { return s.captureId == 999; }) == 1);
     // Schema v1 used a different fitter and must never silently contaminate v2.
     FILE* f = std::fopen(path.c_str(), "w"); assert(f);
     std::fprintf(f, "rawlens-noise v1\n400 0.0001 0.00001 8\n"); std::fclose(f);

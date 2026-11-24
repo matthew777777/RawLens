@@ -53,7 +53,7 @@ object WaveletVulkan {
 
     /**
      * Full wavelet denoise. [noiseA]/[noiseB] are the normalized green
-     * variance slope/offset (see [WaveletDenoiser.noiseAB]);
+     * variance slope/offset (see [RawNoiseModel.noiseAB]);
      * [wbGains] preserve Camera2 gain scale, with both greens averaged (RAWR).
      */
     fun process(
@@ -105,29 +105,5 @@ object WaveletVulkan {
     ): Int
     private external fun nativeLastGpuMs(handle: Long): Double
 
-    /**
-     * Learned per-device noise model (rawlens_noise::fit over the store at
-     * [storePath]) evaluated at [iso]: green (a, b) in normalized raw units
-     * plus sample/ISO counts, or null when untrained or the library is missing.
-     */
-    fun predictNoise(storePath: String, iso: Float): FloatArray? =
-        if (!ensureLoaded()) null else try { nativePredictNoise(storePath, iso) } catch (_: RuntimeException) { null }
 
-    private external fun nativePredictNoise(storePath: String, iso: Float): FloatArray?
-
-    /**
-     * Learned model at [iso] as prior, refined by a caller's own blind
-     * estimate ([estimateA], [estimateB] in normalized raw units, [bins] =
-     * its confidence) with the same rule the wavelet stage uses
-     * (rawlens_noise::combine): (a, b, evidence weight, samples, isos), or
-     * null when untrained for this ISO or the library is missing.
-     */
-    fun combineNoise(storePath: String, iso: Float, estimateA: Float, estimateB: Float, bins: Int): FloatArray? =
-        if (!ensureLoaded()) null else try {
-            nativeCombineNoise(storePath, iso, estimateA, estimateB, bins)
-        } catch (_: RuntimeException) { null }
-
-    private external fun nativeCombineNoise(
-        storePath: String, iso: Float, estimateA: Float, estimateB: Float, bins: Int
-    ): FloatArray?
 }

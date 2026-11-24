@@ -224,9 +224,9 @@ internal object LkrMerge {
         LkrBridge.nativeSetCacheDir(context.codeCacheDir.absolutePath)
         // Learned per-device noise model as prior for the burst's own fit (as HDR+);
         // the native side declines when it is untrained for this ISO.
-        val noiseSource = WaveletDenoiser.NoiseSource.of(metadata)
+        val noiseSource = RawNoiseModel.Source.of(metadata)
         LkrBridge.nativeSetNoiseModel(
-            noiseSource?.let { WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), it) },
+            noiseSource?.let { RawNoiseModel.storePath(RawNoiseModel.noiseDir(context), it) },
             noiseSource?.iso?.toFloat() ?: 0f)
         LkrBridge.nativeSetPrior(settings.network && !settings.npuDenoise && !settings.noPrior)
         LkrBridge.nativeSetNpuDenoise(settings.npuDenoise, settings.noPrior)

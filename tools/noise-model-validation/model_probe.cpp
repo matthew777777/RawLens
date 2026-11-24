@@ -5,10 +5,10 @@
 #include <random>
 #include <vector>
 #ifndef MODEL_HEADER
-#define MODEL_HEADER "../../app/src/main/cpp/wavelet/noise_model.h"
+#define MODEL_HEADER "../../app/src/main/cpp/noise/noise_model.h"
 #endif
 #include MODEL_HEADER
-#include "../../app/src/main/cpp/wavelet/noise_estimate.h"
+#include "../../app/src/main/cpp/noise/noise_estimate.h"
 
 extern "C" int predict(const double* rows, int n, float iso, float ea, float eb,
                         int bins, int evidence, double* out) {

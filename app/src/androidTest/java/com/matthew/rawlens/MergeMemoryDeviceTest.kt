@@ -149,7 +149,7 @@ class MergeMemoryDeviceTest {
                     val ref = inputs.size / 2
                     val merged = measured("hdrplus ${frames[0].width}x${frames[0].height} N=${inputs.size}") {
                         processor.merge(inputs, ref, HdrPlusSettings(),
-                            noiseSource = WaveletDenoiser.NoiseSource.of(frames[ref].metadata))
+                            noiseSource = RawNoiseModel.Source.of(frames[ref].metadata))
                     }
                     checkNotNull(merged) { "HDR+ merge returned null" }
                     val bb = ByteBuffer.allocateDirect(merged.values.size * 4).order(ByteOrder.LITTLE_ENDIAN)

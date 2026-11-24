@@ -15,8 +15,8 @@
 
 #include "raw_denoise/DenoisePipeline.hpp"
 #include "capture_sharpening/CaptureSharpening.h"
-#include "noise_estimate.h"
-#include "noise_model.h"
+#include "../noise/noise_estimate.h"
+#include "../noise/noise_model.h"
 #include <android/log.h>
 
 #define WAVELET_FENCE_TIMEOUT_NS 30000000000ull
@@ -414,8 +414,7 @@ class WaveletHost {
             auto samples = rawlens_noise::loadSamples(store);
             model = rawlens_noise::fit(samples);
             if (e.ok && e.bins >= rawlens_noise::kMinBins) {
-                rawlens_noise::addSample(samples, {iso, e.a, e.b, e.bins, analogIso, captureId});
-                if (!rawlens_noise::saveSamples(store, samples))
+                if (!rawlens_noise::recordSample(store, {iso, e.a, e.b, e.bins, analogIso, captureId}))
                     __android_log_print(ANDROID_LOG_WARN, "WaveletNoise", "noise store write failed");
             }
             __android_log_print(ANDROID_LOG_INFO, "WaveletNoise",

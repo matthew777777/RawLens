@@ -111,7 +111,7 @@ Full guided-filter averaging of (a,b) was within ~1% and not worth a 9x9 apron.
 
 ## Item 3 + adaptive strength: blind noise estimate (2026-11-03)
 
-`app/src/main/cpp/wavelet/noise_estimate.h`, called by the host in RawLens mode
+`app/src/main/cpp/noise/noise_estimate.h`, called by the host in RawLens mode
 before upload. Native green CFA sites only (raw samples after demosaic):
 residual vs 4 diagonal greens, 8x8 blocks per green lattice, per-brightness-bin
 10% quantile of block variance (chi^2 corrected), weighted LS fit var = a*x + b.
@@ -201,7 +201,7 @@ Night DNG (IMG_20261102_181122_683), production chain clip01 -> RCD oracle -> de
   like the shipped shader (earlier prototype numbers were slightly off).
 
 ## Step 4: learned per-device noise model (2026-11-03, verified on device)
-`app/src/main/cpp/wavelet/noise_model.h`, used by `choose_noise` in RawLens mode.
+`app/src/main/cpp/noise/noise_model.h`, used by `choose_noise` in RawLens mode.
 - Every shot with a usable blind estimate (>= 3 brightness bins) appends
   (ISO, a, b, bins) to a per-key store, `filesDir/wavelet-noise/<sha>.txt`,
   where the key is camera id, physical id, pixel mode, quad Bayer, binning,

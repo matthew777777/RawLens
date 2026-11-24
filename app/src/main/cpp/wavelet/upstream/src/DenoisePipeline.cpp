@@ -780,7 +780,7 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                 const float sb = std::pow(varf, (float)scale);
                 const float sb2 = sb * sb;
                 PA pa{ew, eh, tw, th, halo, 1u << (uint32_t)scale, 1.0f / sb2, 0u, (uint32_t)scale,
-                      groupsX, scale > 0 ? 1u : 0u, scale == 1 ? 1u : 0u, 0, 0, 0, 0, 0};
+                      groupsX, scale > 0 ? 1u : 0u, scale == 1 ? 1u : 0u, 0, 0, 0, 0, 0, 0, 0};
                 if (wiener) {
                     // Effective noise variance per band; Luma/Chroma sliders
                     // scale it (defaults 0.25/0.75 -> 1.0 / 1.5 fine, 3.0 coarse).
@@ -811,7 +811,7 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
             if (!wiener) {
                 // Last scale's apply (earlier ones are fused into the next estimate).
                 PA pa{ew, eh, tw, th, halo, 1u, 1.0f, 1u, (uint32_t)(maxScale - 1), groupsX, 0u,
-                      maxScale == 1 ? 1u : 0u, 0, 0, 0, 0, 0};
+                      maxScale == 1 ? 1u : 0u, 0, 0, 0, 0, 0, 0, 0};
                 dispatch(im.atrPipe, im.atrPipeLayout, im.atrSets[maxScale - 1], &pa, sizeof(pa), gx, gy);
             }
             // RawLens step 1: low-res chroma (block means, regression, correction).

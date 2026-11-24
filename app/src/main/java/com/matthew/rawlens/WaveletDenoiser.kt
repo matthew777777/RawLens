@@ -4,10 +4,7 @@
 package com.matthew.rawlens
 
 import android.content.Context
-import android.os.Build
-import java.io.File
 import java.nio.ByteBuffer
-import java.security.MessageDigest
 
 /**
  * Post-demosaic profiled-wavelet denoise (luma + chroma) via the vendored
@@ -19,7 +16,7 @@ import java.security.MessageDigest
  */
 class WaveletDenoiser(context: Context) {
     private val assets = context.applicationContext.assets
-    private val noiseDir = noiseDir(context)
+    private val noiseDir = RawNoiseModel.noiseDir(context)
     private var handle = 0L
 
     /** Last native GPU time in ms (-1 when unavailable). */
@@ -66,7 +63,7 @@ class WaveletDenoiser(context: Context) {
         wbGains: FloatArray,
         sharpen: SharpenRequest? = null,
         pattern: BayerPattern? = null,
-        noiseSource: NoiseSource? = null
+        noiseSource: RawNoiseModel.Source? = null
     ): Boolean {
         if (!ensureInit()) return false
         require(wbGains.size >= 3) { "wbGains needs 3 entries" }
@@ -112,32 +109,7 @@ class WaveletDenoiser(context: Context) {
             "iterations=${settings.level.iterations} cfa=$pattern gpuMs=${WaveletVulkan.lastGpuMs(handle)}")
     }
 
-    /**
-     * RawLens learned noise model input: capture ISO and the raw mode key.
-     * Samples are stored per key (camera, physical camera, pixel mode,
-     * quad Bayer, raw size) and per build fingerprint, so a firmware update
-     * (HAL raw NR may change) starts a fresh model.
-     */
-    data class NoiseSource(
-        val iso: Int, val rawModeKey: String, val maxAnalogIso: Int = 0, val captureId: Long = 0L
-    ) {
-        companion object {
-            /** The one key builder (wavelet path and MFSR share the same store). */
-            fun of(metadata: RawFrameMetadata): NoiseSource? {
-                // A merged frame has a different noise law from one sensor
-                // exposure; it must not train or use the single-frame prior.
-                if ((metadata.compositeUsedCount ?: 1) > 1) return null
-                return metadata.sensitivityIso?.let {
-                    NoiseSource(it, "${metadata.cameraId}/${metadata.activePhysicalCameraId}/" +
-                        "${metadata.sensorPixelMode}/${metadata.quadBayer}/${metadata.rawBinningFactorUsed}/" +
-                        "${metadata.imageWidth}x${metadata.imageHeight}",
-                        metadata.maxAnalogSensitivityIso ?: 0, metadata.timestampNanos)
-                }
-            }
-        }
-    }
-
-    private fun noiseStorePath(source: NoiseSource): String? = storePath(noiseDir, source)
+    private fun noiseStorePath(source: RawNoiseModel.Source): String? = RawNoiseModel.storePath(noiseDir, source)
 
     /** Capture sharpening fused into the same GPU submit as [process]. */
     class SharpenRequest(
@@ -148,39 +120,6 @@ class WaveletDenoiser(context: Context) {
 
     companion object {
         private const val TAG = "WaveletDenoiser"
-
-        /** Learned-model store file for [source] under [dir] (per raw-mode key + build fingerprint). */
-        internal fun storePath(dir: File, source: NoiseSource): String? {
-            if (source.iso <= 0) return null
-            if (!dir.isDirectory && !dir.mkdirs()) return null
-            val digest = MessageDigest.getInstance("SHA-256")
-                .digest("${source.rawModeKey}|${Build.FINGERPRINT}".toByteArray())
-            val name = digest.take(12).joinToString("") { "%02x".format(it) }
-            return File(dir, "$name.txt").absolutePath
-        }
-
-        /** Store directory (same as the instance's [noiseDir]). */
-        internal fun noiseDir(context: Context): File = File(context.applicationContext.filesDir, "wavelet-noise")
-
-        /** Matches RAWR GreenNoiseToNormalized, including float operation order
-         * and acceptance rules. The caller supplies the mean green black level
-         * and effective white used for demosaic normalization.
-         */
-        fun noiseAB(
-            noiseProfile: DoubleArray?, pattern: BayerPattern, black: Float, white: Float
-        ): Pair<Float, Float>? {
-            if (noiseProfile == null || noiseProfile.size < 8 ||
-                !(white > black) || !(black >= 0f)) return null
-            val g0 = if (pattern == BayerPattern.GRBG || pattern == BayerPattern.GBRG) 0 else 1
-            val g1 = if (g0 == 0) 3 else 2
-            val slope = (noiseProfile[g0 * 2] + noiseProfile[g1 * 2]).toFloat() * 0.5f
-            val offset = (noiseProfile[g0 * 2 + 1] + noiseProfile[g1 * 2 + 1]).toFloat() * 0.5f
-            if (!slope.isFinite() || !offset.isFinite() || !(slope >= 0f)) return null
-            val range = white - black
-            val a = if (range > 0f) slope / range else 0f
-            val b = if (range > 0f) (slope * black + offset) / (range * range) else 0f
-            return a to b
-        }
 
         /** RAWR collapseRggbToRgb: preserve absolute gains, average both greens. */
         fun rawrWhiteBalance(rggb: FloatArray?): FloatArray? {

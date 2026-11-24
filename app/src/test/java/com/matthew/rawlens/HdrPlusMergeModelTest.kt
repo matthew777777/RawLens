@@ -7,7 +7,7 @@ import org.junit.Test
 
 class HdrPlusMergeModelTest {
     private fun model(a: Double, b: Double) =
-        HdrPlusNoiseModel(a, b, 5, doubleArrayOf(0.02, 0.05, 0.1, 0.2, 0.4))
+        RawNoiseEstimate(a, b, 5, doubleArrayOf(0.02, 0.05, 0.1, 0.2, 0.4))
 
     @Test fun gainsRiseWithStrengthAndFallWithNoise() {
         val quiet = HdrPlusMergeModel.frequencyGains(model(1e-4, 1e-6), 959.0)
@@ -21,7 +21,7 @@ class HdrPlusMergeModelTest {
     @Test fun gainMatchesTheNativeNormsAtOneLevel() {
         val level = 0.1
         val range = 959.0
-        val m = HdrPlusNoiseModel(1e-3, 0.0, 1, doubleArrayOf(level))
+        val m = RawNoiseEstimate(1e-3, 0.0, 1, doubleArrayOf(level))
         val rev = 0.5 * (26.5 - 13)
         val robustness = Math.pow(2.0, -rev + 7.5)
         val read = Math.pow(Math.pow(2.0, -rev + 10.0), 1.6)

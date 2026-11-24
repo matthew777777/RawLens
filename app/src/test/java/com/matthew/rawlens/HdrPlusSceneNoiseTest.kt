@@ -9,7 +9,24 @@ import kotlin.math.sqrt
 import org.junit.Assert.*
 import org.junit.Test
 
-class HdrPlusSceneNoiseTest {
+class RawSceneNoiseTest {
+    @Test fun sparseStridedExposureReaderMatchesPackedNoiseEstimator() {
+        val (bytes, black) = frame(.002, .00002, 123L)
+        val packed = requireNotNull(RawSceneNoise.sample(bytes, w, w, black, white))
+        val source = bytes.duplicate().order(ByteOrder.nativeOrder())
+        val origin = source.position()
+        val sparse = requireNotNull(RawSceneNoise.sampleCodes(w, w,
+            DoubleArray(4) { black[it].toDouble() }, white.toInt(), RawCodeReader { x, y ->
+                source.getShort(origin + (y * w + x) * 2).toInt() and 65535
+            }))
+        assertArrayEquals(packed.level, sparse.level, 0.0)
+        assertArrayEquals(packed.coefficient, sparse.coefficient, 0.0)
+        val a = requireNotNull(RawSceneNoise.fit(listOf(packed)))
+        val b = requireNotNull(RawSceneNoise.fit(listOf(sparse)))
+        assertEquals(a.a, b.a, 0.0)
+        assertEquals(a.b, b.b, 0.0)
+    }
+
     private val w = 512
     private val white = 4095f
 
@@ -33,10 +50,10 @@ class HdrPlusSceneNoiseTest {
     }
 
     private fun fit(a: Double, b: Double, frames: Int = 4, scale: Int = 1,
-                    prior: HdrPlusNoisePrior? = null): HdrPlusNoiseModel? =
-        HdrPlusSceneNoise.fit((0 until frames).map {
+                    prior: RawNoisePrior? = null): RawNoiseEstimate? =
+        RawSceneNoise.fit((0 until frames).map {
             val (bytes, black) = frame(a, b, 42L + it, scale)
-            HdrPlusSceneNoise.sample(bytes, w, w, black, white * scale)
+            RawSceneNoise.sample(bytes, w, w, black, white * scale)
         }, prior)
 
     @Test fun recoversShotAndReadNoise() {
@@ -58,13 +75,13 @@ class HdrPlusSceneNoiseTest {
 
     @Test fun unusableInputIsUnknownNotNoiseless() {
         val flat = ByteBuffer.allocate(128 * 128 * 2)
-        assertNull(HdrPlusSceneNoise.fit(listOf(HdrPlusSceneNoise.sample(flat, 128, 128, FloatArray(4), white))))
-        assertNull(HdrPlusSceneNoise.sample(flat, 256, 256, FloatArray(4), white))
-        assertNull(HdrPlusSceneNoise.sample(flat, 128, 128, FloatArray(4), Float.NaN))
-        assertNull(HdrPlusSceneNoise.fit(emptyList()))
+        assertNull(RawSceneNoise.fit(listOf(RawSceneNoise.sample(flat, 128, 128, FloatArray(4), white))))
+        assertNull(RawSceneNoise.sample(flat, 256, 256, FloatArray(4), white))
+        assertNull(RawSceneNoise.sample(flat, 128, 128, FloatArray(4), Float.NaN))
+        assertNull(RawSceneNoise.fit(emptyList()))
         val (bytes, black) = frame(1e-3, 0.0, 1)
         // A partial burst estimate is not evidence about the missing frames.
-        assertNull(HdrPlusSceneNoise.fit(listOf(HdrPlusSceneNoise.sample(bytes, w, w, black, white), null)))
+        assertNull(RawSceneNoise.fit(listOf(RawSceneNoise.sample(bytes, w, w, black, white), null)))
     }
 
     @Test fun learnedPriorRefinesTheEstimateAndBadPriorsAreIgnored() {
@@ -90,12 +107,12 @@ class HdrPlusSceneNoiseTest {
         val (f1, _) = frame(a, b, 8)
         val range = (white - black.average()).toDouble()
         val observed = HdrPlusMotionMeter.meanAbsDiffNormalized(f0, f1, w * w, normalizationRange = range)
-        val s0 = HdrPlusSceneNoise.frameSigma(f0, w, w, black, range, model)
-        val s1 = HdrPlusSceneNoise.frameSigma(f1, w, w, black, range, model)
+        val s0 = RawSceneNoise.frameSigma(f0, w, w, black, range, model)
+        val s1 = RawSceneNoise.frameSigma(f1, w, w, black, range, model)
         val expected = (s0 + s1) / sqrt(Math.PI)
         assertEquals(observed, expected, 0.08 * observed)
         assertTrue(HdrPlusAutoSelect.motionShare(observed, expected) < 0.15)
-        val cells = HdrPlusSceneNoise.cellSigma(f0, w, w, black, range, model)!!
+        val cells = RawSceneNoise.cellSigma(f0, w, w, black, range, model)!!
         val (mw, mh) = HdrPlusMotionMeter.mapCells(w, w)
         assertEquals(mw * mh, cells.size)
         assertTrue(cells.all { it.isFinite() && it > 0.0 })
@@ -109,11 +126,11 @@ class HdrPlusSceneNoiseTest {
         val model = fit(a, b)!!
         val (f0, black) = frame(a, b, 7)
         val range = (white - black.average()).toDouble()
-        val reference = HdrPlusSceneNoise.spatialNoiseReference(f0, w, w, range)
+        val reference = RawSceneNoise.spatialNoiseReference(f0, w, w, range)
         // |pixel - wide blur| of noise is nearly |noise|: 4 pixels x sigma x sqrt(2/pi).
-        val expected = 4 * Math.sqrt(2 / Math.PI) * HdrPlusSceneNoise.frameSigma(f0, w, w, black, range, model)
+        val expected = 4 * Math.sqrt(2 / Math.PI) * RawSceneNoise.frameSigma(f0, w, w, black, range, model)
         assertEquals(expected, reference, 0.1 * expected)
-        assertTrue(HdrPlusSceneNoise.spatialNoiseReference(f0, w, w, Double.NaN).isNaN())
-        assertTrue(HdrPlusSceneNoise.spatialNoiseReference(f0, 2 * w, w, range).isNaN())
+        assertTrue(RawSceneNoise.spatialNoiseReference(f0, w, w, Double.NaN).isNaN())
+        assertTrue(RawSceneNoise.spatialNoiseReference(f0, 2 * w, w, range).isNaN())
     }
 }

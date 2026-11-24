@@ -130,7 +130,7 @@ endif()
 if(ANDROID)
   add_library(lkrpipeline SHARED lkrl_jni.cpp)
   # Learned per-device noise model (header-only, shared with the wavelet stage and HDR+).
-  target_include_directories(lkrpipeline PRIVATE "${LKRL_DIR}/../../../../../app/src/main/cpp/wavelet")
+  target_include_directories(lkrpipeline PRIVATE "${LKRL_DIR}/../../../../../app/src/main/cpp/noise")
   target_compile_options(lkrpipeline PRIVATE -O3 -Wall -fno-rtti)
   find_library(LKRL_LOG_LIB log REQUIRED)
   target_link_libraries(lkrpipeline PRIVATE lkrl_core android ${LKRL_LOG_LIB})

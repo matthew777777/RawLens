@@ -16,7 +16,7 @@ import kotlin.math.pow
  * the reference/companion difference. This mirrors how the native code turns
  * the slider into `norm` (RawMergeHdrPlusGpu.h `frequencyNorms`, shaders
  * hdrq_rms / hdrq_mismatch_norm / hdrq_merge) and divides it by the power a
- * noise-only difference has under a measured [HdrPlusNoiseModel]. The ratio
+ * noise-only difference has under a measured [RawNoiseEstimate]. The ratio
  * ("noise gain") is 1 when the merge assumes exactly the noise the sensor
  * has: below it the merge rejects plain noise, above it the merge accepts
  * differences that many times larger than noise.
@@ -53,7 +53,7 @@ object HdrPlusMergeModel {
      * at the median over the model's own signal levels. [codeRange] is
      * white minus black in raw codes: the native norms are in raw codes.
      */
-    fun frequencyGains(model: HdrPlusNoiseModel, codeRange: Double): DoubleArray {
+    fun frequencyGains(model: RawNoiseEstimate, codeRange: Double): DoubleArray {
         require(codeRange.isFinite() && codeRange > 0.0) { "HDR+ code range must be positive" }
         return DoubleArray(strengths.count()) { index ->
             val rev = 0.5 * (26.5 - (strengths.first + index))
@@ -98,7 +98,7 @@ object HdrPlusMergeModel {
      * There a companion's weight is 1 - diff / maxDiff, with diff the blurred
      * reference/companion difference per CFA cell and maxDiff the reference's
      * own blur residual ([noiseReference], measured by
-     * [HdrPlusSceneNoise.spatialNoiseReference]) over the slider's
+     * [RawSceneNoise.spatialNoiseReference]) over the slider's
      * robustness. A noise-only difference of mean d therefore leaks d /
      * maxDiff of the reference; the frequency merge at gain g leaks
      * 1/(g + 1), so the equivalent gain is maxDiff / d - 1.

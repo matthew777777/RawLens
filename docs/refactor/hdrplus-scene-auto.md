@@ -118,3 +118,31 @@ marker; later manual choices are respected. HDR+ enablement is unchanged.
 
 Local results and outstanding calibration work are recorded in
 `docs/refactor/results/hdrplus-scene-auto-2026-11-05/report.md`.
+
+
+## Shared noise ownership (2026-11-24)
+
+Noise calibration is independent of the denoiser backend. `RawSceneNoise.kt`
+(previously `HdrPlusSceneNoise.kt`) owns the pure blind scene estimator and
+`RawNoiseEstimate` / `RawNoisePrior`. `RawNoiseModel.kt` owns source identity,
+firmware-qualified store paths, prediction, evidence blending, HAL-profile
+conversion as an explicit fallback, and the record entry point for future Rawdn.
+The CPU-only `rawLensNoise` JNI library and native `noise_model.h` /
+`noise_estimate.h` live under `app/src/main/cpp/noise/`; they do not link wavelet
+or Vulkan. Wavelet, HDR+, MFSR, LK-R, burst/offline entry points and photo/video
+RAW exposure assist use this shared ownership. Existing estimator math and
+backend-specific confidence decisions are retained.
+
+The historical `files/wavelet-noise/` directory and v2 schema remain unchanged
+so trained data stays readable. Forced readouts use a readout-profile suffix
+(DCG, normal, ISZ and remosaiced output must not collide at equal dimensions).
+CRAW and Hexadeca sidecars preserve the readout label for offline consumers.
+Single-frame models reject merged-reference metadata. Future Rawdn may record
+validated normalized single-frame estimates with `RawNoiseModel.record`;
+preview overlays read/refine priors but do not train on unvalidated scenes.
+Native training is serialized by a file lock; persistence remains atomic and
+capture IDs prevent training twice on the same exposure.
+
+Validation: 60 Kotlin unit tests, native model-store checks (including training
+and deduplication), ARM64 shared-noise/wavelet/LK-R builds. No new phone denoising
+quality claim or Rawdn implementation is implied by this ownership refactor.

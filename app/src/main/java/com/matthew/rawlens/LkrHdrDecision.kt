@@ -32,7 +32,7 @@ object LkrHdrDecision {
         val median: Double,
         val p10: Double,
         /** Measured noise of this frame, normalised units (variance = a x + b); null = unknown. */
-        val noise: HdrPlusNoiseModel?
+        val noise: RawNoiseEstimate?
     )
 
     data class Plan(val evs: FloatArray) {
@@ -98,9 +98,9 @@ object LkrHdrDecision {
         fun level(q: Double) = ((sorted[((k - 1) * q).toInt()] - bl) / range).toDouble().coerceAtLeast(0.0)
         // A frame whose maximum is a single outlier is not clipped: the plateau must be its clip.
         val clipped = if (plateau >= 2) plateau.toDouble() / k else 0.0
-        val noise = if (view.rowStride == view.width * 2) HdrPlusSceneNoise.sample(
+        val noise = if (view.rowStride == view.width * 2) RawSceneNoise.sample(
             buf.duplicate().also { it.rewind() }, view.width, view.height, black, white
-        )?.let { HdrPlusSceneNoise.fit(listOf(it)) } else null
+        )?.let { RawSceneNoise.fit(listOf(it)) } else null
         return Stats(clipped, level(0.5), level(0.1), noise)
     }
 }

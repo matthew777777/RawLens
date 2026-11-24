@@ -28,7 +28,7 @@
 #include "lkrl_tuning.h"
 #include "lkrl_resample.h"
 #include "lkrl_sharpness.h"
-#include "noise_model.h"   // app/src/main/cpp/wavelet: learned per-device noise model
+#include "noise_model.h"   // app/src/main/cpp/noise: learned per-device noise model
 
 #include <cmath>
 
@@ -177,7 +177,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   const NoiseModelRef noise_model = g_noise_model;
   g_noise_model = {};
   if (!noise_model.path.empty() && noise_model.iso > 0) {
-    // Same mix as HDR+ (WaveletVulkan.combineNoise): model prior, this burst's fit as evidence.
+    // Same mix as HDR+ (RawNoiseModel.combineNoise): model prior, this burst's fit as evidence.
     prm.noise_refine = [noise_model](float* a, float* b, int bins) {
       const auto model = rawlens_noise::fit(rawlens_noise::loadSamples(noise_model.path));
       if (!model.supports(noise_model.iso)) {

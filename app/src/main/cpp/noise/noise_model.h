@@ -24,6 +24,9 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 
 namespace rawlens_noise {
 
@@ -131,6 +134,20 @@ inline bool saveSamples(const std::string& path, const std::vector<Sample>& s) {
                      s[i].analogIso, (unsigned long long)s[i].captureId);
     const bool ok = std::fclose(f) == 0;
     return ok && std::rename(tmp.c_str(), path.c_str()) == 0;
+}
+
+// Serialize training across backend libraries/processes; atomic rename keeps readers safe.
+inline bool recordSample(const std::string& path, const Sample& shot) {
+    if (path.empty() || !valid(shot)) return false;
+    const int fd = open((path + ".lock").c_str(), O_CREAT | O_RDWR, 0600);
+    if (fd < 0) return false;
+    if (flock(fd, LOCK_EX) != 0) { close(fd); return false; }
+    auto samples = loadSamples(path);
+    addSample(samples, shot);
+    const bool ok = saveSamples(path, samples);
+    flock(fd, LOCK_UN);
+    close(fd);
+    return ok;
 }
 
 // Weighted LS y = k1*u + k0 with relative errors (weight bins / y_model^2,
