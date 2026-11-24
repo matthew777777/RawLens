@@ -35,7 +35,7 @@ class EncodedVideoLutDeviceTest {
         val originalSelection = library.selected
         var imported: String? = null
         try {
-            imported = library.import(android.net.Uri.fromFile(File(requireNotNull(path))))
+            imported = library.import(android.net.Uri.fromFile(File(requireNotNull(path)))).first
             assertEquals(imported, library.selected)
             assertTrue(library.entries().any { it.name == imported })
             assertEquals(33, requireNotNull(library.load()).size)

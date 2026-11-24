@@ -32,7 +32,7 @@ class EncodedVideoMonitorUiDeviceTest {
         prefs.edit().putBoolean("lens_setup_complete",true).commit()
         val library = EncodedVideoLutLibrary(context)
         val originalSelection = library.selected
-        val imported = library.import(android.net.Uri.fromFile(File(path)))
+        val imported = library.import(android.net.Uri.fromFile(File(path))).first
         val activity = instrumentation.startActivitySync(Intent(context,MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val dir = File(context.getExternalFilesDir(null),"sony-encoded-video").apply { mkdirs() }
