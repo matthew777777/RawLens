@@ -36,6 +36,7 @@ class SessionLadderTest {
         assertTrue(ladder.canDegrade("0", comboCount = 3))
         assertEquals(1, ladder.degrade())
         assertFalse("degrading returns to the primary route", ladder.altRouteActive)
+        assertFalse("degrading does not restart the direct-route attempt", ladder.altRouteAvailable("5"))
         assertEquals(2, ladder.degrade())
         assertFalse(ladder.canDegrade("0", comboCount = 3))
     }

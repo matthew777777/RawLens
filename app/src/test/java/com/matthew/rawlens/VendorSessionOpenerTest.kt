@@ -14,7 +14,12 @@ import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.*
 
 class VendorSessionOpenerTest {
-    private class Harness(mode: Int = 37379, params: Boolean = true, requireMode: Boolean = false) {
+    private class Harness(
+        mode: Int = 37379,
+        params: Boolean = true,
+        requireMode: Boolean = false,
+        allowLegacyOutputs: Boolean = true
+    ) {
         val device = mock(CameraDevice::class.java)
         val base = mock(SessionConfiguration::class.java)
         val submissions = mutableListOf<Pair<VendorSessionAttempt, CameraCaptureSession.StateCallback>>()
@@ -40,7 +45,7 @@ class VendorSessionOpenerTest {
                 { failed++ }, {}, { _, attempt, callback ->
                     submissions += attempt to callback
                     mock(SessionConfiguration::class.java)
-                }, requireOperatingMode = requireMode)
+                }, requireOperatingMode = requireMode, allowLegacyOutputs = allowLegacyOutputs)
         }
         fun rejectLast() = submissions.last().second.onConfigureFailed(mock(CameraCaptureSession::class.java))
     }
@@ -109,6 +114,15 @@ class VendorSessionOpenerTest {
         h.legacyCallback!!.onConfigured(mock(CameraCaptureSession::class.java))
         assertEquals(VendorSessionAttempt(0, false), h.configured)
         assertTrue(h.configuredLegacy)
+    }
+
+    @Test fun `pinned outputs reject the legacy surface fallback`() {
+        val h = Harness(0, false, allowLegacyOutputs = false)
+        h.syncReject = true
+        h.opener.open()
+        assertEquals(1, h.submissions.size)
+        assertEquals(1, h.failed)
+        assertNull(h.legacyCallback)
     }
 
     @Test fun `reserved standard modes cannot become accidental high speed sessions`() {

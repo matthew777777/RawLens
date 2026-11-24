@@ -22,11 +22,13 @@ internal class VendorSessionOpener(
     private val log: (String) -> Unit,
     private val makeConfiguration: (SessionConfiguration, VendorSessionAttempt, CameraCaptureSession.StateCallback) -> SessionConfiguration = ::vendorSessionConfiguration,
     private val requireOperatingMode: Boolean = false,
-    private val requireSessionParameters: Boolean = false
+    private val requireSessionParameters: Boolean = false,
+    private val allowLegacyOutputs: Boolean = true
 ) {
     private val attempts = VendorSessionAttempt.sequence(mode, base.sessionParameters != null)
         .filter { !requireOperatingMode || it.operatingMode == mode }
         .filter { !requireSessionParameters || it.parameters }
+    private val canUseLegacyOutputs = allowLegacyOutputs && !requireOperatingMode && !requireSessionParameters
     private var serial = 0
     private var finished = false
 
@@ -43,7 +45,7 @@ internal class VendorSessionOpener(
             if (finished || token != serial || !isCurrent()) return
             log("Vendor session rejected: $attempt legacy=$legacy ($reason)")
             if (!legacy && index + 1 < attempts.size) submit(index + 1, false)
-            else if (!legacy && allowLegacy && !requireOperatingMode && !requireSessionParameters) submit(index, true)
+            else if (!legacy && allowLegacy && canUseLegacyOutputs) submit(index, true)
             else {
                 finished = true
                 failed(reason)

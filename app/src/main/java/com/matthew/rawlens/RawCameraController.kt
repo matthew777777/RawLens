@@ -775,10 +775,8 @@ class RawCameraController(
         try {
             val configuredIds = enabledCameraIds()
             val candidates = if (configuredIds.isEmpty()) cameraManager.cameraIdList.toList() else configuredIds.toList()
-            rawCameraIds = candidates.filter { cameraId ->
-                val openId = resolveOpenCameraId(cameraId)
-                openId != null && openId !in ladder.unopenableOpenIds
-            }.sortedWith(compareBy<String> { isFrontCamera(it) }.thenBy { opticalMetric(it) })
+            rawCameraIds = candidates.filter { resolveAvailableOpenCameraId(it) != null }
+                .sortedWith(compareBy<String> { isFrontCamera(it) }.thenBy { opticalMetric(it) })
                 // Settings → Lenses order wins; lenses it doesn't know keep widest-first.
                 .let { LensListStore.applyOrder(it, lensListStore.order()) }
             val id = selectedCameraId?.takeIf(rawCameraIds::contains)
@@ -805,6 +803,11 @@ class RawCameraController(
             }
             sessionPrimaryRoute = route
             sessionAltRoute = resolveDirectPhysicalFallback(route)
+            if (route.openCameraId in ladder.unopenableOpenIds &&
+                ladder.altRouteAvailable(sessionAltRoute?.openCameraId)
+            ) {
+                ladder.switchToAltRoute()
+            }
             val effectiveRoute = if (ladder.altRouteActive) sessionAltRoute ?: route else route
             val openCameraId = effectiveRoute.openCameraId
             activePhysicalCameraId = effectiveRoute.physicalCameraId
@@ -910,7 +913,9 @@ class RawCameraController(
                 } catch (_: Exception) {
                     // Best effort: a verdict write must never break the fallback path.
                 }
-                val fallback = SessionRecoveryPolicy.nextLensAfterOpenRejected(candidates, ladder.unopenableOpenIds, ::resolveOpenCameraId)
+                val fallback = SessionRecoveryPolicy.nextLensAfterOpenRejected(
+                    candidates, ladder.unopenableOpenIds, ::resolveAvailableOpenCameraId
+                )
                 if (fallback == null) {
                     Log.w(LOG_TAG, "No openable RAW lens remains (candidates=$candidates rejected=${ladder.unopenableOpenIds})")
                     if (!scheduleOpenRejectionRetry()) onState("CAMERA UNAVAILABLE")
@@ -1023,7 +1028,7 @@ class RawCameraController(
             val retryUnpacked = retryUnpackedOnStarvation && session != null && rawStreamImages == 0 &&
                 clearPackedFormatPreference(reason)
             val next = if (retryUnpacked) failed else deviceFaultRecovery.next(failed, rawCameraIds.filter { id ->
-                id in verified && resolveOpenCameraId(id) !in ladder.unopenableOpenIds
+                id in verified && resolveAvailableOpenCameraId(id) != null
             })
             // Invalidate callbacks and release the dead session before waiting for the HAL.
             stop()
@@ -1651,7 +1656,9 @@ class RawCameraController(
             },
             log = { Log.i(LOG_TAG, it) },
             requireOperatingMode = xiaomiRaw50Session,
-            requireSessionParameters = vivoStream != null
+            requireSessionParameters = vivoStream != null,
+            // Legacy surface lists discard the physical camera binding.
+            allowLegacyOutputs = activePhysicalCameraId == null
         ).open()
     }
 
@@ -1863,10 +1870,8 @@ class RawCameraController(
     /**
      * Session setup recovery: a HAL that rejects the session (sync exception
      * or async onConfigureFailed) advances the fallback ladder and rebuilds
-     * instead of wedging on SESSION ERROR. First the direct-physical route
-     * for vendor composites (a binding the HAL does not honor rejects every
-     * size), then degraded combos on the primary route. Terminal only when
-     * every attempt is exhausted.
+     * using the selected sensor directly when possible, then smaller stream
+     * combinations on the original route.
      */
     private fun handleSessionSetupFailed(generation: Int, reason: String) {
         // Sync rejections can surface on the SurfaceTexture (main) thread when
@@ -1919,8 +1924,8 @@ class RawCameraController(
     }
 
     /**
-     * Session fallback ladder: first the direct-physical route for vendor
-     * composites, then degraded combos on the primary route. Shared by
+     * Session fallback ladder: first the direct route to the selected sensor,
+     * then smaller stream combinations on the primary route. Shared by
      * explicit HAL rejections ([handleSessionSetupFailed]) and silent ones:
      * a compat session that configures fine but delivers zero RAW buffers
      * (vivo X300 Ultra) is the same unsatisfiable combo without the error
@@ -1946,8 +1951,8 @@ class RawCameraController(
 
     /**
      * Open-failure recovery: degrading combos cannot fix a device that fails
-     * to open, but a vendor composite may still open through its
-     * direct-physical route. Returns true when a restart was issued. Runs on
+     * to open, but the selected physical sensor may still open directly.
+     * Returns true when a restart was issued. Runs on
      * the camera handler (the openCamera callback thread).
      */
     private fun advancePastFailedOpen(failedOpenId: String): Boolean {
@@ -1958,7 +1963,7 @@ class RawCameraController(
     }
 
     /**
-     * First ladder rung for vendor composites: restart once on the
+     * First ladder rung for pinned sensors: restart once on the
      * direct-physical route unless it is already active or has failed.
      * Returns true when a restart was issued.
      */
@@ -8430,7 +8435,8 @@ class RawCameraController(
      * Composite IDs follow the vendor convention used by PhotonCamera: open the portion before
      * `/` or `-` as the logical CameraDevice and bind outputs to the portion after it. Hidden OEM
      * relationships frequently aren't present in physicalCameraIds, so successful characteristic
-     * lookup is the compatibility check. Plain IDs continue to open directly.
+     * lookup is the compatibility check. A standalone sensor prefers an advertised,
+     * openable logical parent when one exists.
      */
     private fun resolveCameraRoute(cameraId: String): CameraRoute? {
         val (logicalId, physicalId, logical) = cameraRouteParts(cameraId).firstNotNullOfOrNull { (logicalId, physicalId) ->
@@ -8441,7 +8447,7 @@ class RawCameraController(
             }
             Triple(logicalId, physicalId, logical)
         } ?: return directRawCharacteristics(cameraId)?.let { direct ->
-            val parentId = findIshtarLogicalParent(cameraId, direct)
+            val parentId = findAdvertisedLogicalParent(cameraId, direct)
             CameraRoute(cameraId, parentId ?: cameraId, cameraId.takeIf { parentId != null }, direct)
         }
 
@@ -8453,7 +8459,9 @@ class RawCameraController(
             null
         }
         val directPhysical = if (isXiaomi13Ultra) directRawCharacteristics(physicalId) else null
-        val advertisedParent = directPhysical?.let { findIshtarLogicalParent(physicalId, it, logicalId) }
+        val advertisedParent = directPhysical?.takeIf {
+            it.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+        }?.let { findAdvertisedLogicalParent(physicalId, it, logicalId) }
         if (advertisedParent != null) {
             return CameraRoute(cameraId, advertisedParent, physicalId, directPhysical)
         }
@@ -8474,14 +8482,11 @@ class RawCameraController(
      * Use only openable parents and Camera2-advertised membership. A bare logical ID
      * retains automatic lens selection. A bare sensor ID keeps its settings identity.
      */
-    private fun findIshtarLogicalParent(
+    private fun findAdvertisedLogicalParent(
         physicalId: String,
         physical: CameraCharacteristics,
         preferredParent: String? = null
     ): String? {
-        if (!isXiaomi13Ultra || physical.get(CameraCharacteristics.LENS_FACING) !=
-            CameraCharacteristics.LENS_FACING_BACK
-        ) return null
         if (preferredParent == null && physical.physicalCameraIds.any { it != physicalId }) return null
         val openableIds = runCatching { cameraManager.cameraIdList.toList() }.getOrDefault(emptyList())
         return (listOfNotNull(preferredParent).filter { it in openableIds } + openableIds).firstOrNull { id ->
@@ -8549,28 +8554,27 @@ class RawCameraController(
     private fun cachedCameraRoute(cameraId: String): CameraRoute? =
         cameraRouteCache.get(cameraId)
 
-    private fun resolveOpenCameraId(cameraId: String): String? =
-        cachedCameraRoute(cameraId)?.openCameraId
+    private fun resolveAvailableOpenCameraId(cameraId: String): String? {
+        val route = cachedCameraRoute(cameraId) ?: return null
+        return route.openCameraId.takeUnless { it in ladder.unopenableOpenIds }
+            ?: resolveDirectPhysicalFallback(route)?.openCameraId
+    }
 
     /**
-     * Direct-physical fallback for vendor composites (e.g. `9/2`): when the
-     * physical member is not advertised in the logical camera's
-     * `physicalCameraIds`, binding outputs to it may be rejected by the HAL
-     * even though the physical camera opens fine on its own (Xiaomi aux
-     * routing). Returns null for standalone routes and for advertised
-     * memberships, where a direct open would be refused as a subordinate.
+     * Retry the same sensor directly if it is independently listed. For vendor
+     * composites, also allow a direct trial of an unlisted, unadvertised sensor.
      */
     private fun resolveDirectPhysicalFallback(route: CameraRoute): CameraRoute? {
         val physicalId = route.physicalCameraId ?: return null
-        val advertised = try {
-            cameraManager.getCameraCharacteristics(route.openCameraId).physicalCameraIds
-        } catch (_: Exception) {
-            null
-        }
-        if (advertised?.contains(physicalId) == true) return null
-        val direct = cachedCameraRoute(physicalId) ?: return null
-        if (direct.openCameraId != physicalId || direct.physicalCameraId != null) return null
-        return CameraRoute(route.identity, physicalId, null, direct.characteristics)
+        if (physicalId == route.openCameraId || physicalId in ladder.unopenableOpenIds) return null
+        val independentlyOpenable = runCatching { physicalId in cameraManager.cameraIdList }.getOrDefault(false)
+        if (!independentlyOpenable && runCatching {
+                physicalId in cameraManager.getCameraCharacteristics(route.openCameraId).physicalCameraIds
+            }.getOrDefault(false)
+        ) return null
+        val direct = directRawCharacteristics(physicalId) ?: return null
+        if (direct.physicalCameraIds.any { it != physicalId }) return null
+        return CameraRoute(route.identity, physicalId, null, direct)
     }
 
     /**
