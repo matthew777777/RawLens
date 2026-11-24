@@ -9,7 +9,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('cache'); ap.add_argument('out')
 ap.add_argument('--steps', type=int, default=40000); ap.add_argument('--batch', type=int, default=16)
 ap.add_argument('--patch', type=int, default=128); ap.add_argument('--hp', type=float, default=1.0)
 ap.add_argument('--lr', type=float, default=3e-4); ap.add_argument('--width', type=float, default=1.0)
-ap.add_argument('--init', default=None)
+ap.add_argument('--init', default=None); ap.add_argument('--struct', type=float, default=0.0, help='structured noise: row + LF chroma, measured ratios (1 = Redmi night max)'); ap.add_argument('--amax', type=float, default=2e-3)
 A = ap.parse_args()
 dev = 'mps' if torch.backends.mps.is_available() else 'cpu'
 C = np.load(os.path.join(A.cache, 'crops.npy'), mmap_mode='r')
@@ -24,10 +24,18 @@ def sample(idx, p, rng):
         if rng.random() < 0.5: q = q[[0, 2, 1, 3]].transpose(0, 2, 1)     # CFA transpose: swap G1/G2
         X[k] = q
     e = np.exp(rng.uniform(0, np.log(16), (B, 1, 1, 1))).astype(np.float32)
-    a = np.exp(rng.uniform(np.log(3e-5), np.log(2e-3), (B, 1, 1, 1))).astype(np.float32)
+    a = np.exp(rng.uniform(np.log(3e-5), np.log(A.amax), (B, 1, 1, 1))).astype(np.float32)
     b = (a * np.exp(rng.uniform(np.log(5e-4), np.log(5e-2), (B, 1, 1, 1)))).astype(np.float32)
     t = torch.from_numpy(np.maximum(X / e, 0)); at = torch.from_numpy(a); bt = torch.from_numpy(b)
     n = at * torch.poisson(t / at) + torch.randn_like(t) * torch.sqrt(bt)
+    if A.struct > 0:   # extra structured noise, std relative to the local white sigma (measure_struct.py:
+        sw = torch.sqrt(at * t + bt)   # row/white 1.2-2.6, LF chroma/white 1.0-3.0 at 64/8 px => extra 0.08-0.30 sw)
+        kr = torch.from_numpy(rng.uniform(0, 0.30, (B, 1, 1, 1)).astype(np.float32)) * A.struct
+        kc = torch.from_numpy(rng.uniform(0, 0.35, (B, 1, 1, 1)).astype(np.float32)) * A.struct
+        row = torch.randn(B, 4, p, 1)                                   # per-row, per-plane offsets
+        lf = F.interpolate(torch.randn(B, 4, p // 8 + 2, p // 8 + 2), size=(p + 16, p + 16), mode='bicubic', align_corners=False)[:, :, 8:8 + p, 8:8 + p]
+        lf = lf / lf.std((2, 3), keepdim=True).clamp(min=1e-6)
+        n = n + sw * (kr * row + kc * lf)
     g1 = gat(torch.ones_like(at), at, bt)
     u = gat(n, at, bt) / g1; ut = gat(t, at, bt) / g1
     sig = (1.0 / g1).expand(-1, 1, p, p)
