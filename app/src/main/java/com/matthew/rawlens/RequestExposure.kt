@@ -78,7 +78,7 @@ internal object RequestExposure {
             i.exposureRange?.first ?: i.lastExposureNanos,
             i.exposureRange?.last ?: i.lastExposureNanos
         )
-        return SensorExposure(iso, exposure).apply { programDriven = programDriving && i.selectedIso == null && i.selectedExposureNanos == null &&
+        return SensorExposure(iso, exposure).apply { programDriven = programDriving &&
                 !ettrExposure }
     }
 }

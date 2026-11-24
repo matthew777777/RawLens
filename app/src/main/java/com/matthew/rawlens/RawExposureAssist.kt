@@ -68,21 +68,23 @@ data class RawExposureAssistFrame(
     val average: RawAverageReading? = null
 )
 
-/** Primitive signature: avoids boxing three Ints on every RAW sample in the hot loop. */
-internal fun interface RawExposureCodeReader {
-    fun codeAt(x: Int, y: Int): Int
-}
-
 /** One sparse RAW quad per display cell; the ML spot mean scans its complete small ROI. */
 internal object RawExposureAssistSampler {
 
     fun sample(image: Image, c: CameraCharacteristics, settings: RawExposureAssistSettings,
                focus: Pair<Float, Float>? = null, result: CaptureResult? = null,
-               meterCrop: IntArray? = null): RawExposureAssistFrame? {
+               meterCrop: IntArray? = null, noisePrior: RawNoisePrior? = null): RawExposureAssistFrame? {
         val p = image.planes.singleOrNull() ?: return null
         val pattern = c[CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT] ?: return null
         if (pattern !in 0..3 || image.width < 2 || image.height < 2) return null
-        val black = c[CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN] ?: return null
+        val dcg = LapisRootSession.spec(c)?.takeIf {
+            it.metadataVerified && it.width == image.width && it.height == image.height
+        }?.dcg == true
+        val staticPattern = c[CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN]
+        if (!dcg && staticPattern == null) return null
+        val staticBlack = DoubleArray(4) { if (dcg) 1024.0 else
+            requireNotNull(staticPattern).getOffsetForIndex(it % 2, it / 2).toDouble() }
+        val staticWhite = if (dcg) 16383 else c[CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL] ?: return null
         val matching = result?.takeIf { it[CaptureResult.SENSOR_TIMESTAMP] == image.timestamp }
         val physical = if (Build.VERSION.SDK_INT >= 31 && matching is TotalCaptureResult) {
             val id = matching[CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID]
@@ -90,17 +92,27 @@ internal object RawExposureAssistSampler {
         } else null
         val dynamicBlack = (physical?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
             ?: matching?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL))?.takeIf { it.size == 4 && it.all(Float::isFinite) }
-        val blackLevels = DoubleArray(4) { dynamicBlack?.get(it)?.toDouble() ?: black.getOffsetForIndex(it % 2, it / 2).toDouble() }
-        val white = physical?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
+        val dynamicWhite = physical?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
             ?: matching?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
-            ?: c[CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL] ?: return null
-        val noise = physical?.get(CaptureResult.SENSOR_NOISE_PROFILE) ?: matching?.get(CaptureResult.SENSOR_NOISE_PROFILE)
-        val offsets = noise?.map { it.second }?.filter { it.isFinite() && it > 0.0 }
-        val dynamicRangeEv = if (!offsets.isNullOrEmpty()) MagicLanternEttr.dynamicRangeEv(offsets.average()) else Double.NaN
+        val (blackLevels, white) = levels(staticBlack, staticWhite, dynamicBlack, dynamicWhite, dcg)
+        // Exposure-assist noise comes from the measured RAW signal, never HAL S/O.
+        val dynamicRangeEv = Double.NaN
         val rotation = c[CameraCharacteristics.SENSOR_ORIENTATION] ?: 0
         val mirrored = c[CameraCharacteristics.LENS_FACING] == CameraCharacteristics.LENS_FACING_FRONT
         return sampleBuffer(p.buffer, image.width, image.height, p.rowStride, p.pixelStride, image.format,
-            pattern, blackLevels, white, rotation, mirrored, image.timestamp, settings, focus, dynamicRangeEv, meterCrop)
+            pattern, blackLevels, white, rotation, mirrored, image.timestamp, settings, focus, dynamicRangeEv, meterCrop, noisePrior)
+    }
+
+    /** A verified composed readout must never fall back to stock RAW10 levels. */
+    internal fun levels(staticBlack: DoubleArray, staticWhite: Int, dynamicBlack: FloatArray?,
+                        dynamicWhite: Int?, dcg: Boolean): Pair<DoubleArray, Int> {
+        val fallbackBlack = if (dcg) DoubleArray(4) { 1024.0 } else staticBlack
+        val fallbackWhite = if (dcg) 16383 else staticWhite
+        val white = dynamicWhite?.takeIf { it > 0 && (!dcg || it > 1024) } ?: fallbackWhite
+        val black = dynamicBlack?.takeIf { b ->
+            b.size == 4 && b.all { it.isFinite() && it >= 0 && it < white && (!dcg || it > 256f) }
+        }?.let { b -> DoubleArray(4) { b[it].toDouble() } } ?: fallbackBlack
+        return black to white
     }
 
     /** Platform-free buffer adapter, shared by RAW_SENSOR and packed RAW10/12. */
@@ -108,7 +120,7 @@ internal object RawExposureAssistSampler {
                               format: Int, pattern: Int, black: DoubleArray, white: Int, rotation: Int,
                               mirrored: Boolean, timestamp: Long, settings: RawExposureAssistSettings,
                               focus: Pair<Float, Float>? = null, dynamicRangeEv: Double = Double.NaN,
-                              meterCrop: IntArray? = null): RawExposureAssistFrame? {
+                              meterCrop: IntArray? = null, noisePrior: RawNoisePrior? = null): RawExposureAssistFrame? {
         if (!settings.enabled || width < 2 || height < 2 || rowStride <= 0) return null
         if (format != android.graphics.ImageFormat.RAW_SENSOR && PackedRawFormat.ofInt(format) == null) return null
         val buffer = source.duplicate().order(ByteOrder.nativeOrder())
@@ -122,10 +134,16 @@ internal object RawExposureAssistSampler {
         val origin = buffer.position()
         if (packed == null && (pixelStride < 2 || rowStride < width * pixelStride ||
                 origin.toLong() + (height - 1L) * rowStride + (width - 1L) * pixelStride + 2 > buffer.limit())) return null
-        return sampleCodes(width, height, pattern, black, white, rotation, mirrored,
-            timestamp, settings, focus, dynamicRangeEv, meterCrop) { x, y ->
+        val reader = RawCodeReader { x, y ->
             packed?.get(y and 1)?.codeAt(x, y) ?: (buffer.getShort(origin + y * rowStride + x * pixelStride).toInt() and 0xffff)
         }
+        val measuredRange = if (settings.overlay == RawExposureOverlayMode.ZEBRAS && !dynamicRangeEv.isFinite()) {
+            val samples = RawSceneNoise.sampleCodes(width, height, black, white, reader)
+            val noise = samples?.let { RawSceneNoise.fit(listOf(it), noisePrior) }
+            noise?.b?.takeIf { it.isFinite() && it > 0 }?.let(MagicLanternEttr::dynamicRangeEv) ?: Double.NaN
+        } else dynamicRangeEv
+        return sampleCodes(width, height, pattern, black, white, rotation, mirrored,
+            timestamp, settings, focus, measuredRange, meterCrop, reader)
     }
 
     internal fun sensorPoint(u: Float, v: Float, rotation: Int, mirrored: Boolean): Pair<Float, Float> {
@@ -137,7 +155,7 @@ internal object RawExposureAssistSampler {
                              rotation: Int, mirrored: Boolean, timestamp: Long,
                              settings: RawExposureAssistSettings, focus: Pair<Float, Float>? = null,
                              dynamicRangeEv: Double = Double.NaN, meterCrop: IntArray? = null,
-                             code: RawExposureCodeReader): RawExposureAssistFrame? {
+                             code: RawCodeReader): RawExposureAssistFrame? {
         if (!settings.enabled || width < 2 || height < 2 || pattern !in 0..3 || black.size != 4 || black.any { !it.isFinite() || it < 0 || it >= white }) return null
         if (focus != null && (!focus.first.isFinite() || !focus.second.isFinite())) return null
         val channels = RawEttrSampler.phaseChannelLut(pattern)
@@ -225,7 +243,7 @@ internal object RawExposureAssistSampler {
 }
 
 /** At most one RAW borrow; never queue camera frames or process on the encoder/camera thread. */
-internal class RawExposureAssist(private val publish: (RawExposureAssistFrame?) -> Unit) : AutoCloseable {
+internal class RawExposureAssist(private val context: android.content.Context? = null, private val publish: (RawExposureAssistFrame?) -> Unit) : AutoCloseable {
     @Volatile var settings = RawExposureAssistSettings(spotMeter = false)
         private set
     private val worker = Executors.newSingleThreadExecutor { r -> Thread({
@@ -246,7 +264,7 @@ internal class RawExposureAssist(private val publish: (RawExposureAssistFrame?) 
 
     @Synchronized fun offer(image: Image, c: CameraCharacteristics, focus: Pair<Float, Float>? = null,
                             monitorCrop: IntArray? = null, result: CaptureResult? = null,
-                            meterCrop: IntArray? = monitorCrop) {
+                            meterCrop: IntArray? = monitorCrop, cameraId: String = "0") {
         val config = settings
         if (closed || !config.enabled) return
         val now = SystemClock.elapsedRealtime()
@@ -258,7 +276,19 @@ internal class RawExposureAssist(private val publish: (RawExposureAssistFrame?) 
         val generation = epoch
         worker.execute {
             try {
-                val frame = RawExposureAssistSampler.sample(image, c, config, focus, result, meterCrop = meterCrop)
+                val source = (result as? TotalCaptureResult)?.takeIf {
+                    config.overlay == RawExposureOverlayMode.ZEBRAS &&
+                    it[CaptureResult.SENSOR_TIMESTAMP] == image.timestamp
+                }?.let { runCatching {
+                    RawNoiseModel.Source.of(RawFrameMetadataFactory.capture(cameraId, image, c, it, 1))
+                }.getOrNull() }
+                val path = source?.let { modelSource -> context?.let { RawNoiseModel.storePath(RawNoiseModel.noiseDir(it), modelSource) } }
+                val prior = if (path != null) RawNoisePrior { a, b, bins ->
+                    RawNoiseModel.combineNoise(path, source.iso.toFloat(), a.toFloat(), b.toFloat(), bins)
+                        ?.let { it[0].toDouble() to it[1].toDouble() }
+                } else null
+                val frame = RawExposureAssistSampler.sample(image, c, config, focus, result,
+                    meterCrop = meterCrop, noisePrior = prior)
                 synchronized(this) { if (!closed && epoch == generation) publish(frame?.copy(monitorCrop = monitorCrop, sampledAtElapsedMs = now)) }
             } catch (e: Exception) {
                 Log.w("RawLensRawExposure", "RAW assist sample unavailable", e)

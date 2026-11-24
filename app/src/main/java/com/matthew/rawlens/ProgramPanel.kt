@@ -3,7 +3,6 @@
 
 package com.matthew.rawlens
 
-import com.matthew.rawlens.MainActivity.Companion.SLIDER_STEPS
 
 import android.Manifest
 import android.app.Activity
@@ -91,18 +90,18 @@ internal fun MainActivity.showProgramAxisSlider(isIso: Boolean) {
         (profile.lockedShutterNanos.takeIf { it > 0L } ?: range.current)
             .coerceIn(range.minimum, range.maximum)
     }
+    cancelPendingSliderUpdate()
     activeManualControl = null
     activeProgramAxis = axis
-    // No text label under the histogram: the ruler tick code (ISO/S) plus the
-    // exposure chips carry the values. LIMITS opens the full PROGRAM editor.
+    // LIMITS opens the full PROGRAM editor.
     manualLimits.visibility = View.VISIBLE
     manualLimits.contentDescription = if (isIso) {
         "ISO lock limits and metering editor."
     } else {
         "Shutter lock limits and metering editor."
     }
-    manualSlider.max = SLIDER_STEPS
-    manualSlider.setProgressFromUser(sliderProgress(axis, range.copy(current = current)), fromUser = false)
+    manualSlider.max = sliderSteps(axis, range)
+    manualSlider.progress = sliderProgress(axis, range.copy(current = current))
     manualAuto.text = "AUTO"
     manualAuto.isEnabled = true
     refreshRuleSliderAccessibility()

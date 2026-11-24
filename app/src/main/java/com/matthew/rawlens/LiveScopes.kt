@@ -85,7 +85,7 @@ internal class LiveScopes(
     }
 
     /** True while the user is focusing: manual distance set or a tap scan/lock in flight. */
-    private fun peakingActive(): Boolean =
+    fun peakingActive(): Boolean =
         FocusPeakingPolicy.shouldShow(
             peakingEnabled,
             host.manualFocusSet(),
@@ -299,6 +299,6 @@ internal class LiveScopes(
         /** Scope cost telemetry cadence: one LUT/scan average line per 5 s. */
         const val SCOPE_LOG_INTERVAL_MS = 5000L
         /** Live peaking verdicts ride the same ~4 Hz cadence as the scope. */
-        const val FOCUS_PEAKING_INTERVAL_MS = 250L
+        const val FOCUS_PEAKING_INTERVAL_MS = 80L
     }
 }

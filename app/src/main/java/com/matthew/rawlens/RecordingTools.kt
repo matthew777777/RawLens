@@ -229,8 +229,7 @@ internal class RecordingTools(private val activity: MainActivity) : AutoCloseabl
         val range = focusRange() ?: return
         cancelFocusPull()
         wakePreview()
-        activity.pendingSliderUpdate?.let(activity.manualSlider::removeCallbacks)
-        activity.pendingSliderUpdate = null
+        activity.cancelPendingSliderUpdate()
         activity.cancelManualPanelHide()
         val started = now()
         val duration = durations[durationIndex]

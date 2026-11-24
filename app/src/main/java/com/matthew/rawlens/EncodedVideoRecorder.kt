@@ -347,7 +347,7 @@ class EncodedVideoRecorder internal constructor(
     @Volatile internal var rawExposureSettings = RawExposureAssistSettings(spotMeter = false)
         set(value) { field = value; recordingExposure.configure(value) }
     @Volatile internal var onRawExposureAssist: ((RawExposureAssistFrame?) -> Unit)? = null
-    private val recordingExposure = RawExposureAssist { onRawExposureAssist?.invoke(it) }
+    private val recordingExposure = RawExposureAssist(appContext) { onRawExposureAssist?.invoke(it) }
 
     @Volatile var videoManual: VideoManualSnapshot = VideoManualSnapshot()
     var videoLocks: VideoRecordLocks = VideoRecordLocks()
@@ -1349,6 +1349,10 @@ class EncodedVideoRecorder internal constructor(
     /** Latest stereo peaks [L, R] in dBFS, or null without audio. */
     fun audioLevelsDbfs(): FloatArray? = pcm?.let { floatArrayOf(it.lastPeakDbfsL, it.lastPeakDbfsR) }
 
+    fun exposureCompensationStep(): Float? =
+        (chars ?: videoRoute.characteristics)
+            .get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat()
+
     /**
      * Photo-tile range for the live slider while rolling. Shutter caps at
      * the 1/[fps] frame budget (the stills controller is stopped).
@@ -2022,7 +2026,7 @@ class EncodedVideoRecorder internal constructor(
             focusPeakingEnabled && videoManual.focusDiopters != null, onFocusPeaking,
             cropRect?.let { intArrayOf(it.left, it.top, it.width, it.height) }, result = result) }
         if (!monitoringSuspended) chars?.let { c -> recordingExposure.offer(image, c,
-            monitorCrop = cropRect?.let { intArrayOf(it.left, it.top, it.width, it.height) }, result = result) }
+            monitorCrop = cropRect?.let { intArrayOf(it.left, it.top, it.width, it.height) }, result = result, cameraId = cameraId) }
         val hb = try {
             image.hardwareBuffer
         } catch (_: Exception) {

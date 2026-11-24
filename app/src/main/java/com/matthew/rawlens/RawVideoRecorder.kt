@@ -234,7 +234,7 @@ internal class RawVideoRecorder(
     @Volatile internal var rawExposureSettings = RawExposureAssistSettings(spotMeter = false)
         set(value) { field = value; recordingExposure.configure(value) }
     @Volatile internal var onRawExposureAssist: ((RawExposureAssistFrame?) -> Unit)? = null
-    private val recordingExposure = RawExposureAssist { onRawExposureAssist?.invoke(it) }
+    private val recordingExposure = RawExposureAssist(appContext) { onRawExposureAssist?.invoke(it) }
 
     @Volatile var videoManual: VideoManualSnapshot = VideoManualSnapshot()
     var videoLocks: VideoRecordLocks = VideoRecordLocks()
@@ -678,7 +678,7 @@ internal class RawVideoRecorder(
                     RawImageOwnership.adopt(img, rd)
                     val meteredCrop = crop.resolve(img.width, img.height, binActive)
                     recordingExposure.offer(img, chars, result = synchronized(resultLock) { captureResults[img.timestamp] },
-                        meterCrop = intArrayOf(0, meteredCrop.top, img.width, meteredCrop.height))
+                        meterCrop = intArrayOf(0, meteredCrop.top, img.width, meteredCrop.height), cameraId = cameraId)
                 }
                 val plane = img.planes[0]
                 if (plane.pixelStride != 2) {
@@ -929,6 +929,10 @@ internal class RawVideoRecorder(
 
     /** Latest stereo peaks [L, R] in dBFS (float input may exceed 0), or null without audio. */
     fun audioLevelsDbfs(): FloatArray? = audio?.let { floatArrayOf(it.lastPeakDbfsL, it.lastPeakDbfsR) }
+
+    fun exposureCompensationStep(): Float? =
+        (vfChars ?: videoRoute.characteristics)
+            .get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat()
 
     /**
      * Photo-tile range for the live slider while rolling. Uses this take's

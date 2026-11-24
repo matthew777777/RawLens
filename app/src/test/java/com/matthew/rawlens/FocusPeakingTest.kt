@@ -36,6 +36,23 @@ class FocusPeakingTest {
     }
 
     @Test
+    fun contoursJoinAlignedEdgesAndKeepParallelEdgesSeparate() {
+        val frame = FocusPeakingFrame(
+            cols = 2, rows = 2, mask = booleanArrayOf(true, true, true, true),
+            sensorWidth = 64, sensorHeight = 64,
+            sensorPoints = floatArrayOf(0.25f, 0.25f, 0.75f, 0.25f, 0.25f, 0.75f, 0.75f, 0.75f),
+            sensorTangents = byteArrayOf(0, 0, 0, 0)
+        )
+        val segments = mutableListOf<FloatArray>()
+        FocusPeakingContours.forEachSegment(frame) { x0, y0, x1, y1 ->
+            segments += floatArrayOf(x0, y0, x1, y1)
+        }
+        assertEquals(2, segments.size)
+        assertArrayEquals(floatArrayOf(0.25f, 0.25f, 0.75f, 0.25f), segments[0], 0f)
+        assertArrayEquals(floatArrayOf(0.25f, 0.75f, 0.75f, 0.75f), segments[1], 0f)
+    }
+
+    @Test
     fun rowsHoldCellsSquareAndClamp() {
         assertEquals(96, LegacyScopeFocusSampler.rowsFor(4000, 3000))
         assertEquals(72, LegacyScopeFocusSampler.rowsFor(4000, 2250))

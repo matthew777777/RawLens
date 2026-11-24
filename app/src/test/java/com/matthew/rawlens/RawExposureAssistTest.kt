@@ -11,7 +11,7 @@ class RawExposureAssistTest {
                        pattern: Int = 0, range: Double = Double.NaN, focus: Pair<Float, Float>? = null,
                        code: (Int, Int) -> Int = { _, _ -> 256 }) =
         RawExposureAssistSampler.sampleCodes(256, 192, pattern, black, 1024, 0, false, 100L,
-            settings, focus, range, code = RawExposureCodeReader(code))!!
+            settings, focus, range, code = RawCodeReader(code))!!
 
     @Test fun portHasAllEightOriginalClippingColoursAndUnderPriority() {
         val expected = intArrayOf(0, 0xff0000ff.toInt(), 0xff00ff00.toInt(), 0xff00ffff.toInt(),

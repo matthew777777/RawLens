@@ -20,7 +20,7 @@ import kotlin.math.roundToInt
 import android.view.View
 
 /**
- * RAW detail markers and an optional magnified view of the active preview.
+ * RAW focus contours and an optional magnified view of the active preview.
  * Touches go to the metering overlay. The tap/manual-focus policy owns visibility.
  */
 class FocusPeakingOverlayView @JvmOverloads constructor(
@@ -72,8 +72,8 @@ class FocusPeakingOverlayView @JvmOverloads constructor(
     private var insetBitmap: Bitmap? = null
     private var spareBitmap: Bitmap? = null
     private var insetReady = false
-    private val insetPeaks = PeakPoints()
-    private val previewPeaks = PeakPoints()
+    private val insetPeaks = PeakLines()
+    private val previewPeaks = PeakLines()
     private var insetSource: SurfaceView? = null
     private var copyPending = false
     private var copyGeneration = 0
@@ -234,50 +234,46 @@ class FocusPeakingOverlayView @JvmOverloads constructor(
         discardInset()
     }
 
-    private class PeakPoints {
+    private class PeakLines {
         var xy = FloatArray(0)
         var count = 0
-        var radius = 0f
     }
 
-    private fun updatePeaks(out: PeakPoints, current: FocusPeakingFrame, crop: RectF? = null) {
+    private fun updatePeaks(out: PeakLines, current: FocusPeakingFrame, crop: RectF? = null) {
         out.count = 0
-        val cols = current.cols
-        val rows = current.rows
-        if (cols <= 0 || rows <= 0 || current.mask.size != cols * rows) return
-        out.radius = minOf(width, height).toFloat() / maxOf(cols, rows) * DOT_RADIUS_FRACTION
         val t = contentTransform
         val frameWidth = t?.width() ?: width.toFloat()
         val frameHeight = t?.height() ?: height.toFloat()
         val left = t?.left ?: 0f
         val top = t?.top ?: 0f
-        val points = current.sensorPoints?.takeIf { it.size == current.mask.size * 2 }
-        for (i in current.mask.indices) {
-            if (!current.mask[i]) continue
-            val u = points?.get(i * 2) ?: ((i % cols + 0.5f) / cols)
-            val v = points?.get(i * 2 + 1) ?: ((i / cols + 0.5f) / rows)
-            val (x, y) = FocusPeakingGeometry.viewPoint(u, v, current.rotation, current.mirrored)
-            val cx = left + x * frameWidth
-            val cy = top + y * frameHeight
-            if (crop != null && !crop.contains(cx, cy)) continue
-            if (out.count + 2 > out.xy.size) out.xy = out.xy.copyOf(maxOf(64, out.xy.size * 2))
-            out.xy[out.count++] = cx
-            out.xy[out.count++] = cy
+        FocusPeakingContours.forEachSegment(current) { u0, v0, u1, v1 ->
+            val (x0, y0) = FocusPeakingGeometry.viewPoint(u0, v0, current.rotation, current.mirrored)
+            val (x1, y1) = FocusPeakingGeometry.viewPoint(u1, v1, current.rotation, current.mirrored)
+            val ax = left + x0 * frameWidth
+            val ay = top + y0 * frameHeight
+            val bx = left + x1 * frameWidth
+            val by = top + y1 * frameHeight
+            if (crop == null || (maxOf(ax, bx) >= crop.left && minOf(ax, bx) <= crop.right &&
+                    maxOf(ay, by) >= crop.top && minOf(ay, by) <= crop.bottom)) {
+                if (out.count + 4 > out.xy.size) out.xy = out.xy.copyOf(maxOf(64, out.xy.size * 2))
+                out.xy[out.count++] = ax
+                out.xy[out.count++] = ay
+                out.xy[out.count++] = bx
+                out.xy[out.count++] = by
+            }
         }
     }
 
-    private fun drawPeaks(canvas: Canvas, points: PeakPoints, zoom: Float = 1f) {
-        if (points.count == 0) return
-        paint.strokeWidth = 2f * minOf(points.radius, 1.35f * density / zoom)
-        canvas.drawPoints(points.xy, 0, points.count, paint)
+    private fun drawPeaks(canvas: Canvas, lines: PeakLines, zoom: Float = 1f) {
+        if (lines.count == 0) return
+        paint.strokeWidth = maxOf(1f, 0.9f * density) / zoom
+        canvas.drawLines(lines.xy, 0, lines.count, paint)
     }
 
     private companion object {
-        const val PEAKING_ALPHA = 220
+        const val PEAKING_ALPHA = 240
         const val MAGNIFICATION = 4f
         const val MAX_COPY_DIMENSION = 96
 
-        /** Dot radius as a fraction of the smaller cell dimension. */
-        const val DOT_RADIUS_FRACTION = 0.35f
     }
 }

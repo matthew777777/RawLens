@@ -107,7 +107,7 @@ class FocusPeakingDeviceTest {
             val native = NativeFocusPeaking.sample(raw, width, height, stride,
                 if (packedBits == 0) 2 else 0, packedBits, cfa, black, white, profile, cols, rows)
                 ?: error("native peaking unavailable cfa=$cfa format=$packedBits")
-            val expected = IntArray(cols * rows) { -1 }
+            val expected = IntArray(cols * rows * 2) { -1 }
             val side = FocusPeakingDetail.SIDE
             val scratch = FocusPeakingDetail.Scratch()
             val patch = FloatArray(side * side); val clip = BooleanArray(patch.size)
@@ -135,7 +135,11 @@ class FocusPeakingDeviceTest {
                 var variance = 0f
                 for (phase in 0..3) variance = maxOf(variance, (profile[phase * 2] * mean + profile[phase * 2 + 1]).toFloat())
                 val edge = FocusPeakingDetail.detect(patch, clip, variance, scratch)
-                if (edge >= 0) expected[row * cols + col] = (qy + edge / side * 2) * width + qx + edge % side * 2
+                if (edge >= 0) {
+                    val index = (row * cols + col) * 2
+                    expected[index] = (qy + edge / side * 2) * width + qx + edge % side * 2
+                    expected[index + 1] = FocusPeakingDetail.tangentAt(edge, scratch)
+                }
             }
             assertArrayEquals("native/reference cfa=$cfa packed=$packedBits", expected, native)
             assertNull("truncated buffer accepted", NativeFocusPeaking.sample(raw.duplicate().apply { limit(10) }.slice(),
@@ -238,6 +242,7 @@ class FocusPeakingDeviceTest {
                             ?: error("Kotlin reference rejected RAW")
                         assertArrayEquals("native/reference detail masks differ", reference.mask, frame.mask)
                         assertArrayEquals("native/reference edge coordinates differ", reference.sensorPoints, frame.sensorPoints, 0f)
+                        assertArrayEquals("native/reference edge directions differ", reference.sensorTangents, frame.sensorTangents)
                         val old = LegacyScopeFocusSampler.sample(image, c) ?: error("legacy sampler rejected RAW")
                         assertEquals(image.timestamp, frame.timestampNanos)
                         val points = frame.sensorPoints ?: error("missing detected-edge positions")

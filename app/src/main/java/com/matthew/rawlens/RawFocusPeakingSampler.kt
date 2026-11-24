@@ -43,13 +43,16 @@ object RawFocusPeakingSampler {
             PackedRawFormat.ofInt(image.format)?.bitsPerPixel ?: return null
         if (preferNative) NativeFocusPeaking.sample(buffer, image.width, image.height,
             plane.rowStride, plane.pixelStride, packedBits, cfa, black, white, profile, COLS, rows)?.let { edges ->
-            val mask = BooleanArray(edges.size) { edges[it] >= 0 }
-            val points = FloatArray(edges.size * 2)
-            for (i in edges.indices) if (mask[i]) {
-                points[2 * i] = (edges[i] % image.width + 0.5f) / image.width
-                points[2 * i + 1] = (edges[i] / image.width + 0.5f) / image.height
+            val mask = BooleanArray(COLS * rows) { edges[it * 2] >= 0 }
+            val points = FloatArray(mask.size * 2)
+            val tangents = ByteArray(mask.size)
+            for (i in mask.indices) if (mask[i]) {
+                val offset = edges[i * 2]
+                points[i * 2] = (offset % image.width + 0.5f) / image.width
+                points[i * 2 + 1] = (offset / image.width + 0.5f) / image.height
+                tangents[i] = edges[i * 2 + 1].toByte()
             }
-            return frame(image, characteristics, mask, points, rows, started, "native")
+            return frame(image, characteristics, mask, points, tangents, rows, started, "native")
         }
         val packed = if (plane.pixelStride < 2) {
             val format = PackedRawFormat.ofInt(image.format) ?: return null
@@ -61,6 +64,7 @@ object RawFocusPeakingSampler {
         val band = Array(PATCH) { ShortArray(image.width) }
         val mask = BooleanArray(COLS * rows)
         val points = FloatArray(mask.size * 2)
+        val tangents = ByteArray(mask.size)
         val green = FloatArray(FocusPeakingDetail.SIDE * FocusPeakingDetail.SIDE)
         val clipped = BooleanArray(green.size)
         val scratch = FocusPeakingDetail.Scratch()
@@ -117,22 +121,23 @@ object RawFocusPeakingSampler {
                 if (edge >= 0) {
                     val cell = row * COLS + col
                     mask[cell] = true
+                    tangents[cell] = FocusPeakingDetail.tangentAt(edge, scratch).toByte()
                     points[cell * 2] = (qx + (edge % FocusPeakingDetail.SIDE) * 2 + 0.5f) / image.width
                     points[cell * 2 + 1] = (qy + (edge / FocusPeakingDetail.SIDE) * 2 + 0.5f) / image.height
                 }
             }
         }
-        return frame(image, characteristics, mask, points, rows, started)
+        return frame(image, characteristics, mask, points, tangents, rows, started)
     }
 
     private fun frame(image: Image, characteristics: CameraCharacteristics, mask: BooleanArray,
-                      points: FloatArray, rows: Int, started: Long, backend: String = "kotlin"): FocusPeakingFrame {
+                      points: FloatArray, tangents: ByteArray, rows: Int, started: Long, backend: String = "kotlin"): FocusPeakingFrame {
         val elapsedMs = (System.nanoTime() - started) / 1e6
         if (elapsedMs > 200) Log.w("RawLensCamera", "Peaking detail sample ${"%.1f".format(elapsedMs)}ms; worker drops backlog")
         return FocusPeakingFrame(COLS, rows, mask,
             characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
             characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT,
-            image.width, image.height, sensorPoints = points, timestampNanos = image.timestamp,
+            image.width, image.height, sensorPoints = points, sensorTangents = tangents, timestampNanos = image.timestamp,
             samplingNanos = System.nanoTime() - started, backend = backend)
     }
 }

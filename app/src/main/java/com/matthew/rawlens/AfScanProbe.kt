@@ -146,7 +146,13 @@ class AfScanProbe(context: Context) {
             val dMax = AtomicReference(-Float.MAX_VALUE)
             val callback = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
-                    val phys = physicalId?.let { result.physicalCameraResults[it] }
+                    val phys = physicalId?.let {
+                        if (android.os.Build.VERSION.SDK_INT >= 31) result.physicalCameraTotalResults[it]
+                        else {
+                            @Suppress("DEPRECATION")
+                            result.physicalCameraResults[it]
+                        }
+                    }
                     val afState = result.get(CaptureResult.CONTROL_AF_STATE)
                     if (afState == CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN ||
                         afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||

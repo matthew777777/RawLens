@@ -484,7 +484,7 @@ class RawCameraController(
     /** Live RAW scope-only repeating stream outside ZSL (AUTO/PROGRAM/MANUAL). Frames are
      * sampled for the histogram/waveform and closed; nothing is buffered and ZSL status
      * is unaffected. */
-    private val rawExposureAssist = RawExposureAssist(onRawExposureAssist)
+    private val rawExposureAssist = RawExposureAssist(context, onRawExposureAssist)
     private var rawHistogramStreaming = false
     private var rawHistogramDisabledForSession = false
     @Volatile private var lastPreviewSensorTimestamp = Long.MIN_VALUE
@@ -1476,7 +1476,8 @@ class RawCameraController(
                 // gated by the manual/tap-focus auto-show policy.
                 characteristics?.let { publishFocusPeakingIfDue(image, it) }
                 val sensorResult = latestPreviewResult?.let { pinnedSensorResult(it) ?: it }
-                characteristics?.let { rawExposureAssist.offer(image, it, developFocusView, result = sensorResult) }
+                characteristics?.let { rawExposureAssist.offer(image, it, developFocusView,
+                    result = meteringResults[image.timestamp] ?: latestPreviewResult, cameraId = selectedCameraId ?: "0") }
                 // The dual-RAW worker owns these allocations through Vulkan completion;
                 // don't concurrently hand the same AHB to the viewfinder GPU context.
                 if (!activeDualRaw && !ispDisplayShown) characteristics?.let {
@@ -3990,7 +3991,9 @@ class RawCameraController(
         lostForwardFrames.clear()
         lostRawBufferFrames.clear()
         activeFramesRemaining.set(frameCount)
-        updateRepeatingRequest(allowRawZsl = false)
+        val extendedStill = extendedStillExposure()
+        if (extendedStill) stopRepeatingRawBeforeForwardCapture(currentSession, reader)
+        else updateRepeatingRequest(allowRawZsl = false)
         val generation = lifecycleGeneration
         val captureId = captureSequence.incrementAndGet()
         chainPairedAny = false
@@ -4017,11 +4020,21 @@ class RawCameraController(
             val requests = List(frameCount) { frameIndex ->
                 createSensorRequest(device, CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(reader.surface)
-                    previewSurface?.let { addTarget(it) }
+                    if (!extendedStill) previewSurface?.let { addTarget(it) }
                     setTag(CaptureTag(captureId, frameIndex + 1, frameCount))
                     // Same split as PhotonCamera Photo mode: preview meters under hardware AE;
                     // the shutter-first pair is applied only to the submitted still request.
                     applyCameraControls(this, applyDynamicCurve = true)
+                    if (extendedStill) {
+                        characteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                            ?.filter { it.lower == it.upper }?.minByOrNull { it.upper }?.let {
+                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+                            }
+                        val exposure = get(CaptureRequest.SENSOR_EXPOSURE_TIME) ?: 0L
+                        set(CaptureRequest.SENSOR_FRAME_DURATION, exposure)
+                        rawViewfinder?.expectFrameInterval(exposure + 3_000_000_000L)
+                        bguViewfinder?.expectFrameInterval(exposure + 3_000_000_000L)
+                    }
                     mergeExposure?.let { exposure ->
                         set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                         set(CaptureRequest.SENSOR_SENSITIVITY, exposure.iso)
@@ -4176,7 +4189,7 @@ class RawCameraController(
             val t = (base * Math.pow(2.0, evF.toDouble())).toLong().coerceAtLeast(1L)
             if (evF > 0f) minOf(t, maxOf(base, LKR_HDR_LONG_CAP_NS)) else t
         }).let { value ->
-            value.coerceIn(timeRange?.lower ?: value, timeRange?.upper ?: value)
+            value.coerceIn(timeRange?.lower ?: value, timeRange?.upper?.let(::manualShutterMaximum) ?: value)
         }
         builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
         builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
@@ -4773,7 +4786,11 @@ class RawCameraController(
             cameraHandler.post { setFocusPeakingEnabled(enabled) }
             return
         }
+        val wasActive = scopes.peakingActive()
         scopes.setPeakingEnabled(enabled)
+        if (wasActive != scopes.peakingActive()) {
+            updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
+        }
     }
 
     /**
@@ -5640,6 +5657,30 @@ class RawCameraController(
         open()
     }
 
+    private val extendedShutterPreferences = context.getSharedPreferences("rawlens_extended_shutter", Context.MODE_PRIVATE)
+
+    fun extendedManualShutterEnabled(): Boolean = extendedShutterPreferences.getBoolean(selectedCameraId, false)
+
+    fun setExtendedManualShutter(enabled: Boolean) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setExtendedManualShutter(enabled) }
+            return
+        }
+        extendedShutterPreferences.edit().putBoolean(selectedCameraId, enabled).apply()
+        clampControlsToCamera()
+        updateRepeatingRequest()
+        publishControls()
+    }
+
+    private fun extendedStillExposure(): Boolean = extendedManualShutterEnabled() &&
+        photoControlsBeforeVideo == null && lapisSessionSpec == null &&
+        (selectedExposureNanos ?: 0L) >
+            (characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)?.upper ?: Long.MAX_VALUE)
+
+    private fun manualShutterMaximum(advertised: Long): Long =
+        if (extendedManualShutterEnabled() && photoControlsBeforeVideo == null && lapisSessionSpec == null)
+            maxOf(advertised, 30_000_000_000L) else advertised
+
     fun manualControlRange(control: ManualControl): ManualControlRange? {
         if(lapisSessionSpec?.dcg==true && (control==ManualControl.ISO || control==ManualControl.SHUTTER))return null
         return when (control) {
@@ -5659,8 +5700,8 @@ class RawCameraController(
             val range = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
                 ?: return null
             ManualControlRange(
-                range.lower, range.upper,
-                (selectedExposureNanos ?: lastExposureNanos).coerceIn(range.lower, range.upper),
+                range.lower, manualShutterMaximum(range.upper),
+                (selectedExposureNanos ?: lastExposureNanos).coerceIn(range.lower, manualShutterMaximum(range.upper)),
                 selectedExposureNanos == null
             )
         }
@@ -5677,7 +5718,8 @@ class RawCameraController(
                 ?.takeIf { it > 0f } ?: return null
             ManualControlRange(
                 0L, (minimumDistance * FOCUS_DISTANCE_SCALE).toLong(),
-                ((selectedFocusDistanceDiopters ?: 0f) * FOCUS_DISTANCE_SCALE).toLong(),
+                ((snapshotVideoMeteredFocus() ?: 0f).coerceIn(0f, minimumDistance) *
+                    FOCUS_DISTANCE_SCALE).toLong(),
                 selectedFocusDistanceDiopters == null
             )
         }
@@ -5701,6 +5743,7 @@ class RawCameraController(
             onState("DCG14 USES AUTO EXPOSURE")
             return
         }
+        var focusModeChanged = false
         when (control) {
             ManualControl.ISO -> {
                 clearExposureHold()
@@ -5716,28 +5759,30 @@ class RawCameraController(
             }
             ManualControl.FOCUS_DISTANCE -> {
                 val minimumDistance = characteristics?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-                selectedFocusDistanceDiopters = value?.let { raw ->
+                val previous = selectedFocusDistanceDiopters
+                val next = value?.let { raw ->
                     (raw.toFloat() / FOCUS_DISTANCE_SCALE).coerceIn(0f, minimumDistance)
                 }
-                // Manual focus forces AF OFF until cleared; a "focus never
-                // moves" report needs this visible next to the Idle AF trace.
-                Log.i(
-                    LOG_TAG,
-                    selectedFocusDistanceDiopters?.let {
-                        "Manual focus ${String.format(java.util.Locale.US, "%.2f", it)}D (AF off)"
-                    } ?: "Manual focus cleared (AF back to auto)"
-                )
-                // Manual focus takes over the held touch lock (see PhotoAutoFocus).
-                if (value != null) touchFocus.dropForManualFocus()
+                val takingOverAf = next != null && (previous == null || touchFocus.active || touchFocus.usesManualFocusFallback)
+                if (previous == next && !takingOverAf) return
+                selectedFocusDistanceDiopters = next
+                focusModeChanged = takingOverAf || next == null
+                if (takingOverAf) touchFocus.dropForManualFocus()
+                if (focusModeChanged) {
+                    Log.i(LOG_TAG, if (next == null) "Manual focus cleared (AF back to auto)"
+                        else "Manual focus engaged (AF off)")
+                }
             }
             ManualControl.EXPOSURE_COMPENSATION -> {
                 clearExposureHold()
                 exposureCompensation = value?.toInt() ?: 0
             }
         }
-        if (control == ManualControl.FOCUS_DISTANCE) scopes.refreshPeaking()
+        if (focusModeChanged) scopes.refreshPeaking()
         clampControlsToCamera()
-        controlsChanged()
+        // A position change within MF only needs a new repeating request. Keep
+        // queued RAW preview frames flowing while the lens moves.
+        controlsChanged(light = control == ManualControl.FOCUS_DISTANCE && !focusModeChanged)
     }
 
     fun exposureCompensationStops(index: Long): Float {
@@ -5784,9 +5829,9 @@ class RawCameraController(
         restartCameraForConfigurationChange()
     }
 
-    private fun controlsChanged() {
+    private fun controlsChanged(light: Boolean = false) {
         publishControls()
-        updateRepeatingRequest(preserveRawZslBuffer = true)
+        updateRepeatingRequest(preserveRawZslBuffer = true, light = light)
     }
 
     private fun updateRepeatingRequest(
@@ -5821,14 +5866,14 @@ class RawCameraController(
             RawStreamPlan.Inputs(
                 allowRawZsl = allowRawZsl,
                 zslRestartFitsReader = zslRestartFitsReader(),
-                zslRequested = rawZslRequested && !xiaomiFullResRawActive,
+                zslRequested = rawZslRequested && !xiaomiFullResRawActive && !extendedStillExposure(),
                 zslBlocked = isRawZslBlocked(),
                 zslCapacity = rawZslCapacity,
                 readerPresent = reader != null,
                 rawRetryReady = SystemClock.elapsedRealtime() >= rawPreviewRetryUntilMs,
                 captureInProgress = captureInProgress.get(),
                 stillExecuting = cameraCaptureSequenceActive || activeFramesRemaining.get() > 0,
-                histogramEnabled = scopes.histogramEnabled || rawExposureAssist.settings.enabled,
+                histogramEnabled = scopes.histogramEnabled || rawExposureAssist.settings.enabled || scopes.peakingActive(),
                 histogramDisabledForSession = rawHistogramDisabledForSession,
                 ettrEnabled = ettr.settings.enabled,
                 ettrModeAvailable = ettrModeAvailable(),
@@ -5888,6 +5933,15 @@ class RawCameraController(
                 if (includeRaw) addTarget(reader!!.surface)
                 setTag(includeRaw)
                 applyCameraControls(this, deviceAeFpsRange = deviceAeRange)
+                if (extendedStillExposure()) {
+                    // Long integration belongs to the forward still. Keep repeating
+                    // preview short so queued frames cannot delay it by many exposures.
+                    val previewNs = minOf(get(CaptureRequest.SENSOR_EXPOSURE_TIME) ?: 100_000_000L, 100_000_000L)
+                    set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewNs)
+                    set(CaptureRequest.SENSOR_FRAME_DURATION, previewNs)
+                    rawViewfinder?.expectFrameInterval(previewNs)
+                    bguViewfinder?.expectFrameInterval(previewNs)
+                }
                 val useDeviceAeRange = deviceAeRange != null &&
                     get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_ON
                 // Retain the existing RAW cadence when flexible device AE is unavailable.
@@ -6318,7 +6372,7 @@ class RawCameraController(
             lastIso = lastIso,
             lastExposureNanos = lastExposureNanos,
             isoRange = isoRange?.let { it.lower..it.upper },
-            exposureRange = exposureRange?.let { it.lower..it.upper },
+            exposureRange = exposureRange?.let { it.lower..manualShutterMaximum(it.upper) },
             manualSensorSupported =
                 supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
         ))
@@ -6331,6 +6385,9 @@ class RawCameraController(
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             builder.set(CaptureRequest.SENSOR_SENSITIVITY, sensorExposure.iso)
             builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, sensorExposure.exposureNanos)
+            if (selectedExposureNanos != null && extendedManualShutterEnabled() &&
+                photoControlsBeforeVideo == null && lapisSessionSpec == null)
+                builder.set(CaptureRequest.SENSOR_FRAME_DURATION, sensorExposure.exposureNanos)
         } else {
             // P0: while a flash precapture converges the repeating request
             // meters under the flash AE mode; otherwise plain AE ON.
@@ -6434,7 +6491,7 @@ class RawCameraController(
      */
     private fun logAfRequest(wanted: Int, sent: Int, manualFocus: Float?, region: String) {
         val why = when {
-            manualFocus != null -> "manual ${String.format(java.util.Locale.US, "%.2f", manualFocus)}D"
+            manualFocus != null -> "manual"
             touchFocus.active -> "touch"
             else -> "idle"
         }
@@ -7781,7 +7838,7 @@ class RawCameraController(
         }
         if (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) return
         // If the ring cannot fit, the viewfinder remains a sample-and-release stream.
-        val wantHistogram = (scopes.histogramEnabled || rawExposureAssist.settings.enabled) &&
+        val wantHistogram = (scopes.histogramEnabled || rawExposureAssist.settings.enabled || scopes.peakingActive()) &&
             !rawHistogramDisabledForSession
         val wantEttr = ettr.settings.enabled && ettrModeAvailable()
         val wantProgram = programCustomActive()
@@ -8256,7 +8313,7 @@ class RawCameraController(
             selectedIso = selectedIso?.coerceIn(range.lower, range.upper * DigitalGain.MAX_FACTOR)
         } ?: run { selectedIso = null }
         c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)?.let { range ->
-            selectedExposureNanos = selectedExposureNanos?.coerceIn(range.lower, range.upper)
+            selectedExposureNanos = selectedExposureNanos?.coerceIn(range.lower, manualShutterMaximum(range.upper))
         } ?: run { selectedExposureNanos = null }
         val evRange = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
         exposureCompensation = if (evRange == null) 0

@@ -8,9 +8,7 @@ import android.media.Image
 import java.nio.ByteOrder
 
 /**
- * Focus-peaking overlay color, persisted by [preferenceValue]. Green matches the
- * native monitor overlay default (FocusPeakingParams.color); the rest are the
- * usual camera-assist primaries.
+ * Focus-peaking color, persisted by [preferenceValue].
  */
 enum class FocusPeakingColor(val preferenceValue: String, val label: String, val argb: Int) {
     GREEN("green", "GREEN", 0xFF4DFF1A.toInt()),
@@ -59,7 +57,9 @@ data class FocusPeakingFrame(
     val sensorPoints: FloatArray? = null,
     val timestampNanos: Long = 0L,
     val samplingNanos: Long = 0L,
-    val backend: String = "legacy"
+    val backend: String = "legacy",
+    /** Unsigned tangent direction per detected point, in 45-degree steps. */
+    val sensorTangents: ByteArray? = null
 )
 
 /**
@@ -126,6 +126,64 @@ object FocusPeakingGeometry {
             (col + 1) / cols.toFloat(), (row + 1) / rows.toFloat(), rotation, mirrored
         )
         return floatArrayOf(minOf(x0, x1), minOf(y0, y1), maxOf(x0, x1), maxOf(y0, y1))
+    }
+}
+
+/** Join nearby peaks only when the measured edge directions support the same contour. */
+internal object FocusPeakingContours {
+    private val tangentX = floatArrayOf(1f, 0.70710677f, 0f, -0.70710677f)
+    private val tangentY = floatArrayOf(0f, 0.70710677f, 1f, 0.70710677f)
+
+    fun forEachSegment(frame: FocusPeakingFrame, emit: (Float, Float, Float, Float) -> Unit) {
+        val points = frame.sensorPoints ?: return
+        val tangents = frame.sensorTangents ?: return
+        val (cols, rows, mask) = frame
+        val width = frame.sensorWidth.toFloat()
+        val height = frame.sensorHeight.toFloat()
+        if (cols <= 0 || rows <= 0 || width <= 0 || height <= 0 ||
+            mask.size != cols * rows || points.size != mask.size * 2 || tangents.size != mask.size) return
+        val cellSize = minOf(width / cols, height / rows)
+        val maxGapSquared = (1.6f * cellSize).let { it * it }
+        val connected = BooleanArray(mask.size)
+        for (i in mask.indices) {
+            if (!mask[i]) continue
+            val x = points[2 * i]
+            val y = points[2 * i + 1]
+            val direction = tangents[i].toInt()
+            val col = i % cols
+            val row = i / cols
+            // Only look right or down so every possible join is evaluated once.
+            for (dy in 0..1) for (dx in (if (dy == 0) 1 else -1)..1) {
+                if (col + dx !in 0 until cols || row + dy >= rows) continue
+                val j = i + dy * cols + dx
+                if (!mask[j]) continue
+                val other = tangents[j].toInt()
+                val vx = (points[2 * j] - x) * width
+                val vy = (points[2 * j + 1] - y) * height
+                val lengthSquared = vx * vx + vy * vy
+                if (lengthSquared <= 0f || lengthSquared > maxGapSquared) continue
+                val alignment = vx * tangentX[direction] + vy * tangentY[direction]
+                val otherAlignment = vx * tangentX[other] + vy * tangentY[other]
+                // Both tangents must be within 27 degrees of the joining line.
+                if (alignment * alignment < 0.8f * lengthSquared ||
+                    otherAlignment * otherAlignment < 0.8f * lengthSquared) continue
+                emit(x, y, points[2 * j], points[2 * j + 1])
+                connected[i] = true
+                connected[j] = true
+            }
+        }
+        // A local edge can be real even if the neighbouring tile found nothing.
+        // Give it a short stroke within the support of the RAW detail detector.
+        val halfLength = minOf(8f, cellSize * 0.3f)
+        for (i in mask.indices) {
+            if (!mask[i] || connected[i]) continue
+            val direction = tangents[i].toInt()
+            val du = halfLength * tangentX[direction] / width
+            val dv = halfLength * tangentY[direction] / height
+            val x = points[2 * i]
+            val y = points[2 * i + 1]
+            emit(x - du, y - dv, x + du, y + dv)
+        }
     }
 }
 

@@ -80,6 +80,14 @@ int detect(Scratch& s, float modelVariance) {
     }
     return best;
 }
+int tangentAt(int edge, const Scratch& s) {
+    const float gx = s.smooth[edge+1] - s.smooth[edge-1];
+    const float gy = s.smooth[edge+N] - s.smooth[edge-N];
+    if (std::abs(gx) <= 0.41421356f * std::abs(gy)) return 0;
+    if (std::abs(gy) <= 0.41421356f * std::abs(gx)) return 2;
+    return gx * gy < 0.f ? 1 : 3;
+}
+
 }
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_matthew_rawlens_NativeFocusPeaking_sampleNative(
@@ -90,7 +98,7 @@ Java_com_matthew_rawlens_NativeFocusPeaking_sampleNative(
     if (!bytes || width < P || height < P || cols <= 0 || cols > 512 || rows <= 0 || rows > 512 ||
         width > 65536 || height > 65536 || int64_t(width) * height > INT32_MAX || cfa < 0 || cfa > 3 || rowStride <= 0 || !calibration || !noise || !output ||
         env->GetArrayLength(calibration) != 5 || env->GetArrayLength(noise) != 8 ||
-        env->GetArrayLength(output) != cols * rows) return JNI_FALSE;
+        env->GetArrayLength(output) != cols * rows * 2) return JNI_FALSE;
     int64_t rowBytes;
     if (packedBits == 10 && width % 4 == 0) rowBytes = int64_t(width) / 4 * 5;
     else if (packedBits == 12 && width % 2 == 0) rowBytes = int64_t(width) / 2 * 3;
@@ -119,7 +127,7 @@ Java_com_matthew_rawlens_NativeFocusPeaking_sampleNative(
         uint16_t v; std::memcpy(&v, row + int64_t(x) * pixelStride, sizeof(v)); return v;
     };
     Scratch scratch;
-    std::vector<jint> points(cols * rows, -1);
+    std::vector<jint> points(cols * rows * 2, -1);
     const bool sameParity = cfa == 1 || cfa == 2;
     const int green0 = sameParity ? 0 : 1, green1 = sameParity ? 3 : 2;
     for (int row = 0; row < rows; ++row) {
@@ -150,9 +158,13 @@ Java_com_matthew_rawlens_NativeFocusPeaking_sampleNative(
                     variance = std::max(variance, float(slope * double(mean) + offset));
             }
             const int edge = detect(scratch, variance);
-            if (edge >= 0) points[row*cols+col] = (qy + edge/N*2) * width + qx + edge%N*2;
+            if (edge >= 0) {
+                const int index = (row * cols + col) * 2;
+                points[index] = (qy + edge/N*2) * width + qx + edge%N*2;
+                points[index+1] = tangentAt(edge, scratch);
+            }
         }
     }
-    env->SetIntArrayRegion(output, 0, cols * rows, points.data());
+    env->SetIntArrayRegion(output, 0, cols * rows * 2, points.data());
     return env->ExceptionCheck() ? JNI_FALSE : JNI_TRUE;
 }

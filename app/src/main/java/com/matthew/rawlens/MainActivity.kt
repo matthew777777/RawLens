@@ -86,7 +86,8 @@ class MainActivity : Activity() {
     internal var activeManualControl: ManualControl? = null
     /** PROGRAM axis lock slider reuses the bottom ruler; null when the ruler drives MANUAL. */
     internal var activeProgramAxis: ManualControl? = null
-    internal var pendingSliderUpdate: Runnable? = null
+    private var pendingSliderUpdate: Runnable? = null
+    internal val hasPendingSliderUpdate get() = pendingSliderUpdate != null
     internal var manualPanelHide: Runnable? = null
     internal lateinit var debugOverlay: TextView
     internal lateinit var rawVfDebugOverlay: TextView
@@ -697,10 +698,14 @@ class MainActivity : Activity() {
             },
             initialFocusPeakingEnabled = focusPeakingEnabled,
             onFocusPeaking = { frame ->
-                runOnUiThread { focusPeakingOverlay.update(frame) }
+                runOnUiThread {
+                    if (!videoRecording && focusPeakingEnabled && focusPeakingOverlay.isShown) {
+                        focusPeakingOverlay.update(frame)
+                    }
+                }
             },
             onFocusPeakingActive = { active ->
-                runOnUiThread { setFocusPeakingVisible(active) }
+                runOnUiThread { if (!videoRecording) setFocusPeakingVisible(active && focusPeakingEnabled) }
             },
             bguViewfinder = findViewById(R.id.bguViewfinder),
             onRawExposureAssist = { frame -> runOnUiThread {
@@ -1016,41 +1021,42 @@ class MainActivity : Activity() {
         meteringOverlay.onOverlayTouched = { closeFloatingPanels() }
         meteringOverlay.onPanelSwipe = ::openPreviewPanel
         manualSlider.max = SLIDER_STEPS
-        manualSlider.onProgressChanged = { progress, fromUser ->
-            if (fromUser) {
-                // PROGRAM lock slider and MANUAL slider share the bottom ruler.
-                activeProgramAxis?.let { axis ->
-                    onProgramAxisScrubbed(axis, progress)
-                } ?: run {
-                    val control = activeManualControl
-                    val range = control?.let { manualRangeFor(it) }
-                    if (control != null && range != null) {
-                        manualAuto.isEnabled = true
-                        pendingSliderUpdate?.let(manualSlider::removeCallbacks)
-                        val value = sliderValue(control, range, progress)
-                        pendingSliderUpdate = Runnable { setManualValueFor(control, value) }.also {
-                            manualSlider.postDelayed(it, SLIDER_UPDATE_DELAY_MS)
-                        }
-                    }
-                }
+        manualSlider.onProgressChanged = {
+            val control = activeProgramAxis ?: activeManualControl
+            if (control != null) {
+                manualAuto.isEnabled = true
                 refreshRuleSliderAccessibility()
+                // Apply the newest position at a steady rate, even if touch events never pause.
+                if (pendingSliderUpdate == null) {
+                    pendingSliderUpdate = Runnable {
+                        pendingSliderUpdate = null
+                        when (control) {
+                            activeProgramAxis -> onProgramAxisScrubbed(control, manualSlider.progress)
+                            activeManualControl -> manualRangeFor(control)?.let { range ->
+                                setManualValueFor(control, sliderValue(control, range, manualSlider.progress))
+                            }
+                            else -> Unit
+                        }
+                    }.also { manualSlider.postDelayed(it, SLIDER_UPDATE_INTERVAL_MS) }
+                }
             }
         }
-        manualSlider.onStartTracking = { cancelManualPanelHide() }
-        manualSlider.onStopTracking = { progress ->
-            pendingSliderUpdate?.let(manualSlider::removeCallbacks)
-            activeProgramAxis?.let { axis ->
-                commitProgramAxis(axis, progress)
-            } ?: run {
-                activeManualControl?.let { control ->
-                    manualRangeFor(control)?.let { range ->
-                        setManualValueFor(control, sliderValue(control, range, progress))
-                    }
-                }
+        manualSlider.onStartTracking = {
+            cancelManualPanelHide()
+            if (activeManualControl == ManualControl.FOCUS_DISTANCE) recordingTools.cancelFocusPull()
+        }
+        manualSlider.onStopTracking = { progress, changed ->
+            val pending = pendingSliderUpdate
+            cancelPendingSliderUpdate()
+            if (changed) {
+                val axis = activeProgramAxis
+                if (axis != null) commitProgramAxis(axis, progress)
+                else pending?.run()
             }
             scheduleManualPanelHide()
         }
         manualAuto.setOnClickListener {
+            cancelPendingSliderUpdate()
             activeProgramAxis?.let {
                 saveProgramProfile(programProfile().copy(lockMode = ProgramLockMode.NONE))
                 updateProgramChipStates()
@@ -4364,13 +4370,15 @@ class MainActivity : Activity() {
         refreshScopeContentDescription()
     }
 
+    internal fun cancelPendingSliderUpdate() {
+        pendingSliderUpdate?.let(manualSlider::removeCallbacks)
+        pendingSliderUpdate = null
+    }
+
     internal fun hideManualControl() {
         if (!::manualPanel.isInitialized) return
         cancelManualPanelHide()
-        if (::manualSlider.isInitialized) {
-            pendingSliderUpdate?.let(manualSlider::removeCallbacks)
-        }
-        pendingSliderUpdate = null
+        cancelPendingSliderUpdate()
         manualPanel.visibility = View.GONE
         recordingTools.hide()
         activeManualControl = null
@@ -4901,7 +4909,7 @@ class MainActivity : Activity() {
         const val KEY_WAVELET_GRAIN_PCT = "wavelet_grain_pct"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"
         const val SLIDER_STEPS = 10_000
-        const val SLIDER_UPDATE_DELAY_MS = 32L
+        const val SLIDER_UPDATE_INTERVAL_MS = 32L
         const val MANUAL_PANEL_TIMEOUT_MS = 4_000L
         const val HISTOGRAM_INTERVAL_MS = 700L
         /** Mirrors HistogramView RAW-hold: YUV resumes once the view stops preferring RAW. */

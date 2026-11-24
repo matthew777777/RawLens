@@ -69,7 +69,6 @@ import android.os.SystemClock
 /** Settings → Exposure. Moved verbatim from MainActivity.showSettings (showExposureTab). */
 internal fun MainActivity.showExposureSettings(p: SettingsPage) {
     val content = p.content
-    content.addView(p.kit.sectionDesc(FlashStillPolicy.AUTO_UNAVAILABLE_NOTE))
     fun sectionTitle(text: String): TextView = p.kit.sectionTitle(text)
     fun sectionDesc(text: String): TextView = p.kit.sectionDesc(text)
     fun polish() = p.kit.polish()
@@ -78,7 +77,17 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         rawZslSettingsStatus = null
         sidecarSettingsStatus = null
         content.removeAllViews()
+        content.addView(sectionTitle("Manual exposure"))
+        content.addView(p.kit.settingsCheck("Extended shutter range",
+            controller.extendedManualShutterEnabled()).apply {
+            setOnCheckedChangeListener { _, checked ->
+                controller.setExtendedManualShutter(checked)
+                updateQuickControls()
+            }
+        })
+        content.addView(sectionDesc("Extends manual shutter times up to 30 seconds for this lens in Photo mode. Uses Camera2 without root. Exposure times above the advertised range depend on the phone; preview uses a shorter exposure while the saved still uses the selected shutter. Photo mode only; DCG/DSG keeps automatic exposure."))
         content.addView(sectionTitle("Program AE"))
+        content.addView(sectionDesc(FlashStillPolicy.AUTO_UNAVAILABLE_NOTE))
         var dynamicSettings = dynamicExposureSettings()
         fun applyDynamicSettings() {
             lensPreferences().edit()
@@ -323,10 +332,11 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
                 override fun onStopTrackingTouch(seekBar: SettingsSlider) = applyProgramSettings()
             })
         })
+        content.addView(sectionTitle("ETTR"))
         var ettr = ettrSettings()
         fun applyEttr() = saveEttrSettings(ettr)
         content.addView(SettingsSwitch(this).apply {
-            text = "ETTR single exposure (RAW-measured)"
+            text = "RAW-measured single exposure"
             setTextColor(getColor(R.color.text_primary))
             isChecked = ettr.enabled
             setOnCheckedChangeListener { _, enabled ->
@@ -335,6 +345,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             }
         })
         content.addView(TextView(this).apply {
+            tag = "settings-description"
             text = "When the gain ceiling binds, ETTR keeps the hand-motion " +
                 "shutter cap and accepts a darker frame instead of trading noise for blur."
             setTextColor(getColor(R.color.text_secondary))
@@ -362,9 +373,9 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         refreshEttrButtons()
         content.addView(ettrHeadroomButton)
         content.addView(ettrIsoLimitButton)
-        content.addView(sectionTitle("Two-exposure RAW HDR (experimental)"))
+        content.addView(sectionTitle("RAW HDR"))
         content.addView(SettingsSwitch(this).apply {
-            text = "Experimental two-exposure RAW HDR"
+            text = "Two-exposure capture"
             setTextColor(getColor(R.color.text_primary))
             isChecked = dualRawEnabled
             isEnabled = controller.supportsDualRaw() || dualRawEnabled
@@ -380,7 +391,8 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             }
         })
         content.addView(TextView(this).apply {
-            text = "Available on any lens with manual RAW capture, or rooted Redmi DCG14 with AE always on. " +
+            tag = "settings-description"
+            text = "Experimental. Available on any lens with manual RAW capture, or rooted Redmi DCG14 with AE always on. " +
                 "DCG14 meters each exposure separately using AE compensation; ISO may differ. " +
                 "Saves a 16-bit DNG from two sequential exposures, " +
                 "using the short exposure to recover clipped highlights. " +
@@ -391,9 +403,9 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             textSize = 11f
         })
         content.addView(sectionTitle("Exposure brackets"))
-        content.addView(sectionDesc("Brackets captures a 3-frame exposure bracket and saves every frame as its own DNG (IMG_<time>_F00/F01/F02). No merge."))
+        content.addView(sectionDesc("Brackets uses ±2 EV by default and ±4 EV with Wide bracket enabled. It captures 3 frames and saves every frame as its own DNG (IMG_<time>_F00/F01/F02). No merge."))
         content.addView(SettingsSwitch(this).apply {
-            text = "Bracket range: −4 / 0 / +4 EV"
+            text = "Wide bracket (±4 EV)"
             setTextColor(getColor(R.color.text_primary))
             isChecked = hdrBracketStops() == 4
             setOnCheckedChangeListener { _, enabled ->
@@ -404,7 +416,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             }
         })
         content.addView(SettingsSwitch(this).apply {
-            text = "Debug: LK-R HDR bracket (up to 8 frames: 0 EV frames, 2 × −2, 1 × +1.5 EV)"
+            text = "LK-R test bracket"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lkrHdrDebugBracket()
             setOnCheckedChangeListener { _, enabled ->

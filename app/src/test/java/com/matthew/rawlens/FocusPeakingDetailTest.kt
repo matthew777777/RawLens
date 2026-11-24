@@ -86,6 +86,14 @@ class FocusPeakingDetailTest {
     @Test fun patchLocalSupportKeepsThinSharpLines() {
         assertTrue(detects(patch { x, _ -> if (x == n / 2) 0.6f else 0.2f }))
     }
+    @Test fun tangentRunsAlongTheDetectedEdge() {
+        val scratch = FocusPeakingDetail.Scratch()
+        for ((axis, tangent) in listOf(0 to 2, 1 to 0, 2 to 3)) {
+            val index = FocusPeakingDetail.detect(edge(axis = axis), BooleanArray(n * n), scratch = scratch)
+            assertTrue(index >= 0)
+            assertEquals(tangent, FocusPeakingDetail.tangentAt(index, scratch))
+        }
+    }
     @Test fun detectedPointStaysOnSharpEdge() {
         val index = FocusPeakingDetail.detect(edge(), BooleanArray(n * n))
         assertTrue(index >= 0)

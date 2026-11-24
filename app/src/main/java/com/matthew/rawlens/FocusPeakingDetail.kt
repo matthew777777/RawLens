@@ -19,6 +19,20 @@ internal object FocusPeakingDetail {
         val residual = FloatArray(SIDE * SIDE / 4)
     }
 
+    // Edge direction is perpendicular to the gradient. Four unsigned directions
+    // suffice for linking neighbouring peaks, and match the native sampler.
+    fun tangentAt(edge: Int, scratch: Scratch): Int {
+        val smooth = scratch.smooth
+        val gx = smooth[edge + 1] - smooth[edge - 1]
+        val gy = smooth[edge + SIDE] - smooth[edge - SIDE]
+        return when {
+            abs(gx) <= 0.41421356f * abs(gy) -> 0 // horizontal
+            abs(gy) <= 0.41421356f * abs(gx) -> 2 // vertical
+            gx * gy < 0f -> 1 // down-right
+            else -> 3 // down-left
+        }
+    }
+
     /** Returns the strongest supported edge's index, or -1 when evidence is insufficient.
      * [noiseVariance] is the variance of the averaged green sample, in normalized RAW units.
      * Scratch is private to one sampling call/worker; no cross-frame state or stale marks.

@@ -12,7 +12,7 @@ internal object NativeFocusPeaking {
                packedBits: Int, cfa: Int, black: FloatArray, white: Float,
                profile: DoubleArray?, cols: Int, rows: Int): IntArray? {
         if (!available || !raw.isDirect) return null
-        val points = IntArray(cols * rows)
+        val points = IntArray(cols * rows * 2)
         val calibration = floatArrayOf(white, black[0], black[1], black[2], black[3])
         return try {
             if (sampleNative(raw, width, height, rowStride, pixelStride, packedBits, cfa,

@@ -9,7 +9,7 @@ class RawAverageMeterTest {
     private val settings = RawExposureAssistSettings(meterMode = RawExposureMeterMode.AVERAGE)
     private fun frame(w: Int = 256, h: Int = 192, pattern: Int = 0, black: DoubleArray = DoubleArray(4),
                       crop: IntArray? = null, config: RawExposureAssistSettings = settings,
-                      code: RawExposureCodeReader = RawExposureCodeReader { _, _ -> 256 }) =
+                      code: RawCodeReader = RawCodeReader { _, _ -> 256 }) =
         RawExposureAssistSampler.sampleCodes(w, h, pattern, black, 1024, 0, false, 1,
             config, meterCrop = crop, code = code)
 
@@ -17,7 +17,7 @@ class RawAverageMeterTest {
         for (pattern in 0..3) {
             val channels = RawEttrSampler.phaseChannelLut(pattern)
             val levels = intArrayOf(1024, 128, 256, 512)
-            val f = frame(pattern = pattern, code = RawExposureCodeReader { x, y -> levels[channels[(y and 1) * 2 + (x and 1)]] })!!
+            val f = frame(pattern = pattern, code = RawCodeReader { x, y -> levels[channels[(y and 1) * 2 + (x and 1)]] })!!
             val a = f.average!!
             assertEquals(log2((1024.0 + 128 + 256 + 512) / (4 * 1024)), a.ev, 1e-12)
             assertEquals(100.0, a.clippedPercent, 0.0)
@@ -27,7 +27,7 @@ class RawAverageMeterTest {
     }
 
     @Test fun clippedAreaCountsQuadsOnceEvenWhenSeveralChannelsClip() {
-        val a = frame(code = RawExposureCodeReader { x, _ -> if (x < 64) 1024 else 256 })!!.average!!
+        val a = frame(code = RawCodeReader { x, _ -> if (x < 64) 1024 else 256 })!!.average!!
         assertEquals(25.0, a.clippedPercent, 0.0)
         assertEquals(7, a.clippedChannels)
         assertEquals(log2(0.25 + 0.75 * 0.25), a.ev, 1e-12)
@@ -36,7 +36,7 @@ class RawAverageMeterTest {
     @Test fun eitherGreenAndBlueCanIndependentlyReportClipping() {
         for (pattern in 0..3) for (selected in listOf(1, 2, 3)) {
             val channels = RawEttrSampler.phaseChannelLut(pattern)
-            val a = frame(pattern = pattern, code = RawExposureCodeReader { x, y ->
+            val a = frame(pattern = pattern, code = RawCodeReader { x, y ->
                 if (channels[(y and 1) * 2 + (x and 1)] == selected) 1024 else 256
             })!!.average!!
             assertEquals(if (selected == 3) 1 else 2, a.clippedChannels)
@@ -46,7 +46,7 @@ class RawAverageMeterTest {
 
     @Test fun phaseBlackLevelsAreNormalizedBeforeAreaAverage() {
         val black = doubleArrayOf(0.0, 64.0, 128.0, 256.0)
-        val a = frame(black = black, code = RawExposureCodeReader { x, y ->
+        val a = frame(black = black, code = RawCodeReader { x, y ->
             val b = black[(y and 1) * 2 + (x and 1)].toInt(); b + (1024 - b) / 4
         })!!.average!!
         assertEquals(-2.0, a.ev, 0.0)
@@ -54,7 +54,7 @@ class RawAverageMeterTest {
     }
 
     @Test fun recordingCropExcludesClippedLetterboxAndAlignsInward() {
-        val f = frame(crop = intArrayOf(65, 33, 126, 126), code = RawExposureCodeReader { x, y ->
+        val f = frame(crop = intArrayOf(65, 33, 126, 126), code = RawCodeReader { x, y ->
             if (x in 66 until 190 && y in 34 until 158) 256 else 1024
         })!!
         val a = f.average!!
@@ -67,14 +67,14 @@ class RawAverageMeterTest {
     @Test fun sampledMeanMatchesIndependentDenseRampAndReadBudgetIsBounded() {
         val w = 4080; val h = 3060
         var reads = 0
-        val a = frame(w, h, code = RawExposureCodeReader { x, y -> reads++; 32 + x / 8 + y / 16 })!!.average!!
+        val a = frame(w, h, code = RawCodeReader { x, y -> reads++; 32 + x / 8 + y / 16 })!!.average!!
         val denseMean = 32 + (0 until w).sumOf { it / 8 }.toDouble() / w + (0 until h).sumOf { it / 16 }.toDouble() / h
         assertEquals(log2(denseMean / 1024), a.ev, 0.002)
         assertEquals(0, a.clippedCells)
         assertTrue("Average must not scan a full 12 MP image: $reads", reads <= 65_536)
         assertEquals(4 * a.sampledCells, reads)
         var offReads = 0
-        assertNull(frame(config = settings.copy(spotMeter = false), code = RawExposureCodeReader { _, _ -> offReads++; 256 }))
+        assertNull(frame(config = settings.copy(spotMeter = false), code = RawCodeReader { _, _ -> offReads++; 256 }))
         assertEquals(0, offReads)
     }
 
