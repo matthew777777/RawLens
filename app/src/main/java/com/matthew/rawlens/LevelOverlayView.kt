@@ -98,7 +98,7 @@ class LevelOverlayView @JvmOverloads constructor(
         if (width <= 0 || height <= 0) return
         val cx = width / 2f
         val cy = height / 2f
-        val lineLength = min(width, height) * 0.30f
+        val lineLength = min(width, height) * 0.20f
         val gapHalf = 14f * density
         val witnessHalf = 6f * density
         val half = lineLength / 2f
@@ -142,10 +142,10 @@ class LevelOverlayView @JvmOverloads constructor(
         drawDegrees: Float,
         current: VirtualHorizon.State
     ) {
-        val trackHalf = 36f * density
+        val trackHalf = 22f * density
         val tickHalf = 4f * density
-        val ringRadius = 6f * density
-        val bubbleRadius = 4.5f * density
+        val ringRadius = 4.5f * density
+        val bubbleRadius = 3f * density
         val offset = VirtualHorizon.pitchOffsetFraction(current.pitchDegrees) * trackHalf
         bubblePaint.color = if (current.isPitchLevel) LEVEL_COLOR else TILT_COLOR
 

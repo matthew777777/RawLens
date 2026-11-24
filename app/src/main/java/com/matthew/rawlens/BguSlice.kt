@@ -47,6 +47,7 @@ internal object BguSlice {
             "  return mix(1.055 * pow(v, vec3(1.0 / 2.4)) - vec3(0.055),\n" +
             "             12.92 * v, lessThanEqual(v, vec3(0.0031308)));\n" +
             "}\n" +
+            PhotoLutGl.glsl + "\n" +
             "void main() {\n" +
             "  vec4 q = texture(uGuide, tex);\n" +
             "  vec3 g = encodeGuide(vec3(q.r, (q.g + q.b) * 0.5, q.a));\n" +
@@ -58,7 +59,7 @@ internal object BguSlice {
             "  vec4 r2 = texture(uGrid2, n);\n" +
             "  vec4 gh = vec4(g, 1.0);\n" +
             "  vec3 developed = vec3(dot(gh, r0), dot(gh, r1), dot(gh, r2));\n" +
-            "  vec3 enc = clamp(developed, 0.0, 1.0);\n" +
+            "  vec3 enc = photoCube(clamp(developed, 0.0, 1.0));\n" +
             "  highp vec2 p = gl_FragCoord.xy;\n" +
             "  enc += vec3(ign(p, 0.0) - 0.5, ign(p, 1.0) - 0.5, ign(p, 2.0) - 0.5) / 255.0;\n" +
             "  fragColor = vec4(enc, 1.0);\n" +

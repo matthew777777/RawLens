@@ -140,6 +140,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         val camWhite: FloatArray
         var displayP3: Boolean
         var jpeg: Boolean
+        var photoLut: PhotoLutLook?
         var exposureEv: Float
         var basicTone: Int
         var agxPunchy: Float
@@ -205,6 +206,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override val camWhite = FloatArray(3) { 1f }
         override var displayP3 = false
         override var jpeg = false
+        override var photoLut: PhotoLutLook? = null
         override var exposureEv = 0f
         override var basicTone = 0
         override var agxPunchy = 0f
@@ -261,6 +263,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         // change never tears a frame.
         override var displayP3 = false
         override var jpeg = false
+        override var photoLut: PhotoLutLook? = null
         override var exposureEv = 0f
         override var basicTone = 0
         override var agxPunchy = 0f
@@ -543,6 +546,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private val aces2 = Aces2Gl()
     /** Baked JPEG-preview tone pipeline (one LUT fetch per pixel for every tone mapper). */
     private val toneLutGl = VfToneLutGl(context.cacheDir)
+    private val photoLutGl = PhotoLutGl()
+    @Volatile private var previewPhotoLut: PhotoLutLook? = null
     private var gpuBasicToneLoc = -1
     private var gpuAgxPunchyLoc = -1
     private var gpuAgxContrastLoc = -1
@@ -923,7 +928,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         agxGamut = resolved.agxGamutCompression
         highlightShoulder = resolved.highlightShoulder
         toneLook = ToneLook.values(resolved)
-        toneLutGl.request(resolved)
+        previewPhotoLut = resolved.photoLut
+        toneLutGl.request(resolved.copy(photoLut = null))
         shadowLift = resolved.shadowLift
         highlightRecovery = resolved.highlightRecovery
         previewHeadroom = resolved.highlightHeadroom
@@ -949,6 +955,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     override fun setSensorLevels(overrides: DngMetadataOverrides) {
         sensorLevels = overrides
     }
+
+    private val packedPreview = RawPackedUnpacker.PreviewPlaneReader()
 
     override fun offer(image: Image, c: CameraCharacteristics, result: CaptureResult?) {
         val now = SystemClock.elapsedRealtime()
@@ -977,6 +985,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 Log.i("RawViewfinder", "VF raw strides pixelStride=${plane.pixelStride} " +
                     "rowStride=${plane.rowStride} w=${image.width} h=${image.height}")
             }
+            val packed = PackedRawFormat.ofInt(image.format)
+            if (packed == null && (plane.rowStride <= 0 || plane.pixelStride <= 0)) return
+            val buffer = if (packed == null) plane.buffer else
+                packedPreview.unpack(plane.buffer, image.width, image.height, plane.rowStride, packed)
+            val rowStride = if (packed == null) plane.rowStride else image.width * 2
+            val pixelStride = if (packed == null) plane.pixelStride else 2
             val active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
             val crop = LapisRootSession.previewCrop(c, result?.get(CaptureResult.SCALER_CROP_REGION) ?: active, image.width, image.height)
             val longEdge = VfResolution.effectiveEdge(targetLongEdge, recordMode, powerSave)
@@ -1000,10 +1014,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             // the first-frame diagnostic always samples, as does an insane
             // reported-levels fallback (its data-driven replacement needs a
             // fresh sample every frame it is active).
-            val probing = engineMode != VfEngineMode.CPU && vfProbeInputSignal && VfVulkan.available
+            val probing = packed == null && engineMode != VfEngineMode.CPU && vfProbeInputSignal && VfVulkan.available
             val inputSample = if (probing || !vfDiagLogged || !levelsSane) {
                 try {
-                    sampleRawCodes(plane.buffer, plane.rowStride, plane.pixelStride, image.width, image.height)
+                    sampleRawCodes(buffer, rowStride, pixelStride, image.width, image.height)
                 } catch (_: Exception) {
                     null
                 }
@@ -1048,7 +1062,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 halGains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
             )) {
                 runCatching {
-                    RawWhiteBalanceFallback.estimateDetailed(plane.buffer, plane.rowStride, plane.pixelStride,
+                    RawWhiteBalanceFallback.estimateDetailed(buffer, rowStride, pixelStride,
                         image.width, image.height, cfaInt, levels, white, RawWhiteBalanceFallback.locusFor(c),
                         RawWhiteBalanceFallback.exposureEv100(result?.get(CaptureResult.SENSOR_EXPOSURE_TIME),
                             result?.get(CaptureResult.SENSOR_SENSITIVITY), result?.get(CaptureResult.LENS_APERTURE)))
@@ -1071,18 +1085,18 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             }
             // Coarse 2 Hz statistic on the user geometry; the grid stride
             // adapts, so the CPU cap below does not skew it.
-            updatePreviewExposure(plane, gpuGeo.left, gpuGeo.top, gpuGeo.width, gpuGeo.height, gpuGeo.step, levels, white, now, lensSnap)
+            updatePreviewExposure(buffer, rowStride, pixelStride, gpuGeo.left, gpuGeo.top, gpuGeo.width, gpuGeo.height, gpuGeo.step, levels, white, now, lensSnap)
             // Each path samples its own geometry: the GPU renders the full
             // user setting, the NEON fallback caps at CPU_MAX so it holds
             // 30 fps instead of crawling at ~3 fps on 1080. The overlay stats
             // track whichever path actually rendered this offer.
-            when (engineMode) {
+            when (if (packed != null) VfEngineMode.CPU else engineMode) {
                 VfEngineMode.CPU -> {
                     val geo = RawPreviewGeometry.quadGeometry(
                         image.width, image.height, crop, minOf(longEdge, VfResolution.CPU_MAX))
                     statVfWidth = geo.width
                     statVfHeight = geo.height
-                    offerCpu(plane, c, result, now, geo.left, geo.top, geo.width, geo.height, geo.step, channels, levels, white, lensSnap)
+                    offerCpu(buffer, rowStride, pixelStride, c, result, now, geo.left, geo.top, geo.width, geo.height, geo.step, channels, levels, white, lensSnap)
                 }
                 VfEngineMode.GPU -> {
                     statVfWidth = gpuGeo.width
@@ -1102,7 +1116,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                         image.width, image.height, crop, minOf(longEdge, VfResolution.CPU_MAX))
                     statVfWidth = geo.width
                     statVfHeight = geo.height
-                    offerCpu(plane, c, result, now, geo.left, geo.top, geo.width, geo.height, geo.step, channels, levels, white, lensSnap)
+                    offerCpu(buffer, rowStride, pixelStride, c, result, now, geo.left, geo.top, geo.width, geo.height, geo.step, channels, levels, white, lensSnap)
                 }
             }
         } catch (failure: Exception) {
@@ -1401,7 +1415,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
 
     /** NEON CPU fallback: native-sampled superpixel; lens shading stays in-shader. */
     private fun offerCpu(
-        plane: Image.Plane, c: CameraCharacteristics, result: CaptureResult?,
+        buffer: ByteBuffer, rowStride: Int, pixelStride: Int, c: CameraCharacteristics, result: CaptureResult?,
         now: Long, left: Int, top: Int, width: Int, height: Int, step: Int,
         channels: IntArray, levels: FloatArray, white: Float, lens: VfLensSnapshot
     ) {
@@ -1421,7 +1435,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             frame.pixels.clear()
             frame.halfOutput = glEs3
             val copyStartedNs = System.nanoTime()
-            VfCpuNeon.copy(plane.buffer, plane.rowStride, plane.pixelStride, left, top,
+            VfCpuNeon.copy(buffer, rowStride, pixelStride, left, top,
                 width, height, step, channels, levels, white, frame.pixels, halfOutput = frame.halfOutput)
             noteNeonSample(copyStartedNs, width, height)
             snapshotRenderState(c, result, channels, frame, now)
@@ -1476,7 +1490,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      * offered frame so pans glide instead of stepping. Camera thread only.
      */
     private fun updatePreviewExposure(
-        plane: Image.Plane, left: Int, top: Int, width: Int, height: Int, step: Int,
+        buffer: ByteBuffer, rowStride: Int, pixelStride: Int, left: Int, top: Int, width: Int, height: Int, step: Int,
         levels: FloatArray, white: Float, now: Long, lens: VfLensSnapshot = VfLensSnapshot.IDENTITY
     ) {
         val strength = previewExposureStrength
@@ -1499,7 +1513,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             focusY = previewFocusY
         ).bounded()
         val correction = VfGpuImport.estimatePreviewCorrectionEv(
-            plane.buffer, plane.rowStride, plane.pixelStride,
+            buffer, rowStride, pixelStride,
             left, top, width, height, step, levels, white, previewEvScratch,
             weights = previewEvWeightScratch,
             lens = lens.model, pattern = lens.pattern, tuning = tuning
@@ -1612,6 +1626,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         // Snapshot the WYSIWYG render state with the frame so AgX slider moves
         // and RAW/JPEG switches never tear a frame in flight.
         out.jpeg = renderJpeg
+        out.photoLut = previewPhotoLut
         out.displayP3 = previewP3
         out.lensGreenRow = VfGpuImport.lensGreenRow(channels)
         out.exposureEv = previewExposureEv + DigitalGain.ev(digitalGain).toFloat()
@@ -1711,6 +1726,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         glUniform3fv(cameraWhiteLoc, 1, state.camWhite, 0)
         glUniform1i(displayP3Loc, if (state.displayP3) 1 else 0)
         // JPEG preview needs the baked LUT; until the first bake lands, show the RAW preview.
+        if (glEs3) photoLutGl.bind(program, state.photoLut)
         glUniform1i(jpegLoc, if (state.jpeg && toneLutGl.bind(program, TONE_LUT_UNIT, glEs3)) 1 else 0)
         glUniform1f(exposureEvLoc, state.exposureEv)
         glUniform1i(basicToneLoc, state.basicTone)
@@ -2172,6 +2188,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glUniformMatrix3fv(gpuCamToAcesLoc, 1, false, frame.camToAces, 0)
                     glUniform3fv(gpuCameraWhiteLoc, 1, frame.camWhite, 0)
                     glUniform1i(gpuDisplayP3Loc, if (frame.displayP3) 1 else 0)
+                    photoLutGl.bind(gpuProgram, frame.photoLut)
                     glUniform1i(gpuJpegLoc, if (frame.jpeg && toneLutGl.bind(gpuProgram, TONE_LUT_UNIT, glEs3)) 1 else 0)
                     glUniform1i(gpuBasicToneLoc, frame.basicTone)
                     aces2.bind(gpuProgram, frame.basicTone, frame.toneLook)
@@ -2719,8 +2736,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             check(status[0] != 0) { glGetShaderInfoLog(id) }
             return id
         }
-        val vertex = shader(GL_VERTEX_SHADER, "attribute vec2 position; attribute vec2 uv; varying vec2 tex; void main(){ tex=uv; gl_Position=vec4(position,0.,1.); }")
-        val fragment = shader(GL_FRAGMENT_SHADER, VfGpuImport.cpuFragmentShader())
+        val vertex = shader(GL_VERTEX_SHADER, if (glEs3) VfGpuImport.gpuVertexShader() else "attribute vec2 position; attribute vec2 uv; varying vec2 tex; void main(){ tex=uv; gl_Position=vec4(position,0.,1.); }")
+        val fragment = shader(GL_FRAGMENT_SHADER, VfGpuImport.cpuFragmentShader(glEs3))
         program = glCreateProgram(); glAttachShader(program, vertex); glAttachShader(program, fragment); glLinkProgram(program)
         glDeleteShader(vertex); glDeleteShader(fragment)
         val linked = IntArray(1); glGetProgramiv(program, GL_LINK_STATUS, linked, 0); check(linked[0] != 0)
@@ -2871,6 +2888,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 gpuChansLoc >= 0 && gpuBlackQLoc >= 0 && gpuDenQLoc >= 0 &&
                 gpuLensLoc >= 0 && gpuLensSizeLoc >= 0 && gpuLensActiveLoc >= 0 && gpuApplyLensLoc >= 0 &&
                 gpuLensGreenRowLoc >= 0) { "VF GPU uniforms missing" }
+            // Sampler types must use separate units even when the JPEG branch is off.
+            glUseProgram(id)
+            glUniform1i(glGetUniformLocation(id, "u_toneLut"), TONE_LUT_UNIT)
+            glUseProgram(0)
             gpuProgram = id
             val ids = IntArray(1); glGenTextures(1, ids, 0); gpuBayerTexture = ids[0]
             glBindTexture(GL_TEXTURE_2D, gpuBayerTexture)
@@ -2889,6 +2910,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private fun releaseGl() {
         aces2.close()
         toneLutGl.close()
+        photoLutGl.close()
         // Runs on the GL worker: release native Vulkan imports first, then our refs.
         vfHint.close()
         try {

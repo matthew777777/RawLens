@@ -420,4 +420,9 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         })
         markActive(videoTab)
         polish()
+        p.kit.collapseSection("Monitoring & LUTs", "Monitoring & LUTs", "Preview tools and display looks")
+        p.kit.collapseSection("RAW Video", "RAW Video", "CRAW format and capture options")
+        p.kit.collapseSection("Locks on record", "Locks on record", "Exposure, white balance and focus")
+        p.kit.collapseSection("Stabilization", "Stabilization", "Output and motion settings")
+        p.kit.collapseSection("Recording folder", "Recording folder", "Storage and recovery")
 }

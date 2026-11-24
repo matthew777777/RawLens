@@ -14,6 +14,7 @@ internal data class HdrBracketSaveInput(
     val characteristics: CameraCharacteristics,
     val orientation: Int,
     val cameraId: String,
+    val boundPhysicalId: String?,
     /** One identifier for the whole set, independent of serialization latency. */
     val captureId: Long,
     /** One fix for the whole set: every bracket shares the same geotag. */
@@ -40,10 +41,11 @@ internal class HdrBracketSaveJob(
             val names = pending.mapIndexed { index, frame ->
                 val metadata = RawFrameMetadataFactory.capture(
                     input.cameraId, frame.image, input.characteristics, frame.result,
-                    input.orientation, levelOverrides = input.dngOverrides
+                    input.orientation, levelOverrides = input.dngOverrides, boundPhysicalId = input.boundPhysicalId
                 )
+                val sensorResult = physicalCaptureResult(frame.result, input.boundPhysicalId) ?: frame.result
                 saver.save(
-                    frame.image, input.characteristics, frame.result, input.orientation,
+                    frame.image, input.characteristics, sensorResult, input.orientation,
                     input.dngOverrides, metadata, input.dngBackend,
                     fileNameSuffix = hdrBracketSuffix(index),
                     captureId = input.captureId,

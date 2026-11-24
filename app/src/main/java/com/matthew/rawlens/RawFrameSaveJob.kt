@@ -6,7 +6,7 @@ package com.matthew.rawlens
 import android.content.Context
 import android.graphics.Bitmap
 import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.CaptureResult
 import android.media.Image
 
 /**
@@ -47,7 +47,7 @@ internal data class RawFrameSaveInput(
 internal class RawFrameSaveJob(
     private val context: Context,
     private val image: Image,
-    private val result: TotalCaptureResult,
+    private val result: CaptureResult,
     private val input: RawFrameSaveInput,
     private val host: Host,
 ) {

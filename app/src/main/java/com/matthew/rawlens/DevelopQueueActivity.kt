@@ -100,7 +100,7 @@ class DevelopQueueActivity : Activity() {
     private fun buildSettings(saved: DevelopQueueOptions) {
         settingsPage.addView(kit.sectionTitle("Tone & exposure"))
         tone=kit.settingsButton("Tone mapping: ${mapper.label}").apply {
-            setOnClickListener { kit.chooseEnum("Tone mapping",mapper,{ it.label }) {
+            setOnClickListener { kit.choose("Tone mapping", PhotoToneMapper.selectable, mapper, { it.label }) {
                 mapper=it;tone.text="Tone mapping: ${it.label}"
             } }
         };settingsPage.addView(tone);controls+=tone

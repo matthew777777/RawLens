@@ -139,9 +139,11 @@ internal class BguGlSlice {
         }
     }
 
+    private val photoLutGl = PhotoLutGl()
+
     fun draw(
         eglImage: Long, cpuGuide: ByteBuffer?, geo: BguGuideGeo,
-        rotation: Int, mirrored: Boolean, viewW: Int, viewH: Int, fit: IntArray
+        rotation: Int, mirrored: Boolean, viewW: Int, viewH: Int, fit: IntArray, photoLut: PhotoLutLook? = null
     ): Boolean {
         if (viewW <= 0 || viewH <= 0) return true
         val guideTex = if (cpuGuide != null) {
@@ -180,6 +182,7 @@ internal class BguGlSlice {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, texGrid[i])
             GLES30.glUniform1i(units[i], 1 + i)
         }
+        photoLutGl.bind(program, photoLut)
         val s = BguFit.DEFAULT_S.toFloat()
         val r = BguFit.DEFAULT_R
         // Geometry belongs to the uploaded fit, which may lag guide resizing.
@@ -199,6 +202,7 @@ internal class BguGlSlice {
     }
 
     fun destroy() {
+        photoLutGl.close()
         try {
             GLES30.glDeleteProgram(program)
         } catch (_: Exception) {

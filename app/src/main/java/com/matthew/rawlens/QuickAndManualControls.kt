@@ -106,6 +106,7 @@ internal fun MainActivity.showQuickControls() {
     updateQuickControls()
     quickPanel.alpha = 0f
     quickPanel.visibility = View.VISIBLE
+    findViewById<View>(R.id.quickButton).isSelected = true
     positionQuickPanel()
     quickPanel.animate().alpha(1f).setDuration(160L).start()
     quickPanel.post { positionQuickPanel(); updateOverlayStack() }
@@ -120,10 +121,7 @@ internal fun MainActivity.closeFloatingPanels() {
 
 
 internal fun MainActivity.setQuickTileState(tile: TextView, active: Boolean) {
-    if (quickTileStates.put(tile, active) == active) return
-    tile.background = getDrawable(if (active) R.drawable.quick_tile_active else R.drawable.quick_tile)
     tile.isSelected = active
-    tile.setTextColor(getColor(if (active) R.color.accent_dark else R.color.text_primary))
 }
 
 /** Top-bar gold tags: only photo features that are on right now. */
@@ -140,18 +138,10 @@ internal fun MainActivity.refreshFeatureTags(ettrEnabled: Boolean) {
     featureTags.visibility = if (tags.isEmpty()) View.GONE else View.VISIBLE
 }
 
-/** Exposure tiles: gold value when the user set it, primary when auto. */
-internal fun MainActivity.refreshManualTileAccents() {
-    fun tint(tile: TextView, manual: Boolean) =
-        tile.setTextColor(getColor(if (manual) R.color.accent else R.color.text_primary))
-    fun manual(control: ManualControl) =
-        runCatching { manualRangeFor(control)?.automatic == false }.getOrDefault(false)
-    tint(isoControl, manual(ManualControl.ISO))
-    tint(shutterControl, manual(ManualControl.SHUTTER))
-    tint(wbControl, manual(ManualControl.WHITE_BALANCE))
-    tint(focusControl, manual(ManualControl.FOCUS_DISTANCE))
-    val ev = evControl.text.lines().lastOrNull()?.trim()
-    tint(evControl, ev != null && ev != "+0.0" && ev != "0.0" && ev != "--")
+internal fun MainActivity.refreshExposureAutoIndicators() {
+    isoControl.exposureAutomatic = manualRangeFor(ManualControl.ISO)?.automatic == true
+    shutterControl.exposureAutomatic = manualRangeFor(ManualControl.SHUTTER)?.automatic == true
+    wbControl.exposureAutomatic = manualRangeFor(ManualControl.WHITE_BALANCE)?.automatic == true
 }
 
 /** Both scope views share one bottom slot; only the active mode is visible. */
@@ -395,6 +385,7 @@ internal fun MainActivity.refreshVideoChip(control: ManualControl) {
             }
         }
     }
+    refreshExposureAutoIndicators()
 }
 
 internal fun MainActivity.formatVideoEvStops(index: Long): String {
@@ -427,7 +418,6 @@ internal fun MainActivity.showManualControl(control: ManualControl, allowToggle:
     // in the slider strip, so landscape stays compact. Full values remain in
     // accessibility descriptions.
     manualLimits.visibility = View.GONE
-    manualSlider.label = shortControlName(control)
     manualSlider.max = if (control == ManualControl.WHITE_BALANCE && controller.wbPresetsEnabled)
         range.maximum.toInt().coerceAtLeast(1) else SLIDER_STEPS
     manualSlider.setProgressFromUser(sliderProgress(control, range), fromUser = false)
@@ -441,41 +431,22 @@ internal fun MainActivity.showManualControl(control: ManualControl, allowToggle:
     scheduleManualPanelHide()
 }
 
-/** Full value stays available to accessibility even though the ruler draws ticks only. */
+/** Use the same camera-value mapping for the scale and its accessibility readout. */
 internal fun MainActivity.refreshRuleSliderAccessibility() {
-    activeProgramAxis?.let { axis ->
-        val range = manualRangeFor(axis) ?: return
-        val value = sliderValue(axis, range, manualSlider.progress)
-        val valueText = formatManualValue(axis, value)
-        manualSlider.valueText = rulerValueText(axis, value)
-        manualSlider.minText = rulerValueText(axis, range.minimum)
-        manualSlider.maxText = rulerValueText(axis, range.maximum)
-        manualSlider.contentDescription =
-            "${controlName(axis)} lock slider, $valueText. Current value also shown in the ${shortControlName(axis)} chip."
-        return
-    }
-    val control = activeManualControl ?: return
+    val control = activeProgramAxis ?: activeManualControl ?: return
     val range = manualRangeFor(control) ?: return
-    val value = sliderValue(control, range, manualSlider.progress)
-    val valueText = formatManualValue(control, value)
-    manualSlider.valueText = rulerValueText(control, value)
-    manualSlider.minText = rulerValueText(control, range.minimum)
-    manualSlider.maxText = rulerValueText(control, range.maximum)
+    fun labelAt(progress: Int) = formatManualValue(control, sliderValue(control, range, progress))
+    val valueText = labelAt(manualSlider.progress)
+    manualSlider.referenceLabels = if (control == ManualControl.WHITE_BALANCE && controller.wbPresetsEnabled) {
+        emptyList()
+    } else {
+        (1..3).map { index ->
+            labelAt(manualSlider.max * index / 4).removePrefix("ISO ").removeSuffix(" EV")
+        }
+    }
+    val adjustment = if (activeProgramAxis != null) "lock slider" else "slider"
     manualSlider.contentDescription =
-        "${controlName(control)} slider, $valueText. Current value also shown in the ${shortControlName(control)} chip."
-}
-
-/**
- * Compact value for the floating ruler: the axis code already sits above it,
- * so "ISO 7964" becomes "7964" and "+0.2 EV" becomes "+0.2".
- */
-internal fun MainActivity.rulerValueText(control: ManualControl, value: Long): String {
-    val full = formatManualValue(control, value)
-    return when (control) {
-        ManualControl.ISO -> full.removePrefix("ISO ").trim()
-        ManualControl.EXPOSURE_COMPENSATION -> full.removeSuffix(" EV").trim()
-        else -> full
-    }.ifEmpty { "--" }
+        "${controlName(control)} $adjustment, $valueText. Current value also shown in the ${shortControlName(control)} chip."
 }
 
 internal fun MainActivity.scheduleManualPanelHide() {
@@ -604,11 +575,10 @@ internal fun MainActivity.cycleQuickMono() {
     if (isVideoMode) return
     val current = jpegOutputSettings()
     val next = current.mono.mode.next()
-    if (!controller.setJpegOutputSettings(current.copy(mono = current.mono.copy(mode = next)).resolvedForPlatform())) {
+    if (!applyPhotoOutputSettings(current.copy(mono = current.mono.copy(mode = next)))) {
         setStatus("SETTINGS AFTER SAVES")
         return
     }
-    lensPreferences().edit().putString(MonoMode.PREFERENCE_KEY, next.name).apply()
     updateQuickControls()
     setStatus(if (next.enabled) "B&W • ${next.label.uppercase(Locale.US)}" else "COLOR")
 }

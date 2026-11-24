@@ -8,7 +8,9 @@ enum class PhotoToneMapper(val label: String) {
     val shaderMode: Int get() = when(this) { AGX -> 0; BASIC -> 1; SIGMOID -> 2; ACES_2 -> 3; OPENDRT -> 4 }
     companion object {
         const val PREFERENCE_KEY = "jpeg_tone_mapper"
+        val selectable: List<PhotoToneMapper> = entries.filter { it != BASIC }
+
         fun fromPreference(value: String?): PhotoToneMapper =
-            entries.firstOrNull { it.name == value } ?: SIGMOID
+            selectable.firstOrNull { it.name == value } ?: SIGMOID
     }
 }

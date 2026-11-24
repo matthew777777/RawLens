@@ -103,6 +103,35 @@ object RawPackedUnpacker {
         }
     }
 
+    /** Reuses a tight, native-code plane for the CPU viewfinder on the camera thread. */
+    internal class PreviewPlaneReader {
+        private var storage: ByteBuffer? = null
+        private var row = ShortArray(0)
+
+        fun unpack(source: ByteBuffer, width: Int, height: Int, rowStride: Int,
+                   format: PackedRawFormat): ByteBuffer {
+            require(width > 0 && width % 4 == 0 && height > 0)
+            val packedBytes = format.packedRowBytes(width)
+            require(rowStride >= packedBytes)
+            val required = (height - 1L) * rowStride + packedBytes
+            require(required <= source.remaining())
+            val bytes = 2L * width * height
+            require(bytes <= Int.MAX_VALUE)
+            val output = storage?.takeIf { it.capacity() >= bytes }
+                ?: ByteBuffer.allocateDirect(bytes.toInt()).order(ByteOrder.nativeOrder()).also { storage = it }
+            if (row.size < width) row = ShortArray(width)
+            output.clear()
+            output.limit(bytes.toInt())
+            val shorts = output.asShortBuffer()
+            val origin = source.position()
+            for (y in 0 until height) {
+                decodeRow(source, origin + y * rowStride, row, 0, width, format)
+                shorts.put(row, 0, width)
+            }
+            return output
+        }
+    }
+
     /**
      * Sparse native-code sampler for metering loops: decodes one packed row
      * at a time and caches it, so histograms and peaking pay per visited

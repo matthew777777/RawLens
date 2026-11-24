@@ -12,6 +12,7 @@ import android.hardware.camera2.params.ColorSpaceTransform
 import android.media.Image
 import android.os.Build
 import android.util.Rational
+import android.util.Size
 
 /** A defensive immutable wrapper for metadata arrays supplied by the camera HAL. */
 class ImmutableFloatValues(values: FloatArray) {
@@ -147,17 +148,28 @@ data class RawFrameMetadata(
     }
 }
 
+private fun physicalCaptureResults(result: TotalCaptureResult): Map<String, CaptureResult> = runCatching {
+    if (Build.VERSION.SDK_INT >= 31) result.physicalCameraTotalResults
+    else {
+        @Suppress("DEPRECATION")
+        result.physicalCameraResults
+    }
+}.getOrDefault(emptyMap())
+
+internal fun physicalCaptureResult(result: TotalCaptureResult, physicalId: String?): CaptureResult? =
+    physicalId?.let { physicalCaptureResults(result)[it] }
+
 object RawFrameMetadataFactory {
     /**
      * Physical-result routing contract (the `captureValue` routing pattern).
-     * Returns the physical camera id to read sensor keys from, or null when the
-     * frame has no physical source or the id is stale/unknown. Pure strings in
-     * and out so it stays JVM-testable without the Android framework.
+     * An output binding takes precedence over the logical camera's active ID.
+     * If that sensor's result is missing, callers fall back to the logical result.
      */
     internal fun selectPhysicalResultId(
         activePhysicalId: String?,
-        availableIds: Set<String>
-    ): String? = activePhysicalId?.takeIf { it in availableIds }
+        availableIds: Set<String>,
+        boundPhysicalId: String? = null
+    ): String? = (boundPhysicalId ?: activePhysicalId)?.takeIf { it in availableIds }
 
     fun capture(
         cameraId: String,
@@ -165,9 +177,10 @@ object RawFrameMetadataFactory {
         characteristics: CameraCharacteristics,
         result: TotalCaptureResult,
         exifOrientation: Int,
-        levelOverrides: DngMetadataOverrides = DngMetadataOverrides()
+        levelOverrides: DngMetadataOverrides = DngMetadataOverrides(),
+        boundPhysicalId: String? = null
     ): RawFrameMetadata = capture(cameraId, RawImageView.of(image), characteristics, result,
-        exifOrientation, levelOverrides)
+        exifOrientation, levelOverrides, boundPhysicalId = boundPhysicalId)
 
     /** [capture] over a live or staged RAW plane ([BufferedRawFrame.view]). */
     internal fun capture(
@@ -176,30 +189,19 @@ object RawFrameMetadataFactory {
         characteristics: CameraCharacteristics,
         result: TotalCaptureResult,
         exifOrientation: Int,
-        levelOverrides: DngMetadataOverrides = DngMetadataOverrides()
+        levelOverrides: DngMetadataOverrides = DngMetadataOverrides(),
+        vendorFullResolution: Boolean = false,
+        boundPhysicalId: String? = null
     ): RawFrameMetadata {
         val cfaValue = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         val cfaResult = runCatching { cfaValue?.let(BayerPattern::fromCamera2) }
         val cfa = cfaResult.getOrNull()
 
-        // Physical-first routing: when the HAL reports which physical camera
-        // produced this frame, sensor keys below read from that physical result
-        // and fall back to the logical result per key. Pipeline states
-        // (AF/AE/lens/flash) and frame identity stay logical. With no physical
-        // source this degrades to a plain logical read, identical to before.
-        // Physical results need Android 12 (the runCatching below also
-        // covers HALs that throw, but only an SDK guard satisfies the
-        // minSdk-30 NewApi gate for the call itself).
-        val physicalResults = if (Build.VERSION.SDK_INT >= 31) {
-            runCatching { result.physicalCameraTotalResults }.getOrNull()
-        } else {
-            null
-        }
-        val physicalId = selectPhysicalResultId(
-            result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID),
-            physicalResults?.keys ?: emptySet()
-        )
-        val physical: TotalCaptureResult? = physicalId?.let { physicalResults?.get(it) }
+        // An explicitly bound output can differ from the logical camera's active sensor.
+        val logicalActiveId = result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
+        val physicalResults = physicalCaptureResults(result)
+        val physicalId = selectPhysicalResultId(logicalActiveId, physicalResults.keys, boundPhysicalId)
+        val physical = physicalResults[physicalId]
         fun <T> sensorKey(key: CaptureResult.Key<T>): T? = physical?.get(key) ?: result.get(key)
 
         val dynamicBlack = sensorKey(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
@@ -251,11 +253,15 @@ object RawFrameMetadataFactory {
                 "halWhite=${dynamicWhite ?: staticWhite}")
         }
 
-        val pixelSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+        val fullSize = if (vendorFullResolution) Size(image.width, image.height) else null
+        val pixelSize = fullSize ?: characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
         val imageCrop = image.cropRect.snapshot()!!
         val plane = image.buffer?.takeIf { image.planeCount == 1 }
-        val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE).snapshot()
-        val preCorrection = characteristics
+        // The vendor stream is configured at full resolution while standard
+        // Camera2 characteristics can still describe the binned photo mode.
+        val fullArray = fullSize?.let { IntRectSnapshot(0, 0, it.width, it.height) }
+        val activeArray = fullArray ?: characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE).snapshot()
+        val preCorrection = fullArray ?: characteristics
             .get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE).snapshot()
         val rawCrop = if (Build.VERSION.SDK_INT >= 34) {
             sensorKey(CaptureResult.SCALER_RAW_CROP_REGION).snapshot()
@@ -402,11 +408,10 @@ object RawFrameMetadataFactory {
             noiseProfile = noise,
             sensorPixelMode = pixelMode,
             rawBinningFactorUsed = rawBinning,
-            activePhysicalCameraId = result
-                .get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID),
-            afState = result.get(CaptureResult.CONTROL_AF_STATE),
-            aeState = result.get(CaptureResult.CONTROL_AE_STATE),
-            lensState = result.get(CaptureResult.LENS_STATE),
+            activePhysicalCameraId = boundPhysicalId ?: logicalActiveId,
+            afState = sensorKey(CaptureResult.CONTROL_AF_STATE),
+            aeState = sensorKey(CaptureResult.CONTROL_AE_STATE),
+            lensState = sensorKey(CaptureResult.LENS_STATE),
             quadBayer = quadBayer,
             aperture = sensorKey(CaptureResult.LENS_APERTURE)
                 ?.takeIf { it.isFinite() && it > 0f },

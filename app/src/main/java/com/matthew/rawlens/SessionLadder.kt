@@ -61,18 +61,17 @@ internal class SessionLadder {
         comboIndex = 0
         altRouteActive = false
         failedOpenIds.clear()
-        routeRetries = 0
-        rejectionRetries = 0
+        resetOpenRetries()
     }
 
-    /** Camera start: a fresh lifecycle gets a fresh route-retry budget. */
-    fun resetRouteRetries() {
+    /** A fresh camera lifecycle retries temporary provider failures. */
+    fun resetOpenRetries() {
         routeRetries = 0
+        rejectionRetries = 0
     }
 
     fun onOpened(openId: String) {
-        routeRetries = 0
-        rejectionRetries = 0
+        resetOpenRetries()
         openedOnce += openId
     }
 

@@ -25,11 +25,12 @@ data class DevelopedJpeg(val bitmap: Bitmap, val settings: JpegOutputSettings, v
 class Gles31JpegOutputProcessor(context: Context) {
     private val cleanup = RapidRawDevelop(context.applicationContext)
     private val shaderSource = context.applicationContext.assets.open(SHADER).bufferedReader().use {
-        it.readText().replace("// SIGMOID_FUNCTIONS", CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
+        it.readText().replace("// PHOTO_CUBE", PhotoLutGl.glsl).replace("// SIGMOID_FUNCTIONS", CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
     }
     // This processor is invoked inside Gles31AmazeProcessor.process(), on its persistent writer
     // EGL context. Compile once per context instead of once per saved JPEG.
     private val aces2 = Aces2Gl()
+    private val photoLut = PhotoLutGl()
     private var program = 0
     private val cleanupPrograms = IntArray(4)
     private var programThread: Thread? = null
@@ -114,6 +115,7 @@ class Gles31JpegOutputProcessor(context: Context) {
 
             val outputProgram = outputProgram(prepared != null, resolved.toneMapper, resolved.ultraHdr)
             GLES31.glUseProgram(outputProgram)
+            photoLut.bind(outputProgram, resolved.photoLut)
             if (prepared != null) cleanup.bindPrepared(outputProgram, prepared)
             GLES31.glBindImageTexture(
                 0, scene.textureId, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F
@@ -202,6 +204,7 @@ class Gles31JpegOutputProcessor(context: Context) {
     /** Must be called while AMaZE's persistent EGL context is current on its worker thread. */
     fun close() {
         aces2.close()
+        photoLut.close()
         cleanup.close()
         if (program != 0 || cleanupPrograms.any { it != 0 }) {
             check(programThread == Thread.currentThread()) {
@@ -345,7 +348,7 @@ class Gles31JpegOutputProcessor(context: Context) {
         if (fusedCleanup) {
             if (cleanupPrograms[index] == 0) cleanupPrograms[index] = compile(cleanup.fusedSource(shaderSource, tone == PhotoToneMapper.BASIC, gainmap))
         } else {
-            if (program == 0) program = compile(shaderSource)
+            if (program == 0) program = compile("#define RAWLENS_STILL_SDR 1\n$shaderSource")
         }
         programThread = thread
         return if (fusedCleanup) cleanupPrograms[index] else program

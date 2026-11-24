@@ -36,16 +36,6 @@ layout(push_constant) uniform Params {
     vec4 u_shadeActive;   // shade active l, t, 1/w, 1/h (sensor px)
 } p;
 
-uint fetchCode(ivec2 s) {
-    return texelFetch(rawImg, s, 0).r;
-}
-
-float fetchLinear(ivec2 q, int ch) {
-    ivec2 s = q + ivec2(ch & 1, (ch >> 1) & 1);
-    int num = int(texelFetch(rawImg, s, 0).r) * 64 - floatBitsToInt(p.u_black[ch]);
-    return clamp(float(num) / float(floatBitsToInt(p.u_invRange[ch])), 0.0, 1.0);
-}
-
 // Lens-shading gains (R, Gr, Gb, B) for one quad, one hardware-
 // bilinear texture fetch at the quad origin (intra-quad variation is
 // negligible — the map is ~17x17 over the sensor; the GL viewfinder
@@ -72,8 +62,17 @@ void main() {
     ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(ij, p.u_frameSize))) return;
     ivec2 q = p.u_quadBase + ij * p.u_step;
-    vec4 b = vec4(fetchLinear(q, p.u_chans.x), fetchLinear(q, p.u_chans.y),
-                  fetchLinear(q, p.u_chans.z), fetchLinear(q, p.u_chans.w));
+    // Fetch and normalize in sensor order so black and range use fixed vector lanes.
+    uvec4 sites = uvec4(texelFetch(rawImg, q, 0).r,
+                        texelFetchOffset(rawImg, q, 0, ivec2(1, 0)).r,
+                        texelFetchOffset(rawImg, q, 0, ivec2(0, 1)).r,
+                        texelFetchOffset(rawImg, q, 0, ivec2(1, 1)).r);
+    ivec4 num = ivec4(sites) * 64 - floatBitsToInt(p.u_black);
+    vec4 linear = clamp(vec4(num) / vec4(floatBitsToInt(p.u_invRange)), 0.0, 1.0);
+    // The red site identifies the row and column flips for all four Bayer layouts.
+    ivec4 ch = p.u_chans;
+    vec4 columns = (ch.x & 1) != 0 ? linear.yxwz : linear;
+    vec4 b = (ch.x & 2) != 0 ? columns.zwxy : columns;
     if (p.u_shadeDims.z != 0) {
         b *= shadeQuad(q, p.u_chans);
     }

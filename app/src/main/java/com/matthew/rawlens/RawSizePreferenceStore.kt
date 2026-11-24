@@ -27,10 +27,29 @@ class RawSizePreferenceStore(context: Context) {
         editor.apply()
     }
 
+    internal fun customReaderSize(cameraId: String?): String? =
+        cameraId?.let { normalizeReaderSize(preferences.getString("reader_size_$it", null)) }
+
+    internal fun setCustomReaderSize(cameraId: String, size: String?) {
+        val key = "reader_size_$cameraId"
+        val normalized = normalizeReaderSize(size)
+        val editor = preferences.edit()
+        if (normalized == null) editor.remove(key) else editor.putString(key, normalized)
+        editor.apply()
+    }
+
     private fun key(cameraId: String) = "size_$cameraId"
 
     companion object {
         const val PREFS_NAME = "rawlens_raw_size"
+        const val VENDOR_READER_USAGE = 0x00100000L
+
+        internal fun normalizeReaderSize(text: String?): String? {
+            val normalized = normalizeSize(text?.replace('X', 'x')) ?: return null
+            val (width, height) = normalized.split('x').map(String::toLong)
+            // A RAW_SENSOR plane stores at least two bytes per pixel.
+            return normalized.takeIf { width * height <= Int.MAX_VALUE / 2 }
+        }
 
         /** Pure + host-tested: "WxH" with positive dimensions. */
         fun isPlausibleSize(text: String): Boolean = normalizeSize(text) != null

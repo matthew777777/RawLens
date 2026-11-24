@@ -66,7 +66,7 @@ class DevelopQueueService : Service() {
                 val exif=ExifInterface(cache)
                 val image=DngImportReader.read(cache)
                 val metadata=image.frameMetadata(exif)
-                val look=item.options.look()
+                val look = item.options.look().copy(photoLut = PhotoLutSelection(applicationContext).current())
                 val settings=RawDevelopmentSettings(exposureEv=item.options.exposureEv+(image.tags[50730]?.first() ?: 0.0),
                     adaptiveExposureStrength=if(item.options.autoExposure) 1f else 0f,
                     adaptiveExposureTuning=AdaptiveExposureTuning.fromOutputSettings(look))

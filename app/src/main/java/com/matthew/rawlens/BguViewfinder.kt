@@ -57,6 +57,7 @@ class BguViewfinder @JvmOverloads constructor(
     @Volatile private var previewCenterWeight = 0f
     @Volatile private var previewFocusX: Float? = null
     @Volatile private var previewFocusY: Float? = null
+    @Volatile private var photoLut: PhotoLutLook? = null
     @Volatile private var agx = floatArrayOf(1f, 1f, 1f, 0f, 10f, 6.5f, 0f, 1f, 0f, 0f, CameraToneBalance.DEFAULT_SHADOW_LIFT, 0f)
     @Volatile private var frameIntervalNs = 1_000_000_000L / 30
     override var onStarvation: (() -> Unit)? = null
@@ -83,11 +84,11 @@ class BguViewfinder @JvmOverloads constructor(
      * and power-save caps stay authoritative, and the CPU guide (whose
      * cost scales brutally with guide size) keeps the raw user target.
      */
-    internal fun effectiveTargetLongEdge(): Int {
+    internal fun effectiveTargetLongEdge(packed: Boolean = false): Int {
         val base = bguEffectiveTarget(
             userTarget = targetLongEdge,
             surfaceLongEdge = maxOf(width, height),
-            gpuPath = !cpuFallback && !cpuForced,
+            gpuPath = !packed && !cpuFallback && !cpuForced,
             recordMode = recordMode,
             powerSave = powerSave
         )
@@ -99,7 +100,7 @@ class BguViewfinder @JvmOverloads constructor(
         // mid-range phones at 6-11 ms stay on step-4. [guideBoost] is
         // latched with hysteresis in offer(); record/power-save and the
         // CPU guide never boost.
-        return if (guideBoost && !cpuFallback && !cpuForced && !recordMode && !powerSave)
+        return if (!packed && guideBoost && !cpuFallback && !cpuForced && !recordMode && !powerSave)
             maxOf(base, BOOST_TARGET) else base
     }
 
@@ -121,6 +122,7 @@ class BguViewfinder @JvmOverloads constructor(
 
     override fun setAgx(settings: JpegOutputSettings) {
         val r = settings.resolvedForPlatform()
+        photoLut = r.photoLut
         agx = floatArrayOf(
             r.agxContrast, r.agxSaturation, r.agxPurityBoost, r.agxHuePreservation,
             r.effectiveAgxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder, if (r.agxLook == AgxLook.PUNCHY) 1f else 0f,
@@ -351,6 +353,8 @@ class BguViewfinder @JvmOverloads constructor(
         sensorLevels = overrides
     }
 
+    private val packedPreview = RawPackedUnpacker.PreviewPlaneReader()
+
     override fun offer(image: Image, c: CameraCharacteristics, result: CaptureResult?) {
         if (disposed || fatal != null) return
         val generation = gridExchange.generation
@@ -401,10 +405,15 @@ class BguViewfinder @JvmOverloads constructor(
             return
         }
         val plane = image.planes.firstOrNull() ?: return
-        val rowStride = plane.rowStride
-        val pixelStride = plane.pixelStride
-        val buf = plane.buffer
-        if (rowStride <= 0 || pixelStride <= 0) return
+        val packed = PackedRawFormat.ofInt(image.format)
+        if (plane.rowStride <= 0 || (packed == null && plane.pixelStride <= 0)) return
+        val rowStride = if (packed == null) plane.rowStride else image.width * 2
+        val pixelStride = if (packed == null) plane.pixelStride else 2
+        val buf = if (packed == null) plane.buffer else try {
+            packedPreview.unpack(plane.buffer, image.width, image.height, plane.rowStride, packed)
+        } catch (_: IllegalArgumentException) {
+            return
+        }
 
         val cropRect = try {
             result?.get(CaptureResult.SCALER_CROP_REGION)
@@ -416,7 +425,9 @@ class BguViewfinder @JvmOverloads constructor(
         val nextBoost = guideBoostNext(guideBoost, statVkMs, boostOffers)
         if (guideBoost && !nextBoost) boostOffers = 0 // re-warm after a release
         guideBoost = nextBoost
-        val effTarget = effectiveTargetLongEdge()
+        val effTarget = effectiveTargetLongEdge(packed != null).let {
+            if (packed != null) minOf(it, VfCpuNeon.MAX_EDGE) else it
+        }
         statEffTarget = effTarget
         val key = GeoKey(image.width, image.height, crop?.joinToString(",") ?: "full", effTarget)
         var geo = geoCache
@@ -518,7 +529,7 @@ class BguViewfinder @JvmOverloads constructor(
                 // Per-offer evaluation: the automatic fallback and the manual
                 // BGU_CPU override take the identical CPU path, and each job
                 // records which guide it carries, so mid-stream taps flip cleanly.
-                val useCpu = cpuFallback || cpuForced
+                val useCpu = packed != null || cpuFallback || cpuForced
                 val guideOk = if (!useCpu) {
                     offerGpuGuide(image, buf, rowStride, pixelStride, geo, slot, channels, levels, white, offerT0)
                 } else {
@@ -1657,7 +1668,7 @@ class BguViewfinder @JvmOverloads constructor(
         val ok = try {
             val drew = slice.draw(
                 eglImage, cpuBuf, job.geo,
-                job.rotation, job.mirrored, width, height, fit
+                job.rotation, job.mirrored, width, height, fit, photoLut
             )
             val t1 = SystemClock.elapsedRealtimeNanos()
             val drawMs = (t1 - t0) / 1e6f

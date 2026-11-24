@@ -1474,39 +1474,13 @@ class RawDevelopmentCoordinator(context: Context) {
         return jxlOutput.process(output, look, jxl)
     }
 
-    /**
-     * Tile-drop retry for the half-float JXL path, mirroring
-     * [developWithTileDropRetry]: a dropped (unwritten, all-zero) GPU tile
-     * is retried once, and a persistent drop fails loudly. Samples RGB
-     * only; alpha is ignored.
-     */
-    private fun developJxlWithTileDropRetry(tag: String, once: () -> DevelopedJxl): DevelopedJxl {
-        val first = once()
-        if (findJxlZeroTiles(first).isEmpty()) return first
-        Log.w(LOG_TAG, "Dropped GPU tile(s) in $tag; retrying develop once")
-        val second = once()
-        val redrops = findJxlZeroTiles(second)
-        if (redrops.isEmpty()) {
-            Log.i(LOG_TAG, "Tile-drop retry recovered $tag")
-            return second
+    private fun developJxlWithTileDropRetry(tag: String, once: () -> DevelopedJxl): DevelopedJxl =
+        try {
+            once()
+        } catch (failure: JxlGpuOutputException) {
+            Log.w(LOG_TAG, "Invalid GPU output in $tag; retrying develop once", failure)
+            once()
         }
-        throw IllegalStateException("GPU tile drop persisted after retry in $tag: retry=$redrops")
-    }
-
-    private fun findJxlZeroTiles(frame: DevelopedJxl): List<DevelopTile> {
-        val view = frame.halfRgba.duplicate().order(java.nio.ByteOrder.nativeOrder())
-        val rowShorts = frame.width * 4
-        return DevelopTileDropDetector.findZeroTiles(frame.width, frame.height) { x, y ->
-            // Any nonzero half sample keeps the tile alive: OR the full
-            // 16-bit patterns (no truncation) so near-black subnormals in a
-            // single channel cannot masquerade as a dropped tile.
-            val base = (y * rowShorts + x * 4) * 2
-            val r = view.getShort(base).toInt() and 0xffff
-            val g = view.getShort(base + 2).toInt() and 0xffff
-            val b = view.getShort(base + 4).toInt() and 0xffff
-            r or g or b
-        }
-    }
 
     /** Releases cached programs and the thread-confined EGL session after queued saves finish. */
     fun close() {

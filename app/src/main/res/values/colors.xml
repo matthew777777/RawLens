@@ -12,8 +12,11 @@
     <color name="text_muted">#6E757B</color>
     <color name="accent">#DDC08D</color>
     <color name="accent_dark">#241B0C</color>
+    <color name="quick_gold_surface">#30271B</color>
+    <color name="quick_gold_rim">#80684A</color>
     <color name="accent_soft">#1ADDC08D</color>
     <color name="focus">#DDC08D</color>
     <color name="metering">#E5A861</color>
+    <color name="exposure_index">#FF5950</color>
     <color name="danger">#FF7A7A</color>
 </resources>

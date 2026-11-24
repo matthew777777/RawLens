@@ -186,6 +186,8 @@ class JxlPixelPackTest {
     @Test
     fun pqEotfAnchorsMatchSt2084() {
         assertEquals(0f, JxlPixelPack.pqEotfNits(0f), 0f)
+        // Half-float rounding can land just below the PQ code for zero nits.
+        assertEquals(0f, JxlPixelPack.pqEotfNits(0.0000007152557f), 0f)
         assertEquals(100f, JxlPixelPack.pqEotfNits(0.5081f), 0.5f)
         assertEquals(1000f, JxlPixelPack.pqEotfNits(0.7518f), 1f)
         assertEquals(10000f, JxlPixelPack.pqEotfNits(1f), 1f)

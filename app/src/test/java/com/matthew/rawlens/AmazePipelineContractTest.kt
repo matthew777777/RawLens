@@ -11,6 +11,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AmazePipelineContractTest {
+    @Test fun fiftyMpFusedJpegFitsWithoutIncreasingGpuBudget() {
+        val budget = 768L * 1024 * 1024
+        assertTrue(AmazePipelineContract.evaluate(limits(), 8160, 6120, budget) is AmazeCapability.Unsupported)
+        assertTrue(AmazePipelineContract.evaluate(limits(), 8160, 6120, budget,
+            fusedOutput = true, gainmap = true) is AmazeCapability.Supported)
+        val raw = AmazePipelineContract.estimatedGpuBytes(8160, 6120)
+        val fused = AmazePipelineContract.estimatedGpuBytes(8160, 6120, true, true)
+        assertEquals(8160L * 6120 * 4 - 2040L * 1530 * 4, raw - fused)
+    }
+
     @Test
     fun chromaStencilKeepsRawTherapeeP1InNortheastQuadrant() {
         val shader = File("src/main/assets/shaders/amaze/chroma.glsl").readText()

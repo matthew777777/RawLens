@@ -3,6 +3,25 @@
 
 package com.matthew.rawlens
 
+internal enum class RawStreamMode(val label: String) {
+    AUTO("Automatic"),
+    RAW_ONLY("RAW only"),
+    PREVIEW_AND_RAW("Preview + RAW");
+
+    fun selectCombos(combos: List<SessionStreamCombo>): List<SessionStreamCombo> = when (this) {
+        AUTO -> combos
+        RAW_ONLY -> combos.filter { it.preview == null }
+        PREVIEW_AND_RAW -> combos.filter { it.preview != null }
+    }
+
+    companion object {
+        const val KEY = "raw_stream_mode"
+
+        fun fromPreference(value: String?): RawStreamMode =
+            entries.firstOrNull { it.name == value } ?: AUTO
+    }
+}
+
 /**
  * Plain width/height pair for session-combo selection. `android.util.Size`
  * is a framework stub under JVM unit tests, so the ladder below runs on

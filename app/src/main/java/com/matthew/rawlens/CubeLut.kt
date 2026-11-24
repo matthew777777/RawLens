@@ -2,6 +2,8 @@
 package com.matthew.rawlens
 
 import java.io.Reader
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.floor
 
 /**
@@ -11,7 +13,7 @@ import kotlin.math.floor
  * the domain clamp to its edge. Output values retain their signed float range.
  * No 1D shaper, mixed 1D/3D, or Resolve video-range extensions are accepted.
  */
-internal class CubeLut private constructor(
+class CubeLut private constructor(
     val title: String,
     val size: Int,
     private val minimum: FloatArray,
@@ -26,6 +28,15 @@ internal class CubeLut private constructor(
     fun rgbaHalfBits(): ShortArray = ShortArray(size * size * size * 4) { i ->
         VfVideoGrade.floatToHalfBits(if (i % 4 == 3) 1f else values[i / 4 * 3 + i % 4]).toShort()
     }
+
+    private val halfBuffer by lazy {
+        val half = rgbaHalfBits()
+        ByteBuffer.allocateDirect(half.size * 2).order(ByteOrder.nativeOrder()).apply {
+            asShortBuffer().put(half)
+        }
+    }
+
+    internal fun rgbaHalfBuffer(): ByteBuffer = halfBuffer.asReadOnlyBuffer()
 
     fun gpuParameters(intensity: Float): FloatArray {
         require(intensity.isFinite() && intensity in 0f..1f)
@@ -53,6 +64,7 @@ internal class CubeLut private constructor(
     }
 
     companion object {
+        private val TOKEN_SEPARATOR = Regex("\\s+")
         const val MAX_BYTES = 32 * 1024 * 1024
 
         /** Resource limits are app policy, not additional .cube format rules. */
@@ -78,7 +90,7 @@ internal class CubeLut private constructor(
                 val line = (if (comment < 0) raw else raw.substring(0,comment))
                     .removePrefix("\uFEFF").trim()
                 if (line.isNotEmpty()) {
-                    val words = line.split(Regex("\\s+"))
+                    val words = line.split(TOKEN_SEPARATOR)
                     val key = words[0]
                     fun triple(): FloatArray {
                         require(words.size == 4) { "Expected three domain values" }

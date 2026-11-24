@@ -178,8 +178,7 @@ jstring encodeWithLibjxl(JNIEnv* env, jobject rgb, jint width, jint height, jint
     JXL_CHECK(env, encoder, JxlEncoderSetBasicInfo(encoder, &basic));
 
     // Color: native sRGB / Display-P3 encoding like darktable's known-profile
-    // fast path; ICC blob fallback otherwise. PQ keeps the primaries choice
-    // and swaps only the transfer function to ST2084.
+    // fast path; ICC blob fallback otherwise. HDR stills use BT.2100 PQ.
     if (icc.empty()) {
         JxlColorEncoding color;
         // Zero first, as the Adobe DNG SDK does (dng_jxl.cpp): only the enum
@@ -188,7 +187,9 @@ jstring encodeWithLibjxl(JNIEnv* env, jobject rgb, jint width, jint height, jint
         color.color_space = JXL_COLOR_SPACE_RGB;
         color.white_point = JXL_WHITE_POINT_D65;
         color.rendering_intent = JXL_RENDERING_INTENT_PERCEPTUAL;
-        if (displayP3) {
+        if (transferFunction == 1) {
+            color.primaries = JXL_PRIMARIES_2100;
+        } else if (displayP3) {
             color.primaries = JXL_PRIMARIES_P3;
         } else {
             color.primaries = JXL_PRIMARIES_SRGB;

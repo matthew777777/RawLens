@@ -67,24 +67,25 @@ internal class VfToneLutGl(private val cacheDir: File?) {
      * u_toneLut at it. Returns false only before the first LUT ever exists.
      */
     fun bind(program: Int, unit: Int, es3: Boolean): Boolean {
-        val pending = ready.getAndSet(null) ?: if (texture == 0) memory else null
-        if (pending != null && pending.key != uploadedKey) upload(pending, es3)
-        if (texture == 0) return false
         val location = GL.glGetUniformLocation(program, "u_toneLut")
         if (location < 0) return false
+        val pending = ready.getAndSet(null) ?: if (texture == 0) memory else null
         GL.glActiveTexture(GL.GL_TEXTURE0 + unit)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
-        GL.glUniform1i(location, unit)
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-        return true
+        try {
+            // The camera input is already bound on unit zero for this draw.
+            if (pending != null && pending.key != uploadedKey) upload(pending, es3)
+            if (texture == 0) return false
+            GL.glBindTexture(GL.GL_TEXTURE_2D, texture)
+            GL.glUniform1i(location, unit)
+            return true
+        } finally {
+            GL.glActiveTexture(GL.GL_TEXTURE0)
+        }
     }
 
     private fun upload(baked: Baked, es3: Boolean) {
         val w = VfToneLut.SIZE_C * VfToneLut.SIZE_I
         val h = VfToneLut.SIZE_C
-        val previous = IntArray(1)
-        GL.glGetIntegerv(GL.GL_ACTIVE_TEXTURE, previous, 0)
-        GL.glActiveTexture(GL.GL_TEXTURE0)
         val fresh = texture == 0
         if (fresh) {
             val ids = IntArray(1)
@@ -112,7 +113,6 @@ internal class VfToneLutGl(private val cacheDir: File?) {
             else GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, w, h, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, bytes)
         }
         uploadedKey = baked.key
-        GL.glActiveTexture(previous[0])
     }
 
     /** GL thread: drops the texture. The baked LUT stays cached and is re-uploaded on the next bind. */

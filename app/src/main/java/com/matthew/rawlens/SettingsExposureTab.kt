@@ -78,8 +78,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         rawZslSettingsStatus = null
         sidecarSettingsStatus = null
         content.removeAllViews()
-        content.addView(sectionTitle("PROGRAM custom AE"))
-        content.addView(sectionDesc("RAW-driven per-lens sensor ISO + shutter. Full per-lens editor (priority, locks, bounds, bias) mirrors the PROGRAM panel; ISO/S chips open it too."))
+        content.addView(sectionTitle("Program AE"))
         var dynamicSettings = dynamicExposureSettings()
         fun applyDynamicSettings() {
             lensPreferences().edit()
@@ -92,21 +91,13 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             controller.setDynamicExposureSettings(dynamicSettings)
         }
         content.addView(SettingsSwitch(this).apply {
-            text = "PROGRAM custom AE (RAW-driven)"
+            text = "RAW-driven Program AE"
             setTextColor(getColor(R.color.text_primary))
             isChecked = dynamicSettings.enabled
             setOnCheckedChangeListener { _, enabled ->
                 dynamicSettings = dynamicSettings.copy(enabled = enabled)
                 applyDynamicSettings()
             }
-        })
-        content.addView(TextView(this).apply {
-            text = "PROGRAM custom AE is RAW-driven per-lens (sensor ISO + shutter). " +
-                "Hold ISO/SHUTTER chips to lock, tap for slider, Auto releases both. " +
-                "Cameras without manual sensor control keep using Android AE. " +
-                "Use ISO/S chips for the full editor; ETTR overrides PROGRAM when converged."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
         })
         if (!controller.hasManualSensorControl()) {
             content.addView(TextView(this).apply {
@@ -118,7 +109,19 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         }
         var programSettings = programProfile()
         fun applyProgramSettings() = saveProgramProfile(programSettings)
-        val curveControls = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL }
+        val curveControls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        val curveToggle = Button(this).apply {
+            text = "Show brightness targets"
+            visibility = if (programSettings.brightnessTuning == ProgramBrightnessTuning.FIXED) View.GONE else View.VISIBLE
+            setOnClickListener {
+                val expanded = curveControls.visibility == View.VISIBLE
+                curveControls.visibility = if (expanded) View.GONE else View.VISIBLE
+                text = if (expanded) "Show brightness targets" else "Hide brightness targets"
+            }
+        }
         content.addView(Button(this).apply {
             fun refresh() { text = "Scene brightness: ${programSettings.brightnessTuning.label}" }
             refresh()
@@ -127,14 +130,15 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
                     programSettings.brightnessTuning, { it.label }) { mode ->
                     programSettings = programSettings.copy(brightnessTuning = mode)
                     applyProgramSettings()
-                    curveControls.visibility = if (programSettings.brightnessTuning == ProgramBrightnessTuning.FIXED) View.GONE else View.VISIBLE
+                    curveControls.visibility = View.GONE
+                    curveToggle.text = "Show brightness targets"
+                    curveToggle.visibility = if (mode == ProgramBrightnessTuning.FIXED) View.GONE else View.VISIBLE
                     refresh()
                 }
             }
         })
-        content.addView(sectionDesc("Natural preserves darker scenes by adapting the exposure target to scene brightness. Fixed uses the same target in every scene. Protect highlights also limits bright areas. Adaptive curves are experimental. Saved per lens."))
+        content.addView(curveToggle)
         content.addView(curveControls)
-        curveControls.visibility = if (programSettings.brightnessTuning == ProgramBrightnessTuning.FIXED) View.GONE else View.VISIBLE
         curveControls.addView(sectionDesc("Exposure targets as a percentage of linear RAW brightness. Lower values keep the scene darker; higher values increase sensor exposure. Bias applies on top. The curve blends smoothly between these four scene levels."))
         val targetSliders = mutableListOf<SettingsSlider>()
         val targetNames = listOf("Dark scene", "Dim scene", "Normal scene", "Bright scene")

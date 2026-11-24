@@ -41,6 +41,8 @@ internal class PhotoAutoFocus(private val host: Host) {
     var aeLockIndefinite = false
         private set
     val scanning get() = active && !completed
+    private var focusLocked = false
+    val holdingIndefinitely get() = active && indefinite && (scanning || focusLocked)
     var requestedMode = CONTROL_AF_MODE_OFF
         private set
     private var runId = 0L
@@ -52,18 +54,24 @@ internal class PhotoAutoFocus(private val host: Host) {
     private var lastState: Int? = null
     /** True while a tap lock is held as a manual distance (HAL ignored the CONT_PICTURE START). */
     private var manualHold = false
+    val usesManualFocusFallback get() = manualHold
+    private var focusAssistanceRequested = false
+    val showsFocusAssistance get() = active && focusAssistanceRequested
     /** AF-C point mode: a tap moves the continuous-AF region instead of running a one-shot lock. */
     var continuousPoint = false
     /** True while a tapped region is steering continuous AF (cleared by reset / session / lock). */
     var continuousPointActive = false
         private set
 
-    /** Stream configuration does not reset 3A. Explicitly clear an inherited lock. */
-    fun onSessionReady() {
+    fun resetForSession() {
         resetForStop()
         continuousPointActive = false
         // Tap regions are in the old session's coordinates; idle AF starts full-frame.
         host.afRegion = null
+    }
+
+    /** Clear inherited HAL focus state once the new session delivers preview metadata. */
+    fun onSessionReady() {
         if (!host.canSendOneShot() || host.selectedFocusDistanceDiopters != null) return
         val mode = idleMode(host.afAvailableModes())
         if (tapMode(host.afAvailableModes()) == CONTROL_AF_MODE_OFF) return
@@ -81,6 +89,17 @@ internal class PhotoAutoFocus(private val host: Host) {
         if (!host.canSendOneShot() || host.captureBusy()) return
         val region = host.meteringRegion(viewX, viewY) ?: return
         if (!indefinite && continuousPoint && startContinuousPoint(region, viewX, viewY, updateAe)) return
+        startScan(region, indefinite, updateAe, viewX, viewY)
+    }
+
+    fun focusSelectedPoint(centerX: Float, centerY: Float) {
+        if (!host.canSendOneShot() || host.captureBusy()) return
+        startScan(host.afRegion ?: host.meteringRegion(centerX, centerY), true, false, centerX, centerY,
+            showFocusAssistance = false)
+    }
+
+    private fun startScan(region: MeteringRectangle?, indefinite: Boolean, updateAe: Boolean,
+                          viewX: Float, viewY: Float, showFocusAssistance: Boolean = true) {
         continuousPointActive = false
         cancelTimers()
         ++runId
@@ -88,16 +107,19 @@ internal class PhotoAutoFocus(private val host: Host) {
         lastFrame = -1L
         lastState = null
         this.indefinite = indefinite
+        focusAssistanceRequested = showFocusAssistance
         aeLockIndefinite = indefinite && updateAe && host.isAeLockSupported()
+        dropManualHold()
         host.selectedFocusDistanceDiopters = null
         host.afRegion = if (host.maxAfRegions() > 0) region else null
-        if (updateAe && host.isAeMeteringSupported()) {
+        if (updateAe && region != null && host.isAeMeteringSupported()) {
             host.aeRegion = region
             host.syncDevelopFocus(viewX, viewY)
         }
         requestedMode = tapMode(host.afAvailableModes())
         active = requestedMode != CONTROL_AF_MODE_OFF
         completed = false
+        focusLocked = false
         host.onFocusLock(false, false, 0L)
         host.publishControls()
         try {
@@ -267,6 +289,7 @@ internal class PhotoAutoFocus(private val host: Host) {
 
     private fun finish(sharp: Boolean) {
         completed = true
+        focusLocked = sharp
         timeout?.let(host.handler::removeCallbacks)
         timeout = null
         if (!sharp && host.canSendOneShot()) {
@@ -339,6 +362,8 @@ internal class PhotoAutoFocus(private val host: Host) {
         ++runId
         active = false
         completed = false
+        focusAssistanceRequested = false
+        focusLocked = false
         aeLockIndefinite = false
         startFrame = null
         lastFrame = -1L

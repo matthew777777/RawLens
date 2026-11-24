@@ -20,6 +20,17 @@ class PhysicalResultRoutingTest {
     }
 
     @Test
+    fun boundOutputUsesItsOwnSensorEvenWhenLogicalCameraIsOnAnotherLens() {
+        assertEquals(
+            "3",
+            RawFrameMetadataFactory.selectPhysicalResultId("0", setOf("0", "3"), boundPhysicalId = "3")
+        )
+        assertNull(
+            RawFrameMetadataFactory.selectPhysicalResultId("0", setOf("0"), boundPhysicalId = "3")
+        )
+    }
+
+    @Test
     fun noPhysicalSourceStaysLogical() {
         assertNull(RawFrameMetadataFactory.selectPhysicalResultId(null, setOf("0", "2")))
     }

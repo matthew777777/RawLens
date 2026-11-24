@@ -48,15 +48,13 @@ internal fun MainActivity.wireVideoQuickControls() {
 internal fun MainActivity.arrangeQuickControlRows() {
     val photoRow = findViewById<android.widget.LinearLayout>(R.id.photoCaptureQuickRow)
     val videoRow = findViewById<android.widget.LinearLayout>(R.id.videoModeQuickRow)
-    val destination = if (isVideoMode && !encodedVideoEnabled)
-        findViewById<android.widget.LinearLayout>(R.id.videoFormatQuickRow)
-    else if (isVideoMode) videoRow else photoRow
+    val destination = if (isVideoMode) videoRow else photoRow
     if (releaseQuick.parent !== destination) {
         (releaseQuick.parent as? android.view.ViewGroup)?.removeView(releaseQuick)
-        destination.addView(releaseQuick, if (isVideoMode && !encodedVideoEnabled) 0 else if (isVideoMode) destination.childCount else 1)
+        destination.addView(releaseQuick, if (isVideoMode) destination.childCount else 1)
     }
     (releaseQuick.layoutParams as android.widget.LinearLayout.LayoutParams).apply {
-        marginStart = if (isVideoMode && !encodedVideoEnabled) 0 else dp(8)
+        marginStart = dp(8)
         releaseQuick.layoutParams = this
     }
 }
@@ -66,16 +64,21 @@ internal fun MainActivity.updateVideoQuickControls() {
     findViewById<View>(R.id.videoFormatQuickRow).visibility =
         if (isVideoMode) View.VISIBLE else View.GONE
     val idle = !videoRecording && videoRecorder == null && encodedVideoRecorder == null
+    findViewById<View>(R.id.recordingPreviewSleep).visibility = if (isVideoMode) View.VISIBLE else View.GONE
+    findViewById<View>(R.id.videoQuickHeading).visibility =
+        if (isVideoMode && !idle) View.VISIBLE else View.GONE
     fun tile(id: Int, label: String, active: Boolean, enabled: Boolean) {
-        findViewById<TextView>(id).apply {
-            text = label
+        findViewById<QuickControlTileView>(id).apply {
+            valueFirst = true
+            setTextSize(14f)
+            setTextIfChanged(label)
             isEnabled = enabled
             alpha = if (enabled) 1f else .4f
             contentDescription = label.replace('\n', ' ')
             setQuickTileState(this, active)
         }
     }
-    tile(R.id.videoModeQuick, "Format\n${if (encodedVideoEnabled) "Encoded Video" else "RAW Video"}", encodedVideoEnabled, idle)
+    tile(R.id.videoModeQuick, "Format\n${if (encodedVideoEnabled) "HEVC 10-bit" else "CRAW"}", encodedVideoEnabled, idle)
     findViewById<View>(R.id.videoBinningQuick).visibility = if (encodedVideoEnabled) View.GONE else View.VISIBLE
     findViewById<View>(R.id.encodedVideoCropQuick).visibility =
         if (isVideoMode && encodedVideoEnabled) View.VISIBLE else View.GONE
@@ -91,9 +94,20 @@ internal fun MainActivity.updateVideoQuickControls() {
     tile(R.id.videoBinningQuick, "BINNING\n${if (binning) "ON" else "OFF"}", binning, idle)
     findViewById<View>(R.id.videoResolutionQuick).visibility = if (encodedVideoEnabled) View.VISIBLE else View.GONE
     val res = encodedVideoResPref()
-    tile(R.id.videoResolutionQuick, "Size\n${res.width}×${res.height}", false, idle)
+    val size = when (res.width) {
+        3840 -> "4K"
+        2560 -> "QHD"
+        1920 -> "FHD"
+        else -> "${res.width}×${res.height}"
+    }
+    tile(R.id.videoResolutionQuick, "Size\n$size", false, idle)
+    findViewById<View>(R.id.videoResolutionQuick).contentDescription = "Size ${res.width} by ${res.height}"
     tile(R.id.videoFpsQuick, "Frame rate\n${if (encodedVideoEnabled) encodedVideoFpsPref().toString() else rawVideoFrameRateLabel()}", false, idle)
-    releaseQuick.isEnabled = if (isVideoMode) !encodedVideoEnabled || !videoRecording else !dualRawEnabled
+    (releaseQuick as QuickControlTileView).apply {
+        valueFirst = isVideoMode
+        setTextSize(if (isVideoMode) 14f else 13f)
+    }
+    releaseQuick.isEnabled = if (isVideoMode) !encodedVideoEnabled || idle else !dualRawEnabled
     releaseQuick.alpha = if (releaseQuick.isEnabled) 1f else .4f
 }
 

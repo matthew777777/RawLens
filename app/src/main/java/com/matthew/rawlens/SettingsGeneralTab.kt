@@ -3,6 +3,7 @@
 
 package com.matthew.rawlens
 
+import com.matthew.rawlens.MainActivity.Companion.KEY_FOCUS_MAGNIFIER
 import com.matthew.rawlens.MainActivity.Companion.KEY_FOCUS_PEAKING_COLOR
 
 import com.matthew.rawlens.MainActivity.Companion.KEY_FOCUS_PEAKING
@@ -174,6 +175,20 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             textSize = 11f
         })
         content.addView(sectionTitle("Viewfinder"))
+        content.addView(Button(this).apply {
+            fun refresh() { text = "RAW camera streams: ${controller.rawStreamMode().label}" }
+            refresh()
+            setOnClickListener {
+                p.kit.chooseEnum("RAW camera streams", controller.rawStreamMode(), { it.label }) { picked ->
+                    controller.setRawStreamMode(picked)
+                    refresh()
+                }
+            }
+        })
+        content.addView(sectionDesc(
+            "Automatic uses camera detection. RAW only also disables the ISP viewfinder. " +
+                "Preview + RAW requires both streams. Switch back to Automatic if the camera cannot start."
+        ))
         content.addView(p.kit.settingsCheck("Always use ISP viewfinder", ispPreviewAlways()).apply {
             setOnCheckedChangeListener { _, checked ->
                 setIspPreviewAlways(checked)
@@ -254,6 +269,16 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc("Peaking auto-shows while a manual focus distance is set or a tap-to-focus scan/lock is in flight."))
+        content.addView(SettingsSwitch(this).apply {
+            text = "Focus magnifier"
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = focusPeakingOverlay.magnifierEnabled
+            setOnCheckedChangeListener { _, enabled ->
+                focusPeakingOverlay.magnifierEnabled = enabled
+                lensPreferences().edit().putBoolean(KEY_FOCUS_MAGNIFIER, enabled).apply()
+            }
+        })
+        content.addView(sectionDesc("Shows a 4× inset around the focus point while peaking is active."))
         content.addView(Button(this).apply {
             fun refresh() {
                 text = "Peaking color: ${focusPeakingColor.label}"
@@ -317,5 +342,6 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
         markActive(generalTab)
         polish()
         // Keep preview switches visible directly on General, without a submenu.
-        p.kit.collapseSection("Settings backup", "Backup & restore")
+        p.kit.collapseSection("RAW capture", "RAW capture", "Sensor and capture compatibility")
+        p.kit.collapseSection("Settings backup", "Backup & restore", "Export or import your preferences")
 }

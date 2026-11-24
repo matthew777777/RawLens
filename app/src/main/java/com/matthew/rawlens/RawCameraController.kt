@@ -187,7 +187,9 @@ class RawCameraController(
     initialFacePriorityEnabled: Boolean = false,
     initialContinuousAfPoint: Boolean = false,
     private val onFaces: (List<FaceOverlayBox>) -> Unit = { },
-    private val vendorKeysByKey: (settingsKey: String?) -> VendorKeyProfile = { VendorKeyProfile() }
+    private val vendorKeysByKey: (settingsKey: String?) -> VendorKeyProfile = { VendorKeyProfile() },
+    private val onExposureHold: (requested: Boolean, confirmed: Boolean) -> Unit = { _, _ -> },
+    private val onAeTargetCleared: () -> Unit = {}
 ) {
     private val virtualLensStore = VirtualLensStore(context)
     private val lensListStore = LensListStore(context)
@@ -258,6 +260,7 @@ class RawCameraController(
     @Volatile private var hdrPlusSettings = initialHdrPlusSettings
     private var activeHdrPlusSettings = initialHdrPlusSettings
     @Volatile private var hdrPlusMerge: HdrPlusMerge? = null
+    private val photoModeLock = Any()
     @Volatile private var mfsrSettings = initialMfsrSettings
     private var activeMfsrSettings = initialMfsrSettings
     /** RAW image ↔ capture result matching for forward captures and the ZSL ring. */
@@ -389,10 +392,32 @@ class RawCameraController(
         // when the session's need for an ISP stream actually changed.
         if (wasWanted != ispPreviewWanted() && camera != null) restartCameraForConfigurationChange()
     }
+    private val rawStreamPreferences = context.getSharedPreferences(SettingsBackup.STORE_MAIN, Context.MODE_PRIVATE)
+
+    internal fun rawStreamMode(): RawStreamMode =
+        RawStreamMode.fromPreference(rawStreamPreferences.getString(RawStreamMode.KEY, null))
+
+    private var sessionStreamMode = rawStreamMode()
+
+    internal fun setRawStreamMode(mode: RawStreamMode) {
+        rawStreamPreferences.edit().putString(RawStreamMode.KEY, mode.name).apply()
+        cameraHandler.post {
+            val selected = rawStreamMode()
+            if (selected != sessionStreamMode) {
+                sessionStreamMode = selected
+                ladder.reset()
+                restartCameraForConfigurationChange()
+            }
+        }
+    }
+
     private var previewSize: Size? = null
     private var selectedCameraId: String? = null
     private var rawCameraIds: List<String> = emptyList()
     private var activePhysicalCameraId: String? = null
+    private val isXiaomi13Ultra = Build.DEVICE.equals("ishtar", ignoreCase = true)
+    private var pinnedIshtarRoute = false
+    private var physical3aRequestKeys = emptySet<CaptureRequest.Key<*>>()
     private var selectedIso: Int? = null
         set(value) { field = value; DigitalGain.requestedIso = value }
     private var selectedExposureNanos: Long? = null
@@ -441,6 +466,8 @@ class RawCameraController(
     private var rawViewfinderStreaming = false
     private var rawZslStreaming = false
     private var rawZslRequestEpoch = 0L
+    // Grace-paired RAW images need a timestamp boundary because they lack a request epoch.
+    private var zslMeteringTimestampFloor = Long.MIN_VALUE
     private var rawZslCapacity = 0
     private var rawZslTargetFpsRange: Range<Int>? = null
     private var rawZslRealtimeTimestamps = false
@@ -462,11 +489,27 @@ class RawCameraController(
     private var rawHistogramDisabledForSession = false
     @Volatile private var lastPreviewSensorTimestamp = Long.MIN_VALUE
     private var latestPreviewResult: TotalCaptureResult? = null
+
+    private fun <T> latestSensorValue(key: CaptureResult.Key<T>): T? =
+        latestPreviewResult?.let { pinnedSensorResult(it)?.get(key) ?: it.get(key) }
     @Volatile private var lapisLeaseKey: String? = null
     @Volatile private var lapisPreparedMode: LapisRootProfile.Mode? = null
     @Volatile private var lapisSessionSpec: LapisRootSession.Spec? = null
     private val motionTracker = CameraMotionTracker(context)
     private var lastIso = 100
+    private var exposureHoldRequested = false
+    private var exposureHoldConfirmed = false
+    private val exposureHoldTimeout = Runnable {
+        if (exposureHoldRequested && !exposureHoldConfirmed) {
+            clearExposureHold()
+            updateRepeatingRequest(preserveRawZslBuffer = true)
+            refreshCaptureAvailability()
+            onState("EXPOSURE COULD NOT LOCK")
+        }
+    }
+    private var heldProgramExposure: SensorExposure? = null
+    private var heldProgramGain = 1f
+    private val needsFreshStillForHold get() = exposureHoldRequested || touchFocus.holdingIndefinitely
     private var lastExposureNanos = 10_000_000L
     private var lastWbKelvin: Int? = null
     private var metadataFrameCount = 0
@@ -522,6 +565,8 @@ class RawCameraController(
     // Session ladder, stream health and ISP probe state (camera thread).
     private var rawPreviewRetryUntilMs = 0L
     private var rawPreviewFailures = 0
+    private var rawOnlyStillTemplate = false
+    @Volatile private var rawPreviewUnavailable = false
     /**
      * Stillborn-stream detection: repeating-RAW health for the current session.
      * [rawStreamImages] counts repeating-path buffers only — an in-flight
@@ -586,6 +631,10 @@ class RawCameraController(
     private val lensVerdicts = LensVerdictStore(context)
     /** Per-lens RAW size preference, honored first in the combo ladder. */
     private val rawSizePreferenceStore = RawSizePreferenceStore(context)
+    private var xiaomiRaw50Session = false
+    private var vendorRawReaderActive = false
+    private val xiaomiFullResRawActive: Boolean
+        get() = vendorRawReaderActive && (xiaomiRaw50Session || XiaomiRawRequestKeys.supported())
     /** Per-lens packed format preference; auto (`RAW_SENSOR`) unless opted in. */
     private val rawFormatPreferenceStore = RawFormatPreferenceStore(context)
     /** Stream format of the session being built; drives the packed fallback. */
@@ -635,7 +684,16 @@ class RawCameraController(
         running = true
         prewarmHighlightsIfNeeded()
         lifecycleGeneration++
-        ladder.resetRouteRetries()
+        val generation = lifecycleGeneration
+        cameraHandler.post {
+            if (!isCurrent(generation)) return@post
+            ladder.resetOpenRetries()
+            deviceFaultRecovery.reset()
+            if (rawPreviewUnavailable) {
+                ladder.reset()
+                rawOnlyStillTemplate = false
+            }
+        }
         viewfinder.removeOnLayoutChangeListener(previewLayoutListener)
         viewfinder.addOnLayoutChangeListener(previewLayoutListener)
         viewfinder.listener = object : AutoFitSurfaceView.Listener {
@@ -653,7 +711,12 @@ class RawCameraController(
                 if (openedCamera != null && session == null && running) createSession(openedCamera, lifecycleGeneration)
             }
             override fun onSurfaceDestroyed() {
-                stop()
+                val generation = lifecycleGeneration
+                cameraHandler.post {
+                    if (isCurrent(generation)) {
+                        if (viewfinder.isAvailable) restartCameraForConfigurationChange() else stop()
+                    }
+                }
             }
         }
         if (viewfinder.isAvailable) {
@@ -667,6 +730,11 @@ class RawCameraController(
 
     @SuppressLint("MissingPermission")
     private fun open() {
+        if (!isOnCameraThread()) {
+            val generation = lifecycleGeneration
+            cameraHandler.post { if (isCurrent(generation)) open() }
+            return
+        }
         if (!running || destroyed || opening || camera != null) return
         // The root worker owns camera 0 during a 200→50 MP shot; its completion restarts us.
         if (hexadecaBusy.get() && !cameraReleasedForHexadeca) { running = false; return }
@@ -746,6 +814,16 @@ class RawCameraController(
             vendorKeyCharacteristics = if (effectiveRoute.physicalCameraId == null) effectiveRoute.characteristics
                 else runCatching { cameraManager.getCameraCharacteristics(openCameraId) }
                     .getOrDefault(effectiveRoute.characteristics)
+            pinnedIshtarRoute = isXiaomi13Ultra && effectiveRoute.physicalCameraId != null &&
+                vendorKeyCharacteristics?.physicalCameraIds?.contains(effectiveRoute.physicalCameraId) == true
+            physical3aRequestKeys = if (pinnedIshtarRoute) {
+                runCatching { vendorKeyCharacteristics?.availablePhysicalCameraRequestKeys.orEmpty().toSet() }
+                    .getOrDefault(emptySet())
+            } else emptySet()
+            if (pinnedIshtarRoute) {
+                Log.i(LOG_TAG, "Ishtar pinned route: lens=$id open=$openCameraId sensor=$activePhysicalCameraId " +
+                    "physicalRequestKeys=${physical3aRequestKeys.size}")
+            }
             lastVendorSessionReport = null
             lastVendorRequestReport = null
             vendorSessionFingerprint = null
@@ -762,6 +840,7 @@ class RawCameraController(
             rawZslFallbackDetail = null
             rawPreviewRetryUntilMs = 0L
             rawPreviewFailures = 0
+            rawPreviewUnavailable = false
             rawViewfinder?.invalidateSession()
             bguViewfinder?.invalidateSession()
             // A fresh session retries the full ladder from legacy (engines may
@@ -806,21 +885,21 @@ class RawCameraController(
                 // the next lens instead of wedging on a black viewfinder.
                 opening = false
                 Log.w(LOG_TAG, "openCamera rejected $openCameraId (selected $id)", failure)
-                if (!running) return
-                if (advancePastFailedOpen(openCameraId)) return
+                if (!isCurrent(generation)) return
                 // An ID that opened before reporting unknown-device is a camera
                 // service hiccup, not a bad lens: never denylist it, and stop the
                 // cascade (the next lens would fail the same way). Retry instead.
                 val msSinceFault = lastDeviceFaultMs.takeIf { it > 0L }
                     ?.let { SystemClock.elapsedRealtime() - it }
                 if (!SessionRecoveryPolicy.shouldDenylistOnOpenRejected(
-                        openCameraId, ladder.openedOnceOpenIds, msSinceFault) &&
-                    scheduleOpenRejectionRetry()
+                        openCameraId, ladder.openedOnceOpenIds, msSinceFault)
                 ) {
                     Log.w(LOG_TAG, "Lens $id rejected after opening before or ${msSinceFault ?: "-"}ms " +
                         "after a device fault; treating as transient")
+                    if (!scheduleOpenRejectionRetry()) onState("CAMERA UNAVAILABLE")
                     return
                 }
+                if (advancePastFailedOpen(openCameraId)) return
                 ladder.denylist(openCameraId)
                 try {
                     // Record both keys: the open ID that refused and the route
@@ -914,7 +993,10 @@ class RawCameraController(
             Log.w(LOG_TAG, "Camera device error on ${device.id}: $error")
             if (error == CameraDevice.StateCallback.ERROR_CAMERA_DEVICE ||
                 error == CameraDevice.StateCallback.ERROR_CAMERA_SERVICE) {
-                recoverDeviceFault(generation, "Camera ${device.id} error $error")
+                recoverDeviceFault(
+                    generation, "Camera ${device.id} error $error",
+                    retryUnpackedOnStarvation = error == CameraDevice.StateCallback.ERROR_CAMERA_DEVICE
+                )
             } else onState(if (error == CameraDevice.StateCallback.ERROR_CAMERA_IN_USE) "CAMERA IN USE" else "CAMERA ERROR")
         }
         // P4: track clean teardown so a stale device reference can never feed
@@ -929,7 +1011,7 @@ class RawCameraController(
     }
 
     /** Both synchronous open failure and onDisconnected can report the same fault. */
-    private fun recoverDeviceFault(generation: Int, reason: String) {
+    private fun recoverDeviceFault(generation: Int, reason: String, retryUnpackedOnStarvation: Boolean = false) {
         cameraHandler.post {
             if (!isCurrent(generation)) return@post
             lastDeviceFaultMs = SystemClock.elapsedRealtime()
@@ -938,7 +1020,9 @@ class RawCameraController(
                 else sessionPrimaryRoute?.openCameraId
             if (session == null && failedOpenId != null && advancePastFailedOpen(failedOpenId)) return@post
             val verified = runCatching { lensVerdicts.verifiedIds() }.getOrDefault(emptySet())
-            val next = deviceFaultRecovery.next(failed, rawCameraIds.filter { id ->
+            val retryUnpacked = retryUnpackedOnStarvation && session != null && rawStreamImages == 0 &&
+                clearPackedFormatPreference(reason)
+            val next = if (retryUnpacked) failed else deviceFaultRecovery.next(failed, rawCameraIds.filter { id ->
                 id in verified && resolveOpenCameraId(id) !in ladder.unopenableOpenIds
             })
             // Invalidate callbacks and release the dead session before waiting for the HAL.
@@ -1007,12 +1091,22 @@ class RawCameraController(
         // Stream format: auto resolves to RAW_SENSOR; an opted-in packed
         // format wins only when the map actually lists it, otherwise the
         // choice degrades to today's behavior with a log line.
-        val sessionRawFormat = effectiveRawFormat(selectedCameraId, map)
+        val xiaomiRaw50Size = xiaomiRaw50Size(c, map)
+        xiaomiRaw50Session = xiaomiRaw50Size != null
+        val vendorReaderSize = xiaomiRaw50Size ?: customRawReaderSize()
+        vendorRawReaderActive = vendorReaderSize != null
+        val vivoStream = vivoUltraStream()
+        val sessionRawFormat = if (vendorRawReaderActive) android.graphics.ImageFormat.RAW_SENSOR
+            else if (vivoStream?.rawFormat == "RAW10") android.graphics.ImageFormat.RAW10
+            else if (vivoStream != null) android.graphics.ImageFormat.RAW_SENSOR
+            else effectiveRawFormat(selectedCameraId, map)
         lastSessionRawFormat = sessionRawFormat
-        val rawSizes = if (lapisSessionSpec != null && selectedCameraId == "0")
+        val rawSizes = if (vendorReaderSize != null) listOf(vendorReaderSize)
+        else if (lapisSessionSpec != null && selectedCameraId == "0")
             listOf(Size(lapisSessionSpec!!.width,lapisSessionSpec!!.height))
-        else map.getOutputSizes(sessionRawFormat)?.toList()
-        if (rawSizes.isNullOrEmpty()) {
+        else if (vivoStream != null) listOf(vivoUltraSize(vivoStream))
+        else rawOutputSizes(c, map, sessionRawFormat)
+        if (rawSizes.isEmpty()) {
             Log.e(LOG_TAG, "Session aborted: no RAW size for format $sessionRawFormat")
             onState("RAW UNAVAILABLE")
             return
@@ -1032,37 +1126,28 @@ class RawCameraController(
         // Empty preview sizes are not terminal: the ladder's RAW-only tail
         // covers HALs that expose no preview stream at all.
         val previewChoices = map.getOutputSizes(android.view.SurfaceHolder::class.java)?.toList().orEmpty()
-        // Fallback ladder: attempt 0 is raw-only (largest RAW, ring-sized
-        // reader, no preview target). A HAL rejection advances the index and
-        // rebuilds the session with a degraded combo instead of wedging on
-        // SESSION ERROR.
-        val mapRawSizes = rawSizes.map { SessionStreamSize(it.width, it.height) }
-        val combos = SessionStreamSelection.orderCombosForPreferredSize(
-            SessionStreamSelection.selectSessionStreamCombos(
-                mapRawSizes,
-                previewChoices.map { SessionStreamSize(it.width, it.height) },
-                fullReaderMaxImages(),
-                SessionStreamSelection.MIN_ACQUIRED_RAW_IMAGES
-            ),
-            preferredRawSize(selectedCameraId, mapRawSizes)
-        )
+        val mode = sessionStreamMode
+        val combos = sessionStreamCombos(rawSizes, previewChoices, xiaomiRaw50Size != null)
         if (combos.isEmpty()) {
-            Log.e(LOG_TAG, "Session aborted: no RAW_SENSOR size")
-            onState("RAW UNAVAILABLE")
+            val reason = "No advertised stream combination for ${mode.label}"
+            if (advanceSessionLadder(reason)) return
+            Log.e(LOG_TAG, reason)
+            onState("PREVIEW + RAW UNAVAILABLE")
             return
         }
         ladder.comboIndex = ladder.comboIndex.coerceIn(0, combos.lastIndex)
         // ISP preview-request verdict: cameras proven to stall at ~20 fps
         // raw-only jump straight to the first preview combo; everyone else
         // starts raw-only (the probe below renders the verdict once).
-        if (ladder.comboIndex == 0 &&
-            (ispPreviewRequestNeeded(selectedCameraId) || threeAPreviewWanted(selectedCameraId) || ispPreviewWanted())
+        if (mode == RawStreamMode.AUTO && ladder.comboIndex == 0 &&
+            (pinnedIshtarRoute || ispPreviewRequestNeeded(selectedCameraId) ||
+                threeAPreviewWanted(selectedCameraId) || ispPreviewWanted())
         ) {
             SessionStreamSelection.firstPreviewComboIndex(combos).takeIf { it > 0 }?.let { ladder.comboIndex = it }
         }
         sessionOffersPreview = combos.any { it.preview != null }
         val combo = combos[ladder.comboIndex]
-        if (ladder.comboIndex > 0 && combo.preview == null &&
+        if (mode == RawStreamMode.AUTO && ladder.comboIndex > 0 && combo.preview == null &&
             threeAPreviewState(selectedCameraId) in 1..THREE_A_CONFIRMED
         ) {
             // Same terminal state for the 3A remedy: every preview step was
@@ -1071,7 +1156,7 @@ class RawCameraController(
             persistThreeAPreviewState(selectedCameraId, THREE_A_REFUSED)
             Log.w(LOG_TAG, "3A preview remedy refused by HAL; raw-only verdict persisted")
         }
-        if (ladder.comboIndex > 0 && combo.preview == null && ispPreviewRequestNeeded(selectedCameraId)) {
+        if (mode == RawStreamMode.AUTO && ladder.comboIndex > 0 && combo.preview == null && ispPreviewRequestNeeded(selectedCameraId)) {
             // The preview remedy failed on this camera: the stillborn ladder
             // fell through every preview step (some HALs crash with any
             // preview+RAW session), landing raw-only. Raw-only is the
@@ -1084,8 +1169,9 @@ class RawCameraController(
         viewfinder.post {
             onCaptureSurfaceSize?.invoke(rawSize.width, rawSize.height)
         }
-        rawZslCapacity = SessionStreamSelection.clampZslCapacityForReader(calculateRawZslCapacity(rawSize), combo.readerMaxImages)
-        if (rawZslRequested && rawZslCapacity == 0 && calculateRawZslCapacity(rawSize) > 0) {
+        rawZslCapacity = if (xiaomiFullResRawActive) 0 else
+            SessionStreamSelection.clampZslCapacityForReader(calculateRawZslCapacity(rawSize), combo.readerMaxImages)
+        if (!xiaomiFullResRawActive && rawZslRequested && rawZslCapacity == 0 && calculateRawZslCapacity(rawSize) > 0) {
             // Degraded combo: the reduced reader cannot host a ZSL ring, so this
             // session is viewfinder plus forward capture. Latched like any
             // rejected stream combination; a lens change resets the ladder.
@@ -1135,7 +1221,9 @@ class RawCameraController(
         // session configures, zero images arrive) disarm via the stillborn
         // ladder and persist the verdict; EGL import of CPU-only buffers
         // stays fenced behind runtime probing. See VfGpuImport.
-        if (vfGpuReaderTrialArmed && !vfGpuReaderPreflightOk(rawSize.width, rawSize.height)) {
+        if (!vendorRawReaderActive && vivoStream == null &&
+            vfGpuReaderTrialArmed && !vfGpuReaderPreflightOk(rawSize.width, rawSize.height)
+        ) {
             // Allocator refuses the trial usage up front (MT6878-class
             // grallocs): skip the stillborn session entirely and go
             // straight CPU-only. Not persisted: the probe is free and
@@ -1151,7 +1239,17 @@ class RawCameraController(
         if (packedSession) {
             Log.i(LOG_TAG, "Packed RAW session; CPU-only reader")
         }
-        val reader = if (vfGpuReaderTrialArmed && !packedSession) {
+        val reader = if (vendorRawReaderActive || vivoStream != null) {
+            try {
+                val usage = if (vendorRawReaderActive) RawSizePreferenceStore.VENDOR_READER_USAGE
+                    else HardwareBuffer.USAGE_CPU_READ_OFTEN
+                ImageReader.newInstance(rawSize.width, rawSize.height, sessionRawFormat,
+                    readerMaxImages, usage)
+            } catch (failure: RuntimeException) {
+                handleSessionSetupFailed(generation, "RAW reader ${rawSize.width}x${rawSize.height} rejected: ${failure.message}")
+                return
+            }
+        } else if (vfGpuReaderTrialArmed && !packedSession) {
             ImageReader.newInstance(
                 rawSize.width,
                 rawSize.height,
@@ -1179,14 +1277,16 @@ class RawCameraController(
         // this camera has no persisted verdict. Any rebuild disarms via this
         // reset; degraded raw-only tail steps never arm (their preview steps
         // were already rejected — jumping back would loop the ladder).
-        fpsProbeArmed = combo.label == SessionStreamSelection.RAW_ONLY_FULL_LABEL &&
+        fpsProbeArmed = mode == RawStreamMode.AUTO && !pinnedIshtarRoute &&
+            combo.label == SessionStreamSelection.RAW_ONLY_FULL_LABEL &&
             selectedCameraId != null && !ispPreviewVerdictKnown(selectedCameraId)
         fpsProbeCameraId = selectedCameraId
         fpsProbeFirstNs = 0L
         fpsProbeShot = captureSequence.get()
         // Arm the 3A probe on the first raw-only step only: a degraded
         // raw-only tail means the preview steps were already refused.
-        threeAProbeArmed = combo.preview == null && ladder.comboIndex == 0 && sessionOffersPreview &&
+        threeAProbeArmed = mode == RawStreamMode.AUTO && !pinnedIshtarRoute &&
+            combo.preview == null && ladder.comboIndex == 0 && sessionOffersPreview &&
             lapisSessionSpec == null && selectedCameraId != null &&
             threeAPreviewState(selectedCameraId) < THREE_A_MAX_TRIALS
         threeAProbeFirstMs = 0L
@@ -1316,6 +1416,9 @@ class RawCameraController(
                         }
                     }
                 }
+                if (activeFramesRemaining.get() <= 0 && rawPreviewFailures > 0 && !rawPreviewUnavailable) {
+                    rawPreviewFailures = 0
+                }
                 if (activeFramesRemaining.get() <= 0 && rawStreamImages++ == 0) {
                     selectedCameraId?.let(deviceFaultRecovery::onFrames)
                     Log.i(LOG_TAG, "First RAW stream image ${image.width}x${image.height} ts=${image.timestamp}")
@@ -1323,7 +1426,7 @@ class RawCameraController(
                     // is the verification event. Idempotent, so a
                     // stale frame attributing to the same identity is
                     // harmless; generation-gated above.
-                    if (previewSize != null &&
+                    if (sessionStreamMode == RawStreamMode.AUTO && previewSize != null &&
                         threeAPreviewState(selectedCameraId) in 1..THREE_A_MAX_TRIALS
                     ) {
                         // The RAW+preview trial streams: keep it across cold starts.
@@ -1372,13 +1475,14 @@ class RawCameraController(
                 // Focus peaking rides the same RAW VF stream at its own throttle,
                 // gated by the manual/tap-focus auto-show policy.
                 characteristics?.let { publishFocusPeakingIfDue(image, it) }
-                characteristics?.let { rawExposureAssist.offer(image, it, developFocusView, result = latestPreviewResult) }
+                val sensorResult = latestPreviewResult?.let { pinnedSensorResult(it) ?: it }
+                characteristics?.let { rawExposureAssist.offer(image, it, developFocusView, result = sensorResult) }
                 // The dual-RAW worker owns these allocations through Vulkan completion;
                 // don't concurrently hand the same AHB to the viewfinder GPU context.
                 if (!activeDualRaw && !ispDisplayShown) characteristics?.let {
                     activeVf()?.apply {
                         setSensorLevels(dngMetadataOverrides(selectedCameraId))
-                        offer(image, it, latestPreviewResult)
+                        offer(image, it, sensorResult)
                     }
                 }
                 }
@@ -1512,8 +1616,16 @@ class RawCameraController(
         val callback = sessionCallback(device, generation)
         val plan = chooseSessionPerformancePlan(device, preview, raw, callback)
         lastSessionPlanLabel = plan.label
-        val opmode = runCatching { vendorKeys(selectedCameraId).operatingMode }.getOrDefault(0)
+        val opmode = if (xiaomiRaw50Session) XiaomiUltraRaw50.SESSION_MODE
+            else runCatching { vendorKeys(selectedCameraId).operatingMode }.getOrDefault(0)
         val builtReport = lastVendorSessionReport ?: VendorKeyApplyReport(emptyList(), emptyList())
+        val vivoStream = vivoUltraStream()
+        if (vivoStream != null && (plan.configuration.sessionParameters == null ||
+                DeviceLensProfiles.FORCE_MODE !in builtReport.applied)) {
+            rawReader?.let { discardSessionOutputs(it, previewSurface) }
+            handleSessionSetupFailed(generation, "${vivoStream.name}: vivo sensor-mode key rejected")
+            return
+        }
         VendorSessionOpener(
             device, plan.configuration, opmode, listOfNotNull(preview, raw), cameraHandler,
             isCurrent = { isCurrent(generation) && camera === device },
@@ -1536,7 +1648,9 @@ class RawCameraController(
                 rawReader?.let { discardSessionOutputs(it, previewSurface) }
                 handleSessionSetupFailed(generation, reason)
             },
-            log = { Log.i(LOG_TAG, it) }
+            log = { Log.i(LOG_TAG, it) },
+            requireOperatingMode = xiaomiRaw50Session,
+            requireSessionParameters = vivoStream != null
         ).open()
     }
 
@@ -1599,6 +1713,8 @@ class RawCameraController(
             // stall observed on Samsung HALs with an explicit tag.
             return SessionPerformancePlan(configuration(null, null), "RAW ONLY")
         }
+
+        if (pinnedIshtarRoute) return SessionPerformancePlan(configuration(null, null), "DEFAULT (Ishtar physical)")
 
         if (rawStreamCompatMode) {
             // Stillborn-stream fallback (Samsung): no stream-use-case hints at
@@ -1708,11 +1824,12 @@ class RawCameraController(
                     // callbacks during the open gap must not consume them.
                     rawPreviewFailures = 0
                     rawPreviewRetryUntilMs = 0L
-                    touchFocus.onSessionReady()
+                    touchFocus.resetForSession()
                     updateRepeatingRequest()
                     // stop() disables the shutter while the Activity is backgrounded. A new
                     // camera session must explicitly restore it when the Activity resumes.
                     refreshCaptureAvailability()
+                    scheduleRawPreviewHealthCheck(generation, configured)
                 } catch (failure: CameraAccessException) {
                     configured.close()
                     if (session === configured) session = null
@@ -1729,7 +1846,12 @@ class RawCameraController(
             }
             Log.i(LOG_TAG, "Session ready (zsl=$rawZslStreaming vf=$rawViewfinderStreaming)")
             logAfCapabilities()
-            onState(if (rawZslStreaming) "READY • ZSL WARMING" else "READY")
+            onState(when {
+                xiaomiRaw50Session -> "READY • 50 MP RAW"
+                vendorRawReaderActive -> "READY • CUSTOM RAW"
+                rawZslStreaming -> "READY • ZSL WARMING"
+                else -> "READY"
+            })
         }
         override fun onConfigureFailed(session: CameraCaptureSession) {
             if (!isCurrent(generation)) return
@@ -1755,6 +1877,16 @@ class RawCameraController(
         }
         if (!isCurrent(generation)) return
         if (advanceSessionLadder("Session setup failed ($reason)")) return
+        vivoUltraStream()?.let {
+            Log.e(LOG_TAG, "${it.name} unavailable: $reason")
+            onState("${it.name} SENSOR MODE UNAVAILABLE")
+            return
+        }
+        if (vendorRawReaderActive) {
+            Log.e(LOG_TAG, "Vendor RAW reader unavailable: $reason")
+            onState(if (xiaomiRaw50Session) "50 MP RAW UNAVAILABLE" else "CUSTOM RAW UNAVAILABLE")
+            return
+        }
         if (downgradePackedFormatToAuto("Session setup failed ($reason)")) return
         Log.e(LOG_TAG, reason)
         onState("SESSION ERROR")
@@ -1768,14 +1900,20 @@ class RawCameraController(
      */
     private fun downgradePackedFormatToAuto(reason: String): Boolean {
         check(isOnCameraThread())
+        if (vivoUltraStream() != null) return false
+        if (!clearPackedFormatPreference(reason)) return false
+        onState("RECOVERING PREVIEW")
+        restartCameraForConfigurationChange()
+        return true
+    }
+
+    private fun clearPackedFormatPreference(reason: String): Boolean {
         val id = selectedCameraId ?: return false
         if (lastSessionRawFormat == android.graphics.ImageFormat.RAW_SENSOR) return false
         rawFormatPreferenceStore.set(id, null)
         lastSessionRawFormat = android.graphics.ImageFormat.RAW_SENSOR
         ladder.comboIndex = 0
         Log.w(LOG_TAG, "$reason; packed format refused, retrying $id as RAW_SENSOR")
-        onState("RECOVERING PREVIEW")
-        restartCameraForConfigurationChange()
         return true
     }
 
@@ -1837,20 +1975,31 @@ class RawCameraController(
     private fun sessionComboCount(characteristics: CameraCharacteristics): Int {
         val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?: return 1
-        val rawSizes = lapisSessionSpec?.takeIf { selectedCameraId=="0" }?.let { listOf(Size(it.width,it.height)) }
-            ?: map.getOutputSizes(effectiveRawFormat(selectedCameraId, map))?.toList().orEmpty()
+        val xiaomiRaw50Size = xiaomiRaw50Size(characteristics, map)
+        val rawSizes = (xiaomiRaw50Size ?: customRawReaderSize())?.let(::listOf)
+            ?: lapisSessionSpec?.takeIf { selectedCameraId=="0" }?.let { listOf(Size(it.width,it.height)) }
+            ?: vivoUltraStream()?.let { listOf(vivoUltraSize(it)) }
+            ?: rawOutputSizes(characteristics, map, effectiveRawFormat(selectedCameraId, map))
         val previewSizes = map.getOutputSizes(android.view.SurfaceHolder::class.java)?.toList().orEmpty()
-        if (rawSizes.isEmpty()) return 1
+        return sessionStreamCombos(rawSizes, previewSizes, xiaomiRaw50Size != null).size.coerceAtLeast(1)
+    }
+
+    private fun sessionStreamCombos(
+        rawSizes: List<Size>,
+        previewSizes: List<Size>,
+        xiaomiRaw50: Boolean
+    ): List<SessionStreamCombo> {
         val mapRawSizes = rawSizes.map { SessionStreamSize(it.width, it.height) }
-        return SessionStreamSelection.orderCombosForPreferredSize(
+        val combos = SessionStreamSelection.orderCombosForPreferredSize(
             SessionStreamSelection.selectSessionStreamCombos(
                 mapRawSizes,
                 previewSizes.map { SessionStreamSize(it.width, it.height) },
-                fullReaderMaxImages(),
+                if (xiaomiRaw50) SessionStreamSelection.MIN_ACQUIRED_RAW_IMAGES else fullReaderMaxImages(),
                 SessionStreamSelection.MIN_ACQUIRED_RAW_IMAGES
             ),
             preferredRawSize(selectedCameraId, mapRawSizes)
-        ).size.coerceAtLeast(1)
+        )
+        return sessionStreamMode.selectCombos(combos)
     }
 
     /**
@@ -1883,17 +2032,12 @@ class RawCameraController(
      */
     private fun noteHalAwbVerdict(result: TotalCaptureResult) {
         val identity = awbVerdictIdentity ?: return
-        if (result.get(CaptureResult.CONTROL_AWB_MODE) != CaptureResult.CONTROL_AWB_MODE_AUTO) return
+        val physical = physicalCaptureResult(result, activePhysicalCameraId)
+        val awbMode = physical?.get(CaptureResult.CONTROL_AWB_MODE) ?: result.get(CaptureResult.CONTROL_AWB_MODE)
+        if (awbMode != CaptureResult.CONTROL_AWB_MODE_AUTO) return
         val now = SystemClock.elapsedRealtime()
         if (awbVerdictFirstMs == 0L) awbVerdictFirstMs = now
         if (!awbVerdictSawWorking) {
-            // Only the selected sensor can establish this route's health;
-            // another physical camera's AWB says nothing about its RAW stream.
-            val physical = if (Build.VERSION.SDK_INT >= 31) {
-                sessionPrimaryRoute?.physicalCameraId?.let { id ->
-                    runCatching { result.physicalCameraTotalResults[id] }.getOrNull()
-                }
-            } else null
             val neutral = (physical?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
                 ?: result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT))
                 ?.let { values -> DoubleArray(values.size) { values[it].toDouble() } }
@@ -2150,12 +2294,40 @@ class RawCameraController(
         }
     }
 
+    private fun rawPreviewStaleAfterMs(): Long =
+        maxOf(3000L, (selectedExposureNanos ?: lastExposureNanos) / 1_000_000L + 2000L)
+
+    private fun hasRecentRawPreviewImage(): Boolean =
+        lastRawImageReceivedMs > 0L &&
+            SystemClock.elapsedRealtime() - lastRawImageReceivedMs < rawPreviewStaleAfterMs()
+
+    private fun scheduleRawPreviewHealthCheck(
+        generation: Int,
+        configured: CameraCaptureSession,
+        startedAt: Long = SystemClock.elapsedRealtime()
+    ) {
+        cameraHandler.postDelayed({
+            if (!isCurrent(generation) || session !== configured || rawPreviewUnavailable) return@postDelayed
+            val now = SystemClock.elapsedRealtime()
+            if (rawViewfinderStreaming &&
+                now - maxOf(lastRawImageReceivedMs, startedAt) >= rawPreviewStaleAfterMs()) {
+                recoverRawPreview("No fresh RAW camera image")
+            }
+            if (isCurrent(generation) && session === configured && !rawPreviewUnavailable) {
+                scheduleRawPreviewHealthCheck(generation, configured, startedAt)
+            }
+        }, 3000L)
+    }
+
     private fun recoverRawPreview(reason: String) {
-        if (!running || camera == null || session == null || captureInProgress.get()) return
+        if (!running || camera == null || session == null || captureInProgress.get() ||
+            rawPreviewUnavailable || SystemClock.elapsedRealtime() < rawPreviewRetryUntilMs) return
         // A stillborn GPU-usage trial resolves first: the usage axis, not
         // the plan axis, starved this session. Disarm and rebuild with the
         // default reader; the first delivered image persists the verdict.
-        if (SessionRecoveryPolicy.shouldDisarmVfGpuReaderTrial(rawPreviewFailures, rawStreamImages, vfGpuReaderTrialArmed)) {
+        if (!vendorRawReaderActive && vivoUltraStream() == null &&
+            SessionRecoveryPolicy.shouldDisarmVfGpuReaderTrial(rawPreviewFailures, rawStreamImages, vfGpuReaderTrialArmed)
+        ) {
             vfGpuReaderTrialArmed = false
             vfGpuTrialConvicted = true
             // The usage axis changed: retry the full combo under it before
@@ -2170,6 +2342,7 @@ class RawCameraController(
             restartCameraForConfigurationChange()
             return
         }
+        if (rawStreamImages == 0 && retryIshtarWithLogicalRequestKeys()) return
         // A repeating RAW stream that delivered zero buffers cannot recover at
         // the request level: the stall is the session/stream configuration
         // itself (Samsung: request retries 1..4 change nothing while zero RAW
@@ -2209,8 +2382,17 @@ class RawCameraController(
                     "failures=$rawStreamFailures plan=$lastSessionPlanLabel)"
             )
         ) return
+        if (rawStreamImages == 0 && rawPreviewFailures >= 1) {
+            if (downgradePackedFormatToAuto(reason)) return
+            if (previewSurface == null && !rawOnlyStillTemplate) {
+                // Try the HAL's still template on its standalone RAW stream.
+                rawOnlyStillTemplate = true
+                Log.w(LOG_TAG, "$reason; retrying RAW-only with the still template")
+                restartCameraForConfigurationChange()
+                return
+            }
+        }
         val generation = lifecycleGeneration
-        val shot = captureSequence.get()
         rawPreviewFailures++
         val delayMs = 1000L * rawPreviewFailures
         rawPreviewRetryUntilMs = if (rawPreviewFailures <= 3) SystemClock.elapsedRealtime() + delayMs else Long.MAX_VALUE
@@ -2219,11 +2401,16 @@ class RawCameraController(
             "RAW preview recovery $rawPreviewFailures: $reason " +
                 "(images=$rawStreamImages results=$rawStreamResults failures=$rawStreamFailures plan=$lastSessionPlanLabel)"
         )
+        rawPreviewUnavailable = rawPreviewFailures > 3
         updateRepeatingRequest(allowRawZsl = false)
-        if (rawPreviewFailures <= 3) cameraHandler.postDelayed({
-            if (isCurrent(generation) && shot == captureSequence.get() && !captureInProgress.get()) updateRepeatingRequest()
-        }, delayMs)
-        else if (rawStreamImages == 0) onState("RAW VF UNAVAILABLE")
+        if (!rawPreviewUnavailable) {
+            cameraHandler.postDelayed({
+                if (isCurrent(generation) && !captureInProgress.get()) updateRepeatingRequest()
+            }, delayMs)
+        } else {
+            refreshCaptureAvailability()
+            onState("RAW VF UNAVAILABLE")
+        }
     }
 
     init {
@@ -2236,22 +2423,15 @@ class RawCameraController(
                 // recovery. Flipping here hides the legacy Surface, whose
                 // teardown (resetNative -> destroyGrade) kills the shared
                 // record pipelines mid-take and freezes the recording.
-                if (!running || camera == null || session == null) return@post
-                // Legacy is the first AUTO rung: its GPU->NEON ladder is
-                // exhausted when it starves, so BGU takes over for the
-                // session. A blocked renderer is not a dead camera stream:
-                // the camera recovery below still runs when the stream
-                // itself is stale (restarting mid-merge would add a cut).
+                if (!running || camera == null || session == null ||
+                    activeVf() !== rawViewfinder || !hasRecentRawPreviewImage()) return@post
+                // The RAW watchdog handles camera stalls. Change renderers only
+                // when the camera is delivering buffers to the active engine.
                 if (vfGlobalMode == VfEngineMode.AUTO && !legacyDead) {
                     legacyDead = true
                     Log.w(LOG_TAG, "Legacy viewfinder failed; falling back to BGU")
                     notifyVfRoute()
                     publishRawVfDebug(force = true)
-                }
-                // Stale-stream recovery (was GpuScheduling.shouldRecoverCamera).
-                if (lastRawImageReceivedMs == 0L ||
-                    SystemClock.elapsedRealtime() - lastRawImageReceivedMs > 2000L) {
-                    recoverRawPreview("No fresh RAW image or display frame")
                 }
             }
         }
@@ -2259,7 +2439,8 @@ class RawCameraController(
             cameraHandler.post {
                 // Same stopped-camera rule as legacy above: never reroute
                 // while a take owns the camera.
-                if (!running || camera == null || session == null) return@post
+                if (!running || camera == null || session == null ||
+                    activeVf() !== bguViewfinder || !hasRecentRawPreviewImage()) return@post
                 // BGU is the last AUTO rung: any persistent failure marks
                 // it dead and routing returns to legacy (last resort).
                 if (!bguDead) {
@@ -2520,7 +2701,7 @@ class RawCameraController(
                 val minFrame = c[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP]
                     ?.getOutputMinFrameDuration(android.graphics.ImageFormat.RAW_SENSOR,Size(reader.width,reader.height)) ?: 0L
                 val requests = listOf(plan.high,plan.low).mapIndexed { index, exposure ->
-                    device.createCaptureRequest(CameraDevice.TEMPLATE_MANUAL).apply {
+                    createSensorRequest(device, CameraDevice.TEMPLATE_MANUAL).apply {
                         addTarget(reader.surface)
                         setTag(CaptureTag(id,index+1,2))
                         applyCameraControls(this,applyDynamicCurve=false)
@@ -2544,6 +2725,7 @@ class RawCameraController(
                         set(CaptureRequest.NOISE_REDUCTION_MODE,CaptureRequest.NOISE_REDUCTION_MODE_OFF)
                         set(CaptureRequest.EDGE_MODE,CaptureRequest.EDGE_MODE_OFF)
                         requestLensShadingMap(this)
+                        applyPhysical3a(this)
                     }.build()
                 }
                 cameraCaptureSequenceActive = true
@@ -2642,23 +2824,40 @@ class RawCameraController(
 
     /** JPEG output choices are frozen with the shutter press, just like capture format. */
     fun setJpegOutputSettings(settings: JpegOutputSettings): Boolean {
-        if (captureInProgress.get() || pendingSaveCount.get() > 0) return false
-        if (!isOnCameraThread()) {
-            cameraHandler.post { setJpegOutputSettings(settings) }
-            return true
-        }
         val resolved = settings.resolvedForPlatform()
-        if (resolved.activeDLighting != jpegOutputSettings.activeDLighting) {
+        val previous: JpegOutputSettings
+        val disabledMerge: MfsrSettings?
+        synchronized(photoModeLock) {
+            if (captureInProgress.get() || pendingSaveCount.get() > 0) return false
+            previous = jpegOutputSettings
+            disabledMerge = if (resolved.mono.enabled && mfsrSettings.enabled) {
+                mfsrSettings.copy(enabled = false).also { mfsrSettings = it }
+            } else null
+            jpegOutputSettings = resolved
+        }
+        if (isOnCameraThread()) {
+            applyJpegOutputCameraState(previous, resolved, disabledMerge)
+        } else {
+            cameraHandler.post { applyJpegOutputCameraState(previous, resolved, disabledMerge) }
+        }
+        return true
+    }
+
+    private fun applyJpegOutputCameraState(
+        previous: JpegOutputSettings,
+        settings: JpegOutputSettings,
+        disabledMerge: MfsrSettings?,
+    ) {
+        if (settings.activeDLighting != previous.activeDLighting) {
             // A changed capture target must not reuse a converged pair from the old level.
             ettr.clearLive()
             program.resetLoop()
         }
-        jpegOutputSettings = resolved
+        disabledMerge?.let(::applyMfsrCameraState)
         prewarmHighlightsIfNeeded()
         // Live-link AgX sliders + adaptive strength to the JPEG preview: the next
         // sampled frame carries them.
         pushVfRenderState()
-        return true
     }
 
     /**
@@ -2668,11 +2867,15 @@ class RawCameraController(
      */
     fun setJxlOutputSettings(settings: JxlOutputSettings): Boolean {
         if (captureInProgress.get() || pendingSaveCount.get() > 0) return false
-        if (!isOnCameraThread()) {
-            cameraHandler.post { setJxlOutputSettings(settings) }
-            return true
-        }
+        // Publish before returning so a shutter event can freeze the accepted transfer.
         jxlOutputSettings = settings.resolved()
+        if (isOnCameraThread()) {
+            if (jpegOutputSettings.photoLut != null) pushVfRenderState()
+        } else {
+            cameraHandler.post {
+                if (jpegOutputSettings.photoLut != null) pushVfRenderState()
+            }
+        }
         return true
     }
 
@@ -2688,6 +2891,7 @@ class RawCameraController(
             return true
         }
         developedFormat = format
+        if (jpegOutputSettings.photoLut != null) pushVfRenderState()
         return true
     }
 
@@ -2706,9 +2910,10 @@ class RawCameraController(
         }
         val resolved = settings.resolvedForPlatform()
         val strength = adaptivePreviewStrength(captureExposureMode, resolved)
-        rawViewfinder?.setAgx(resolved)
+        val preview = photoPreviewOutput(resolved)
+        rawViewfinder?.setAgx(preview)
         rawViewfinder?.setPreviewExposureStrength(strength)
-        bguViewfinder?.setAgx(resolved)
+        bguViewfinder?.setAgx(preview)
         bguViewfinder?.setPreviewExposureStrength(strength)
     }
 
@@ -2760,11 +2965,18 @@ class RawCameraController(
     fun mfsrSettings(): MfsrSettings = mfsrSettings
 
     fun setMfsrSettings(settings: MfsrSettings): Boolean {
-        if (captureInProgress.get() || pendingSaveCount.get() > 0) {
-            onState("${activeMfsrSettings.label} LOCKED • SAVING")
-            return false
+        synchronized(photoModeLock) {
+            if (captureInProgress.get() || pendingSaveCount.get() > 0) {
+                onState("${activeMfsrSettings.label} LOCKED • SAVING")
+                return false
+            }
+            if (settings.enabled && jpegOutputSettings.mono.enabled) {
+                jpegOutputSettings = jpegOutputSettings.copy(
+                    mono = jpegOutputSettings.mono.copy(mode = MonoMode.OFF)
+                )
+            }
+            mfsrSettings = settings
         }
-        mfsrSettings = settings
         if (settings.enabled && settings.engine == MfsrEngine.LKR) LkrMerge.prewarm(context)
         if (!isOnCameraThread()) {
             cameraHandler.post { applyMfsrCameraState(settings) }
@@ -2804,7 +3016,7 @@ class RawCameraController(
         // the shutter, spin the 3s recovery wait with no capacity, then degrade
         // to a single that further delays the rearm. With the full reservation,
         // a busy queue fails fast with QUEUE FULL and the shutter stays free.
-        if (rawZslRequested) {
+        if (rawZslRequested && !xiaomiFullResRawActive && !needsFreshStillForHold) {
             val need = zslSelectedFrameCount(outputFormat)
             // HDR+ merges to one artifact: reserve one slot, not the burst.
             // Future SR hook: include SR in the merge-to-one slot accounting.
@@ -2881,7 +3093,7 @@ class RawCameraController(
             }
         } else {
             if (!beginCapture(outputFormat, requiredSaveSlots = 1, orientationSnapshot = orientationSnapshot)) return
-            if (activeHdrPlusSettings.enabled || activeMfsrSettings.enabled) {
+            if (!xiaomiRaw50Session && (activeHdrPlusSettings.enabled || activeMfsrSettings.enabled)) {
                 val count = zslSelectedFrameCount(outputFormat)
                 if (!photoMergeFitsReader(count)) {
                     finishCapture("MERGE UNAVAILABLE: RAW buffer capacity")
@@ -3038,9 +3250,13 @@ class RawCameraController(
         requiredSaveSlots: Int,
         orientationSnapshot: Int = deviceOrientationDegrees
     ): Boolean {
-        if (captureInProgress.get()) return false
+        if (captureInProgress.get() || rawPreviewUnavailable) return false
+        if (exposureHoldRequested && !exposureHoldConfirmed) {
+            onState("WAITING FOR AE LOCK")
+            return false
+        }
         if (!hasProcessingCapacity(requiredSaveSlots, outputFormat) ||
-            ((hdrPlusSettings.enabled || mfsrSettings.enabled) && !hasMergeCapacity(outputFormat))) {
+            (!xiaomiRaw50Session && (hdrPlusSettings.enabled || mfsrSettings.enabled) && !hasMergeCapacity(outputFormat))) {
             onState("QUEUE FULL")
             refreshCaptureAvailability()
             return false
@@ -3064,12 +3280,14 @@ class RawCameraController(
         )
         activeCaptureExposureMode = captureExposureMode
         activeAdaptiveExposure = SharedAdaptiveExposure()
-        activeJpegOutputSettings = jpegOutputSettings
+        synchronized(photoModeLock) {
+            activeJpegOutputSettings = jpegOutputSettings
+            activeMfsrSettings = mfsrSettings
+        }
         activeJxlOutputSettings = jxlOutputSettings
         activeDevelopedFormat = developedFormat
         activeDenoiseSettings = denoiseSettings
         activeHdrPlusSettings = hdrPlusSettings
-        activeMfsrSettings = mfsrSettings
         return true
     }
 
@@ -3370,6 +3588,7 @@ class RawCameraController(
         jxl = activeJxlOutputSettings,
         exposureMode = activeCaptureExposureMode,
         focusView = developFocusView,
+        boundPhysicalId = activePhysicalCameraId.takeIf { pinnedIshtarRoute },
     )
 
     private fun saveMfsrMerge(selected: List<BufferedRawFrame>, hdrTail: Int = 0) {
@@ -3747,6 +3966,11 @@ class RawCameraController(
         orientationSnapshot: Int = deviceOrientationDegrees
     ) {
         if (!captureAlreadyStarted && captureInProgress.get()) return
+        if (xiaomiRaw50Session && frameCount > 1) {
+            activeHdrBracket = false
+            onState("50 MP RAW USES SINGLE CAPTURE")
+            return
+        }
         if (!captureAlreadyStarted &&
             !beginCapture(outputFormat, requiredSaveSlots = frameCount, orientationSnapshot = orientationSnapshot)
         ) {
@@ -3791,7 +4015,7 @@ class RawCameraController(
                     }
             } else null
             val requests = List(frameCount) { frameIndex ->
-                device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                createSensorRequest(device, CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(reader.surface)
                     previewSurface?.let { addTarget(it) }
                     setTag(CaptureTag(captureId, frameIndex + 1, frameCount))
@@ -3808,7 +4032,9 @@ class RawCameraController(
                     // P0: resolve still flash after HDR (brackets force manual
                     // exposure) so the builder AE state is final. Never TORCH.
                     applyStillFlash(this)
+                    applyXiaomiRawReaderKeys(this, still = true)
                     requestLensShadingMap(this)
+                    applyPhysical3a(this)
                 }.build()
             }
             requests.firstOrNull()?.let { request ->
@@ -3960,7 +4186,7 @@ class RawCameraController(
         // position and AWB state so focus breathing or per-frame colour adaptation cannot become
         // false motion/chroma between bracket frames.
         val focus = selectedFocusDistanceDiopters
-            ?: latestPreviewResult?.get(CaptureResult.LENS_FOCUS_DISTANCE)
+            ?: latestSensorValue(CaptureResult.LENS_FOCUS_DISTANCE)
         if (focus != null && focus.isFinite()) {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, focus)
@@ -3998,12 +4224,92 @@ class RawCameraController(
         touchFocus.start(viewX, viewY, indefinite = true, updateAe = true)
     }
 
+    fun focusOnSelectedPoint() {
+        if (!isOnCameraThread()) {
+            cameraHandler.post(::focusOnSelectedPoint)
+            return
+        }
+        if (photoControlsBeforeVideo != null || captureInProgress.get() || cameraCaptureSequenceActive) return
+        if (touchFocus.holdingIndefinitely) touchFocus.releaseToContinuous()
+        else touchFocus.focusSelectedPoint(viewfinder.width / 2f, viewfinder.height / 2f)
+        refreshCaptureAvailability()
+    }
+
+    fun toggleExposureHold() {
+        if (!isOnCameraThread()) {
+            cameraHandler.post(::toggleExposureHold)
+            return
+        }
+        if (photoControlsBeforeVideo != null || captureInProgress.get() || cameraCaptureSequenceActive) return
+        if (exposureHoldRequested) {
+            clearExposureHold()
+            program.resetLoop()
+            onState("EXPOSURE RELEASED")
+        } else {
+            if (latestPreviewResult == null) { onState("WAITING FOR METERING"); return }
+            if (flashStillMode != FlashStillMode.OFF || captureExposureMode == CaptureExposureMode.MANUAL ||
+                selectedIso != null || selectedExposureNanos != null
+            ) {
+                onState("AE-L REQUIRES AUTO EXPOSURE AND FLASH OFF")
+                return
+            }
+            if (programCustomActive() && latestSensorValue(CaptureResult.CONTROL_AE_MODE) == CaptureResult.CONTROL_AE_MODE_OFF) {
+                val iso = latestSensorValue(CaptureResult.SENSOR_SENSITIVITY) ?: 0
+                val time = latestSensorValue(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+                if (iso <= 0 || time <= 0L) { onState("WAITING FOR METERING"); return }
+                heldProgramExposure = SensorExposure(iso, time)
+                heldProgramGain = program.digitalGain
+                cancelProgramRampTick()
+            } else if (characteristics?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) != true) {
+                onState("AE LOCK NOT SUPPORTED")
+                return
+            }
+            exposureHoldRequested = true
+            onExposureHold(true, false)
+            cameraHandler.postDelayed(exposureHoldTimeout, 2_000L)
+        }
+        updateRepeatingRequest(preserveRawZslBuffer = true)
+        refreshCaptureAvailability()
+    }
+
+    private fun clearExposureHold() {
+        if (!exposureHoldRequested) return
+        cameraHandler.removeCallbacks(exposureHoldTimeout)
+        exposureHoldRequested = false
+        exposureHoldConfirmed = false
+        heldProgramExposure = null
+        heldProgramGain = 1f
+        onExposureHold(false, false)
+    }
+
+    private fun confirmExposureHold(request: CaptureRequest, result: CaptureResult) {
+        if (!exposureHoldRequested || exposureHoldConfirmed) return
+        val held = heldProgramExposure
+        val confirmed = if (held != null) {
+            request.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_OFF &&
+                result.get(CaptureResult.SENSOR_SENSITIVITY) == held.iso &&
+                result.get(CaptureResult.SENSOR_EXPOSURE_TIME) == held.exposureNanos
+        } else {
+            val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+            request.get(CaptureRequest.CONTROL_AE_LOCK) == true &&
+                (aeState == CaptureResult.CONTROL_AE_STATE_LOCKED ||
+                    (aeState == null && result.get(CaptureResult.CONTROL_AE_LOCK) == true))
+        }
+        if (confirmed) {
+            exposureHoldConfirmed = true
+            cameraHandler.removeCallbacks(exposureHoldTimeout)
+            onExposureHold(true, true)
+            onState("EXPOSURE LOCKED")
+        }
+    }
+
     /** Camera-side half of [PhotoAutoFocus]; every call runs on the camera thread. */
     private inner class PhotoAutoFocusHost : PhotoAutoFocus.Host {
         override val handler: Handler get() = cameraHandler
         override fun isOnCameraThread() = this@RawCameraController.isOnCameraThread()
         override fun canSendOneShot() =
-            camera != null && session != null && singleShotTarget() != null
+            running && !rawPreviewUnavailable && camera != null && session != null &&
+                latestPreviewResult != null && singleShotTarget() != null
         override fun captureBusy() = captureInProgress.get() || cameraCaptureSequenceActive
         override fun maxAfRegions() =
             characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
@@ -4031,11 +4337,12 @@ class RawCameraController(
             val device = camera ?: return
             val currentSession = session ?: return
             val surface = singleShotTarget() ?: return
-            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+            val request = createSensorRequest(device, CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
                 applyCameraControls(this)
                 setTag(PhotoAutoFocus.Command(runId, trigger))
                 set(CaptureRequest.CONTROL_AF_TRIGGER, trigger)
+                applyPhysical3a(this)
             }
             val built = request.build()
             Log.i(LOG_TAG, "AF_TRIGGER route=$selectedCameraId run=$runId trigger=$trigger " +
@@ -4101,14 +4408,13 @@ class RawCameraController(
             return false
         }
         aeMeteringMode = mode
-        if (touchFocus.active) {
-            touchFocus.releaseToContinuous()
-        } else {
-            aeRegion = null
-            updateDevelopFocus(null)
-            updateRepeatingRequest(preserveRawZslBuffer = true)
-            onMeteringReleased()
-        }
+        aeRegion = null
+        updateDevelopFocus(null)
+        touchFocus.clearAeLock()
+        clearExposureHold()
+        onAeTargetCleared()
+        zslMeteringTimestampFloor = Long.MAX_VALUE
+        updateRepeatingRequest()
         onState("AE METERING • ${mode.label}")
         return true
     }
@@ -4118,13 +4424,15 @@ class RawCameraController(
             cameraHandler.post(::resetMeteringTargets)
             return
         }
+        val hadExposureHold = exposureHoldRequested
+        clearExposureHold()
         if (touchFocus.active) {
             aeRegion = null
             updateDevelopFocus(null)
             touchFocus.releaseToContinuous()
             return
         }
-        val hadTargets = afRegion != null || aeRegion != null || touchFocus.aeLockIndefinite
+        val hadTargets = hadExposureHold || afRegion != null || aeRegion != null || touchFocus.aeLockIndefinite
         afRegion = null
         aeRegion = null
         updateDevelopFocus(null)
@@ -4336,6 +4644,7 @@ class RawCameraController(
         }
         val range = characteristics?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) ?: return
         val values = exposureCompensationSteps(range.lower, range.upper)
+        clearExposureHold()
         exposureCompensation = nextValue(exposureCompensation, values, includeAuto = false) ?: 0
         controlsChanged()
     }
@@ -4363,6 +4672,10 @@ class RawCameraController(
             return
         }
         flashStillMode = FlashStillPolicy.nextMode(flashStillMode, isAutoFlashAvailable())
+        if (exposureHoldRequested && flashStillMode != FlashStillMode.OFF) {
+            clearExposureHold()
+            updateRepeatingRequest(preserveRawZslBuffer = true)
+        }
         publishControls()
         onState(if (flashStillMode == FlashStillMode.OFF && !isAutoFlashAvailable())
             "FLASH OFF • AUTO NEEDS RAWLENS METERING" else "FLASH ${flashStillMode.name}")
@@ -4479,8 +4792,9 @@ class RawCameraController(
     private inner class LiveScopesHost : LiveScopes.Host {
         override fun jpegOutputSettings(): JpegOutputSettings = this@RawCameraController.jpegOutputSettings
         override fun vfStats(): RawVfStats? = activeVf()?.snapshot()
-        override fun manualFocusSet(): Boolean = running && selectedFocusDistanceDiopters != null
-        override fun touchFocusActive(): Boolean = running && touchFocus.active
+        override fun manualFocusSet(): Boolean =
+            running && selectedFocusDistanceDiopters != null && !touchFocus.usesManualFocusFallback
+        override fun touchFocusActive(): Boolean = running && touchFocus.showsFocusAssistance
         override fun onRawHistogram(histogram: RgbHistogram) = this@RawCameraController.onRawHistogram(histogram)
         override fun onRawWaveform(waveform: RgbWaveform) = this@RawCameraController.onRawWaveform(waveform)
         override fun onFocusPeaking(frame: FocusPeakingFrame) = this@RawCameraController.onFocusPeaking(frame)
@@ -4561,7 +4875,7 @@ class RawCameraController(
         photoControlsBeforeVideo == null && captureExposureMode == CaptureExposureMode.AUTO
 
     private fun ettrCaptureActive(): Boolean =
-        ettr.settings.enabled && ettrModeAvailable() && !rawZslRequested &&
+        !exposureHoldRequested && ettr.settings.enabled && ettrModeAvailable() && !rawZslRequested &&
             selectedIso == null && selectedExposureNanos == null &&
             ettr.iso != null && ettr.shutterNanos != null
 
@@ -4617,9 +4931,7 @@ class RawCameraController(
         image: Image, cameraCharacteristics: CameraCharacteristics, result: TotalCaptureResult
     ) {
         // Physical metadata belongs to the RAW route when available.
-        val physicalId = sessionPrimaryRoute?.physicalCameraId
-        val frameResult: CaptureResult = if (Build.VERSION.SDK_INT >= 31 && physicalId != null)
-            result.physicalCameraTotalResults[physicalId] ?: result else result
+        val frameResult = physicalCaptureResult(result, activePhysicalCameraId) ?: result
         val baselineIso = frameResult.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
         val baselineShutter = frameResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
         if (baselineIso <= 0 || baselineShutter <= 0L) {
@@ -4722,7 +5034,7 @@ class RawCameraController(
      * [dispatchMeteringSample]) and post the result here.
      */
     private fun updateProgramFromSample(sample: EttrRawSample, baselineIso: Int, baselineShutter: Long, frameResult: CaptureResult) {
-        if (!programCustomActive() || ettrCaptureActive()) return
+        if (exposureHoldRequested || !programCustomActive() || ettrCaptureActive()) return
         val c = characteristics ?: return
         val isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
         val shutterRange = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) ?: return
@@ -4924,6 +5236,11 @@ class RawCameraController(
         clearEttrLiveState()
         touchFocus.dropForManualFocus()
         setCaptureExposureMode(CaptureExposureMode.AUTO)
+        if (vendorRawReaderActive) {
+            ladder.reset()
+            restartCameraForConfigurationChange()
+        }
+        if (jpegOutputSettings.photoLut != null) pushVfRenderState()
     }
 
     fun endVideoPreview() {
@@ -4931,6 +5248,7 @@ class RawCameraController(
         val saved = photoControlsBeforeVideo ?: return
         photoControlsBeforeVideo = null
         setCaptureExposureMode(saved.mode)
+        if (jpegOutputSettings.photoLut != null) pushVfRenderState()
         selectedIso = saved.manual.iso
         selectedExposureNanos = saved.manual.shutterNanos
         selectedWbKelvin = saved.manual.wbKelvin
@@ -4940,6 +5258,10 @@ class RawCameraController(
         exposureCompensation = saved.manual.evIndex ?: 0
         clampControlsToCamera()
         controlsChanged()
+        if (XiaomiUltraRaw50.enabled(context) || customRawReaderSize() != null) {
+            ladder.reset()
+            restartCameraForConfigurationChange()
+        }
     }
 
     fun setCaptureExposureMode(mode: CaptureExposureMode) {
@@ -4947,6 +5269,7 @@ class RawCameraController(
             cameraHandler.post { setCaptureExposureMode(mode) }
             return
         }
+        clearExposureHold()
         captureExposureMode = mode
         enforceAutoFlashAvailability()
         val wasRawZslRequested = rawZslRequested
@@ -5014,7 +5337,7 @@ class RawCameraController(
         restartCameraForConfigurationChange()
     }
 
-    fun lensOptions(): List<LensOption> {
+    fun lensOptions(includeHidden: Boolean = false): List<LensOption> {
         val extended = LapisRootProfile.enabled(context) && "0" in rawCameraIds
         val mode = LapisRootProfile.mode(context)
         val options=rawCameraIds.map { id ->
@@ -5027,7 +5350,7 @@ class RawCameraController(
             options.add(at,LensOption("0","${mainLabel()} · 50 MP",selectedCameraId=="0" && mode==LapisRootProfile.Mode.FULL,
                 "50mp","Main camera, 50 megapixel RAW"))
             options.add(at+1,LensOption("0","${mainLabel()} · 200→50 MP",selectedCameraId=="0" && mode==LapisRootProfile.Mode.HEXADECA_200,
-                "200mp","Main camera, 200 megapixel readout remosaiced to 50 megapixel RAW, one shot"))
+                "200mp","Main camera, 200 megapixel grouped RAW, same-colour sums and rawr Quad Detail remosaic to 50 megapixel Bayer CFA, one shot"))
             options.add(at+2,LensOption("0","${mainLabel(2f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_2X,
                 "2x","Main camera, 2× in-sensor crop RAW"))
             options.add(at+3,LensOption("0","${mainLabel(4f)} · SENSOR",selectedCameraId=="0" && mode==LapisRootProfile.Mode.CROP_4X,
@@ -5061,7 +5384,10 @@ class RawCameraController(
                 virtual.id == active?.id, virtual.settingsKey,
                 virtual.description.ifBlank { "Custom lens on camera ${virtual.baseCameraId}" }))
         }
-        return disambiguatedLensLabels(options)
+        val visible = if (extended && !includeHidden)
+            options.filter { LapisRootProfile.lensVisible(context, it) } else options
+        // Always retain a way to select a camera if saved visibility is stale.
+        return disambiguatedLensLabels(visible.ifEmpty { options.take(1) })
     }
 
     fun activeCameraId(): String? = selectedCameraId
@@ -5118,7 +5444,8 @@ class RawCameraController(
             return false
         }
         if (VendorKeyApply.fingerprint(profile.sessionEntries()) != (vendorSessionFingerprint ?: "")) return true
-        return profile.operatingMode != (vendorSessionOpmode ?: 0) || profile.rawPreviewFps != vendorSessionRawFps
+        val requestedMode = if (xiaomiRaw50Session) XiaomiUltraRaw50.SESSION_MODE else profile.operatingMode
+        return requestedMode != (vendorSessionOpmode ?: 0) || profile.rawPreviewFps != vendorSessionRawFps
     }
 
     /** Throwaway-builder probe of one key against the live HAL. Result posts back on the camera thread. */
@@ -5164,6 +5491,29 @@ class RawCameraController(
             return
         }
         restartCameraForConfigurationChange()
+    }
+
+    internal fun setXiaomiRaw50Enabled(enabled: Boolean) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setXiaomiRaw50Enabled(enabled) }
+            return
+        }
+        XiaomiUltraRaw50.setEnabled(context, enabled)
+        ladder.reset()
+        restartCameraForConfigurationChange()
+    }
+
+    internal fun customRawReaderSizeSetting(): String? =
+        rawSizePreferenceStore.customReaderSize(activeSettingsKey())
+
+    internal fun setCustomRawReaderSize(cameraKey: String, size: String?) {
+        rawSizePreferenceStore.setCustomReaderSize(cameraKey, size)
+        cameraHandler.post {
+            if (activeSettingsKey() == cameraKey && photoControlsBeforeVideo == null) {
+                ladder.reset()
+                restartCameraForConfigurationChange()
+            }
+        }
     }
 
     private fun prewarmHighlightsIfNeeded() {
@@ -5274,6 +5624,7 @@ class RawCameraController(
         afRegion = null; aeRegion = null
         updateDevelopFocus(null)
         ladder.reset()
+        rawOnlyStillTemplate = false
         publishControls()
         restartCameraForConfigurationChange()
     }
@@ -5351,8 +5702,14 @@ class RawCameraController(
             return
         }
         when (control) {
-            ManualControl.ISO -> selectedIso = value?.toInt()
-            ManualControl.SHUTTER -> selectedExposureNanos = value
+            ManualControl.ISO -> {
+                clearExposureHold()
+                selectedIso = value?.toInt()
+            }
+            ManualControl.SHUTTER -> {
+                clearExposureHold()
+                selectedExposureNanos = value
+            }
             ManualControl.WHITE_BALANCE -> {
                 wbPresetsEnabled = false
                 selectedWbKelvin = value?.toInt()?.coerceIn(MIN_WB_KELVIN, MAX_WB_KELVIN)
@@ -5373,7 +5730,10 @@ class RawCameraController(
                 // Manual focus takes over the held touch lock (see PhotoAutoFocus).
                 if (value != null) touchFocus.dropForManualFocus()
             }
-            ManualControl.EXPOSURE_COMPENSATION -> exposureCompensation = value?.toInt() ?: 0
+            ManualControl.EXPOSURE_COMPENSATION -> {
+                clearExposureHold()
+                exposureCompensation = value?.toInt() ?: 0
+            }
         }
         if (control == ManualControl.FOCUS_DISTANCE) scopes.refreshPeaking()
         clampControlsToCamera()
@@ -5408,7 +5768,7 @@ class RawCameraController(
 
     fun snapshotVideoMeteredFocus(): Float? =
         selectedFocusDistanceDiopters
-            ?: runCatching { latestPreviewResult?.get(CaptureResult.LENS_FOCUS_DISTANCE) }.getOrNull()
+            ?: runCatching { latestSensorValue(CaptureResult.LENS_FOCUS_DISTANCE) }.getOrNull()
 
     fun reloadLenses() {
         if (!isOnCameraThread()) {
@@ -5461,7 +5821,7 @@ class RawCameraController(
             RawStreamPlan.Inputs(
                 allowRawZsl = allowRawZsl,
                 zslRestartFitsReader = zslRestartFitsReader(),
-                zslRequested = rawZslRequested,
+                zslRequested = rawZslRequested && !xiaomiFullResRawActive,
                 zslBlocked = isRawZslBlocked(),
                 zslCapacity = rawZslCapacity,
                 readerPresent = reader != null,
@@ -5510,27 +5870,36 @@ class RawCameraController(
             // one SESSION_REGULAR RAW+preview session per lens, no YUV/ISP
             // pipelines. The ZSL *intent* below only tells 3A scheduling that
             // these PREVIEW-template frames back a zero-shutter-lag pipeline.
+            val template = if (surface == null && rawOnlyStillTemplate) CameraDevice.TEMPLATE_STILL_CAPTURE
+                else CameraDevice.TEMPLATE_PREVIEW
+            val explicitFps = runCatching { vendorKeys(selectedCameraId).rawPreviewFps }.getOrDefault(0)
+            // Rawr Device AE lets the HAL trade preview cadence for exposure time.
+            val photoDeviceAe = photoControlsBeforeVideo == null &&
+                (captureExposureMode == CaptureExposureMode.AUTO || captureExposureMode == CaptureExposureMode.ZSL)
+            val deviceAeRange = if (photoDeviceAe && !rawStreamCompatMode && !pinnedIshtarRoute && !xiaomiRaw50Session && explicitFps == 0 &&
+                lapisSessionSpec == null && flashRepeatingAeModeOverride == null
+            ) {
+                characteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                    ?.firstOrNull { it.lower == 15 && it.upper == RAW_ZSL_TARGET_FPS }
+            } else null
             fun previewRequest(includeRaw: Boolean): CaptureRequest =
-                device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                createSensorRequest(device, template).apply {
                 surface?.let { addTarget(it) }
                 if (includeRaw) addTarget(reader!!.surface)
                 setTag(includeRaw)
-                applyCameraControls(this)
-                // Compat sessions omit the forced range: the HAL runs the
-                // RAW+preview combo at its own sustainable rate instead of a
-                // fixed 30 fps the full-resolution RAW readout may not meet.
-                // RAW requests, and every request while the ZSL ring streams, ask for
-                // the best advertised 30 fps range the streams can sustain.
-                if ((includeRaw || useRawZsl) && (!rawStreamCompatMode ||
-                        runCatching { vendorKeys(selectedCameraId).rawPreviewFps != 0 }.getOrDefault(false))) {
+                applyCameraControls(this, deviceAeFpsRange = deviceAeRange)
+                val useDeviceAeRange = deviceAeRange != null &&
+                    get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_ON
+                // Retain the existing RAW cadence when flexible device AE is unavailable.
+                if (!useDeviceAeRange && !xiaomiRaw50Session && (includeRaw || useRawZsl) &&
+                    ((!rawStreamCompatMode && !pinnedIshtarRoute) || explicitFps != 0)
+                ) {
                     rawZslTargetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                 }
                 if (useRawZsl) {
                     // App-operated RAW ZSL still uses TEMPLATE_PREVIEW so the ISP preview never
                     // freezes, but tell 3A/HAL scheduling that this repeating request is serving
-                    // a zero-shutter-lag capture pipeline. Request the best advertised 30 fps
-                    // range whenever the configured RAW+preview streams can physically sustain
-                    // it; slower RAW sensors fall back to their measured stream ceiling.
+                    // a zero-shutter-lag capture pipeline.
                     set(
                         CaptureRequest.CONTROL_CAPTURE_INTENT,
                         if (includeRaw) CaptureRequest.CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG
@@ -5547,6 +5916,7 @@ class RawCameraController(
                     set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
                     set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
                 }
+                applyPhysical3a(this)
             }.build()
             // Keep motion telemetry available throughout preview for burst metadata.
             motionTracker.start(cameraHandler)
@@ -5581,6 +5951,8 @@ class RawCameraController(
                     currentSession.setRepeatingRequest(
                         previewRequest(includeRaw = false), callback, cameraHandler
                     )
+                } else if (rawPreviewUnavailable) {
+                    currentSession.stopRepeating()
                 }
             }
             val wasZslStreaming = rawZslStreaming
@@ -5627,6 +5999,7 @@ class RawCameraController(
                 cameraAccessReason(failure), if (running) "CONTROL ERROR" else null)
         } catch (failure: IllegalArgumentException) {
             Log.w(LOG_TAG, "Repeating request rejected: ${failure.message}", failure)
+            if (retryIshtarWithLogicalRequestKeys()) return
             onRepeatingRequestFailed(useRawStream, useRawZsl, useRawHistogram,
                 failure.message ?: "stream combination rejected", "NOT SUPPORTED")
         } catch (failure: IllegalStateException) {
@@ -5668,6 +6041,15 @@ class RawCameraController(
             ) {
                 if (!isCurrent(generation) || requestEpoch != rawZslRequestEpoch) return
                 diagnostics.result(request, result)
+                val physical = pinnedSensorResult(result)
+                fun <T> sensor(key: CaptureResult.Key<T>): T? = physical?.get(key) ?: result.get(key)
+                if (pinnedIshtarRoute && latestPreviewResult == null) {
+                    Log.i(LOG_TAG, "Ishtar 3A: sensor=$activePhysicalCameraId " +
+                        "logicalActive=${result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)} " +
+                        "physicalResult=${physical != null} " +
+                        "af=${sensor(CaptureResult.CONTROL_AF_STATE)} ae=${sensor(CaptureResult.CONTROL_AE_STATE)} " +
+                        "awb=${sensor(CaptureResult.CONTROL_AWB_STATE)}")
+                }
                 displayCadence.add(result.get(CaptureResult.SENSOR_TIMESTAMP))?.let { fps ->
                     measuredRawFpsDiagnostic = "\nMeasured sensor: %.2f FPS".format(java.util.Locale.US, fps)
                 }
@@ -5678,28 +6060,41 @@ class RawCameraController(
                     rawFpsDiagnostic = "Requested FPS range $askedRange NOT APPLIED AS REQUESTED — HAL reports $reportedRange"
                     Log.w(LOG_TAG, "RAW_FPS_MISMATCH route=$selectedCameraId requested=$askedRange returned=$reportedRange")
                 }
-                val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
-                val shutter = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
-                rawViewfinder?.expectFrameInterval(maxOf(shutter, result.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L))
-                bguViewfinder?.expectFrameInterval(maxOf(shutter, result.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L))
+                val iso = sensor(CaptureResult.SENSOR_SENSITIVITY) ?: 0
+                val shutter = sensor(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+                rawViewfinder?.expectFrameInterval(maxOf(shutter, sensor(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L))
+                bguViewfinder?.expectFrameInterval(maxOf(shutter, sensor(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L))
                 result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { lastPreviewSensorTimestamp = it }
                 if (iso > 0) lastIso = iso
                 if (shutter > 0) lastExposureNanos = shutter
                 // Explicit calibration wins over mode-mismatched HAL metadata, like the VF/DNG.
                 val effectiveWhite = dngMetadataOverrides(selectedCameraId).whiteLevel?.toInt()
-                    ?: result.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
+                    ?: sensor(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
                     ?: characteristics?.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
                 val bits = whiteLevelBitDepth(effectiveWhite)
                 if (bits != lastWhiteLevelBits) {
                     lastWhiteLevelBits = bits
                     onInfo(String.format(java.util.Locale.US, "DNG\n%d-bit RAW", bits), lastSensorInfo)
                 }
+                val firstPreviewResult = latestPreviewResult == null
                 latestPreviewResult = result
+                confirmExposureHold(request, physical ?: result)
+                if (firstPreviewResult && !captureInProgress.get()) {
+                    try {
+                        touchFocus.onSessionReady()
+                    } catch (failure: CameraAccessException) {
+                        Log.w(LOG_TAG, "Initial AF trigger rejected: ${cameraAccessReason(failure)}")
+                    } catch (failure: IllegalStateException) {
+                        Log.w(LOG_TAG, "Initial AF trigger raced camera close")
+                    } catch (failure: IllegalArgumentException) {
+                        Log.w(LOG_TAG, "Initial AF request rejected", failure)
+                    }
+                }
                 noteMeteringResult(result)
                 noteThreeAProbe(result)
                 noteHalAwbVerdict(result)
                 // P0: feed the flash precapture wait with every result's AE state.
-                val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                val aeState = sensor(CaptureResult.CONTROL_AE_STATE)
                 aeState?.let { lastAeState = it }
                 flashPrecapture?.let { wait ->
                     if (wait.onAeState(aeState, SystemClock.elapsedRealtime())) finishFlashPrecapture()
@@ -5707,6 +6102,8 @@ class RawCameraController(
                 handlePreviewFaces(result)
                 val includesRaw = rawSurface != null && request.tag == true
                 if (includesRaw) rawStreamResults++
+                // CameraService stamps output buffers with the logical request's shutter
+                // timestamp. The bound sensor result supplies 3A and calibration only.
                 val rawTimestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
                 if (includesRaw && rawTimestamp != null && activeFramesRemaining.get() > 0) {
                     val collecting = streamCapture
@@ -5720,11 +6117,12 @@ class RawCameraController(
                         pairing.dropPreviewRaw(rawTimestamp)
                     }
                 } else if (includesRaw && rawZslStreaming && requestEpoch == rawZslRequestEpoch) {
-                    result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestamp ->
+                    rawTimestamp?.let { timestamp ->
+                        if (zslMeteringTimestampFloor == Long.MAX_VALUE) zslMeteringTimestampFloor = timestamp
                         val motion = motionTracker.motionForFrame(
                             timestamp,
                             shutter,
-                            result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW) ?: 0L,
+                            sensor(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW) ?: 0L,
                             rawZslRealtimeTimestamps
                         )
                         pairing.putZslResult(timestamp, PendingZslResult(result, motion, requestEpoch))
@@ -5739,7 +6137,7 @@ class RawCameraController(
                     }
                 }
                 val wb = if (wbPresetsEnabled) 0 else selectedWbKelvin ?:
-                    (if (metadataFrameCount++ % 30 == 0) result.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let(::estimateKelvin) else lastWbKelvin) ?: 0
+                    (if (metadataFrameCount++ % 30 == 0) sensor(CaptureResult.COLOR_CORRECTION_GAINS)?.let(::estimateKelvin) else lastWbKelvin) ?: 0
                 hasPreviewMetadata = hasPreviewMetadata || (iso > 0 && shutter > 0L)
                 if (wb > 0) lastWbKelvin = wb
                 if (request.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_ON) {
@@ -5762,10 +6160,10 @@ class RawCameraController(
                     else -> shutter
                 }
                 publishPreviewMetadata(displayIso, displayShutter, wb)
-                if (touchFocus.active) idleAfTrace.reset() else idleAfTrace.onResult(result)
-                publishDebugState(request, result)
-                touchFocus.onResult(result.frameNumber, result.get(CaptureResult.CONTROL_AF_MODE),
-                    result.get(CaptureResult.CONTROL_AF_STATE), result.get(CaptureResult.LENS_FOCUS_DISTANCE))
+                if (touchFocus.active) idleAfTrace.reset() else idleAfTrace.onResult(physical ?: result)
+                publishDebugState(request, physical ?: result)
+                touchFocus.onResult(result.frameNumber, sensor(CaptureResult.CONTROL_AF_MODE),
+                    sensor(CaptureResult.CONTROL_AF_STATE), sensor(CaptureResult.LENS_FOCUS_DISTANCE))
             }
 
             override fun onCaptureFailed(
@@ -5794,9 +6192,65 @@ class RawCameraController(
      * Legacy hardware-AE rebalance is retained only as a seed before the first RAW
      * sample arrives.
      */
+    private fun retryIshtarWithLogicalRequestKeys(): Boolean {
+        if (physical3aRequestKeys.isEmpty()) return false
+        physical3aRequestKeys = emptySet()
+        val generation = lifecycleGeneration
+        Log.w(LOG_TAG, "Retrying Ishtar sensor $activePhysicalCameraId with logical request keys")
+        cameraHandler.post { if (isCurrent(generation)) updateRepeatingRequest() }
+        return true
+    }
+
+    private fun createSensorRequest(device: CameraDevice, template: Int): CaptureRequest.Builder {
+        val id = activePhysicalCameraId
+        if (!pinnedIshtarRoute || id == null || physical3aRequestKeys.isEmpty()) {
+            return device.createCaptureRequest(template)
+        }
+        return try {
+            device.createCaptureRequest(template, setOf(id))
+        } catch (failure: IllegalArgumentException) {
+            Log.w(LOG_TAG, "HAL refused a physical request template for sensor $id", failure)
+            physical3aRequestKeys = emptySet()
+            device.createCaptureRequest(template)
+        }
+    }
+
+    private fun applyPhysical3a(builder: CaptureRequest.Builder) {
+        val id = activePhysicalCameraId ?: return
+        if (physical3aRequestKeys.isEmpty()) return
+        fun <T> copy(key: CaptureRequest.Key<T>) {
+            if (key in physical3aRequestKeys) {
+                builder.get(key)?.let { builder.setPhysicalCameraKey(key, it, id) }
+            }
+        }
+        copy(CaptureRequest.CONTROL_MODE)
+        copy(CaptureRequest.CONTROL_AF_MODE)
+        copy(CaptureRequest.CONTROL_AF_TRIGGER)
+        copy(CaptureRequest.CONTROL_AF_REGIONS)
+        copy(CaptureRequest.LENS_FOCUS_DISTANCE)
+        copy(CaptureRequest.CONTROL_AE_MODE)
+        copy(CaptureRequest.CONTROL_AE_LOCK)
+        copy(CaptureRequest.CONTROL_AE_REGIONS)
+        copy(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER)
+        copy(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION)
+        copy(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE)
+        copy(CaptureRequest.SENSOR_EXPOSURE_TIME)
+        copy(CaptureRequest.SENSOR_SENSITIVITY)
+        copy(CaptureRequest.SENSOR_FRAME_DURATION)
+        copy(CaptureRequest.CONTROL_AWB_MODE)
+        copy(CaptureRequest.CONTROL_AWB_LOCK)
+        copy(CaptureRequest.COLOR_CORRECTION_MODE)
+        copy(CaptureRequest.COLOR_CORRECTION_GAINS)
+        copy(CaptureRequest.COLOR_CORRECTION_TRANSFORM)
+    }
+
+    private fun pinnedSensorResult(result: TotalCaptureResult): CaptureResult? =
+        if (pinnedIshtarRoute) physicalCaptureResult(result, activePhysicalCameraId) else null
+
     private fun applyCameraControls(
         builder: CaptureRequest.Builder,
-        applyDynamicCurve: Boolean = false
+        applyDynamicCurve: Boolean = false,
+        deviceAeFpsRange: Range<Int>? = null
     ) {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         rawMeteringDistortionMode()?.let { builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, it) }
@@ -5847,12 +6301,12 @@ class RawCameraController(
         applyFaceDetectMode(builder)
         val isoRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
         val exposureRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-        val sensorExposure = RequestExposure.resolve(RequestExposure.Inputs(
+        val sensorExposure = heldProgramExposure ?: RequestExposure.resolve(RequestExposure.Inputs(
             selectedIso = selectedIso,
             selectedExposureNanos = selectedExposureNanos,
             applyDynamicCurve = applyDynamicCurve,
             programCustomActive = programCustomActive(),
-            dynamicExposureEnabled = dynamicExposureSettings.enabled,
+            dynamicExposureEnabled = dynamicExposureSettings.enabled && !exposureHoldRequested,
             rawZslRequested = rawZslRequested,
             programIso = program.iso,
             programShutterNanos = program.shutterNanos,
@@ -5868,7 +6322,11 @@ class RawCameraController(
             manualSensorSupported =
                 supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
         ))
-        DigitalGain.autoGain = if (sensorExposure?.programDriven == true) program.digitalGain else 1f
+        DigitalGain.autoGain = when {
+            heldProgramExposure != null -> heldProgramGain
+            sensorExposure?.programDriven == true -> program.digitalGain
+            else -> 1f
+        }
         if (sensorExposure != null) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             builder.set(CaptureRequest.SENSOR_SENSITIVITY, sensorExposure.iso)
@@ -5881,12 +6339,15 @@ class RawCameraController(
                 coerceAeMode(flashRepeatingAeModeOverride ?: CaptureRequest.CONTROL_AE_MODE_ON)
             )
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
+            deviceAeFpsRange?.let {
+                builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+            }
             // Touch-hold AE lock: freeze hardware AE at the held metering point until
             // double-tap / reset-button / retap / manual / lens-switch / stop.
             // CONTROL_AE_LOCK is only meaningful with AE ON; manual/PROGRAM exposure
             // already drives the sensor directly so the lock stays off there.
             builder.set(CaptureRequest.CONTROL_AE_LOCK,
-                flashRepeatingAeModeOverride == null && touchFocus.aeLockIndefinite &&
+                flashRepeatingAeModeOverride == null && (exposureHoldRequested || touchFocus.aeLockIndefinite) &&
                     characteristics?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true)
         }
         val wbSetting = selectedWbKelvin?.let { k -> characteristics?.let { CameraWhiteBalance.setting(it, k) } }
@@ -5925,7 +6386,16 @@ class RawCameraController(
         // flash, AF) after the standard controls. Individually guarded: a bad
         // key skips itself and never fails capture.
         applyVendorRequestKeys(builder)
+        if (!applyDynamicCurve) applyXiaomiRawReaderKeys(builder, still = false)
         if (selectedCameraId == "0") lapisSessionSpec?.applyRequest(builder)
+    }
+
+    private fun applyXiaomiRawReaderKeys(builder: CaptureRequest.Builder, still: Boolean) {
+        if (!xiaomiFullResRawActive || photoControlsBeforeVideo != null) return
+        val chars = vendorKeyCharacteristics ?: return
+        val profile = if (still) XiaomiRawRequestKeys.stillKeys(xiaomiRaw50Session) else XiaomiRawRequestKeys.previewKeys
+        val report = VendorKeyApply.applyRequestKeys(builder, profile, chars, activePhysicalCameraId) { Log.i(LOG_TAG, it) }
+        if (still) Log.i(LOG_TAG, "Xiaomi RAW still keys applied=${report.applied} skipped=${report.skipped}")
     }
 
     private fun applyVendorRequestKeys(builder: CaptureRequest.Builder) {
@@ -6099,11 +6569,12 @@ class RawCameraController(
         flashRepeatingAeModeOverride = wantAe
         updateRepeatingRequest(allowRawZsl = false)
         try {
-            fun precaptureRequest(trigger: Int) = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+            fun precaptureRequest(trigger: Int) = createSensorRequest(device, CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
                 applyCameraControls(this)
                 set(CaptureRequest.CONTROL_AE_MODE, coerceAeMode(wantAe))
                 set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, trigger)
+                applyPhysical3a(this)
             }.build()
             // Open Camera: an IDLE trigger first, else a precapture that already
             // ran (e.g. during AF) is not run again and the wait never starts.
@@ -6303,10 +6774,12 @@ class RawCameraController(
                 if (command.trigger == CaptureRequest.CONTROL_AF_TRIGGER_START)
                     touchFocus.onStartFrame(command.runId, result.frameNumber)
             }
+            val physical = pinnedSensorResult(result)
+            fun <T> sensor(key: CaptureResult.Key<T>): T? = physical?.get(key) ?: result.get(key)
             // One-shot 3A results can contain the entire PRECAPTURE transition
             // between repeating results. Feed them to the same waiter.
             flashPrecapture?.let { wait ->
-                if (wait.onAeState(result.get(CaptureResult.CONTROL_AE_STATE), SystemClock.elapsedRealtime()))
+                if (wait.onAeState(sensor(CaptureResult.CONTROL_AE_STATE), SystemClock.elapsedRealtime()))
                     finishFlashPrecapture()
             }
             if (previewSurface == null && rawReader != null) {
@@ -6314,19 +6787,19 @@ class RawCameraController(
             }
             if (request.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_ON) {
                 updateDynamicExposureFromMetering(
-                    result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0,
-                    result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+                    sensor(CaptureResult.SENSOR_SENSITIVITY) ?: 0,
+                    sensor(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
                 )
             }
-            publishDebugState(request, result, force = true)
-            touchFocus.onResult(result.frameNumber, result.get(CaptureResult.CONTROL_AF_MODE),
-                result.get(CaptureResult.CONTROL_AF_STATE), result.get(CaptureResult.LENS_FOCUS_DISTANCE))
+            publishDebugState(request, physical ?: result, force = true)
+            touchFocus.onResult(result.frameNumber, sensor(CaptureResult.CONTROL_AF_MODE),
+                sensor(CaptureResult.CONTROL_AF_STATE), sensor(CaptureResult.LENS_FOCUS_DISTANCE))
         }
     }
 
     private fun publishDebugState(
         request: CaptureRequest,
-        result: TotalCaptureResult,
+        result: CaptureResult,
         force: Boolean = false
     ) {
         val now = SystemClock.elapsedRealtime()
@@ -6566,7 +7039,7 @@ class RawCameraController(
         image: Image,
         exactResult: TotalCaptureResult?
     ): Boolean {
-        if (!running || !rawZslStreaming || !rawZslRequested ||
+        if (!running || !rawZslStreaming || !rawZslRequested || timestamp < zslMeteringTimestampFloor ||
             isRawZslBlocked()
         ) return false
         val result = exactResult ?: latestPreviewResult ?: return false
@@ -6913,7 +7386,7 @@ class RawCameraController(
             try { releaseFrames() } finally { postSaveCompletion(0) }
         }
         val input = HdrBracketSaveInput(
-            characteristics = c, orientation = orientation, cameraId = cameraId,
+            characteristics = c, orientation = orientation, cameraId = cameraId, boundPhysicalId = activePhysicalCameraId.takeIf { pinnedIshtarRoute },
             captureId = captureId, gps = captureGps,
             dngBackend = captureDngBackend, dngOverrides = captureDngOverrides,
             dngCompression = captureDngCompression
@@ -6959,11 +7432,13 @@ class RawCameraController(
         val frameMetadata = try {
             RawFrameMetadataFactory.capture(
                 selectedCameraId ?: "unknown",
-                image,
+                RawImageView.of(image),
                 c,
                 result,
                 orientation,
-                levelOverrides = captureDngOverrides
+                levelOverrides = captureDngOverrides,
+                vendorFullResolution = xiaomiRaw50Session,
+                boundPhysicalId = activePhysicalCameraId
             )
         } catch (failure: Exception) {
             ownership.close()
@@ -7009,9 +7484,10 @@ class RawCameraController(
                 postSaveCompletion(0)
             }
         }
+        val saveResult = pinnedSensorResult(result) ?: result
         val job = OwnedCaptureJob(releasedOwnership) {
             RawFrameSaveJob(
-                context, image, result,
+                context, image, saveResult,
                 RawFrameSaveInput(
                     characteristics = c, orientation = orientation, frameMetadata = frameMetadata,
                     outputFormat = outputFormat, outputSettings = outputSettings,
@@ -7250,7 +7726,7 @@ class RawCameraController(
         // default would leave the shutter enabled through the whole save drain
         // and invite futile presses (QUEUE FULL). Gate on the full burst —
         // except merges, which save one artifact (one slot, like admission).
-        val hasCapacity = if (rawZslRequested) {
+        val hasCapacity = if (rawZslRequested && !xiaomiFullResRawActive && !needsFreshStillForHold) {
             hasProcessingCapacity(
                 ZslPolicy.availabilitySlotCountFor(
                     hdrPlusSettings,
@@ -7261,10 +7737,11 @@ class RawCameraController(
         } else {
             hasProcessingCapacity()
         }
-        val merging = (hdrPlusSettings.enabled || mfsrSettings.enabled) &&
+        val merging = !xiaomiRaw50Session && (hdrPlusSettings.enabled || mfsrSettings.enabled) &&
             !hasMergeCapacity(captureFormat)
         onCaptureEnabled(
-            running && !destroyed && session != null && !captureInProgress.get() && hasCapacity && !merging
+            running && !destroyed && session != null && !rawPreviewUnavailable &&
+                !captureInProgress.get() && hasCapacity && !merging
         )
     }
 
@@ -7447,14 +7924,23 @@ class RawCameraController(
      * mode switch is a uniform flip on the next sampled frame — no session rebuild, no
      * buffer drop, no flicker. Must be called on the camera thread.
      */
+    private fun photoPreviewOutput(settings: JpegOutputSettings): JpegOutputSettings = when {
+        settings.photoLut == null -> settings
+        photoControlsBeforeVideo != null -> settings.copy(photoLut = null)
+        captureFormat.includesJpeg && developedFormat == DevelopedFormat.JXL ->
+            settings.copy(displayP3 = jxlOutputSettings.displayP3)
+        else -> settings
+    }
+
     private fun pushVfRenderState() {
+        val preview = photoPreviewOutput(jpegOutputSettings)
         val jpeg = !vfPreviewMode.resolve(captureFormat)
         val strength = adaptivePreviewStrength(captureExposureMode, jpegOutputSettings)
         rawViewfinder?.setRenderJpeg(jpeg)
-        rawViewfinder?.setAgx(jpegOutputSettings)
+        rawViewfinder?.setAgx(preview)
         rawViewfinder?.setPreviewExposureStrength(strength)
         bguViewfinder?.setRenderJpeg(jpeg)
-        bguViewfinder?.setAgx(jpegOutputSettings)
+        bguViewfinder?.setAgx(preview)
         bguViewfinder?.setPreviewExposureStrength(strength)
     }
 
@@ -7617,8 +8103,8 @@ class RawCameraController(
             RawZslStatus(state, detail)
         } else ControllerDebugText.rawZslStatus(
             requested = rawZslRequested,
-            disabledForSession = rawZslDisabledForSession,
-            fallbackDetail = rawZslFallbackDetail,
+            disabledForSession = rawZslDisabledForSession || xiaomiFullResRawActive,
+            fallbackDetail = if (xiaomiFullResRawActive) "FULL-RES STILL CAPTURE" else rawZslFallbackDetail,
             capacity = rawZslCapacity,
             streamBroken = zslHealth.streamBroken,
             streaming = rawZslStreaming,
@@ -7650,6 +8136,16 @@ class RawCameraController(
         return transfer
     }
 
+    fun stopAfterPause(onStopped: () -> Unit) {
+        cameraHandler.post {
+            try {
+                stop()
+            } finally {
+                Handler(Looper.getMainLooper()).post { onStopped() }
+            }
+        }
+    }
+
     fun stop() {
         scopes.stopPeaking()
         rawExposureAssist.clear()
@@ -7663,6 +8159,8 @@ class RawCameraController(
             lifecycleGeneration++
             configuringSessionGeneration = null
             touchFocus.resetForStop()
+            onFocusLock(false, false, 0L)
+            clearExposureHold()
             publishPeakingActiveIfChanged()
             touchFocus.cancelTimers()
             cancelRawZslWatchdog()
@@ -7670,6 +8168,7 @@ class RawCameraController(
             motionTracker.stop()
             rawZslStreaming = false
             rawZslRequestEpoch++
+            zslMeteringTimestampFloor = Long.MIN_VALUE
             clearRawZslBuffer()
             captureSequence.incrementAndGet()
             cameraCaptureSequenceActive = false
@@ -7685,6 +8184,8 @@ class RawCameraController(
             rawReader?.let(retiredRawReaders::add)
             closeRetiredRawReaders()
             session = null; camera = null; rawReader = null; previewSurface = null
+            xiaomiRaw50Session = false
+            vendorRawReaderActive = false
             rawReaderMaxImages = 0
             activePhysicalCameraId = null
             characteristics = null
@@ -7861,11 +8362,7 @@ class RawCameraController(
 
     private fun directRawCharacteristics(id: String): CameraCharacteristics? = try {
         val c = cameraManager.getCameraCharacteristics(id)
-        val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-        val rawByCapability = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
-        val rawByStream = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?.outputFormats?.contains(android.graphics.ImageFormat.RAW_SENSOR) == true
-        if (rawByCapability || rawByStream) c else null
+        c.takeIf(::hasRawOutput)
     } catch (_: Exception) {
         null
     }
@@ -7887,7 +8384,8 @@ class RawCameraController(
             }
             Triple(logicalId, physicalId, logical)
         } ?: return directRawCharacteristics(cameraId)?.let { direct ->
-            CameraRoute(cameraId, cameraId, null, direct)
+            val parentId = findIshtarLogicalParent(cameraId, direct)
+            CameraRoute(cameraId, parentId ?: cameraId, cameraId.takeIf { parentId != null }, direct)
         }
 
         // Prefer the full composite block as in the reference implementation, then fall back to
@@ -7897,12 +8395,16 @@ class RawCameraController(
         } catch (_: Exception) {
             null
         }
-        val physical = composite?.takeIf(::hasRawOutput) ?: try {
-            cameraManager.getCameraCharacteristics(physicalId)
-        } catch (_: Exception) {
-            return null
+        val directPhysical = if (isXiaomi13Ultra) directRawCharacteristics(physicalId) else null
+        val advertisedParent = directPhysical?.let { findIshtarLogicalParent(physicalId, it, logicalId) }
+        if (advertisedParent != null) {
+            return CameraRoute(cameraId, advertisedParent, physicalId, directPhysical)
         }
-        if (!hasRawOutput(physical)) return null
+        val physical = composite?.takeIf(::hasAdvertisedRawOutput)
+            ?: directPhysical
+            ?: directRawCharacteristics(physicalId)
+            ?: composite?.takeIf(::hasRawOutput)
+            ?: return null
 
         // Physical-first statics: downstream metadata (black levels, CCMs, active array,
         // lens-shading support) reads from these characteristics, so they must describe the
@@ -7911,11 +8413,70 @@ class RawCameraController(
         return CameraRoute(cameraId, logicalId, physicalId, physical)
     }
 
-    private fun hasRawOutput(c: CameraCharacteristics): Boolean {
+    /**
+     * Use only openable parents and Camera2-advertised membership. A bare logical ID
+     * retains automatic lens selection. A bare sensor ID keeps its settings identity.
+     */
+    private fun findIshtarLogicalParent(
+        physicalId: String,
+        physical: CameraCharacteristics,
+        preferredParent: String? = null
+    ): String? {
+        if (!isXiaomi13Ultra || physical.get(CameraCharacteristics.LENS_FACING) !=
+            CameraCharacteristics.LENS_FACING_BACK
+        ) return null
+        if (preferredParent == null && physical.physicalCameraIds.any { it != physicalId }) return null
+        val openableIds = runCatching { cameraManager.cameraIdList.toList() }.getOrDefault(emptyList())
+        return (listOfNotNull(preferredParent).filter { it in openableIds } + openableIds).firstOrNull { id ->
+            id != physicalId && runCatching {
+                physicalId in cameraManager.getCameraCharacteristics(id).physicalCameraIds
+            }.getOrDefault(false)
+        }
+    }
+
+    private fun hasAdvertisedRawOutput(c: CameraCharacteristics): Boolean {
         val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
         return caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW) ||
             c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?.outputFormats?.contains(android.graphics.ImageFormat.RAW_SENSOR) == true
+    }
+
+    private fun hasRawOutput(c: CameraCharacteristics): Boolean =
+        hasAdvertisedRawOutput(c) || SamsungRawCompatibility.trialSize(c) != null
+
+    private fun vivoUltraStream(): DeviceLensProfiles.Lens? =
+        if (photoControlsBeforeVideo == null) DeviceLensProfiles.vivoUltraStream(
+            selectedCameraId, activeSettingsKey(), vendorKeys(selectedCameraId)
+        ) else null
+
+    private fun vivoUltraSize(lens: DeviceLensProfiles.Lens): Size {
+        val size = checkNotNull(SessionStreamSelection.parseRawSizePreference(lens.rawSize))
+        return Size(size.width, size.height)
+    }
+
+    private fun customRawReaderSize(): Size? {
+        if (photoControlsBeforeVideo != null || lapisSessionSpec != null) return null
+        val size = SessionStreamSelection.parseRawSizePreference(customRawReaderSizeSetting()) ?: return null
+        return Size(size.width, size.height)
+    }
+
+    private fun xiaomiRaw50Size(
+        characteristics: CameraCharacteristics,
+        map: android.hardware.camera2.params.StreamConfigurationMap
+    ): Size? = if (photoControlsBeforeVideo == null && XiaomiUltraRaw50.enabled(context)) {
+        XiaomiUltraRaw50.size(characteristics, map)
+    } else null
+
+    private fun rawOutputSizes(
+        characteristics: CameraCharacteristics,
+        map: android.hardware.camera2.params.StreamConfigurationMap,
+        format: Int
+    ): List<Size> {
+        val advertised = map.getOutputSizes(format)?.toList().orEmpty()
+        if (advertised.isNotEmpty() || format != android.graphics.ImageFormat.RAW_SENSOR) {
+            return advertised
+        }
+        return listOfNotNull(SamsungRawCompatibility.trialSize(characteristics, map))
     }
 
     /** All non-empty splits, since Camera2 IDs themselves are arbitrary strings. */
@@ -7945,7 +8506,7 @@ class RawCameraController(
     private fun resolveDirectPhysicalFallback(route: CameraRoute): CameraRoute? {
         val physicalId = route.physicalCameraId ?: return null
         val advertised = try {
-            cachedCameraRoute(route.openCameraId)?.characteristics?.physicalCameraIds
+            cameraManager.getCameraCharacteristics(route.openCameraId).physicalCameraIds
         } catch (_: Exception) {
             null
         }

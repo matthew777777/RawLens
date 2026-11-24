@@ -7,8 +7,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -102,16 +100,7 @@ class WelcomeActivity : Activity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return "RawLens needs Android 11 or newer."
         }
-        val hasRaw = runCatching {
-            val manager = getSystemService(CameraManager::class.java)
-            manager.cameraIdList.any { id ->
-                manager.getCameraCharacteristics(id)
-                    .get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-                    ?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW) == true
-            }
-        }.getOrDefault(true) // Can't tell: let lens discovery decide.
-        return if (hasRaw) null
-        else "This phone doesn't expose Camera2 RAW, which RawLens needs."
+        return null // Lens discovery checks RAW routes after camera permission is granted.
     }
 
     private fun openAppSettings() {

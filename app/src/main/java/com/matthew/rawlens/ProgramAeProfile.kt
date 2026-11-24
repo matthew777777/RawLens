@@ -70,7 +70,7 @@ data class ProgramAeProfile(
     val normalTarget: Double = 0.16,
     val brightTarget: Double = 0.18,
     /** Digital gain allowed past the highest real ISO and shutter (EV, rawr default +2). */
-    val digitalGainEv: Float = 2f
+    val digitalGainEv: Float = 0f
 ) {
     fun validated(): ProgramAeProfile {
         require(listOf(darkTarget, dimTarget, normalTarget, brightTarget).all { it.isFinite() && it in 0.01..0.50 }) { "Brightness targets must be between 1% and 50%" }
@@ -83,7 +83,7 @@ data class ProgramAeProfile(
         return copy(
             balance = balance.coerceIn(0f, 1f),
             evBias = evBias.coerceIn(MIN_EV_BIAS, MAX_EV_BIAS),
-            digitalGainEv = if (digitalGainEv.isFinite()) digitalGainEv.coerceIn(0f, MAX_DIGITAL_GAIN_EV) else 2f
+            digitalGainEv = if (digitalGainEv.isFinite()) digitalGainEv.coerceIn(0f, MAX_DIGITAL_GAIN_EV) else 0f
         )
     }
 
@@ -158,7 +158,7 @@ data class ProgramAeProfile(
                     dimTarget = number("dimTarget")?.toDoubleOrNull() ?: 0.10,
                     normalTarget = number("normalTarget")?.toDoubleOrNull() ?: 0.16,
                     brightTarget = number("brightTarget")?.toDoubleOrNull() ?: 0.18,
-                    digitalGainEv = number("digitalGainEv")?.toFloatOrNull() ?: 2f
+                    digitalGainEv = number("digitalGainEv")?.toFloatOrNull() ?: 0f
                 ).validated()
             }.getOrNull() ?: ProgramAeProfile()
         }

@@ -109,38 +109,34 @@ void main() {
     cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
 
     highp vec3 sceneAcescg = u_camera_to_acescg * cameraRgb;
-    // Keep the unmodified scene tap for the HDR gain map.
     highp vec3 balancedAcescg = camera_tone_balance(sceneAcescg);
+    highp vec3 balancedRec2020 = ACESCG_TO_REC2020_D65 * balancedAcescg;
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
     highp vec3 outputLinear;
     highp vec3 basicEncoded = vec3(0.0);
     if (u_basic == 3) outputLinear = aces2_output(tl_aces_pre(balancedAcescg), u_display_p3);
-    else if (u_basic == 4) outputLinear = odrt(ACESCG_TO_REC2020_D65 * balancedAcescg, u_display_p3);
-    else if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(ACESCG_TO_REC2020_D65 * balancedAcescg);
+    else if (u_basic == 4) outputLinear = odrt(balancedRec2020, u_display_p3);
+    else if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(balancedRec2020);
     else if (u_basic == 1) {
-        basicEncoded = basic_encoded(outputMatrix * tl_basic_pre(ACESCG_TO_REC2020_D65 * balancedAcescg));
+        basicEncoded = basic_encoded(outputMatrix * tl_basic_pre(balancedRec2020));
         outputLinear = vec3(0.0);
         if (u_write_gainmap != 0) outputLinear = basic_decode(basicEncoded);
     }
     else outputLinear = compress_output_gamut(outputMatrix * agx_base(balancedAcescg));
     highp vec3 baseLinear = clamp(outputLinear, 0.0, 1.0);
-    highp vec3 encoded = (u_basic == 1) ? basicEncoded : srgb_oetf(baseLinear);
+    highp vec3 encoded = photoCube((u_basic == 1) ? basicEncoded : srgb_oetf(baseLinear));
     highp vec3 dither = vec3(
         hash01(outputPixel, 0u), hash01(outputPixel, 1u), hash01(outputPixel, 2u)
     ) - 0.5;
     imageStore(img_out, outputPixel, vec4(encoded + dither / 255.0, 1.0));
 
-    // RAWR-parity Ultra HDR gain map: scene-linear HDR to SDR-base ratio.
-    // The HDR tap is the pre-tonemap demosaiced camera RGB in display-linear
-    // space (camera -> ACEScg -> Rec.2020 -> display, without AgX); the SDR
-    // tap is the clamped display-linear base. Same encode as agx_srgb8.glsl.
+    // Same highlight extension and gain-map encode as agx_srgb8.glsl.
     if (u_write_gainmap != 0) {
         ivec2 gainPixel = outputPixel / 4;
         ivec2 samplePixel = min(gainPixel * 4 + ivec2(2), u_output_size - ivec2(1));
         if (all(equal(outputPixel, samplePixel))) {
-            highp vec3 hdrScene = outputMatrix * (ACESCG_TO_REC2020_D65 * (u_camera_to_acescg * cameraRgb));
-            highp vec3 hdrLin = max(hdrScene * max(u_hdr_exposure, 1e-6), vec3(0.0));
-            highp vec3 sdrLin = max(baseLinear, vec3(0.0));
+            highp vec3 sdrLin = baseLinear;
+            highp vec3 hdrLin = hdr_gainmap_target(sdrLin, balancedRec2020);
             highp float sdrMaxChan = max(sdrLin.x, max(sdrLin.y, sdrLin.z));
             highp float sdrMinChan = min(sdrLin.x, min(sdrLin.y, sdrLin.z));
             highp float sdrSat = (sdrMaxChan - sdrMinChan) / max(sdrMaxChan, 1e-3);
@@ -151,7 +147,7 @@ void main() {
             highp float lumaSdr = dot(sdrLin, vec3(0.2126, 0.7152, 0.0722));
             highp float logGainLuma =
                 log2(max((lumaHdr + max(u_gainmap_offset_hdr, 1e-6)) / (lumaSdr + max(u_gainmap_offset_sdr, 1e-6)), 1e-9));
-            highp float toneScale = smoothstep(0.03, 0.50, lumaSdr) * (1.0 - satW);
+            highp float toneScale = 1.0 - satW;
             highp float hdrMaxChan = max(hdrLin.x, max(hdrLin.y, hdrLin.z));
             highp float hdrMinChan = min(hdrLin.x, min(hdrLin.y, hdrLin.z));
             highp float hdrSat = (hdrMaxChan - hdrMinChan) / max(hdrMaxChan, 1e-3);

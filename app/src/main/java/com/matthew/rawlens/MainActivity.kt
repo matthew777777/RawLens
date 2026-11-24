@@ -61,11 +61,13 @@ class MainActivity : Activity() {
     internal lateinit var controller: RawCameraController
     private lateinit var status: TextView
 
-    internal lateinit var isoControl: TextView
-    internal lateinit var shutterControl: TextView
-    internal lateinit var wbControl: TextView
+    internal lateinit var isoControl: RotatingTextView
+    internal lateinit var shutterControl: RotatingTextView
+    internal lateinit var wbControl: RotatingTextView
     internal lateinit var focusControl: TextView
     internal lateinit var evControl: TextView
+    private lateinit var afOnButton: TextView
+    private lateinit var aeLockButton: TextView
     internal lateinit var lensSwitcher: LinearLayout
     private lateinit var lastCapture: LastCaptureThumbnail
     private lateinit var flashControl: TextView
@@ -95,7 +97,16 @@ class MainActivity : Activity() {
     internal lateinit var focusPeakingOverlay: FocusPeakingOverlayView
     internal lateinit var rawExposureOverlay: RawExposureOverlayView
     internal var rawExposureSettings = RawExposureAssistSettings()
-    internal lateinit var quickPanel: LinearLayout
+    internal lateinit var quickPanel: android.widget.ScrollView
+    private enum class QuickSection(val tab: Int, val panel: Int) {
+        CAPTURE(R.id.captureQuickTab, R.id.photoCaptureQuickRow),
+        MERGE(R.id.mergeQuickTab, R.id.mergeQuickSection),
+        MONITOR(R.id.monitorQuickTab, R.id.monitorQuickSection),
+        TOOLS(R.id.toolsQuickTab, R.id.toolsQuickSection)
+    }
+    private var photoQuickSection = QuickSection.MONITOR
+    private var videoQuickSection = QuickSection.MONITOR
+
     internal lateinit var gridQuick: TextView
     internal lateinit var histogramQuick: TextView
     internal lateinit var levelQuick: TextView
@@ -110,7 +121,7 @@ class MainActivity : Activity() {
     internal var lastLensSwitcherSignature: String? = null
     internal lateinit var featureTags: TextView
     private lateinit var lightQuick: TextView
-    internal lateinit var modeButton: TextView
+    internal lateinit var modeButton: CaptureModeDial
     internal lateinit var rawBadge: TextView
     private lateinit var rawStatusGroup: View
     private var captureFormat = CaptureFormat.DNG_ONLY
@@ -155,7 +166,6 @@ class MainActivity : Activity() {
     internal var sidecarSettingsStatus: TextView? = null
     private var countdownRunnable: Runnable? = null
     internal var scopeRunnable: Runnable? = null
-    internal val quickTileStates = java.util.IdentityHashMap<TextView, Boolean>()
     private lateinit var orientationListener: OrientationEventListener
     internal var activityResumed = false
     /** Camera stream sizing must use the final viewport, not the full-screen XML placeholder. */
@@ -230,11 +240,13 @@ class MainActivity : Activity() {
         ImmersiveMode.apply(window)
 
         status = findViewById(R.id.status)
-        isoControl = findViewById(R.id.isoControl)
-        shutterControl = findViewById(R.id.shutterControl)
-        wbControl = findViewById<RotatingTextView>(R.id.wbControl).apply { fitRotatedText = true }
-        focusControl = findViewById(R.id.focusControl)
-        evControl = findViewById(R.id.evControl)
+        isoControl = findViewById<RotatingTextView>(R.id.isoControl).apply { exposureReadout = true }
+        shutterControl = findViewById<RotatingTextView>(R.id.shutterControl).apply { exposureReadout = true }
+        wbControl = findViewById<RotatingTextView>(R.id.wbControl).apply { exposureReadout = true }
+        focusControl = findViewById<RotatingTextView>(R.id.focusControl).apply { exposureReadout = true }
+        evControl = findViewById<RotatingTextView>(R.id.evControl).apply { exposureReadout = true }
+        afOnButton = findViewById(R.id.afOnButton)
+        aeLockButton = findViewById(R.id.aeLockButton)
         lensSwitcher = findViewById(R.id.lensSwitcher)
         flashControl = findViewById(R.id.flashControl)
         val dngInfo = findViewById<TextView>(R.id.dngInfo)
@@ -320,6 +332,9 @@ class MainActivity : Activity() {
         // The sharp merger owns the shutter like HDR+ does: a stale
         // sharp-on pair turns HDR+ and the bracket off.
         if (mfsrSettings.enabled) {
+            if (MonoMode.read(lensPreferences()).enabled) {
+                lensPreferences().edit().putString(MonoMode.PREFERENCE_KEY, MonoMode.OFF.name).apply()
+            }
             if (hdrPlusSettings.enabled) {
                 hdrPlusSettings = hdrPlusSettings.copy(enabled = false)
                 lensPreferences().edit().putBoolean("hdr_plus_enabled", false).apply()
@@ -412,6 +427,22 @@ class MainActivity : Activity() {
         histogramView = findViewById(R.id.histogramView)
         waveformView = findViewById(R.id.waveformView)
         quickPanel = findViewById(R.id.quickSettingsPanel)
+        for (section in QuickSection.entries) {
+            findViewById<View>(section.tab).setOnClickListener {
+                if (isVideoMode) videoQuickSection = section else photoQuickSection = section
+                refreshQuickSection()
+                quickPanel.scrollTo(0, 0)
+            }
+        }
+        quickPanel.setOnScrollChangeListener { _, _, _, _, _ ->
+            if (quickPanel.visibility == View.VISIBLE) armQuickAutoHide()
+        }
+        for (id in intArrayOf(R.id.gridQuick, R.id.histogramQuick, R.id.aeMeteringQuick,
+            R.id.timerQuick, R.id.releaseQuick, R.id.lightQuick, R.id.monoQuick,
+            R.id.dLightingQuick, R.id.encodedVideoCropQuick, R.id.videoResolutionQuick,
+            R.id.videoFpsQuick, R.id.videoModeQuick)) {
+            findViewById<QuickControlTileView>(id).showsChoice = true
+        }
         quickPanel.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             positionQuickPanel()
             updateOverlayStack()
@@ -425,7 +456,7 @@ class MainActivity : Activity() {
         releaseQuick = findViewById(R.id.releaseQuick)
         hdrPlusQuick = findViewById(R.id.hdrPlusQuick)
         mfsrQuick = findViewById(R.id.mfsrQuick)
-        lkrQuick = findViewById(R.id.lkrQuick)
+        lkrQuick = findViewById<QuickControlTileView>(R.id.lkrQuick).apply { valueFirst = false }
         ettrQuick = findViewById(R.id.ettrQuick)
         featureTags = findViewById(R.id.featureTags)
         lightQuick = findViewById(R.id.lightQuick)
@@ -441,6 +472,16 @@ class MainActivity : Activity() {
             lensPreferences().getString(KEY_FOCUS_PEAKING_COLOR, null)
         )
         focusPeakingOverlay.peakingColor = focusPeakingColor
+        focusPeakingOverlay.magnifierEnabled = lensPreferences().getBoolean(KEY_FOCUS_MAGNIFIER, false)
+        val focusPreviewSources = listOf(
+            findViewById<android.view.SurfaceView>(R.id.recordPreview),
+            findViewById<android.view.SurfaceView>(R.id.bguViewfinder),
+            findViewById<android.view.SurfaceView>(R.id.rawViewfinder),
+            findViewById<android.view.SurfaceView>(R.id.viewfinder)
+        )
+        focusPeakingOverlay.previewSource = {
+            focusPreviewSources.firstOrNull { it.isShown && it.holder.surface.isValid }
+        }
         focusPeakingOverlay.visibility = View.GONE
         scopeMode = ScopeMode.fromPreference(lensPreferences().getString(KEY_SCOPE_MODE, null))
         histogramView.setAgxApplied(scopeAgxApplied())
@@ -519,8 +560,8 @@ class MainActivity : Activity() {
                         return@runOnUiThread
                     }
                     // Top status line next to the DNG badge: details only.
-                    dngInfo.text = dng.substringAfter('\n').replace("-bit RAW", "-BIT")
-                    sensorInfo.text = sensor.substringAfter('\n')
+                    dngInfo.text = "· " + dng.substringAfter('\n').removeSuffix(" RAW")
+                    sensorInfo.text = sensor.substringAfter('\n').replace('x', '×')
                 }
             },
             { enabled ->
@@ -558,7 +599,7 @@ class MainActivity : Activity() {
                         lightQuick.alpha = if (flashEnabled) 1f else 0.4f
                         setQuickTileState(lightQuick, flash.endsWith("ON"))
                     }
-                    refreshManualTileAccents()
+                    refreshExposureAutoIndicators()
                     refreshLensSwitcher()
                     updateQuickControls()
                 }
@@ -594,7 +635,13 @@ class MainActivity : Activity() {
                 runOnUiThread { meteringOverlay.clearTargets() }
             },
             { locked, indefinite, deadlineMs ->
-                runOnUiThread { meteringOverlay.setFocusLock(locked, indefinite, deadlineMs) }
+                runOnUiThread {
+                    meteringOverlay.setFocusLock(locked, indefinite, deadlineMs)
+                    val held = locked && indefinite
+                    afOnButton.isSelected = held
+                    afOnButton.text = if (held) "AF-ON\nLOCKED" else "AF-ON"
+                    afOnButton.contentDescription = if (held) "Focus locked. Tap to release." else "Focus at selected point"
+                }
             },
             { histogram ->
                 // The RAW scope is live in every capture mode (repeating scope-only
@@ -683,7 +730,23 @@ class MainActivity : Activity() {
                     )
                 }
             },
-            vendorKeysByKey = { key -> vendorKeyStore.get(key) }
+            vendorKeysByKey = { key -> vendorKeyStore.get(key) },
+            onAeTargetCleared = { runOnUiThread { meteringOverlay.clearAeTarget() } },
+            onExposureHold = { requested, confirmed ->
+                runOnUiThread {
+                    aeLockButton.isSelected = confirmed
+                    aeLockButton.text = when {
+                        confirmed -> "AE-L\nLOCKED"
+                        requested -> "AE-L\nWAIT"
+                        else -> "AE-L"
+                    }
+                    aeLockButton.contentDescription = when {
+                        confirmed -> "Exposure locked. Tap to release."
+                        requested -> "Locking exposure. Tap to cancel."
+                        else -> "Lock exposure"
+                    }
+                }
+            }
         )
         controller.onIspDisplayChanged = { show -> runOnUiThread { applyIspDisplay(show) } }
         controller.onVfRouteChanged = { isBgu ->
@@ -757,6 +820,8 @@ class MainActivity : Activity() {
         isoControl.setOnLongClickListener { toggleProgramAxisLock(isIso = true); true }
         shutterControl.setOnClickListener { openShutterControl() }
         shutterControl.setOnLongClickListener { toggleProgramAxisLock(isIso = false); true }
+        afOnButton.setOnClickListener { controller.focusOnSelectedPoint() }
+        aeLockButton.setOnClickListener { controller.toggleExposureHold() }
         wbControl.contentDescription = "White balance. Hold to switch Kelvin and presets."
         wbControl.setOnClickListener { openWhiteBalanceControl() }
         wbControl.setOnLongClickListener {
@@ -781,6 +846,7 @@ class MainActivity : Activity() {
         featureTags.setOnClickListener { toggleQuickControls() }
         rawStatusGroup.setOnClickListener { cycleCaptureFormat() }
         modeButton.setOnClickListener { cycleCaptureExposureMode() }
+        modeButton.onStep = ::cycleCaptureExposureMode
     }
 
     /** onCreate stage: Photo/video mode toggle, gallery thumbnail and the quick panel. */
@@ -801,8 +867,7 @@ class MainActivity : Activity() {
         val galleryThumb = findViewById<android.widget.ImageView>(R.id.galleryThumb)
         galleryThumb.clipToOutline = true
         lastCapture = LastCaptureThumbnail(this) { _, _, thumb ->
-            // PhotonCamera-style seat: the capture fills the circle; with none
-            // visible a gallery glyph sits on the glass instead of flat grey.
+            // Use the gallery glyph until a thumbnail is available.
             if (thumb != null) {
                 galleryThumb.setPadding(0, 0, 0, 0)
                 galleryThumb.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
@@ -873,6 +938,10 @@ class MainActivity : Activity() {
         hdrPlusQuick.setOnLongClickListener { cycleHdrPlusQuality(); true }
         mfsrQuick.setOnClickListener { toggleSharpMerge(MfsrEngine.MFSR) }
         lkrQuick.setOnClickListener { toggleSharpMerge(MfsrEngine.LKR) }
+        findViewById<QuickControlTileView>(R.id.lkrHdrQuick).apply {
+            showsChoice = true
+            setOnClickListener { cycleLkrHdr() }
+        }
         lkrQuick.setOnLongClickListener { tile ->
             tile.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             cycleLkrHdr()
@@ -897,6 +966,7 @@ class MainActivity : Activity() {
             // the reticle immediately; the controller re-asserts unlocked AE/AF
             // on the camera thread and confirms via onMeteringReleased.
             meteringOverlay.clearTargets()
+            focusPeakingOverlay.resetTarget()
             controller.resetMeteringTargets()
             setStatus("AE/AF RESET")
             hideQuickControls()
@@ -916,14 +986,17 @@ class MainActivity : Activity() {
         // Overlay taps arrive in fitted-picture coords; the controller
         // normalizes by the full box, so warp them back first.
         meteringOverlay.onTapBoth = { x, y ->
+            focusPeakingOverlay.setTarget(x, y, meteringOverlay)
             val (bx, by) = warpTapToBox(x, y, viewfinder)
             controller.setFocusAndMeteringPoint(bx, by)
         }
         meteringOverlay.onBothDragged = { x, y ->
+            focusPeakingOverlay.setTarget(x, y, meteringOverlay)
             val (bx, by) = warpTapToBox(x, y, viewfinder)
             controller.setFocusAndMeteringPoint(bx, by)
         }
         meteringOverlay.onAfDragged = { x, y ->
+            focusPeakingOverlay.setTarget(x, y, meteringOverlay)
             val (bx, by) = warpTapToBox(x, y, viewfinder)
             controller.setAfPoint(bx, by)
         }
@@ -932,10 +1005,14 @@ class MainActivity : Activity() {
             controller.setAePoint(bx, by)
         }
         meteringOverlay.onAfLockHold = { x, y ->
+            focusPeakingOverlay.setTarget(x, y, meteringOverlay)
             val (bx, by) = warpTapToBox(x, y, viewfinder)
             controller.setFocusAndMeteringHold(bx, by)
         }
-        meteringOverlay.onTargetsCleared = controller::resetMeteringTargets
+        meteringOverlay.onTargetsCleared = {
+            focusPeakingOverlay.resetTarget()
+            controller.resetMeteringTargets()
+        }
         meteringOverlay.onOverlayTouched = { closeFloatingPanels() }
         meteringOverlay.onPanelSwipe = ::openPreviewPanel
         manualSlider.max = SLIDER_STEPS
@@ -1040,6 +1117,71 @@ class MainActivity : Activity() {
         // Photo 3:4 box seats between the islands: an island or panel size
         // change (first layout, font scale, panel growth) re-seats the box.
         // Size-guarded, so settled layouts never recurse.
+        val captureHeader = findViewById<View>(R.id.topBar)
+        captureHeader.layoutDirection = View.LAYOUT_DIRECTION_LTR
+        val headerLeft = captureHeader.paddingLeft
+        val headerRight = captureHeader.paddingRight
+        val headerTop = captureHeader.paddingTop
+        fun placeHeader(cutout: android.view.DisplayCutout?) {
+            if (captureHeader.width == 0) return
+            val location = IntArray(2)
+            captureHeader.getLocationInWindow(location)
+            val width = captureHeader.width
+            val left = maxOf(headerLeft, (cutout?.safeInsetLeft ?: 0) + dp(4))
+            val right = maxOf(headerRight, (cutout?.safeInsetRight ?: 0) + dp(4))
+            val bounds = android.graphics.Rect()
+            cutout?.boundingRects?.forEach { rect ->
+                if (rect.top <= location[1] && rect.bottom > location[1]) bounds.union(rect)
+            }
+            var leftPadding = left
+            var rightPadding = right
+            var topPadding = headerTop
+            var gap = dp(8)
+            var leftColumn = 0
+            var rightColumn = 0
+            val groupStart = left + dp(68)
+            val groupEnd = width - right - dp(4)
+            if (!bounds.isEmpty) {
+                val before = bounds.left - location[0] - dp(6)
+                val after = bounds.right - location[0] + dp(6)
+                when {
+                    before - groupStart >= dp(64) && groupEnd - after >= dp(64) -> {
+                        leftColumn = before - groupStart
+                        rightColumn = groupEnd - after
+                        gap = after - before
+                    }
+                    groupEnd - after >= dp(184) -> leftPadding = maxOf(left, after)
+                    before - left >= dp(184) -> rightPadding = maxOf(right, width - before)
+                    else -> topPadding += (bounds.bottom - location[1]).coerceAtLeast(0)
+                }
+            }
+            if (captureHeader.paddingLeft != leftPadding || captureHeader.paddingRight != rightPadding ||
+                captureHeader.paddingTop != topPadding) {
+                captureHeader.setPadding(leftPadding, topPadding, rightPadding, captureHeader.paddingBottom)
+            }
+            fun sizeColumn(id: Int, size: Int, weight: Float = 0f) {
+                val view = findViewById<View>(id)
+                val params = view.layoutParams as LinearLayout.LayoutParams
+                if (params.width == size && params.weight == weight) return
+                params.width = size
+                params.weight = weight
+                view.layoutParams = params
+            }
+            sizeColumn(R.id.headerCutoutGap, gap)
+            sizeColumn(R.id.meterCutoutGap, gap)
+            sizeColumn(R.id.rawBadge, leftColumn, if (leftColumn == 0) 2f else 0f)
+            sizeColumn(R.id.headerSensorGroup, leftColumn, if (leftColumn == 0) 2f else 0f)
+            sizeColumn(R.id.status, rightColumn, if (rightColumn == 0) 1f else 0f)
+            sizeColumn(R.id.headerMeterGroup, rightColumn, if (rightColumn == 0) 1f else 0f)
+        }
+        captureHeader.setOnApplyWindowInsetsListener { _, insets ->
+            placeHeader(insets.displayCutout)
+            insets
+        }
+        captureHeader.addOnLayoutChangeListener { _, l, _, r, _, oldLeft, _, oldRight, _ ->
+            if (r - l != oldRight - oldLeft) placeHeader(captureHeader.rootWindowInsets?.displayCutout)
+        }
+        captureHeader.requestApplyInsets()
         findViewById<View>(R.id.topBar).addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob ->
             if (!isVideoMode && (r - l != orr - ol || b - t != ob - ot)) {
                 positionViewfinderOverlays()
@@ -1123,6 +1265,10 @@ class MainActivity : Activity() {
     @Deprecated("Use picker intent result for the sidecar folder grant")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PHOTO_LUT_PICK_REQUEST) {
+            handlePhotoLutResult(resultCode, data)
+            return
+        }
         if (requestCode == EncodedVideoLutLibrary.PICK_REQUEST) {
             handleEncodedVideoLutResult(resultCode, data)
             return
@@ -1254,7 +1400,10 @@ class MainActivity : Activity() {
         return super.onKeyDown(keyCode, event)
     }
 
+    private var pendingPauseStops = 0
+
     internal fun startCameraWhenReady() {
+        if (pendingPauseStops > 0 || isFinishing || isDestroyed) return
         // The recorder owns the camera while video state exists (rolling or
         // stopping): a stills start here would STEAL the session and kill the
         // take silently (no frames, audio keeps running). Never touch it.
@@ -1306,12 +1455,15 @@ class MainActivity : Activity() {
         if (videoRecording) stopVideoRecording(rearmPreview = false)
         scopeRunnable?.let(histogramView::removeCallbacks)
         scopeRunnable = null
-        controller.stop()
+        pendingPauseStops++
+        controller.stopAfterPause {
+            pendingPauseStops--
+            if (!activityResumed && !isDestroyed) DeviceImpactProbe.auditBackground(citizenshipExtra())
+            startCameraWhenReady()
+        }
         // PSS sample off-thread (jank); the report itself is counter-only and UI-safe.
         MemoryLeakDiagnostics.sampleAsync("activity-paused")
         MemoryLeakDiagnostics.dumpReport()
-        // Citizenship proof: camera/GPS/video state now, threads again in 8 s.
-        DeviceImpactProbe.auditBackground(citizenshipExtra())
         DeviceImpactProbe.auditStorage(this)
         super.onPause()
     }
@@ -1379,7 +1531,6 @@ class MainActivity : Activity() {
         val viewfinder = findViewById<AutoFitSurfaceView>(R.id.viewfinder)
         val topBar = findViewById<ViewGroup>(R.id.topBar)
         val root = panel.parent as View
-        findViewById<View>(R.id.captureInfoRow).visibility = View.VISIBLE
         // ISP preview SurfaceView: always VISIBLE (its surface is a session output); the
         // RAW/BGU VF media-overlay surfaces cover it unless an ISP preview toggle shows it.
         // Fill the exact viewport: letterboxing (fillViewport=false + 3:4) leaves a
@@ -1466,21 +1617,21 @@ class MainActivity : Activity() {
         viewfinder.translationY = 0f
         syncMeteringOverlayToViewfinder(viewfinder)
         syncGuideOverlayToViewfinder(viewfinder)
-        manualPanel.layoutParams = FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            wrapContent(), Gravity.END or Gravity.BOTTOM
+        setFrameLayoutIfChanged(manualPanel, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, wrapContent(), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
         ).apply {
             marginStart = dp(16)
             marginEnd = dp(16)
-            bottomMargin = panelHeight + dp(16)
-        }
+            bottomMargin = panelHeight + dp(8)
+        })
         quickPanel.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             wrapContent(), Gravity.END or Gravity.BOTTOM
         ).apply {
             marginStart = dp(16)
             marginEnd = dp(16)
-            bottomMargin = panelHeight + dp(16)
+            bottomMargin = panelHeight + dp(8)
+            topMargin = if (topBar.visibility == View.VISIBLE) topBar.height + dp(8) else dp(8)
         }
         updateOverlayStack()
         guideOverlay.setContentInsets(top = 0, end = 0, bottom = 0)
@@ -1500,7 +1651,7 @@ class MainActivity : Activity() {
     private fun floatingLiftPx(): Int {
         val floatingHeight = when {
             ::manualPanel.isInitialized && manualPanel.visibility == View.VISIBLE ->
-                (manualPanel.height.takeIf { it > 0 } ?: dp(124))
+                (manualPanel.height.takeIf { it > 0 } ?: dp(48))
             ::quickPanel.isInitialized && quickPanel.visibility == View.VISIBLE ->
                 (quickPanel.height.takeIf { it > 0 } ?: dp(200))
             else -> 0
@@ -1511,7 +1662,15 @@ class MainActivity : Activity() {
     // Every caller (panels, shutter, crop, rotation) seats through the one
     // rotation-aware path: a separate margin writer here used to drop the
     // quarter-turn lift and park the landscape scope behind the panel.
-    internal fun updateOverlayStack() = seatScopeSlot()
+    internal fun updateOverlayStack() {
+        val selected = activeProgramAxis ?: activeManualControl
+        isoControl.isSelected = selected == ManualControl.ISO
+        shutterControl.isSelected = selected == ManualControl.SHUTTER
+        wbControl.isSelected = selected == ManualControl.WHITE_BALANCE
+        focusControl.isSelected = selected == ManualControl.FOCUS_DISTANCE
+        evControl.isSelected = selected == ManualControl.EXPOSURE_COMPENSATION
+        seatScopeSlot()
+    }
 
     private fun applyDeviceOrientation(degrees: Int, animate: Boolean) {
         deviceOrientationDegrees = degrees
@@ -1714,6 +1873,7 @@ class MainActivity : Activity() {
         findViewById(R.id.isoControl),
         findViewById(R.id.shutterControl), findViewById(R.id.wbControl),
         findViewById(R.id.focusControl), findViewById(R.id.evControl),
+        findViewById(R.id.afOnButton), findViewById(R.id.aeLockButton),
         findViewById(R.id.focusMarkA), findViewById(R.id.focusMarkB),
         findViewById(R.id.focusPullDuration), findViewById(R.id.recordingPreviewSleep),
         // dngInfo/sensorInfo intentionally fixed: wide thin singleLine labels
@@ -2139,6 +2299,8 @@ class MainActivity : Activity() {
     private fun enterVideoMode() {
         lastPhotoExposureMode = captureExposureMode
         isVideoMode = true
+        afOnButton.visibility = View.GONE
+        aeLockButton.visibility = View.GONE
         // Video owns a temporary AUTO session. Photo preferences and merge switches stay intact.
         captureExposureMode = CaptureExposureMode.AUTO
         controller.beginVideoPreview()
@@ -2161,8 +2323,6 @@ class MainActivity : Activity() {
             if (encodedVideoEnabled) "Record Encoded Video" else "Record RAW Video"
         refreshVideoButton()
         refreshCaptureFormatControl()
-        findViewById<TextView>(R.id.dngInfo)?.text =
-            if (encodedVideoEnabled) "${encodedVideoProfile().hudLabel} • HEVC10" else "CRAW"
         refreshVideoSensorInfo()
         setStatus("VIDEO READY")
         updateQuickControls()
@@ -2185,6 +2345,8 @@ class MainActivity : Activity() {
         }
         Log.i(LOG_TAG, "video exit to $lastPhotoExposureMode")
         isVideoMode = false
+        afOnButton.visibility = View.VISIBLE
+        aeLockButton.visibility = View.VISIBLE
         recordingTools.stop()
         recordingTools.hide()
         // The video light never follows the user back into photo.
@@ -2228,9 +2390,7 @@ class MainActivity : Activity() {
         activeScopeView().post { if (!isFinishing && !isDestroyed) seatScopeSlot() }
     }
 
-    // Dedicated red dot under the quick-panel access: a MODE toggle with the
-    // app's chip language (dim entry dot / ready ring / rolling red).
-    // Tap toggles photo <-> video; shutter ring toggles recording.
+    // Photo/video mode toggle. The main shutter controls recording.
     private fun refreshVideoButton() {
         val button = findViewById<View>(R.id.videoRecordButton) ?: return
         when {
@@ -2778,8 +2938,6 @@ class MainActivity : Activity() {
             refreshVideoButton()
             refreshVideoAudioDescription()
             refreshCaptureFormatControl()
-            rawBadge.text = encodedVideoBadgeLabel()
-            rawBadge.setTextColor(getColor(R.color.danger))
             setStatus(
                 if (stats == null) "REC FAILED • CHECK RECORDING FOLDER"
                 else if (saved == null) "FINALIZATION FAILED • CHECK RECORDING FOLDER"
@@ -2837,8 +2995,6 @@ class MainActivity : Activity() {
             refreshVideoButton()
             refreshVideoAudioDescription()
             refreshCaptureFormatControl()
-            rawBadge.text = "RAW Video"
-            rawBadge.setTextColor(getColor(R.color.danger))
             setStatus(
                 if (stats == null) "REC FAILED • CHECK RECORDING FOLDER"
                 else if (saved == null) "FINALIZATION FAILED • CHECK RECORDING FOLDER"
@@ -3086,12 +3242,13 @@ class MainActivity : Activity() {
     internal fun videoDemosaic(): VideoDemosaic =
         VideoDemosaic.fromPreference(lensPreferences().getString(KEY_VIDEO_DEMOSAIC, null))
 
-    /** Encoded Video badge: mode and live output profile. */
-    internal fun encodedVideoBadgeLabel(recording: Boolean = false): String {
+    private fun encodedVideoBadgeLabel(recording: Boolean = false): String =
+        if (recording) "● HEVC 10-bit" else "HEVC 10-bit"
+
+    internal fun encodedVideoOutputProfileLabel(): String {
         val profile = encodedVideoProfile()
-        val label = if (profile == EncodedVideoProfile.SLOG3 && EncodedVideoLutLibrary(this).bakeIntoRecording)
+        return if (profile == EncodedVideoProfile.SLOG3 && EncodedVideoLutLibrary(this).bakeIntoRecording)
             "LUT709" else profile.hudLabel
-        return (if (recording) "● " else "") + "Encoded Video • $label"
     }
 
     internal fun cycleEncodedVideoProfile() {
@@ -3210,8 +3367,10 @@ class MainActivity : Activity() {
     internal fun refreshVideoSensorInfo() {
         if (!isVideoMode) return
         if (encodedVideoEnabled && videoRecorder == null) {
-            findViewById<TextView>(R.id.sensorInfo)?.text = "${encodedVideoResPref().width}x${EncodedVideoLadder.encodedVideoHeight(encodedVideoResPref().width, encodedVideoCrop())} • ${encodedVideoFpsPref()}FPS"
-            findViewById<TextView>(R.id.dngInfo)?.text = "${encodedVideoProfile().hudLabel} • HEVC10"
+            val width = encodedVideoResPref().width
+            val size = if (width == 3840) "4K" else "${width}×${EncodedVideoLadder.encodedVideoHeight(width, encodedVideoCrop())}"
+            findViewById<TextView>(R.id.sensorInfo)?.text = "$size · ${encodedVideoFpsPref()} fps"
+            findViewById<TextView>(R.id.dngInfo)?.text = "· ${encodedVideoOutputProfileLabel()}"
             return
         }
         val rec = videoRecorder
@@ -3234,7 +3393,7 @@ class MainActivity : Activity() {
         val binTag = if (binned) " • BIN" else ""
         findViewById<TextView>(R.id.sensorInfo)?.text = "$dims • ${rawVideoFpsPref()}FPS"
         findViewById<TextView>(R.id.dngInfo)?.text =
-            "CRAW • ${videoCrop.label.uppercase(Locale.US)}$binTag"
+            "· ${videoCrop.label.uppercase(Locale.US)}$binTag"
     }
 
     /**
@@ -3432,6 +3591,19 @@ class MainActivity : Activity() {
         }
     }
 
+    internal fun applyPhotoOutputSettings(settings: JpegOutputSettings): Boolean {
+        if (!controller.setJpegOutputSettings(settings)) return false
+        lensPreferences().edit().apply {
+            if (settings.mono.enabled && mfsrSettings.enabled) {
+                mfsrSettings = controller.mfsrSettings()
+                putBoolean(MfsrSettings.KEY_ENABLED, mfsrSettings.enabled)
+            }
+            putString(MonoMode.PREFERENCE_KEY, settings.mono.mode.name)
+            putBoolean(MonoMode.KEY_KEEP_COLOR_DNG, settings.mono.keepColorDng)
+        }.apply()
+        return true
+    }
+
     internal fun applyMfsrSettings(settings: MfsrSettings): Boolean {
         if (!controller.setMfsrSettings(settings)) {
             setStatus("${mfsrSettings.label} LOCKED • SAVING")
@@ -3439,6 +3611,9 @@ class MainActivity : Activity() {
         }
         mfsrSettings = settings
         lensPreferences().edit().apply {
+            if (settings.enabled && MonoMode.read(lensPreferences()).enabled) {
+                putString(MonoMode.PREFERENCE_KEY, MonoMode.OFF.name)
+            }
             settings.toPreferences().forEach { (key, value) ->
                 when (value) {
                     is Boolean -> putBoolean(key, value)
@@ -3531,7 +3706,7 @@ class MainActivity : Activity() {
     internal fun ettrIsoLimitText(isoLimit: Int): String =
         "ISO ceiling: " + (isoLimit.takeIf { it > 0 }?.toString() ?: "SENSOR MAX")
 
-    private fun cycleCaptureExposureMode() {
+    private fun cycleCaptureExposureMode(step: Int = 1) {
         // The photo switcher doubles as the video exit: in VIDEO mode it
         // returns straight to the last photo mode instead of cycling.
         if (isVideoMode) {
@@ -3539,7 +3714,7 @@ class MainActivity : Activity() {
             return
         }
         val modes = CaptureExposureMode.entries
-        applyCaptureExposureMode(modes[(modes.indexOf(captureExposureMode) + 1) % modes.size])
+        applyCaptureExposureMode(modes[(captureExposureMode.ordinal + step + modes.size) % modes.size])
     }
 
     private fun cycleCaptureFormat() {
@@ -3561,9 +3736,9 @@ class MainActivity : Activity() {
     /** Badge-style pairing label: developed container plus DNG when paired. */
     private fun captureBadgeLabel(): String =
         when (redmiRootMode()) {
-            LapisRootProfile.Mode.HEXADECA_200 -> "200→50 MP • DNG"
+            LapisRootProfile.Mode.HEXADECA_200 -> "DNG · 200 → 50 MP"
             LapisRootProfile.Mode.FULL -> "50 MP • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
-            LapisRootProfile.Mode.DCG14 -> "DCG14 • AUTO AE • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
+            LapisRootProfile.Mode.DCG14 -> (if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG") + " · DCG14"
             LapisRootProfile.Mode.CROP_4X -> "4× • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.CROP_2X -> "2× • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
             LapisRootProfile.Mode.VIDEO60 -> "9.4 MP • RAW10 • " + if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng) else "DNG"
@@ -3613,7 +3788,7 @@ class MainActivity : Activity() {
         rawVfDebugOverlay.contentDescription =
             "RAW viewfinder engine ${mode.name}. Tap to switch the GPU / CPU / BGU / BGU-CPU engine."
         vfEngineButton?.apply {
-            text = chipCaption(if (mode == VfEngineMode.BGU_CPU) "BGU·CPU" else mode.name, "RAW VF")
+            text = chipCaption(if (mode == VfEngineMode.BGU_CPU) "BGU·CPU" else mode.name, "RAW VF", getColor(R.color.text_secondary))
             contentDescription = rawVfDebugOverlay.contentDescription
         }
     }
@@ -3671,17 +3846,18 @@ class MainActivity : Activity() {
     }
 
     internal fun refreshCaptureFormatControl() {
-        refreshCaptureHeaderLayout()
         // Same authority rule as the info labels: in VIDEO mode the badge
         // follows the video format regardless of stills state updates.
         if (isVideoMode) {
             rawBadge.text = if (encodedVideoEnabled) encodedVideoBadgeLabel(videoRecording)
                 else if (videoRecording) "● RAW Video" else "RAW Video"
-            rawBadge.setTextColor(getColor(R.color.danger))
+            rawBadge.setTextColor(getColor(if (videoRecording) R.color.danger else R.color.text_primary))
+            rawBadge.contentDescription = null
+            rawStatusGroup.contentDescription = null
             return
         }
         rawBadge.text = captureBadgeLabel()
-        rawBadge.setTextColor(getColor(R.color.text_secondary))
+        rawBadge.setTextColor(getColor(R.color.text_primary))
         val zslLabel = when (rawZslStatus.state) {
             RawZslState.OFF -> "ZSL off"
             RawZslState.WARMING_UP -> "ZSL warming"
@@ -3692,26 +3868,6 @@ class MainActivity : Activity() {
             "Capture format ${captureBadgeLabel()}. $zslLabel. Tap to change format. ${rawZslStatus.detail}"
         rawBadge.contentDescription = description
         rawStatusGroup.contentDescription = description
-    }
-
-    private fun refreshCaptureHeaderLayout() {
-        // Video needs flexible metadata space for its longer format badge.
-        // Photo keeps its short labels together at the trailing edge.
-        for (id in intArrayOf(R.id.captureHeaderMetadataRow, R.id.captureStatusRow)) {
-            findViewById<LinearLayout>(id).gravity =
-                Gravity.CENTER_VERTICAL or if (isVideoMode) Gravity.START else Gravity.END
-        }
-        for (id in intArrayOf(R.id.sensorInfo, R.id.dngInfo, R.id.featureTags, R.id.status)) {
-            val view = findViewById<View>(id)
-            val params = view.layoutParams as LinearLayout.LayoutParams
-            val width = if (isVideoMode) 0 else LinearLayout.LayoutParams.WRAP_CONTENT
-            val weight = if (isVideoMode) 1f else 0f
-            if (params.width != width || params.weight != weight) {
-                params.width = width
-                params.weight = weight
-                view.layoutParams = params
-            }
-        }
     }
 
     internal fun applyCaptureExposureMode(mode: CaptureExposureMode) {
@@ -3761,7 +3917,7 @@ class MainActivity : Activity() {
             return
         }
         if (captureExposureMode == CaptureExposureMode.PROGRAM) {
-            showProgramAxisSlider(isIso = true)
+            showProgramShift(isIso = true)
             return
         }
         openManualModeThen(ManualControl.ISO)
@@ -3774,7 +3930,7 @@ class MainActivity : Activity() {
             return
         }
         if (captureExposureMode == CaptureExposureMode.PROGRAM) {
-            showProgramAxisSlider(isIso = false)
+            showProgramShift(isIso = false)
             return
         }
         openManualModeThen(ManualControl.SHUTTER)
@@ -3896,7 +4052,10 @@ class MainActivity : Activity() {
         updateQuickControls()
     }
 
+    internal val photoLuts by lazy { PhotoLutSelection(this) }
+
     internal fun jpegOutputSettings(): JpegOutputSettings = JpegOutputSettings(
+        photoLut = photoLuts.current(),
         activeDLighting = ActiveDLighting.fromName(lensPreferences().getString(ActiveDLighting.PREFERENCE_KEY, null)),
         ultraHdr = lensPreferences().getBoolean(KEY_JPEG_ULTRA_HDR, false),
         displayP3 = lensPreferences().getBoolean(KEY_JPEG_DISPLAY_P3, false),
@@ -4120,7 +4279,7 @@ class MainActivity : Activity() {
         "VF preview: ${vfPreviewMode.name} (${vfPreviewMode.label(captureFormat)})"
 
     internal fun dngWriterBackend(): DngWriterBackend = DngWriterBackend.fromPreference(
-        lensPreferences().getString(KEY_DNG_WRITER_BACKEND, DngWriterBackend.ANDROID.preferenceValue)
+        lensPreferences().getString(KEY_DNG_WRITER_BACKEND, null)
     )
 
     internal fun dngCompression(): DngCompression = DngCompression.fromPreference(
@@ -4183,12 +4342,12 @@ class MainActivity : Activity() {
         isoControl.contentDescription = when {
             !inProgram -> "ISO control"
             lock == ProgramLockMode.ISO_LOCK -> "ISO locked. Tap for slider, hold to release. Auto in slider releases both locks."
-            else -> "ISO auto. Tap for slider, hold to lock ISO and let shutter adjust."
+            else -> "ISO auto. Tap for Program shift, hold to lock ISO and let shutter adjust."
         }
         shutterControl.contentDescription = when {
             !inProgram -> "Shutter control"
             lock == ProgramLockMode.SHUTTER_LOCK -> "Shutter locked. Tap for slider, hold to release. Auto in slider releases both locks."
-            else -> "Shutter auto. Tap for slider, hold to lock shutter and let ISO adjust."
+            else -> "Shutter auto. Tap for Program shift, hold to lock shutter and let ISO adjust."
         }
     }
 
@@ -4296,6 +4455,7 @@ class MainActivity : Activity() {
         quickPanel.removeCallbacks(quickAutoHide)
         quickPanel.animate().cancel()
         quickPanel.visibility = View.GONE
+        findViewById<View>(R.id.quickButton).isSelected = false
         quickPanel.alpha = 1f
         quickPanel.translationY = 0f
         updateOverlayStack()
@@ -4364,8 +4524,9 @@ class MainActivity : Activity() {
                 RawExposureOverlayMode.OFF -> "OFF"
                 RawExposureOverlayMode.ZEBRAS -> "ZEBRA"
                 RawExposureOverlayMode.FALSE_COLOR -> "FALSE"
-            }, "OVERLAY")
+            }, "OVERLAY", getColor(R.color.text_secondary))
             isSelected = rawExposureSettings.overlay != RawExposureOverlayMode.OFF
+            setTextColor(getColor(if (isSelected) R.color.accent else R.color.text_secondary))
             contentDescription = "RAW exposure assist: ${rawExposureSettings.overlay.label}. Tap to cycle Off, Zebra, False colour."
         }
     }
@@ -4418,6 +4579,23 @@ class MainActivity : Activity() {
         updateQuickControls()
     }
 
+    private fun refreshQuickSection() {
+        val selected = if (isVideoMode) videoQuickSection else photoQuickSection
+        for (section in QuickSection.entries) {
+            val available = section != QuickSection.MERGE || !isVideoMode
+            findViewById<TextView>(section.tab).apply {
+                visibility = if (available) View.VISIBLE else View.GONE
+                isSelected = section == selected
+                setTextColor(getColor(if (isSelected) R.color.accent_dark else R.color.text_primary))
+                if (section == QuickSection.CAPTURE) setTextIfChanged(if (isVideoMode) "Record" else "Capture")
+            }
+            val show = available && section == selected && !(isVideoMode && section == QuickSection.CAPTURE)
+            findViewById<View>(section.panel).visibility = if (show) View.VISIBLE else View.GONE
+        }
+        findViewById<View>(R.id.recordingQuickSection).visibility =
+            if (isVideoMode && selected == QuickSection.CAPTURE) View.VISIBLE else View.GONE
+    }
+
     internal fun updateQuickControls() {
         if (!::gridQuick.isInitialized || !::levelQuick.isInitialized) return
         arrangeQuickControlRows()
@@ -4466,7 +4644,7 @@ class MainActivity : Activity() {
         hdr.text = "BRACKETS\n${if (hdrEnabled) "ON" else "OFF"}"
         hdr.contentDescription = "Exposure brackets ${if (hdrEnabled) "on" else "off"}. Tap to toggle."
         timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
-        release.text = if (dualRawEnabled) "RELEASE\nRAW HDR TEST" else "RELEASE\n${if (releaseMode == 1) "BURST 6" else "SINGLE"}"
+        release.text = if (dualRawEnabled) "DRIVE\nRAW HDR TEST" else "DRIVE\n${if (releaseMode == 1) "BURST 6" else "SINGLE"}"
         val sharpAvailable = !dualRawEnabled &&
             (captureExposureMode != CaptureExposureMode.ZSL || rawZslStatus.state != RawZslState.FALLBACK)
         val mergeCount = lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT)
@@ -4475,6 +4653,10 @@ class MainActivity : Activity() {
             rawZslStatus.bufferedFrames, sharpAvailable, rawZslStatus.mfsrBusy, zsl = zslMode)
         lkrQuick.text = mfsrSettings.quickText(MfsrEngine.LKR, mergeCount,
             rawZslStatus.bufferedFrames, sharpAvailable, rawZslStatus.mfsrBusy, zsl = zslMode)
+        if (mfsrSettings.isOn(MfsrEngine.LKR) && captureRawPixels > 0L) {
+            val resolution = lkrMegapixelLabel(mfsrSettings.lkrFullRes, mfsrSettings.lkrZoom)
+            lkrQuick.append(" · $resolution")
+        }
         lkrQuick.isEnabled = !dualRawEnabled || mfsrSettings.isOn(MfsrEngine.LKR)
         lkrQuick.alpha = if (lkrQuick.isEnabled) 1f else 0.4f
         // FALLBACK describes the current ZSL session, not permanent capability.
@@ -4513,7 +4695,15 @@ class MainActivity : Activity() {
         setQuickTileState(timer, timerSeconds > 0)
         setQuickTileState(release, releaseMode != 0)
         setQuickTileState(sharp, mfsrSettings.isOn(MfsrEngine.MFSR))
-        setQuickTileState(lkrQuick, mfsrSettings.isOn(MfsrEngine.LKR))
+        lkrQuick.isSelected = mfsrSettings.isOn(MfsrEngine.LKR)
+        lkrQuick.setTextColor(getColor(if (lkrQuick.isSelected) R.color.accent_dark else R.color.text_primary))
+        findViewById<TextView>(R.id.lkrHdrQuick).apply {
+            val hdrMode = mfsrSettings.lkrHdr
+            setTextIfChanged("HDR\n${hdrMode.label.uppercase(Locale.ROOT)}")
+            isSelected = hdrMode != LkrHdrMode.OFF
+            visibility = if (isVideoMode) View.GONE else View.VISIBLE
+            contentDescription = "LK-R HDR: ${mfsrSettings.lkrHdr.label}. Tap to change."
+        }
         updateLkrZoomChip()
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
@@ -4551,6 +4741,7 @@ class MainActivity : Activity() {
             }
         }
         updateVideoQuickControls()
+        refreshQuickSection()
         refreshFeatureTags(ettrEnabled)
         // Video crop lives on the RELEASE tile in VIDEO mode only; the mode
         // button itself stays photo-only (video is a separate red button).
@@ -4568,14 +4759,7 @@ class MainActivity : Activity() {
                 setQuickTileState(release, videoCrop != VideoCrop.OPEN_GATE)
             }
         }
-        modeButton.text = when (captureExposureMode) {
-            CaptureExposureMode.AUTO -> "A\nAUTO"
-            CaptureExposureMode.PROGRAM -> "P\nPROGRAM"
-            CaptureExposureMode.ZSL -> "Z\nZSL"
-            CaptureExposureMode.MANUAL -> "M\nMANUAL"
-        }
-        val exposureModeActive = captureExposureMode != CaptureExposureMode.AUTO
-        setQuickTileState(modeButton, exposureModeActive)
+        modeButton.showMode(captureExposureMode, isVideoMode)
     }
 
     companion object {
@@ -4642,6 +4826,7 @@ class MainActivity : Activity() {
         const val KEY_SCOPE_MODE = "scope_mode"
         const val KEY_HISTOGRAM_LOG = "histogram_log_scale"
         const val KEY_FOCUS_PEAKING = "focus_peaking"
+        const val KEY_FOCUS_MAGNIFIER = "focus_magnifier"
         const val KEY_FOCUS_PEAKING_COLOR = "focus_peaking_color"
         const val KEY_OIS = "optical_image_stabilization"
         const val KEY_RAW_ZSL = "raw_zero_shutter_lag"

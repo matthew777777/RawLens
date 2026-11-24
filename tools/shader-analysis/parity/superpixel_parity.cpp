@@ -3,7 +3,7 @@
 // Uses synthetic RAW16; does not open the camera or measure displayed FPS.
 // Build host: clang++ -std=c++17 -O2 -I/opt/homebrew/include -L/opt/homebrew/lib -lvulkan superpixel_parity.cpp -o superpixel_parity
 // Android: NDK aarch64-linux-android29-clang++ -std=c++17 -O2 -static-libstdc++ -lvulkan ...
-// Run: superpixel_parity original.spv candidate.spv [--bench-only] [--seconds N] [--hz N] [--variant 0|1] [--unshaded-only] [--raw16 tight-4080x3060.raw16]
+// Run: superpixel_parity original.spv candidate.spv [--image] [--bench-only] [--seconds N] [--hz N] [--variant 0|1] [--unshaded-only] [--raw16 tight-4080x3060.raw16]
 #include <vulkan/vulkan.h>
 #include <cstdio>
 #include <cstdlib>
@@ -54,18 +54,22 @@ static void endCmd(VkCommandBuffer c) {
     CK(vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE)); CK(vkQueueWaitIdle(q)); vkFreeCommandBuffers(dev, pool, 1, &c);
 }
 struct Tex { VkImage i; VkDeviceMemory m; VkImageView v; };
-// RGBA16F sampled image (2D or 3D) filled from half data.
-static Tex mkTex(VkImageType type, uint32_t w, uint32_t h, uint32_t d, const std::vector<uint16_t>& halfs) {
+// Sampled image filled from half-float or RAW16 data.
+static Tex mkTex(VkImageType type, uint32_t w, uint32_t h, uint32_t d, const std::vector<uint16_t>& pixels,
+                 VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT) {
     Tex t{};
-    VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; ii.imageType = type; ii.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; ii.imageType = type; ii.format = format;
     ii.extent = {w, h, d}; ii.mipLevels = 1; ii.arrayLayers = 1; ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT; ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (format == VK_FORMAT_R16G16B16A16_SFLOAT)
+        ii.usage |= VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     CK(vkCreateImage(dev, &ii, nullptr, &t.i));
     VkMemoryRequirements mr; vkGetImageMemoryRequirements(dev, t.i, &mr);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; ai.allocationSize = mr.size;
     ai.memoryTypeIndex = memType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     CK(vkAllocateMemory(dev, &ai, nullptr, &t.m)); CK(vkBindImageMemory(dev, t.i, t.m, 0));
-    Buf st = mkBuf(halfs.size() * 2); memcpy(st.p, halfs.data(), halfs.size() * 2);
+    Buf st = mkBuf(pixels.size() * sizeof(uint16_t)); memcpy(st.p, pixels.data(), pixels.size() * sizeof(uint16_t));
     VkCommandBuffer c = beginCmd();
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER}; b.image = t.i; b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -102,11 +106,12 @@ struct Push {
 };
 static_assert(sizeof(Push) == 112);
 struct Program { VkPipeline pipeline; VkPipelineLayout layout; VkDescriptorSetLayout descriptors; };
-static Program program(const char* path, bool aligned = false) {
+static Program program(const char* path, bool aligned = false, bool sampled = false) {
     Program r{};
     VkDescriptorSetLayoutBinding b[4]{};
     VkDescriptorType types[] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    if (sampled) types[0] = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     for (int i = 0; i < 4; ++i) b[i] = {uint32_t(i), types[i], 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; dl.bindingCount=4; dl.pBindings=b;
     CK(vkCreateDescriptorSetLayout(dev,&dl,nullptr,&r.descriptors));
@@ -149,9 +154,9 @@ static double dispatch(const Program& pr, VkDescriptorSet ds, const Push& pc, Te
 }
 static double percentile(std::vector<double> v,double fraction) { std::sort(v.begin(),v.end()); return v[size_t((v.size()-1)*fraction)]; }
 int main(int argc,char** argv) {
-    if(argc<3) { fprintf(stderr,"usage: %s A.spv B.spv [--bench-only] [--seconds N] [--hz N] [--variant 0|1] [--unshaded-only] [--raw16 tight-4080x3060.raw16]\n",argv[0]); return 2; }
-    bool benchOnly=false, unshadedOnly=false; int seconds=0, variant=-1, hz=0; const char* rawPath=nullptr;
-    for(int i=3;i<argc;++i) { if(!strcmp(argv[i],"--bench-only")) benchOnly=true; else if(!strcmp(argv[i],"--seconds")&&i+1<argc) seconds=atoi(argv[++i]); else if(!strcmp(argv[i],"--variant")&&i+1<argc) variant=atoi(argv[++i]);
+    if(argc<3) { fprintf(stderr,"usage: %s A.spv B.spv [--image] [--bench-only] [--seconds N] [--hz N] [--variant 0|1] [--unshaded-only] [--raw16 tight-4080x3060.raw16]\n",argv[0]); return 2; }
+    bool sampled=false, benchOnly=false, unshadedOnly=false; int seconds=0, variant=-1, hz=0; const char* rawPath=nullptr;
+    for(int i=3;i<argc;++i) { if(!strcmp(argv[i],"--image")) sampled=true; else if(!strcmp(argv[i],"--bench-only")) benchOnly=true; else if(!strcmp(argv[i],"--seconds")&&i+1<argc) seconds=atoi(argv[++i]); else if(!strcmp(argv[i],"--variant")&&i+1<argc) variant=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--hz")&&i+1<argc) hz=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--unshaded-only")) unshadedOnly=true;
         else if(!strcmp(argv[i],"--raw16")&&i+1<argc) rawPath=argv[++i];
@@ -178,9 +183,15 @@ int main(int argc,char** argv) {
     CK(vkCreateDevice(pd,&di,nullptr,&dev)); vkGetDeviceQueue(dev,qf,0,&q);
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO}; pci.queueFamilyIndex=qf; CK(vkCreateCommandPool(dev,&pci,nullptr,&pool));
     VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO}; qci.queryType=VK_QUERY_TYPE_TIMESTAMP; qci.queryCount=2; CK(vkCreateQueryPool(dev,&qci,nullptr,&queries));
-    Program programs[3]={program(argv[1]),program(argv[2]),program(argv[2],true)};
+    Program programs[4] = {program(argv[1], false, sampled), program(argv[2], false, sampled)};
+    if (!sampled) {
+        programs[2] = program(argv[1], true);
+        programs[3] = program(argv[2], true);
+    }
     VkSamplerCreateInfo sm{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; sm.magFilter=sm.minFilter=VK_FILTER_LINEAR; sm.addressModeU=sm.addressModeV=sm.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     VkSampler sampler; CK(vkCreateSampler(dev,&sm,nullptr,&sampler));
+    sm.magFilter=sm.minFilter=VK_FILTER_NEAREST;
+    VkSampler nearest; CK(vkCreateSampler(dev,&sm,nullptr,&nearest));
     std::mt19937 rng(63812); std::vector<uint16_t> shadePixels(17*13*4);
     for(auto& v:shadePixels)v=toHalf(std::uniform_real_distribution<float>(1.f,3.f)(rng)); Tex shade=mkTex(VK_IMAGE_TYPE_2D,17,13,1,shadePixels);
     const int channels[4][4]={{0,1,2,3},{1,0,3,2},{2,3,0,1},{3,2,1,0}};
@@ -192,7 +203,7 @@ int main(int argc,char** argv) {
         for(int k=0;k<4;++k) { pc.black[k]=64*(32+k*3)+k*11; pc.range[k]=64*((1<<bits)-1)-pc.black[k]; }
         pc.shadeDims[0]=13; pc.shadeDims[1]=17; pc.shadeDims[2]=shaded; pc.shadeActive[2]=1.f/(pc.pitch-1); pc.shadeActive[3]=1.f/(rows-1);
         const bool aligned = ((ox | step | pc.pitch) & 1) == 0;
-        auto selected = [&](int side) -> const Program& { return programs[side == 1 && aligned ? 2 : side]; };
+        auto selected = [&](int side) -> const Program& { return programs[!sampled && aligned ? side + 2 : side]; };
         Buf raw=mkBuf(((size_t(pc.pitch)*rows+1)/2)*4), dummy=mkBuf(16); auto* codes=static_cast<uint16_t*>(raw.p);
         for(size_t i=0;i<raw.n/2;++i)codes[i]=uint16_t(rng()%((1<<bits)+128)); memset(dummy.p,0,16);
         if (bench && rawPath) {
@@ -200,17 +211,26 @@ int main(int argc,char** argv) {
             size_t got=fread(raw.p,1,raw.n,f); bool extra=fgetc(f)!=EOF; fclose(f);
             if(got!=raw.n || extra){fprintf(stderr,"RAW16 must be tight 4080x3060\n");exit(2);}
         }
+        Tex src{};
+        if (sampled) src = mkTex(VK_IMAGE_TYPE_2D, pc.pitch, rows, 1,
+            std::vector<uint16_t>(codes, codes + size_t(pc.pitch) * rows), VK_FORMAT_R16_UINT);
         Tex out[2]; Buf read[2]; VkDescriptorSet sets[2]; VkDescriptorPool dp;
-        VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,4},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,2},{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,2}};
+        VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,4},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,2},{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,4}};
         VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; dpi.maxSets=2; dpi.poolSizeCount=3; dpi.pPoolSizes=sizes; CK(vkCreateDescriptorPool(dev,&dpi,nullptr,&dp));
         for(int side=0;side<2;++side) {
             out[side]=mkTex(VK_IMAGE_TYPE_2D,ow,oh,1,std::vector<uint16_t>(size_t(ow)*oh*4,0x7bff)); read[side]=mkBuf(size_t(ow)*oh*8);
             VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO}; ai.descriptorPool=dp; ai.descriptorSetCount=1; ai.pSetLayouts=&programs[side].descriptors; CK(vkAllocateDescriptorSets(dev,&ai,&sets[side]));
             VkDescriptorBufferInfo rb{raw.b,0,raw.n},lb{dummy.b,0,dummy.n};
             VkDescriptorImageInfo oi{VK_NULL_HANDLE,out[side].v,VK_IMAGE_LAYOUT_GENERAL},si{sampler,shade.v,VK_IMAGE_LAYOUT_GENERAL};
+            VkDescriptorImageInfo ri{nearest,src.v,VK_IMAGE_LAYOUT_GENERAL};
             VkWriteDescriptorSet wr[4]{};
             for(int j=0;j<4;++j) { wr[j].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[j].dstSet=sets[side]; wr[j].dstBinding=j; wr[j].descriptorCount=1; }
             wr[0].descriptorType=wr[3].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;wr[0].pBufferInfo=&rb;wr[3].pBufferInfo=&lb;
+            if (sampled) {
+                wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                wr[0].pImageInfo = &ri;
+                wr[0].pBufferInfo = nullptr;
+            }
             wr[1].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;wr[1].pImageInfo=&oi;
             wr[2].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;wr[2].pImageInfo=&si; vkUpdateDescriptorSets(dev,4,wr,0,nullptr);
             dispatch(selected(side),sets[side],pc,out[side],read[side],1,true);
@@ -241,14 +261,16 @@ int main(int argc,char** argv) {
             for(int side=0;side<2;++side)if(!times[side].empty())printf("BENCH %s %dx%d step=%d shade=%d samples=%zu median_ms=%.6f p95_ms=%.6f wall_median_ms=%.6f wall_p95_ms=%.6f\n",side?"candidate":"baseline",ow,oh,step,shaded,times[side].size(),percentile(times[side],.5),percentile(times[side],.95),percentile(walls[side],.5),percentile(walls[side],.95));
             fflush(stdout);
         }
-        vkDestroyDescriptorPool(dev,dp,nullptr);for(int i=0;i<2;++i){freeTex(out[i]);freeBuf(read[i]);}freeBuf(raw);freeBuf(dummy);
+        vkDestroyDescriptorPool(dev,dp,nullptr);
+        if (sampled) freeTex(src);
+        for(int i=0;i<2;++i){freeTex(out[i]);freeBuf(read[i]);}freeBuf(raw);freeBuf(dummy);
     };
     if(!benchOnly)for(int cm=0;cm<4;++cm)for(int ox=0;ox<2;++ox)for(int oy=0;oy<2;++oy)
       for(int pad=0;pad<2;++pad)for(int step:{2,3,8})for(int bits:{10,12,14})for(int sh=0;sh<2;++sh)
         runCase(37,23,cm,2+ox,2+oy,step,pad,bits,sh,false);
     for(int sh=0;sh<(unshadedOnly?1:2);++sh)runCase(1020,764,0,0,0,4,0,12,sh,true);
     printf("PASS cases=%d half_components=%zu byte_exact=true\n",cases,compared);
-    freeTex(shade);vkDestroySampler(dev,sampler,nullptr);
-    for(auto pr:programs){vkDestroyPipeline(dev,pr.pipeline,nullptr);vkDestroyPipelineLayout(dev,pr.layout,nullptr);vkDestroyDescriptorSetLayout(dev,pr.descriptors,nullptr);}
+    vkDestroySampler(dev,nearest,nullptr); freeTex(shade);vkDestroySampler(dev,sampler,nullptr);
+    for(auto pr:programs){if (!pr.pipeline) continue; vkDestroyPipeline(dev,pr.pipeline,nullptr);vkDestroyPipelineLayout(dev,pr.layout,nullptr);vkDestroyDescriptorSetLayout(dev,pr.descriptors,nullptr);}
     vkDestroyQueryPool(dev,queries,nullptr);vkDestroyCommandPool(dev,pool,nullptr);vkDestroyDevice(dev,nullptr);vkDestroyInstance(inst,nullptr); return 0;
 }

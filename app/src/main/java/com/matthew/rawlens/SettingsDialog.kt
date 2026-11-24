@@ -175,7 +175,7 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
     }
     val subHost = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(0, 0, 0, dp(24))
+        setPadding(dp(16), 0, dp(16), dp(24))
         visibility = View.GONE
     }
     (settingsScroll.getChildAt(0) as LinearLayout).addView(subHost)
@@ -229,6 +229,7 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
         override fun jxlOutputSettings() = this@showSettings.jxlOutputSettings()
         override fun lensPreferences() = this@showSettings.lensPreferences()
         override fun setStatus(message: String) = this@showSettings.setStatus(message)
+        override fun showPhotoLutSettings() = this@showSettings.showPhotoLutSettings()
         override fun refreshCaptureFormatControl() = this@showSettings.refreshCaptureFormatControl()
         override fun clearTabStatusViews() {
             rawZslSettingsStatus = null
@@ -238,6 +239,8 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
             currentTab = 1
             showJpegTab()
         }
+        override fun applyPhotoOutputSettings(settings: JpegOutputSettings) =
+            this@showSettings.applyPhotoOutputSettings(settings)
         override fun onMonoChanged(mono: MonoSettings) = this@showSettings.updateQuickControls()
     })
     val tabPages: List<() -> Unit> = listOf(
@@ -287,6 +290,8 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
                 pageScrollY = 0
             }
             currentTab = target
+            val inset = if (target == SETTINGS_ROOT) 0 else dp(16)
+            content.setPadding(inset, 0, inset, dp(24))
             if (target == SETTINGS_ROOT) showRoot() else tabPages[target]()
             backButton.contentDescription = if (target == SETTINGS_ROOT) "Close settings" else "Back"
             settingsScroll.scrollTo(0, 0)

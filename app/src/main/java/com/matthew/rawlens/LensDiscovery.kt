@@ -235,14 +235,33 @@ class LensDiscovery(context: Context) {
                     val logicalId = composite.substringBefore('/').substringBefore('-')
                     val logical = characteristics(logicalId)
                     val usable = when {
-                        isRaw(compositeCharacteristics) -> compositeCharacteristics
-                        else -> characteristics(physicalId)?.takeIf { isRaw(it) }
+                        hasAdvertisedRaw(compositeCharacteristics) -> compositeCharacteristics
+                        else -> characteristics(physicalId)?.takeIf(::isRaw)
+                            ?: compositeCharacteristics.takeIf(::isRaw)
                     } ?: return@runCatching null
                     discovered(composite, usable, "vendor route", logicalFallback = logical)
                 }.onSuccess { lens ->
                     if (lens != null) found[composite] = lens
                 }.onFailure {
                     Log.w(LOG_TAG, "Skipping vendor route $composite", it)
+                }
+            }
+
+            // Samsung can accept a queryable numeric sensor as a physical output
+            // of camera 0 even without publishing the membership or a composite ID.
+            if (SamsungRawCompatibility.enabled && "0" in official) {
+                val logical = characteristics("0")
+                if (logical != null) {
+                    for (number in 1..120) {
+                        val physicalId = number.toString()
+                        val id = "0/$physicalId"
+                        if (id in found) continue
+                        val physical = characteristics(physicalId) ?: continue
+                        if (safePhysicalIds(physical).isNotEmpty() || !isRaw(physical)) continue
+                        runCatching { discovered(id, physical, "vendor route", logicalFallback = logical) }
+                            .onSuccess { found[id] = it }
+                            .onFailure { Log.w(LOG_TAG, "Skipping Samsung route $id", it) }
+                    }
                 }
             }
 
@@ -295,22 +314,13 @@ class LensDiscovery(context: Context) {
         false
     }
 
-    private fun isRaw(c: CameraCharacteristics): Boolean {
-        return try {
-            val capabilities =
-                safeGet(c, CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-            if (capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) {
-                true
-            } else {
-                // Some physical-camera characteristic blocks omit the RAW capability bit even though the
-                // physical stream configuration explicitly exposes RAW_SENSOR. Accept that authoritative
-                // stream declaration as well.
-                hasRawStreamConfig(c)
-            }
-        } catch (_: Throwable) {
-            false
-        }
-    }
+    private fun hasAdvertisedRaw(c: CameraCharacteristics): Boolean =
+        safeGet(c, CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            ?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW) == true ||
+            hasRawStreamConfig(c)
+
+    private fun isRaw(c: CameraCharacteristics): Boolean =
+        hasAdvertisedRaw(c) || SamsungRawCompatibility.trialSize(c) != null
 
     private fun discovered(
         id: String,
@@ -396,6 +406,9 @@ class LensDiscovery(context: Context) {
             if (resolutionLabel != null) add(resolutionLabel)
             if (megapixels != null) add(String.format(Locale.US, "%.1f MP", megapixels))
             if (maxRawSize != null && maxRawSize != resolutionLabel) add("RAW $maxRawSize")
+            if (maxRawSize == null && SamsungRawCompatibility.trialSize(c) != null) {
+                add("RAW compatibility trial")
+            }
         } + capabilityBadges(probe)).joinToString(" · ").ifEmpty { "Characteristics unavailable" }
         // Legacy single-line label stays for callers/tests that only render `label`.
         val label = "Camera $id · $title • $details • $routeText"

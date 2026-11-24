@@ -6,9 +6,11 @@ package com.matthew.rawlens
 import android.app.AlertDialog
 import android.content.SharedPreferences
 import android.os.Build
+import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.util.Locale
@@ -29,10 +31,12 @@ internal class PhotoSettingsTab(
     interface Host {
         val controller: RawCameraController
         var developedFormat: DevelopedFormat
+        fun applyPhotoOutputSettings(settings: JpegOutputSettings): Boolean
         fun jpegOutputSettings(): JpegOutputSettings
         fun jxlOutputSettings(): JxlOutputSettings
         fun lensPreferences(): SharedPreferences
         fun setStatus(message: String)
+        fun showPhotoLutSettings()
         fun refreshCaptureFormatControl()
         /** Forget other tabs' live status views before this page replaces them. */
         fun clearTabStatusViews()
@@ -47,6 +51,20 @@ internal class PhotoSettingsTab(
     fun show() {
         host.clearTabStatusViews()
         kit.content.removeAllViews()
+        if (XiaomiUltraRaw50.supported()) {
+            kit.content.addView(kit.settingsCheck("50 MP RAW (experimental)", XiaomiUltraRaw50.enabled(activity)).apply {
+                setOnCheckedChangeListener { _, checked ->
+                    host.controller.setXiaomiRaw50Enabled(checked)
+                }
+            })
+            kit.content.addView(kit.sectionDesc("Uses the full-resolution RAW mode for single photos on supported rear lenses."))
+        }
+        host.controller.activeSettingsKey()?.let { key ->
+            val size = host.controller.customRawReaderSizeSetting()
+            kit.content.addView(kit.settingsButton("Custom RAW reader · ${size ?: "Off"}").apply {
+                setOnClickListener { showCustomRawReader(key, size) }
+            })
+        }
         kit.content.addView(kit.settingsButton("Develop DNGs · Import / export queue").apply {
             setOnClickListener {
                 activity.startActivity(android.content.Intent(activity, DevelopQueueActivity::class.java))
@@ -65,8 +83,37 @@ internal class PhotoSettingsTab(
                 }
             })
             if (LapisRootProfile.enabled(activity)) {
+                kit.content.addView(kit.settingsButton("Lenses shown in switcher").apply {
+                    setOnClickListener {
+                        val lenses = host.controller.lensOptions(includeHidden = true)
+                        val checked = lenses.map { LapisRootProfile.lensVisible(activity, it) }.toBooleanArray()
+                        android.app.AlertDialog.Builder(activity)
+                            .setTitle("Lenses shown in switcher")
+                            .setMultiChoiceItems(lenses.map { it.label }.toTypedArray(), checked) { dialog, index, visible ->
+                                checked[index] = visible
+                                if (checked.none { it }) {
+                                    checked[index] = true
+                                    (dialog as android.app.AlertDialog).listView.setItemChecked(index, true)
+                                }
+                            }
+                            .setPositiveButton("Save") { _, _ ->
+                                lenses.forEachIndexed { index, lens ->
+                                    LapisRootProfile.setLensVisible(activity, lens, checked[index])
+                                }
+                                (activity as? MainActivity)?.updateQuickControls()
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                })
+                kit.content.addView(kit.settingsCheck("200→50 MP: phase-response fit (rawr)",
+                    profile.getBoolean("hexa_phase_fit", false)).apply {
+                    setOnCheckedChangeListener { _, checked ->
+                        profile.edit().putBoolean("hexa_phase_fit", checked).apply()
+                    }
+                })
                 kit.content.addView(kit.sectionDesc("Choose 12.5 MP, 50 MP, 200→50 MP, 2× / 4× sensor RAW or DCG14 in the lens switcher. Root must be active and granted to RawLens. Sensor setup is automatic; camera settings are restored when the session closes."))
-                kit.content.addView(kit.sectionDesc("DCG14: 12.5 MP DCG/DSG RAW14 output at 30 fps; automatic exposure is required. Manual ISO/shutter and flash are unavailable in this mode. 50 MP: verified RAW10. 2× / 4×: RAW14 sensor interface, delivered as 10-bit RAW; extra precision is unverified. 200→50 MP: one-shot DNG; the shutter reads the 200 MP sensor mode (about 20 s with camera restarts) and demosaics it at full resolution on the GPU, saving a 50 MP linear DNG. Preview stays at 12.5 MP; burst, HDR and ZSL are unavailable. Firmware: ${LapisRootProfile.FIRMWARE}."))
+                kit.content.addView(kit.sectionDesc("DCG14: 12.5 MP DCG/DSG RAW14 output at 30 fps; automatic exposure is required. Manual ISO/shutter and flash are unavailable in this mode. 50 MP: verified RAW10. 2× / 4×: RAW14 sensor interface, delivered as 10-bit RAW; extra precision is unverified. 200→50 MP: one-shot DNG; the shutter reads the 200 MP sensor mode (about 20 s with camera restarts) and uses rawr same-colour sums + Quad Detail remosaic, saving a 50 MP Bayer CFA DNG. Preview stays at 12.5 MP; burst, HDR and ZSL are unavailable. Firmware: ${LapisRootProfile.FIRMWARE}."))
             }
         }
         // JPEG XL container options, mirroring darktable's export panel:
@@ -266,9 +313,13 @@ internal class PhotoSettingsTab(
         kit.content.addView(kit.sectionTitle("Photo output"))
         kit.content.addView(kit.sectionDesc("Ultra HDR and Display P3 targets, JPEG quality and chroma, Basic / AgX / Sigmoid / ACES 2.0 tone mapping, adaptive exposure and highlight handling."))
         var currentJpegSettings = host.jpegOutputSettings()
+        kit.content.addView(kit.settingsButton("Photo LUT · ${currentJpegSettings.photoLut?.title ?: "Off"}").apply {
+            setOnClickListener { host.showPhotoLutSettings() }
+        })
+        kit.content.addView(kit.sectionDesc("Use a display-referred 3D .cube with the photo output color space. JPEG and JPEG XL save the look. DNG uses it in the viewfinder."))
         fun applyJpegOutputSettings(settings: JpegOutputSettings): Boolean {
             val resolved = settings.resolvedForPlatform()
-            if (!host.controller.setJpegOutputSettings(resolved)) {
+            if (!host.applyPhotoOutputSettings(resolved)) {
                 host.setStatus("SETTINGS AFTER SAVES")
                 return false
             }
@@ -304,8 +355,6 @@ internal class PhotoSettingsTab(
                 .putBoolean(MainActivity.KEY_JPEG_HL_RECONSTRUCTION, resolved.hlReconstruction)
                 .putBoolean(HighlightReconstructionDefaults.APPLIED, true)
                 .also { resolved.toneLook.save(it) }
-                .putString(MonoMode.PREFERENCE_KEY, resolved.mono.mode.name)
-                .putBoolean(MonoMode.KEY_KEEP_COLOR_DNG, resolved.mono.keepColorDng)
                 .apply()
             host.onMonoChanged(resolved.mono)
             return true
@@ -530,7 +579,7 @@ internal class PhotoSettingsTab(
         kit.content.addView(kit.sectionDesc("Tone Mapper"))
         kit.content.addView(LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
-            for (mode in PhotoToneMapper.entries) {
+            for (mode in PhotoToneMapper.selectable) {
                 addView(Button(activity).apply {
                     text = mode.label
                     isAllCaps = false
@@ -831,7 +880,8 @@ internal class PhotoSettingsTab(
                     highlightRecovery = currentJpegSettings.highlightRecovery,
                     demosaic = currentJpegSettings.demosaic,
                     chromaCleanup = currentJpegSettings.chromaCleanup,
-                    toneLook = currentJpegSettings.toneLook
+                    toneLook = currentJpegSettings.toneLook,
+                    photoLut = currentJpegSettings.photoLut
                 )
                 if (applyJpegOutputSettings(official)) {
                     host.setStatus("AGX RESET • OFFICIAL BASE")
@@ -840,7 +890,38 @@ internal class PhotoSettingsTab(
             }
         })
         kit.polish()
-        kit.collapseRange(advancedLookStart, kit.content.childCount, "Advanced tone & color")
+        kit.collapseRange(advancedLookStart, kit.content.childCount, "Advanced tone & color",
+            "Tone mapping, color and highlight controls")
 
+    }
+
+    private fun showCustomRawReader(cameraKey: String, currentSize: String?) {
+        val input = EditText(activity).apply {
+            hint = "Width × height, e.g. 8192x6144"
+            inputType = InputType.TYPE_CLASS_TEXT
+            isSingleLine = true
+            setText(currentSize.orEmpty())
+        }
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Custom RAW reader")
+            .setMessage("Enter a photo RAW resolution for this lens. RawLens will request RAW_SENSOR with ImageReader usage 0x00100000. The camera HAL must accept the combination.")
+            .setView(input)
+            .setPositiveButton("Apply", null)
+            .setNeutralButton("Turn off") { _, _ ->
+                host.controller.setCustomRawReaderSize(cameraKey, null)
+                host.reshow()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val size = RawSizePreferenceStore.normalizeReaderSize(input.text.toString())
+            if (size == null) {
+                input.error = "Enter a valid RAW size as width × height"
+                return@setOnClickListener
+            }
+            host.controller.setCustomRawReaderSize(cameraKey, size)
+            dialog.dismiss()
+            host.reshow()
+        }
     }
 }

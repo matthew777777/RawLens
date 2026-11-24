@@ -248,23 +248,22 @@ internal object VfGpuImport {
     const val RAW_VF_EV_GAIN = 2.0f
 
     private const val TONEMAP_TAIL_TEMPLATE =
-        " if (u_jpeg == 0) { vec4 bg = b * gains;" +
+        " VFHP vec3 enc;" +
+            " if (u_jpeg == 0) { vec4 bg = b * gains;" +
             "  vec3 rgb = max(color * vec3(bg.r, (bg.g + bg.b) * 0.5, bg.a), vec3(0.0));" +
             "  rgb *= 2.0;" +
             "  rgb = rgb / (vec3(1.0) + rgb);" +
-            "  vec3 encRaw = pow(rgb, vec3(1.0 / 2.2));" +
-            "  vec3 noiseRaw = vec3(ign(gl_FragCoord.xy, 0.0), ign(gl_FragCoord.xy, 1.0), ign(gl_FragCoord.xy, 2.0));" +
-            "  @OUT@ = vec4(encRaw + (noiseRaw - vec3(0.5)) / 255.0, 1.0); return; }" +
-            // JPEG: the save-path sequence on the superpixel (highlight
-            // neutralize -> preview EV -> calibrated camera-to-ACEScg -> baked
-            // stills tone pipeline [VfToneLut] -> one-LSB dither). Only the
-            // superpixel demosaic stands in for AMaZE detail/denoise.
-            " vec3 cam = max(vec3(b.r, (b.g + b.b) * 0.5, b.a), vec3(0.0));" +
-            " vec3 whiteB = smoothstep(vec3(0.70), vec3(0.99), cam);" +
-            " float whiteBlend = max(whiteB.r, max(whiteB.g, whiteB.b));" +
-            " cam = mix(cam, u_cameraWhite, whiteBlend);" +
-            " cam *= exp2(u_exposureEv);" +
-            " vec3 enc = vfToneLut(u_camToAces * cam);" +
+            "  enc = pow(rgb, vec3(1.0 / 2.2));" +
+            " } else {" +
+            // Preview the saved color pipeline after exposure and highlight neutralization.
+            "  vec3 cam = max(vec3(b.r, (b.g + b.b) * 0.5, b.a), vec3(0.0));" +
+            "  vec3 whiteB = smoothstep(vec3(0.70), vec3(0.99), cam);" +
+            "  float whiteBlend = max(whiteB.r, max(whiteB.g, whiteB.b));" +
+            "  cam = mix(cam, u_cameraWhite, whiteBlend);" +
+            "  cam *= exp2(u_exposureEv);" +
+            "  enc = vfToneLut(u_camToAces * cam);" +
+            " }" +
+            " enc = photoCube(enc);" +
             " VFHP float d0 = ign(gl_FragCoord.xy, 0.0);" +
             " VFHP float d1 = ign(gl_FragCoord.xy, 1.0);" +
             " VFHP float d2 = ign(gl_FragCoord.xy, 2.0);" +
@@ -393,16 +392,25 @@ internal object VfGpuImport {
      * ESSL 1.00 fragment shader for the CPU/Vulkan RGBA16F path. Color math,
      * sampled values, geometry and dither use highp where available. Lens correction is disabled on the ES2 fallback.
      */
-    fun cpuFragmentShader(): String =
+    fun cpuFragmentShader(es3: Boolean = false): String = if (es3) {
+        "#version 300 es\n#define VFHP highp\nprecision highp float;\n" +
+            "in highp vec2 tex; out vec4 fragColor; uniform highp sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
+            AGX_UNIFORMS + LENS_UNIFORMS_COMMON + TONEMAP_HELPERS +
+            "\n#define VF_TEX texture\n" + VfToneLut.glsl + "\n" + PhotoLutGl.glsl + "\n" +
+            LENS_GAIN_ES3 +
+            "void main() { vec4 b = texture(raw, tex); b *= vfLensGain(tex);" +
+            TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "fragColor")
+    } else {
         "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
             "#ifdef GL_FRAGMENT_PRECISION_HIGH\n#define VFHP highp\n#else\n#define VFHP mediump\n#endif\n" +
             "varying VFHP vec2 tex; uniform VFHP sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             LENS_UNIFORMS_COMMON +
             TONEMAP_HELPERS + "\n#define VF_TEX texture2D\n" + VfToneLut.glsl + "\n" +
-            LENS_GAIN_ES1 +
+            "vec3 photoCube(vec3 encoded) { return encoded; }\n" + LENS_GAIN_ES1 +
             "void main() { vec4 b = texture2D(raw, tex); b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "gl_FragColor")
+    }
 
     /** ESSL 3.00 vertex shader for the GPU path (highp varyings for exact quad math). */
     fun gpuVertexShader(): String =
@@ -429,7 +437,7 @@ internal object VfGpuImport {
             "uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             "in highp vec2 tex; out vec4 fragColor;" +
-            TONEMAP_HELPERS + "\n#define VF_TEX texture\n" + VfToneLut.glsl + "\n" +
+            TONEMAP_HELPERS + "\n#define VF_TEX texture\n" + VfToneLut.glsl + "\n" + PhotoLutGl.glsl + "\n" +
             LENS_GAIN_ES3 +
             // Runtime-specialized unpack: black/white for the exact RAW bit depth
             // (10/12/16-bit sensor modes all present as unpacked 16-bit codes) are

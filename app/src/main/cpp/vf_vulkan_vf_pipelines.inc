@@ -1049,6 +1049,11 @@ bool createFusedPipeline(Context* ctx, const uint32_t* code, size_t words) {
         uint32_t n = 0; vkGetPhysicalDeviceQueueFamilyProperties(ctx->gpu, &n, nullptr);
         std::vector<VkQueueFamilyProperties> qp(n); vkGetPhysicalDeviceQueueFamilyProperties(ctx->gpu, &n, qp.data());
         VkPhysicalDeviceProperties props; vkGetPhysicalDeviceProperties(ctx->gpu, &props);
+        // Field reports on Adreno 829 show intermittent tiled corruption with
+        // the specialized dispatch enabled. Default this GPU to one dispatch.
+        if (ctx->fusedPathOverride == -1 && std::strstr(props.deviceName, "Adreno (TM) 829")) {
+            ctx->fusedPathOverride = 0;
+        }
         ctx->fusedTsPeriodNs = props.limits.timestampPeriod;
         if (ctx->fusedQueries == VK_NULL_HANDLE && ctx->queueFamily < n && qp[ctx->queueFamily].timestampValidBits > 0) {
             VkQueryPoolCreateInfo qi{}; qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;

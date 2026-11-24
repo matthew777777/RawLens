@@ -14,7 +14,7 @@ import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.*
 
 class VendorSessionOpenerTest {
-    private class Harness(mode: Int = 37379, params: Boolean = true) {
+    private class Harness(mode: Int = 37379, params: Boolean = true, requireMode: Boolean = false) {
         val device = mock(CameraDevice::class.java)
         val base = mock(SessionConfiguration::class.java)
         val submissions = mutableListOf<Pair<VendorSessionAttempt, CameraCaptureSession.StateCallback>>()
@@ -40,7 +40,7 @@ class VendorSessionOpenerTest {
                 { failed++ }, {}, { _, attempt, callback ->
                     submissions += attempt to callback
                     mock(SessionConfiguration::class.java)
-                })
+                }, requireOperatingMode = requireMode)
         }
         fun rejectLast() = submissions.last().second.onConfigureFailed(mock(CameraCaptureSession::class.java))
     }
@@ -67,6 +67,15 @@ class VendorSessionOpenerTest {
         assertEquals(VendorSessionAttempt(37379, true), h.configured)
         assertEquals(1, h.submissions.size)
         assertEquals(0, h.failed)
+    }
+
+    @Test fun `required Xiaomi full resolution mode never submits standard outputs`() {
+        val h = Harness(XiaomiUltraRaw50.SESSION_MODE, requireMode = true)
+        h.syncReject = true
+        h.opener.open()
+        assertEquals(listOf(VendorSessionAttempt(36890, true)), h.submissions.map { it.first })
+        assertEquals(1, h.failed)
+        assertNull(h.legacyCallback)
     }
 
     @Test fun `late callbacks from rejected attempts cannot install stale sessions`() {

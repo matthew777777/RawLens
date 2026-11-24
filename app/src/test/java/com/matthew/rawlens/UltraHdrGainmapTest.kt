@@ -9,7 +9,7 @@ import org.junit.Test
 
 class UltraHdrGainmapTest {
     @Test
-    fun defaultsMirrorRawrVerdicts() {
+    fun defaultsAllowTwoStopsOfHighlightGainWithNoBaselineBoost() {
         val settings = JpegOutputSettings()
         assertEquals(92, settings.gainmapQuality)
         assertEquals(1f, settings.hdrExposure, 0f)
@@ -23,10 +23,10 @@ class UltraHdrGainmapTest {
         assertEquals(0.25f, settings.gainMapFitMargin, 0f)
         assertEquals(0.25f, settings.gainMapFitStep, 0f)
         assertEquals(1f, settings.gainMapFitFloor, 0f)
-        assertEquals(1.45f, settings.gainMapDisplayCap, 0f)
+        assertEquals(2f, settings.gainMapDisplayCap, 0f)
         assertEquals(0.5f, settings.shoulderWidth, 0f)
         assertEquals(0.5f, settings.shoulderKneeBelowMax, 0f)
-        assertEquals(0.75f, settings.baseShare, 0f)
+        assertEquals(0f, settings.baseShare, 0f)
         assertEquals(0.4f, settings.baseExponent, 0f)
         assertEquals(0.05f, settings.chromaKnee, 0f)
     }

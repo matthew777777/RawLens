@@ -9,18 +9,11 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
-import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.roundToInt
 
-/**
- * Minimal floating ruler slider, after the reference camera apps:
- * a translucent dark strip with the axis code + live value stacked on top,
- * a slim tick band, edge min/max hints, and a sand needle. Values are fed in
- * via [valueText]/[minText]/[maxText] so the strip stays self-sufficient and
- * the exposure chips are free for status.
- */
+/** Engraved scale with reference marks in the active camera setting’s units. */
 class RuleSliderView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -43,35 +36,16 @@ class RuleSliderView @JvmOverloads constructor(
             }
         }
 
-    /** Short code (SS / ISO / WB / MF / EV). */
-    var label: String = ""
+    var referenceLabels: List<String> = emptyList()
         set(value) {
-            field = value
-            invalidate()
-        }
-
-    /** Live formatted value drawn bold under the code (e.g. "1/60", "+0.2"). */
-    var valueText: String = ""
-        set(value) {
-            field = value
-            invalidate()
-        }
-
-    /** Edge hints for the tick band (range min / max). Empty hides them. */
-    var minText: String = ""
-        set(value) {
-            field = value
-            invalidate()
-        }
-
-    var maxText: String = ""
-        set(value) {
+            if (field == value) return
             field = value
             invalidate()
         }
 
     override var contentRotation: Float = 0f
         set(value) {
+            if (field == value) return
             field = value
             invalidate()
         }
@@ -83,7 +57,8 @@ class RuleSliderView @JvmOverloads constructor(
     private val density = resources.displayMetrics.density
     private val backgroundRect = RectF()
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(105, 10, 12, 14)
+        color = context.getColor(R.color.surface_container)
+        alpha = 168
         style = Paint.Style.FILL
     }
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -102,46 +77,17 @@ class RuleSliderView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND
     }
     private val needlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(221, 192, 141)
+        color = context.getColor(R.color.accent)
         strokeWidth = 2.5f * density
         strokeCap = Paint.Cap.ROUND
     }
-    private val needleGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(64, 221, 192, 141)
-        strokeWidth = 6f * density
-        strokeCap = Paint.Cap.ROUND
-    }
-    private val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(150, 255, 255, 255)
-        textSize = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_SP, 8.5f, resources.displayMetrics
-        )
-        typeface = android.graphics.Typeface.create(
-            android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD
-        )
+    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = context.getColor(R.color.text_primary)
+        typeface = android.graphics.Typeface.create("sans-serif-condensed-medium", 0)
+        textSize = 10f * density
         textAlign = Paint.Align.CENTER
-        letterSpacing = 0.14f
+        fontFeatureSettings = "tnum"
     }
-    private val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(245, 255, 255, 255)
-        textSize = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_SP, 14f, resources.displayMetrics
-        )
-        typeface = android.graphics.Typeface.create(
-            android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD
-        )
-        textAlign = Paint.Align.CENTER
-    }
-    private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(120, 255, 255, 255)
-        textSize = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_SP, 8f, resources.displayMetrics
-        )
-        typeface = android.graphics.Typeface.create(
-            android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL
-        )
-    }
-
     private var tracking = false
 
     fun setProgressFromUser(progress: Int, fromUser: Boolean) {
@@ -149,72 +95,56 @@ class RuleSliderView @JvmOverloads constructor(
         onProgressChanged?.invoke(this.progress, fromUser)
     }
 
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val desiredHeight = (68f * density).roundToInt()
-        val height = resolveSize(desiredHeight, heightMeasureSpec)
-        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), height)
-    }
-
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val radius = 14f * density
         backgroundRect.set(paddingLeft.toFloat(), paddingTop.toFloat(),
             (width - paddingRight).toFloat(), (height - paddingBottom).toFloat())
+        val radius = backgroundRect.height() / 2f
         canvas.drawRoundRect(backgroundRect, radius, radius, backgroundPaint)
         canvas.drawRoundRect(backgroundRect, radius, radius, borderPaint)
 
-        val centerX = backgroundRect.centerX()
-        val quarterTurn = kotlin.math.abs(kotlin.math.sin(Math.toRadians(contentRotation.toDouble()))) > 0.5
-        val headerY = if (quarterTurn) backgroundRect.centerY() else backgroundRect.top + 20f * density
-        canvas.save()
-        canvas.rotate(contentRotation, centerX, headerY)
-        if (quarterTurn) {
-            drawFittedText(canvas, "$label\n$valueText", valuePaint, centerX, headerY,
-                backgroundRect.height() - 8f * density, 64f * density)
-        } else {
-            canvas.drawText(label, centerX, backgroundRect.top + 12f * density, codePaint)
-            drawFittedText(canvas, valueText, valuePaint, centerX, backgroundRect.top + 24f * density,
-                backgroundRect.width() - 24f * density, 20f * density)
-        }
-        canvas.restore()
-
-        val tickTop = backgroundRect.top + 36f * density
-        val tickBottom = backgroundRect.bottom - 12f * density
-        val tickCenterY = (tickTop + tickBottom) / 2f
+        val sideways = kotlin.math.abs(contentRotation % 180f) > 45f
+        val tickCenterY = if (sideways) backgroundRect.top + 10f * density
+            else backgroundRect.centerY() - 7f * density
+        val needleHalf = (if (sideways) 7f else 9f) * density
+        // At a quarter turn, measured text width runs across the ruler's height.
+        // Reserve clearance for the gold index as well as the shorter white ticks.
+        val labelTop = tickCenterY + needleHalf + needlePaint.strokeWidth / 2f + 3f * density
+        val labelBottom = backgroundRect.bottom - 3f * density
         val minorHalf = 3f * density
         val majorHalf = 5.5f * density
         val tickCount = if (max < 21) max + 1 else 21
         val span = backgroundRect.width() - 24f * density
+        if (span <= 0f) return
         val startX = backgroundRect.left + 12f * density
         for (index in 0 until tickCount) {
             val x = startX + span * index / (tickCount - 1).toFloat()
-            if (quarterTurn && kotlin.math.abs(x - centerX) < 36f * density) continue
             val isMajor = max < 21 || index % 5 == 0 || index == tickCount / 2
             val half = if (isMajor) majorHalf else minorHalf
             canvas.drawLine(x, tickCenterY - half, x, tickCenterY + half,
                 if (isMajor) majorTickPaint else minorTickPaint)
         }
 
-        // Center rotated edge hints inside the strip instead of rotating an edge baseline
-        // outside its bounds. Leave the ruler endpoints and needle unobstructed.
-        for ((text, x) in listOf(minText to startX, maxText to (startX + span))) {
-            if (text.isEmpty()) continue
-            val hintX = if (quarterTurn) x else if (x == startX) x + 28f * density else x - 28f * density
-            val hintY = if (quarterTurn) backgroundRect.centerY() else backgroundRect.bottom - 5f * density
-            canvas.save()
-            canvas.rotate(contentRotation, hintX, hintY)
-            drawFittedText(canvas, text, edgePaint, hintX, hintY,
-                if (quarterTurn) backgroundRect.height() - 8f * density else 56f * density,
-                if (quarterTurn) 20f * density else 10f * density)
-            canvas.restore()
+        val checkpoint = canvas.save()
+        canvas.clipRect(backgroundRect)
+        referenceLabels.forEachIndexed { index, label ->
+            val x = startX + span * (index + 1) / (referenceLabels.size + 1)
+            val y = if (sideways) (labelTop + labelBottom) / 2f
+                else backgroundRect.centerY() + 9f * density
+            val saved = canvas.save()
+            canvas.rotate(contentRotation, x, y)
+            val labelWidth = if (sideways) (labelBottom - labelTop).coerceAtLeast(1f)
+                else span / (referenceLabels.size + 1)
+            val naturalWidth = labelPaint.measureText(label)
+            labelPaint.textScaleX = if (naturalWidth > labelWidth) labelWidth / naturalWidth else 1f
+            canvas.drawText(label, x, y - (labelPaint.ascent() + labelPaint.descent()) / 2f, labelPaint)
+            labelPaint.textScaleX = 1f
+            canvas.restoreToCount(saved)
         }
+        canvas.restoreToCount(checkpoint)
 
-        // Sand needle marks the current position; the fill track is intentionally omitted
-        // so the strip reads as a ruler rather than a progress bar.
-        val fraction = if (max > 0) progress.toFloat() / max.toFloat() else 0f
-        val needleX = startX + span * fraction.coerceIn(0f, 1f)
-        canvas.drawLine(needleX, tickTop - 2f * density, needleX, tickBottom + 2f * density, needleGlowPaint)
-        canvas.drawLine(needleX, tickTop - 2f * density, needleX, tickBottom + 2f * density, needlePaint)
+        val needleX = startX + span * progress / max
+        canvas.drawLine(needleX, tickCenterY - needleHalf, needleX, tickCenterY + needleHalf, needlePaint)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {

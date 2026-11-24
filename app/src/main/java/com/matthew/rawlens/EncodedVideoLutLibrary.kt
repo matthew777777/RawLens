@@ -46,7 +46,7 @@ internal class EncodedVideoLutLibrary(context: Context) {
     fun title(id: String): String = prefs.getString("name_$id", id) ?: id
 
     /** Bounded copy into private storage; publish only after full parse succeeds. */
-    fun import(uri: Uri): String {
+    fun import(uri: Uri, selectForVideo: Boolean = true): Pair<String, CubeLut> {
         require(entries().size < 16) { "Library is full (16 LUTs); remove one first" }
         val id = UUID.randomUUID().toString() + ".cube"
         val temp = File(directory, "$id.tmp")
@@ -72,8 +72,8 @@ internal class EncodedVideoLutLibrary(context: Context) {
             }.getOrNull() ?: "Imported LUT"
             check(temp.renameTo(File(directory, id))) { "Cannot save LUT" }
             prefs.edit().putString("name_$id", if (lut.title == "Imported LUT") originalName else lut.title).apply()
-            selected = id
-            return id
+            if (selectForVideo) selected = id
+            return id to lut
         } finally { temp.delete() }
     }
 

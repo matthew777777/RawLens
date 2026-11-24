@@ -67,4 +67,13 @@ class RawSizePreferenceStoreTest {
         assertEquals(false, RawSizePreferenceStore.isPlausibleSize("0x3072"))
         assertEquals(false, RawSizePreferenceStore.isPlausibleSize("4080x-1"))
     }
+
+    @Test fun `custom reader resolution is stored independently and can be turned off`() {
+        val (store, _, editor) = harness()
+        store.setCustomReaderSize("0/2", "8192 × 6144")
+        verify(editor).putString("reader_size_0/2", "8192x6144")
+        store.setCustomReaderSize("0/2", null)
+        verify(editor).remove("reader_size_0/2")
+        assertNull(RawSizePreferenceStore.normalizeReaderSize("65536x65536"))
+    }
 }

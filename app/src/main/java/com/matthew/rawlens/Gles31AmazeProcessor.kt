@@ -837,7 +837,8 @@ class Gles31AmazeProcessor(
                 require(quadBytes <= maxGpuBytes) { "Quad-Bayer needs $quadBytes GPU bytes, above budget $maxGpuBytes" }
             }
             val capability = AmazePipelineContract.evaluate(
-                queryLimits(), input.width, input.height, maxGpuBytes
+                queryLimits(), input.width, input.height, maxGpuBytes,
+                fusedOutput = fusedOutputSettings != null, gainmap = fusedOutputSettings?.ultraHdr == true
             )
             if (capability is AmazeCapability.Unsupported) {
                 throw UnsupportedOperationException(capability.reason)
@@ -1233,6 +1234,7 @@ class Gles31AmazeProcessor(
                 finalProgram.integer("u_display_p3", if (settings.displayP3) 1 else 0)
                 finalProgram.integer("u_basic", settings.toneMapper.shaderMode)
                 finalProgram.toneLook = ToneLook.values(settings)
+                programs.bindPhotoLut(finalProgram.id, settings.photoLut)
                 finalProgram.float("u_agx_purity_boost", settings.agxPurityBoost)
                 finalProgram.integer("u_agx_punchy", if (settings.agxLook == AgxLook.PUNCHY) 1 else 0)
                 finalProgram.float("u_agx_contrast", settings.agxContrast)
@@ -1304,7 +1306,7 @@ class Gles31AmazeProcessor(
             textures.asReversed().toList().forEach(::releaseTexture)
         }
 
-        private inner class BoundProgram(private val id: Int) {
+        private inner class BoundProgram(val id: Int) {
             private var toneMode: Int? = null
             var toneLook: FloatArray = ToneLook.DEFAULT
             private val pendingSamplers = ArrayList<Pair<String, GlTexture>>(4)
@@ -1381,12 +1383,14 @@ class Gles31AmazeProcessor(
 
     internal class ProgramCache(private val context: Context, private val slicedDispatch: Boolean = false) : Closeable {
         private val aces2 = Aces2Gl()
+        private val photoLut = PhotoLutGl()
+        fun bindPhotoLut(id: Int, lut: PhotoLutLook?) = photoLut.bind(id, lut)
         fun bindAces2(id: Int, mode: Int, look: FloatArray) = aces2.bind(id, mode, look)
         private val programs = LinkedHashMap<String, Int>()
         private val common by lazy { read("shaders/utils/import_amaze.glsl") }
         private val cleanupCommon by lazy { read("shaders/amaze/cleanup.glsl") }
         private val agxOutputCommon by lazy {
-            val source = read("shaders/display/agx_srgb8.glsl")
+            val source = read("shaders/display/agx_srgb8.glsl").replace("// PHOTO_CUBE", PhotoLutGl.glsl)
             source.substring(
                 source.indexOf("uniform highp int u_basic;").also { check(it >= 0) },
                 source.indexOf("void main()").also { check(it >= 0) }
@@ -1434,6 +1438,7 @@ class Gles31AmazeProcessor(
 
         override fun close() {
             aces2.close()
+            photoLut.close()
             programs.values.forEach {
                 GLES31.glDeleteProgram(it)
                 MemoryLeakDiagnostics.glProgramReleased()

@@ -54,6 +54,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     private val afPoint = PointF()
     private val aePoint = PointF()
     private var targetsVisible = false
+    private var aeTargetVisible = false
     private var touchDownX = 0f
     private var touchDownY = 0f
     private var focusAreaTime = -1L
@@ -110,11 +111,17 @@ class FocusMeteringOverlay @JvmOverloads constructor(
 
     fun clearTargets() {
         targetsVisible = false
+        aeTargetVisible = false
         focusAreaTime = -1L
         lastTapUpMs = 0L
         fadePending?.let(::removeCallbacks)
         fadePending = null
         setFocusLock(locked = false, indefinite = false, deadlineMs = 0L)
+        invalidate()
+    }
+
+    fun clearAeTarget() {
+        aeTargetVisible = false
         invalidate()
     }
 
@@ -152,6 +159,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         clamp(afPoint, afHalfSide)
         clamp(aePoint, aeHalfSide)
         targetsVisible = true
+        aeTargetVisible = true
         focusAreaTime = System.currentTimeMillis()
         scheduleFade()
         invalidate()
@@ -172,6 +180,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         aePoint.set(x, y)
         clamp(aePoint, aeHalfSide)
         targetsVisible = true
+        aeTargetVisible = true
         focusAreaTime = System.currentTimeMillis()
         scheduleFade()
         invalidate()
@@ -195,12 +204,14 @@ class FocusMeteringOverlay @JvmOverloads constructor(
             afPoint.x + afHalfSide, afPoint.y + afHalfSide
         )
         canvas.drawRoundRect(focusRect, afCornerRadius, afCornerRadius, afPaint)
-        focusRect.set(
-            aePoint.x - aeHalfSide, aePoint.y - aeHalfSide,
-            aePoint.x + aeHalfSide, aePoint.y + aeHalfSide
-        )
-        canvas.drawRoundRect(focusRect, aeCornerRadius, aeCornerRadius, aePaint)
-        canvas.drawCircle(aePoint.x, aePoint.y, 2.5f * density, aeDotPaint)
+        if (aeTargetVisible) {
+            focusRect.set(
+                aePoint.x - aeHalfSide, aePoint.y - aeHalfSide,
+                aePoint.x + aeHalfSide, aePoint.y + aeHalfSide
+            )
+            canvas.drawRoundRect(focusRect, aeCornerRadius, aeCornerRadius, aePaint)
+            canvas.drawCircle(aePoint.x, aePoint.y, 2.5f * density, aeDotPaint)
+        }
         if (focusLocked) drawLockBadge(canvas)
     }
 
@@ -375,7 +386,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 // clock (lastTapUpMs) — not the reticle age — decides the double.
                 val nearAf =
                     hypot(event.x - afPoint.x, event.y - afPoint.y) < afHalfSide + touchSlop
-                val nearAe =
+                val nearAe = aeTargetVisible &&
                     hypot(event.x - aePoint.x, event.y - aePoint.y) < aeHalfSide + touchSlop
                 val nearLastTap =
                     hypot(event.x - lastTapUpX, event.y - lastTapUpY) < touchSlop * 2f
@@ -455,7 +466,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         val distAf = hypot(x - afPoint.x, y - afPoint.y)
         val distAe = hypot(x - aePoint.x, y - aePoint.y)
         val afHit = distAf <= afHitRadius
-        val aeHit = distAe <= aeHitRadius
+        val aeHit = aeTargetVisible && distAe <= aeHitRadius
         if (afHit && aeHit) {
             return if (distAe < distAf) DragAe else DragAf
         }

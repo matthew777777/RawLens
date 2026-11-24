@@ -72,7 +72,8 @@ internal class SettingsCardColumn(context: Context) : LinearLayout(context) {
         close()
         cards.forEach { rows ->
             val path = Path().apply {
-                rect.set(0f, rows.first().top.toFloat(), width.toFloat(), rows.last().bottom.toFloat())
+                rect.set(paddingLeft.toFloat(), rows.first().top.toFloat(),
+                    (width - paddingRight).toFloat(), rows.last().bottom.toFloat())
                 addRoundRect(rect, radius, radius, Path.Direction.CW)
             }
             // Only the end rows can reach the rounded corners.
@@ -85,7 +86,8 @@ internal class SettingsCardColumn(context: Context) : LinearLayout(context) {
         super.onDraw(canvas)
         collectCards()
         cards.forEach { rows ->
-            rect.set(0f, rows.first().top.toFloat(), width.toFloat(), rows.last().bottom.toFloat())
+            rect.set(paddingLeft.toFloat(), rows.first().top.toFloat(),
+                    (width - paddingRight).toFloat(), rows.last().bottom.toFloat())
             canvas.drawRoundRect(rect, radius, radius, cardPaint)
             rect.inset(density / 2, density / 2)
             canvas.drawRoundRect(rect, radius, radius, edgePaint)
@@ -94,7 +96,7 @@ internal class SettingsCardColumn(context: Context) : LinearLayout(context) {
                 val row = rows[index]
                 if (row is SettingsSlider || isNote(above) || isNote(row)) continue
                 val y = row.top.toFloat()
-                canvas.drawLine(dividerInset, y, width - dividerInset, y, dividerPaint)
+                canvas.drawLine(paddingLeft + dividerInset, y, width - paddingRight - dividerInset, y, dividerPaint)
             }
         }
     }

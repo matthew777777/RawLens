@@ -226,12 +226,16 @@ internal class SettingsKit(
      * expert controls stay available without filling the everyday page. Sections never
      * expand in place: every submenu navigates and back returns, as in the page list.
      */
-    fun collapseRange(start: Int, end: Int, title: String) {
+    fun collapseRange(start: Int, end: Int, title: String, summary: String? = null) {
         if (end <= start) return
         val views = (start until end).map { content.getChildAt(it) }
         val body = SettingsCardColumn(activity)
-        views.forEach { content.removeView(it); body.addView(it) }
-        val header = navRow(title, null) { openSubPage?.invoke(title, body) }
+        views.forEach { view ->
+            val params = view.layoutParams
+            content.removeView(view)
+            body.addView(view, params)
+        }
+        val header = navRow(title, summary) { openSubPage?.invoke(title, body) }.apply { tag = SUBPAGE_LINK_TAG }
         // The top margin sets the link apart as a card of its own.
         content.addView(header, start, LinearLayout.LayoutParams(
             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
@@ -241,15 +245,16 @@ internal class SettingsKit(
         if (openSubPageTitle() == title) openSubPage?.invoke(title, body)
     }
 
-    fun collapseSection(title: String, label: String) {
+    fun collapseSection(title: String, label: String, summary: String? = null) {
         val start = (0 until content.childCount).firstOrNull {
             val child = content.getChildAt(it)
             child is TextView && child.tag == SettingsCardColumn.SECTION_TAG && child.text.toString().removeSuffix("  ⓘ") == title
         } ?: return
         val end = (start + 1 until content.childCount).firstOrNull {
-            content.getChildAt(it).tag == SettingsCardColumn.SECTION_TAG
+            val tag = content.getChildAt(it).tag
+            tag == SettingsCardColumn.SECTION_TAG || tag == SUBPAGE_LINK_TAG
         } ?: content.childCount
-        collapseRange(start, end, label)
+        collapseRange(start, end, label, summary)
     }
 
     /** Normalize legacy pages into readable sections without changing their listeners. */
@@ -341,6 +346,7 @@ internal class SettingsKit(
     }
 
     private companion object {
+        const val SUBPAGE_LINK_TAG = "settings-subpage-link"
         const val ROW_TITLE_SP = 15f
         const val ROW_VALUE_SP = 13f
     }

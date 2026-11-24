@@ -43,7 +43,7 @@ internal object DeviceLensProfiles {
     /** Virtual lenses created by a profile carry this id prefix, so reloading replaces them. */
     const val VIRTUAL_PREFIX = "dp_"
 
-    private const val FORCE_MODE = "vivo.control.forceSensorMode"
+    const val FORCE_MODE = "vivo.control.forceSensorMode"
 
     val all: List<Profile> = listOf(
         Profile(
@@ -92,6 +92,19 @@ internal object DeviceLensProfiles {
     /** Profiles made for this phone model. */
     fun matching(model: String = Build.MODEL): List<Profile> =
         all.filter { model.trim() in it.models }
+
+    /** The mode-selected stream can be absent from the default Camera2 map. */
+    fun vivoUltraStream(
+        cameraId: String?, key: String?, vendor: VendorKeyProfile, model: String = Build.MODEL
+    ): Lens? {
+        val profile = matching(model).firstOrNull { it.id == "vivo_x300_ultra" } ?: return null
+        return plan(profile).firstOrNull { (lens, profileKey) ->
+            lens.cameraId == cameraId && profileKey == key && vendor.sessionEntries().any {
+                it.name == FORCE_MODE && it.type == VendorKeyType.INT &&
+                    it.value.trim().toIntOrNull() == lens.sessionKeys.single().second
+            }
+        }?.first
+    }
 
     /**
      * Settings key per lens: the first lens on a camera ID uses the route

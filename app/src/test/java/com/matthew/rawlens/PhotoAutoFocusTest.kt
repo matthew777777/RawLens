@@ -10,6 +10,7 @@ import android.os.Handler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -226,6 +227,33 @@ class PhotoAutoFocusTest {
         af.onStartFrame(run, 100); result(100, focused)
         assertEquals("FOCUS LOCKED ∞", host.states.last())
         assertFalse(af.aeLockIndefinite)
+    }
+
+    @Test fun focusButtonUsesSelectedAfRegionWithoutMovingAeRegion() {
+        val selected = mock(MeteringRectangle::class.java)
+        val exposurePoint = mock(MeteringRectangle::class.java)
+        host.afRegion = selected
+        host.aeRegion = exposurePoint
+        af.focusSelectedPoint(100f, 100f)
+        assertFalse(af.showsFocusAssistance)
+        val run = host.triggers.last().second
+        af.onStartFrame(run, 100)
+        result(100, focused)
+        assertSame(selected, host.afRegion)
+        assertSame(exposurePoint, host.aeRegion)
+        assertTrue(af.holdingIndefinitely)
+        assertFalse(af.showsFocusAssistance)
+        assertFalse(af.aeLockIndefinite)
+    }
+
+    @Test fun tapFocusKeepsFocusAssistanceThroughLock() {
+        val run = tap()
+        assertTrue(af.showsFocusAssistance)
+        af.onStartFrame(run, 100)
+        result(100, focused)
+        assertTrue(af.showsFocusAssistance)
+        af.releaseToContinuous()
+        assertFalse(af.showsFocusAssistance)
     }
 
     @Test fun sessionStartupDoesNotTriggerUnderManualFocus() {

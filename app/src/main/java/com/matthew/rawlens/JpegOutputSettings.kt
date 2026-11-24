@@ -63,7 +63,6 @@ data class JpegOutputSettings(
     // scene-linear HDR to SDR-base ratio (log2, normalized by
     // gainMapMin/MaxLog2), dual-encoded with the SDR base and assembled by
     // the native UltrahdrMux (MPF + GContainer XMP + hdrgm + ISO 21496-1).
-    // Defaults mirror RAWR's UltraHdrParams verdicts.
     val gainmapQuality: Int = 92,
     /** Linear gain matching the SDR base's exposure domain. 1 = scene tap already exposed. */
     val hdrExposure: Float = 1f,
@@ -81,11 +80,11 @@ data class JpegOutputSettings(
     val gainMapFitMargin: Float = 0.25f,
     val gainMapFitStep: Float = 0.25f,
     val gainMapFitFloor: Float = 1f,
-    val gainMapDisplayCap: Float = 1.45f,
+    val gainMapDisplayCap: Float = 2f,
     val shoulderWidth: Float = 0.5f,
     val shoulderKneeBelowMax: Float = 0.5f,
     /** Luma baseline floor share (0 disables). */
-    val baseShare: Float = 0.75f,
+    val baseShare: Float = 0f,
     val baseExponent: Float = 0.4f,
     /** Soft-knee chroma compression around the per-pixel channel mean. */
     val chromaKnee: Float = 0.05f,
@@ -97,7 +96,8 @@ data class JpegOutputSettings(
     /** B&W photosite mode (after rwmono); OFF keeps the colour develop. */
     val mono: MonoSettings = MonoSettings(),
     /** Sigmoid / ACES 2.0 / Basic look controls (neutral defaults). */
-    val toneLook: ToneLookSettings = ToneLookSettings()
+    val toneLook: ToneLookSettings = ToneLookSettings(),
+    val photoLut: PhotoLutLook? = null
 ) {
     /**
      * Expand the existing AgX shadow range to restore middle grey after protection.
@@ -157,10 +157,10 @@ data class JpegOutputSettings(
             gainMapFitMargin = bounded(gainMapFitMargin, 0f, 2f, 0.25f),
             gainMapFitStep = bounded(gainMapFitStep, 0.05f, 2f, 0.25f),
             gainMapFitFloor = boundedFitFloor,
-            gainMapDisplayCap = bounded(gainMapDisplayCap, boundedFitFloor, 8f, 1.45f),
+            gainMapDisplayCap = bounded(gainMapDisplayCap, boundedFitFloor, 8f, 2f),
             shoulderWidth = bounded(shoulderWidth, 0f, 4f, 0.5f),
             shoulderKneeBelowMax = bounded(shoulderKneeBelowMax, 0f, 4f, 0.5f),
-            baseShare = bounded(baseShare, 0f, 2f, 0.75f),
+            baseShare = bounded(baseShare, 0f, 2f, 0f),
             baseExponent = bounded(baseExponent, 0.05f, 4f, 0.4f),
             chromaKnee = bounded(chromaKnee, 0.001f, 1f, 0.05f)
         )

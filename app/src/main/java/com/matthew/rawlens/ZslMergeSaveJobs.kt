@@ -19,6 +19,7 @@ internal data class ZslMergeSaveSettings(
     val jxl: JxlOutputSettings,
     val exposureMode: CaptureExposureMode,
     val focusView: Pair<Float, Float>?,
+    val boundPhysicalId: String?,
 )
 
 /**
@@ -83,14 +84,16 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             check(selected.none { it.staged != null }) { "keepSourceBurst needs camera Images" }
             selected.forEachIndexed { index, frame ->
                 val metadata = RawFrameMetadataFactory.capture(
-                    cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides
+                    cameraId, frame.image, c, frame.result, orientation,
+                    levelOverrides = saveSettings.dngOverrides, boundPhysicalId = saveSettings.boundPhysicalId
                 )
                 val buffer = frame.image.planes.single().buffer
                 val position = buffer.position()
                 val limit = buffer.limit()
                 try {
+                    val sensorResult = physicalCaptureResult(frame.result, saveSettings.boundPhysicalId) ?: frame.result
                     saver.save(
-                        frame.image, c, frame.result, orientation, overrides, metadata, backend,
+                        frame.image, c, sensorResult, orientation, overrides, metadata, backend,
                         fileNameSuffix = "F%02d".format(index),
                         captureId = captureTimeMillis,
                         gps = captureGps,
@@ -103,7 +106,10 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             }
         }
         val inputs = selected.map { frame ->
-            val metadata = RawFrameMetadataFactory.capture(cameraId, frame.view(), c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides)
+            val metadata = RawFrameMetadataFactory.capture(
+                cameraId, frame.view(), c, frame.result, orientation,
+                levelOverrides = saveSettings.dngOverrides, boundPhysicalId = saveSettings.boundPhysicalId
+            )
             val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
                 ?: throw UnsupportedOperationException("HDR+ RAW geometry is not supported")
             val normalization = metadata.normalizationOrNull()
@@ -340,14 +346,16 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
             check(selected.none { it.staged != null }) { "keepSourceBurst needs camera Images" }
             selected.forEachIndexed { index, frame ->
                 val metadata = RawFrameMetadataFactory.capture(
-                    cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides
+                    cameraId, frame.image, c, frame.result, orientation,
+                    levelOverrides = saveSettings.dngOverrides, boundPhysicalId = saveSettings.boundPhysicalId
                 )
                 val buffer = frame.image.planes.single().buffer
                 val position = buffer.position()
                 val limit = buffer.limit()
                 try {
+                    val sensorResult = physicalCaptureResult(frame.result, saveSettings.boundPhysicalId) ?: frame.result
                     saver.save(
-                        frame.image, c, frame.result, orientation, overrides, metadata, backend,
+                        frame.image, c, sensorResult, orientation, overrides, metadata, backend,
                         fileNameSuffix = "F%02d".format(index),
                         captureId = captureTimeMillis,
                         gps = captureGps,
@@ -362,7 +370,10 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
         host.reportSaveState("${settings.label} MERGING")
         val tMerge0 = android.os.SystemClock.elapsedRealtime()
         val metadataOf = { frame: BufferedRawFrame ->
-            RawFrameMetadataFactory.capture(cameraId, frame.view(), c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides)
+            RawFrameMetadataFactory.capture(
+                cameraId, frame.view(), c, frame.result, orientation,
+                levelOverrides = saveSettings.dngOverrides, boundPhysicalId = saveSettings.boundPhysicalId
+            )
         }
         val hdr = hdrTail > 0 && settings.engine == MfsrEngine.LKR && selected.size - hdrTail >= 1
         // HDR: reference + blur rejection over the 0 EV frames only (a short frame is never the
@@ -388,7 +399,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
             // Same shutter / ZSL / save tail for both engines; only the merge differs.
             if (settings.engine == MfsrEngine.LKR)
                 MergeGpuQuiet.during { LkrMerge.mergeLive(context, ordered,
-                    LkrMerge.Settings(network = settings.lkrNetwork, dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
+                    LkrMerge.Settings(network = settings.lkrNetwork, npuDenoise = settings.lkrNpuDenoise, noPrior = settings.lkrNoPrior, dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
                         zoom = settings.lkrZoom, fullRes = settings.lkrFullRes, hdrBracket = hdr),
                     releaseInputs = host::releaseInputs) }
             else MfsrMerge.merge(context, ordered, settings)

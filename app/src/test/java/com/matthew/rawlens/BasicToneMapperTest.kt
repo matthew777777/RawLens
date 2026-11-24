@@ -32,7 +32,8 @@ class BasicToneMapperTest {
         assertEquals(PhotoToneMapper.SIGMOID, PhotoToneMapper.fromPreference(null))
         assertEquals(PhotoToneMapper.SIGMOID, PhotoToneMapper.fromPreference("unknown"))
         assertEquals(PhotoToneMapper.AGX, PhotoToneMapper.fromPreference("AGX"))
-        assertEquals(PhotoToneMapper.BASIC, PhotoToneMapper.fromPreference("BASIC"))
+        assertEquals(PhotoToneMapper.SIGMOID, PhotoToneMapper.fromPreference("BASIC"))
+        assertFalse(PhotoToneMapper.BASIC in PhotoToneMapper.selectable)
     }
 
     @Test fun shoulderPreservesMidsAndHighlightGradationAtEveryStrength() {

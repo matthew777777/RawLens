@@ -124,8 +124,9 @@ Arm reference: https://developer.arm.com/Tools%20and%20Software/Mali%20Offline%2
 ## RAW superpixel A/B harness
 
 `parity/superpixel_parity.cpp` compares the original and candidate RGBA16F
-buffer superpixel modules, including native-equivalent `ALIGNED_WORDS`
-specialization selection. The source header contains host/Android build
+superpixel modules. Use `--image` for the sampled R16_UINT input path.
+Buffer tests select the native-equivalent `ALIGNED_WORDS` specialization
+on both sides. The source header contains host/Android build
 commands. It exercises CFA layouts, alignment, pitches, sample steps, levels,
 and lens shading, then reports interleaved single-dispatch GPU timestamps.
 

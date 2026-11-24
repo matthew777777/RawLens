@@ -101,7 +101,6 @@ internal fun MainActivity.showProgramAxisSlider(isIso: Boolean) {
     } else {
         "Shutter lock limits and metering editor."
     }
-    manualSlider.label = shortControlName(axis)
     manualSlider.max = SLIDER_STEPS
     manualSlider.setProgressFromUser(sliderProgress(axis, range.copy(current = current)), fromUser = false)
     manualAuto.text = "AUTO"
@@ -154,10 +153,35 @@ internal fun MainActivity.openManualModeThen(control: ManualControl) {
 internal fun MainActivity.showProgramPanelHintOnce() {
     if (programHintShown) return
     programHintShown = true
+    setStatus("PROGRAM AE • TAP ISO OR SHUTTER TO SHIFT")
+}
+
+internal fun MainActivity.showProgramShift(isIso: Boolean) {
+    if (!controller.hasManualSensorControl()) {
+        setStatus("ANDROID AE • NO MANUAL SENSOR")
+        return
+    }
     val profile = programProfile()
-    setStatus("P ${programLockText(profile.lockMode).substringAfter("Lock: ")} " +
-        "${String.format(Locale.US, "%.2f", profile.balance)} " +
-        "${programEvBiasText(profile.evBias)} • ISO/S edits")
+    if (profile.lockMode == if (isIso) ProgramLockMode.ISO_LOCK else ProgramLockMode.SHUTTER_LOCK) {
+        showProgramAxisSlider(isIso)
+        return
+    }
+    closeFloatingPanels()
+    val balances = floatArrayOf(0f, 0.5f, 1f)
+    val labels = arrayOf("Lower ISO", "Balanced", "Faster shutter")
+    val selected = if (profile.lockMode == ProgramLockMode.NONE) {
+        balances.indexOfFirst { it == profile.balance }
+    } else -1
+    RawLensDialogBuilder(this)
+        .setTitle("Program shift")
+        .setSingleChoiceItems(labels, selected) { dialog, index ->
+            saveProgramProfile(programProfile().copy(balance = balances[index], lockMode = ProgramLockMode.NONE))
+            setStatus("PROGRAM • ${labels[index]}")
+            dialog.dismiss()
+        }
+        .setNeutralButton("Advanced") { _, _ -> showProgramPanel() }
+        .setNegativeButton("Cancel", null)
+        .show()
 }
 
 internal fun MainActivity.programBalanceText(balance: Float): String = when {
@@ -243,8 +267,7 @@ internal fun MainActivity.showProgramPanel() {
         })
     }
     container.addView(TextView(this).apply {
-        text = "Hold ISO / SHUTTER chips to lock • tap for slider • Auto releases both • " +
-            "lock both for manual"
+        text = "Hold ISO or shutter to lock it. Tap a locked value to adjust it."
         setTextColor(getColor(R.color.text_secondary))
         textSize = 11f
         setPadding(0, dp(4), 0, 0)
@@ -480,7 +503,7 @@ internal fun MainActivity.showProgramPanel() {
         }
     })
     RawLensDialogBuilder(this)
-        .setTitle("PROGRAM AE • custom")
+        .setTitle("Advanced Program AE")
         .setView(ScrollView(this).apply { addView(container) })
         .setPositiveButton("Done", null)
         .show()

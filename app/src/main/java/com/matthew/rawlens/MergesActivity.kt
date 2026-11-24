@@ -927,7 +927,7 @@ class MergesActivity : Activity() {
         val inputs = BurstMergeRunner.Inputs(
             mfsr = tuningMfsr.copy(lkrZoom = lkrZoom, lkrFullRes = false),
             hdrPlus = tuningHdr,
-            jpeg = MergeScreenSettings.jpeg(prefs),
+            jpeg = MergeScreenSettings.jpeg(prefs, PhotoLutSelection(applicationContext).current()),
             denoise = MergeScreenSettings.denoise(prefs),
             jxl = MergeScreenSettings.jxl(prefs),
             developedFormat = developedFormat,

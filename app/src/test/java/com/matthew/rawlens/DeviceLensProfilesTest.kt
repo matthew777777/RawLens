@@ -32,4 +32,15 @@ class DeviceLensProfilesTest {
             }
         }
     }
+
+    @Test fun vivoUltraRequiresMatchingSessionModeAndRoute() {
+        val mode = VendorKeyProfile(listOf(
+            VendorKeyEntry(DeviceLensProfiles.FORCE_MODE, VendorKeyType.INT, VendorKeyScope.SESSION, "31")
+        ))
+        val stream = DeviceLensProfiles.vivoUltraStream("3", "3", mode, "V2562")
+        assertEquals("RAW10", stream?.rawFormat)
+        assertEquals("4080x3064", stream?.rawSize)
+        assertNull(DeviceLensProfiles.vivoUltraStream("3", "3", VendorKeyProfile(), "V2562"))
+        assertNull(DeviceLensProfiles.vivoUltraStream("4", "4", mode, "V2562"))
+    }
 }

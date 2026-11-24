@@ -86,7 +86,7 @@ object ScopeStyle {
     const val WAVEFORM_DESAT_OVER = 0.75f
 
     /** Histogram fill alpha per channel, blended ADD (darktable-style overlap mixing). */
-    const val HISTOGRAM_FILL_ALPHA = 170
+    const val HISTOGRAM_FILL_ALPHA = 52
 
     /** Histogram top-edge trace alpha (SRC_OVER, per channel): crisp outline in glare. */
     const val HISTOGRAM_LINE_ALPHA = 255

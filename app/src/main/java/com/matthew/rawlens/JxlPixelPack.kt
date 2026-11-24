@@ -167,7 +167,7 @@ object JxlPixelPack {
         val c = code.coerceIn(0f, 1f).toDouble()
         if (c <= 0.0) return 0f
         val cp = c.pow(1.0 / 78.84375)
-        val y = ((cp - 0.8359375) / (18.8515625 - 18.6875 * cp)).pow(1.0 / 0.15930176)
+        val y = ((cp - 0.8359375).coerceAtLeast(0.0) / (18.8515625 - 18.6875 * cp)).pow(1.0 / 0.15930176)
         return (y * 10000.0).toFloat()
     }
 

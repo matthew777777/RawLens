@@ -112,7 +112,7 @@ object AmazePipelineContract {
         require(input.values.size == input.width * input.height) { "CFA buffer size mismatch" }
     }
 
-    fun estimatedGpuBytes(width: Int, height: Int): Long {
+    fun estimatedGpuBytes(width: Int, height: Int, fusedOutput: Boolean = false, gainmap: Boolean = false): Long {
         require(width > 0 && height > 0)
         val windowPixels = WINDOW.toLong() * WINDOW
         val scratch = windowPixels * (
@@ -120,18 +120,22 @@ object AmazePipelineContract {
                 VECTOR_SCRATCH_TEXTURES * AmazeTextureFormat.RGBA32F.bytesPerPixel
             )
         val fullFrame = width.toLong() * height * (
-            AmazeTextureFormat.R32F.bytesPerPixel + AmazeTextureFormat.RGBA16F.bytesPerPixel
+            AmazeTextureFormat.R32F.bytesPerPixel +
+                (if (fusedOutput) AmazeTextureFormat.RGBA8 else AmazeTextureFormat.RGBA16F).bytesPerPixel
             )
-        return scratch + fullFrame
+        return scratch + fullFrame + if (fusedOutput && gainmap)
+            ((width.toLong() + 3) / 4) * ((height.toLong() + 3) / 4) * 4 else 0
     }
 
     fun evaluate(
         limits: AmazeGpuLimits,
         width: Int,
         height: Int,
-        maxGpuBytes: Long = Long.MAX_VALUE
+        maxGpuBytes: Long = Long.MAX_VALUE,
+        fusedOutput: Boolean = false,
+        gainmap: Boolean = false
     ): AmazeCapability {
-        val estimatedBytes = estimatedGpuBytes(width, height)
+        val estimatedBytes = estimatedGpuBytes(width, height, fusedOutput, gainmap)
         val reason = when {
             limits.majorVersion < 3 || limits.majorVersion == 3 && limits.minorVersion < 1 ->
                 "OpenGL ES 3.1 compute shaders are required (${limits.versionString})"

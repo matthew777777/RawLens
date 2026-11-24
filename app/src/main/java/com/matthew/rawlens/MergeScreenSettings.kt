@@ -16,7 +16,8 @@ internal object MergeScreenSettings {
     fun outputFormat(value: String?): CaptureFormat =
         CaptureFormat.entries.firstOrNull { it.name == value } ?: CaptureFormat.JPEG
 
-    fun jpeg(prefs: SharedPreferences): JpegOutputSettings = JpegOutputSettings(
+    fun jpeg(prefs: SharedPreferences, photoLut: PhotoLutLook? = null): JpegOutputSettings = JpegOutputSettings(
+        photoLut = photoLut,
         activeDLighting = ActiveDLighting.fromName(prefs.getString(ActiveDLighting.PREFERENCE_KEY, null)),
         ultraHdr = prefs.getBoolean(MainActivity.KEY_JPEG_ULTRA_HDR, false),
         displayP3 = prefs.getBoolean(MainActivity.KEY_JPEG_DISPLAY_P3, false),

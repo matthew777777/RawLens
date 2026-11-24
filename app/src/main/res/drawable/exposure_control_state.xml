@@ -1,0 +1,27 @@
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/outline_strong">
+    <item>
+        <selector>
+            <item android:state_selected="true">
+                <layer-list>
+                    <item
+                        android:bottom="2dp"
+                        android:gravity="bottom|center_horizontal"
+                        android:height="2dp"
+                        android:width="16dp">
+                        <shape>
+                            <solid android:color="@color/exposure_index" />
+                            <corners android:radius="1dp" />
+                        </shape>
+                    </item>
+                </layer-list>
+            </item>
+        </selector>
+    </item>
+    <item android:id="@android:id/mask">
+        <shape>
+            <solid android:color="@android:color/white" />
+            <corners android:radius="6dp" />
+        </shape>
+    </item>
+</ripple>

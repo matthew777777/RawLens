@@ -83,6 +83,35 @@ class RawPackedUnpackerTest {
         assertArrayEquals(codes.map(Int::toShort).toShortArray(), decoded)
     }
 
+    @Test fun `preview plane preserves native codes with padding and source offset`() {
+        val reader = RawPackedUnpacker.PreviewPlaneReader()
+        val width = 4
+        val codes = intArrayOf(64, 65, 127, 1023, 0, 1, 511, 777)
+        for (format in PackedRawFormat.entries) {
+            val shift = 16 - format.bitsPerPixel
+            val leftJustified = codes.map { it shl shift }.toIntArray()
+            val packed = when (format) {
+                PackedRawFormat.RAW10 -> packRaw10(leftJustified)
+                PackedRawFormat.RAW12 -> packRaw12(leftJustified)
+            }
+            val rowBytes = packed.size / 2
+            val stride = rowBytes + 3
+            val input = ByteBuffer.allocateDirect(1 + stride + rowBytes)
+            input.position(1)
+            input.put(packed, 0, rowBytes)
+            input.position(1 + stride)
+            input.put(packed, rowBytes, rowBytes)
+            input.flip()
+            input.position(1)
+
+            val output = reader.unpack(input, width, 2, stride, format)
+            val decoded = ShortArray(codes.size)
+            output.asShortBuffer().get(decoded)
+            assertArrayEquals(codes.map(Int::toShort).toShortArray(), decoded)
+            assertEquals(1, input.position())
+        }
+    }
+
     @Test fun `odd width is refused`() {
         try {
             RawPackedUnpacker.decodePlaneToShorts(

@@ -23,6 +23,8 @@ data class DevelopedJxl(
     val settings: JxlOutputSettings
 )
 
+internal class JxlGpuOutputException(message: String) : IllegalStateException(message)
+
 /**
  * Develops an unclamped scene-linear ACEScg texture into half-float
  * display-referred RGBA, preserving up to 16-bit precision for the JPEG XL
@@ -33,12 +35,13 @@ data class DevelopedJxl(
  */
 class Gles31JxlOutputProcessor(context: Context) {
     private val shaderSource = context.applicationContext.assets.open(SHADER).bufferedReader().use {
-        it.readText().replace("// SIGMOID_FUNCTIONS", CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
+        it.readText().replace("// PHOTO_CUBE", PhotoLutGl.glsl).replace("// SIGMOID_FUNCTIONS", CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
     }.replace("binding = 1, rgba8", "binding = 1, rgba16f")
 
     // Invoked inside Gles31AmazeProcessor.process(), on its persistent writer
     // EGL context. Same per-context ownership discipline as the JPEG side.
     private val aces2 = Aces2Gl()
+    private val photoLut = PhotoLutGl()
     private var program = 0
     private var programThread: Thread? = null
     private var framebuffer = 0
@@ -89,6 +92,7 @@ class Gles31JxlOutputProcessor(context: Context) {
 
             val outputProgram = outputProgram()
             GLES31.glUseProgram(outputProgram)
+            photoLut.bind(outputProgram, resolvedLook.photoLut)
             GLES31.glBindImageTexture(
                 0, scene.textureId, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F
             )
@@ -130,18 +134,32 @@ class Gles31JxlOutputProcessor(context: Context) {
             GLES31.glUniform1ui(location(outputProgram, "u_grain_seed"), System.nanoTime().toInt())
             GLES31.glUniform1i(location(outputProgram, "u_write_gainmap"), 0)
             GLES31.glUniform1i(location(outputProgram, "u_gainmap_only"), 0)
-            GLES31.glDispatchCompute(ceilDiv(scene.width, 8), ceilDiv(scene.height, 8), 1)
+            val dispatchOffset = location(outputProgram, "u_jxl_dispatch_offset")
+            for (slice in GpuScheduling.slices(scene.width, scene.height, 8, 8, DISPATCH_BUDGET)) {
+                GLES31.glUniform2i(dispatchOffset, slice.x, slice.y)
+                GLES31.glDispatchCompute(slice.groupsX, slice.groupsY, 1)
+                awaitSlice(slice)
+            }
             GLES31.glMemoryBarrier(
                 GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_FRAMEBUFFER_BARRIER_BIT
             )
             checkGl("AgX/JXL dispatch")
             val submittedAt = SystemClock.elapsedRealtime()
             val pixels = readHalfFloat(encodedTexture[0], scene.width, scene.height)
+            val samples = pixels.asShortBuffer()
+            for (alpha in 3 until samples.limit() step 4) {
+                if (samples.get(alpha).toInt() != HALF_ONE) {
+                    val pixel = alpha / 4
+                    throw JxlGpuOutputException(
+                        "Invalid JXL readback at (${pixel % scene.width}, ${pixel / scene.width})"
+                    )
+                }
+            }
             val completedAt = SystemClock.elapsedRealtime()
             Log.i(
                 LOG_TAG,
                 "JXL output ${scene.width}x${scene.height} ${resolved.bitDepth.label} " +
-                    "${resolved.pixelType.label} q=${resolved.quality} effort=${resolved.effort} " +
+                    "${resolved.pixelType.label} ${resolved.hdrTransfer.label} q=${resolved.quality} effort=${resolved.effort} " +
                     "tier=${resolved.decodingSpeed}: allocate=${allocatedAt - startedAt}ms " +
                     "submit=${submittedAt - allocatedAt}ms read=${completedAt - submittedAt}ms " +
                     "total=${completedAt - startedAt}ms"
@@ -159,6 +177,7 @@ class Gles31JxlOutputProcessor(context: Context) {
     /** Must be called while AMaZE's persistent EGL context is current on its worker thread. */
     fun close() {
         aces2.close()
+        photoLut.close()
         if (program != 0) {
             check(programThread == Thread.currentThread()) {
                 "JXL output program must be closed by its owning worker thread"
@@ -195,14 +214,22 @@ class Gles31JxlOutputProcessor(context: Context) {
                 .order(ByteOrder.nativeOrder())
             GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 2)
             try {
-                GLES30.glReadPixels(
-                    0, 0, width, height,
-                    GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, pixels
-                )
+                for (row in 0 until height step BAND_ROWS) {
+                    pixels.position(row * width * 8)
+                    GLES30.glReadPixels(
+                        0, row, width, minOf(BAND_ROWS, height - row),
+                        GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, pixels
+                    )
+                    val error = GLES20.glGetError()
+                    if (error != GLES20.GL_NO_ERROR) {
+                        throw JxlGpuOutputException(
+                            "JXL half-float readback failed at row $row (GLES 0x${error.toString(16)})"
+                        )
+                    }
+                }
             } finally {
                 GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
             }
-            checkGl("JXL half-float readback")
             pixels.rewind()
             return pixels
         } finally {
@@ -210,10 +237,41 @@ class Gles31JxlOutputProcessor(context: Context) {
         }
     }
 
+    // Bound each dispatch so the output shader does not monopolize the
+    // Adreno queue while the viewfinder and UI are also rendering.
+    private fun awaitSlice(slice: GpuScheduling.Slice) {
+        val position = "(${slice.x}, ${slice.y})"
+        val fence = GLES30.glFenceSync(GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+        if (fence == 0L) throw JxlGpuOutputException("Could not fence JXL output at $position")
+        try {
+            val deadline = SystemClock.elapsedRealtime() + GPU_TIMEOUT_MS
+            var flags = GLES30.GL_SYNC_FLUSH_COMMANDS_BIT
+            while (true) {
+                when (val status = GLES30.glClientWaitSync(fence, flags, GPU_WAIT_INTERVAL_NS)) {
+                    GLES30.GL_ALREADY_SIGNALED, GLES30.GL_CONDITION_SATISFIED -> return
+                    GLES30.GL_TIMEOUT_EXPIRED -> {
+                        if (SystemClock.elapsedRealtime() >= deadline) {
+                            throw JxlGpuOutputException("JXL GPU timed out at $position")
+                        }
+                    }
+                    else -> {
+                        val error = GLES20.glGetError()
+                        throw JxlGpuOutputException(
+                            "JXL GPU wait failed at $position (status=$status, GLES 0x${error.toString(16)})"
+                        )
+                    }
+                }
+                flags = 0
+            }
+        } finally {
+            GLES30.glDeleteSync(fence)
+        }
+    }
+
     private fun compile(body: String): Int {
         val shader = GLES31.glCreateShader(GLES31.GL_COMPUTE_SHADER)
         check(shader != 0) { "Could not allocate AgX/JXL shader" }
-        GLES31.glShaderSource(shader, "#version 310 es\n$body")
+        GLES31.glShaderSource(shader, "#version 310 es\n#define RAWLENS_JXL\n$body")
         GLES31.glCompileShader(shader)
         val status = IntArray(1)
         GLES31.glGetShaderiv(shader, GLES31.GL_COMPILE_STATUS, status, 0)
@@ -259,9 +317,12 @@ class Gles31JxlOutputProcessor(context: Context) {
         }
     }
 
-    private fun ceilDiv(value: Int, divisor: Int) = (value + divisor - 1) / divisor
-
     private companion object {
+        const val BAND_ROWS = 256
+        const val DISPATCH_BUDGET = 131_072
+        const val GPU_WAIT_INTERVAL_NS = 10_000_000L
+        const val GPU_TIMEOUT_MS = 10_000L
+        const val HALF_ONE = 0x3c00
         const val SHADER = "shaders/display/agx_srgb8.glsl"
         const val LOG_TAG = "RawLensDevelop"
     }

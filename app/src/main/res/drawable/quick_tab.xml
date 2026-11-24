@@ -1,0 +1,17 @@
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/accent_soft">
+    <item>
+        <selector>
+            <item android:state_selected="true">
+                <inset android:insetLeft="2dp" android:insetTop="5dp"
+                    android:insetRight="2dp" android:insetBottom="5dp">
+                    <shape>
+                        <solid android:color="@color/accent" />
+                        <corners android:radius="14dp" />
+                    </shape>
+                </inset>
+            </item>
+        </selector>
+    </item>
+    <item android:id="@android:id/mask" android:drawable="@android:color/white" />
+</ripple>

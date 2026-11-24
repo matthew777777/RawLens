@@ -3,6 +3,7 @@ package com.matthew.rawlens
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.text.Layout
 import android.text.SpannableString
@@ -24,14 +25,30 @@ class QuickControlTileView @JvmOverloads constructor(
     override var contentRotation = 0f
         set(value) { if (field != value) { field = value; invalidate() } }
 
+    var showsChoice = false
+    var valueFirst = false
+        set(value) {
+            if (field == value) return
+            field = value
+            lastKey = null
+            invalidate()
+        }
+    private val indicator = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val activeColor = context.getColor(R.color.accent)
+    private val choiceColor = context.getColor(R.color.text_secondary)
+
     private data class Key(val text: String, val width: Int, val height: Int, val color: Int, val size: Float, val typeface: Typeface?)
     private var lastKey: Key? = null
     private var textLayout: StaticLayout? = null
 
     override fun onDraw(canvas: Canvas) {
         val quarterTurn = ((contentRotation.roundToInt() % 180) + 180) % 180 == 90
-        val inset = 2f * resources.displayMetrics.density
-        val availableWidth = ((if (quarterTurn) height else width) - inset * 2).toInt().coerceAtLeast(1)
+        val density = resources.displayMetrics.density
+        val inset = 2f * density
+        val sideInset = if (showsChoice && isEnabled) 6f * density else inset
+        val availableWidth = ((if (quarterTurn) height else width) - sideInset * 2).toInt().coerceAtLeast(1)
         val availableHeight = ((if (quarterTurn) width else height) - inset * 2).coerceAtLeast(1f)
         val key = Key(text.toString(), availableWidth, availableHeight.toInt(), currentTextColor, textSize, typeface)
         if (lastKey != key) {
@@ -49,13 +66,24 @@ class QuickControlTileView @JvmOverloads constructor(
                 else -> lines[1]
             }
             // Keep the original TextView text for accessibility and automation.
+            val hasValue = lines.size == 2
+            if (hasValue && valueFirst) {
+                val name = lines[0]
+                lines[0] = lines[1]
+                lines[1] = name
+            }
             val label = SpannableString(lines.joinToString("\n"))
             val split = label.indexOf('\n')
             if (split >= 0) {
-                label.setSpan(RelativeSizeSpan(.9f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                val titleStart = if (hasValue && valueFirst) split + 1 else 0
+                val titleEnd = if (hasValue && valueFirst) label.length else split
+                label.setSpan(RelativeSizeSpan(if (valueFirst) .72f else .9f),
+                    titleStart, titleEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 val muted = (currentTextColor and 0x00ffffff) or (((currentTextColor ushr 24) * .78f).toInt() shl 24)
-                label.setSpan(ForegroundColorSpan(muted), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                label.setSpan(StyleSpan(Typeface.BOLD), split + 1, label.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                label.setSpan(ForegroundColorSpan(muted), titleStart, titleEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                val valueStart = if (hasValue && valueFirst) 0 else split + 1
+                val valueEnd = if (hasValue && valueFirst) split else label.length
+                label.setSpan(StyleSpan(Typeface.BOLD), valueStart, valueEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             val textPaint = TextPaint(paint).apply { color = currentTextColor }
             var longest = 1f
@@ -76,6 +104,18 @@ class QuickControlTileView @JvmOverloads constructor(
         val checkpoint = canvas.save()
         canvas.translate(width / 2f, height / 2f)
         canvas.rotate(contentRotation)
+        if (isSelected && text.indexOf('\n') >= 0 && currentTextColor != context.getColor(R.color.accent_dark)) {
+            indicator.color = activeColor
+            canvas.drawCircle(0f, -availableHeight / 2f + 3f * density, 1.5f * density, indicator)
+        }
+        if (showsChoice && isEnabled) {
+            indicator.color = choiceColor
+            indicator.strokeWidth = density
+            val x = availableWidth / 2f + 2f * density
+            val half = 2f * density
+            canvas.drawLine(x - half, -half, x + half, 0f, indicator)
+            canvas.drawLine(x + half, 0f, x - half, half, indicator)
+        }
         canvas.translate(-availableWidth / 2f, -layout.height / 2f)
         layout.draw(canvas)
         canvas.restoreToCount(checkpoint)

@@ -11,11 +11,16 @@ layout(binding = 2, rgba8) writeonly uniform highp image2D img_gainmap;
 uniform highp ivec2 u_size;
 uniform highp ivec2 u_gainmap_size;
 uniform highp int u_basic;
+// PHOTO_CUBE
 uniform highp int u_display_p3;
 // HDR PQ stills (JXL): 1 preserves scene highlights above SDR white and
 // encodes ST2084 instead of sRGB. 0 is the SDR path, bit-identical to
 // before (every HDR branch below is gated on this; unset stays 0).
 uniform highp int u_hdr_pq;
+#ifdef RAWLENS_JXL
+uniform highp ivec2 u_jxl_dispatch_offset;
+#endif
+const highp float HDR_HEADROOM = 4.0;
 uniform highp float u_agx_purity_boost;
 uniform highp int u_agx_punchy;
 uniform highp float u_agx_contrast;
@@ -53,7 +58,11 @@ uniform highp uint u_grain_seed;
 #define EFFECTIVE_GAINMAP_ONLY 0
 #define EFFECTIVE_WRITE_GAINMAP RAPIDRAW_GAINMAP
 #else
+#ifdef RAWLENS_STILL_SDR
+#define EFFECTIVE_HDR_PQ 0
+#else
 #define EFFECTIVE_HDR_PQ u_hdr_pq
+#endif
 #define EFFECTIVE_GRAIN_AMOUNT u_grain_amount
 #define EFFECTIVE_GAINMAP_ONLY u_gainmap_only
 #define EFFECTIVE_WRITE_GAINMAP u_write_gainmap
@@ -78,7 +87,6 @@ const highp mat3 AGX_OUTSET = mat3(
 );
 // d(agx_contrast)/dx at x=1 (white-point slope for the HDR linear tail:
 // -17.86*7 + 78.01*6 - 126.7*5 + 92.06*4 - 28.72*3 + 4.361*2 - 0.1718).
-const highp float AGX_SLOPE_AT_WHITE = 0.1702;
 const highp mat3 REC2020_TO_SRGB = mat3(
      1.6604910021, -0.1245504745, -0.0181507634,
     -0.5876411388,  1.1328998971, -0.1005788980,
@@ -103,9 +111,8 @@ highp vec3 agx_base(highp vec3 acescg) {
     highp vec3 scene = max(ACESCG_TO_REC2020_D65 * acescg, vec3(0.0));
     // Scene-linear soft shoulder, mirror of AgxDisplayTransform.compressHighlight.
     // C1 at knee 0.9, asymptote 1.7: 1.0->0.994, 1.95->1.49, 16->1.7 at full strength.
-    // Strength 0 = pinned Filament AgX only. HDR keeps raw scene highlights
-    // (the shoulder asymptote would cap them near SDR white), so it skips this.
-    if (u_highlight_shoulder > 0.0 && EFFECTIVE_HDR_PQ == 0) {
+    // Strength 0 = pinned Filament AgX only.
+    if (u_highlight_shoulder > 0.0) {
         for (int c = 0; c < 3; ++c) {
             if (scene[c] > 0.9) {
                 highp float t = (scene[c] - 0.9) / 0.8;
@@ -119,16 +126,10 @@ highp vec3 agx_base(highp vec3 acescg) {
     highp float minimumEv = -2.473931188 - u_agx_shadow_ev;
     highp float evRange = u_agx_shadow_ev + u_agx_highlight_ev;
     highp vec3 normV = (v - vec3(minimumEv)) / evRange;
-    // SDR clamps highlights to white; HDR lets the graded curve run past 1
-    // (linear tail below) so scene highlights survive as code values > 1.
-    v = (EFFECTIVE_HDR_PQ != 0) ? max(normV, vec3(0.0)) : clamp(normV, 0.0, 1.0);
+    v = clamp(normV, 0.0, 1.0);
     highp float pivot = u_agx_shadow_ev / evRange;
     highp vec3 contrastV = vec3(pivot) + (v - vec3(pivot)) * u_agx_contrast;
-    v = (EFFECTIVE_HDR_PQ != 0) ? max(contrastV, vec3(0.0)) : clamp(contrastV, 0.0, 1.0);
-    // The fit polynomial is only valid on [0,1]: evaluate it clamped and
-    // extend highlights with its white-point slope (monotonic, continuous).
-    highp vec3 over = max(v - vec3(1.0), vec3(0.0));
-    v = agx_contrast(clamp(v, 0.0, 1.0)) + over * vec3(AGX_SLOPE_AT_WHITE);
+    v = agx_contrast(clamp(contrastV, 0.0, 1.0));
     if (u_agx_punchy != 0) {
         highp float lookLuma = dot(v, vec3(0.2126, 0.7152, 0.0722));
         v = vec3(lookLuma) + 1.4 * (pow(max(v, vec3(0.0)), vec3(1.35)) - vec3(lookLuma));
@@ -150,11 +151,12 @@ highp vec3 agx_base(highp vec3 acescg) {
 
 highp vec3 compress_output_gamut(highp vec3 value) {
     if (u_agx_gamut_compression <= 0.0) return value;
-    highp float anchor = clamp(dot(value, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+    highp float ceiling = 1.0;
+    highp float anchor = clamp(dot(value, vec3(0.2126, 0.7152, 0.0722)), 0.0, ceiling);
     highp vec3 delta = value - vec3(anchor);
     highp float scale = 1.0;
     for (int channel = 0; channel < 3; ++channel) {
-        if (delta[channel] > 0.0) scale = min(scale, (1.0 - anchor) / delta[channel]);
+        if (delta[channel] > 0.0) scale = min(scale, (ceiling - anchor) / delta[channel]);
         else if (delta[channel] < 0.0) scale = min(scale, -anchor / delta[channel]);
     }
     scale = mix(1.0, clamp(scale, 0.0, 1.0), u_agx_gamut_compression);
@@ -189,6 +191,33 @@ highp vec3 basic_decode(highp vec3 encoded) {
                encoded / 12.92, lessThanEqual(encoded, vec3(0.04045)));
 }
 
+highp vec3 hdr_highlights(highp vec3 graded, highp float gradedY, highp vec3 sceneRec2020) {
+    const highp vec3 rec2020Luma = vec3(0.2627, 0.6780, 0.0593);
+    const highp float sceneDiffuseWhite = 0.60;
+    highp float sceneY = dot(sceneRec2020, rec2020Luma);
+    // Keep diffuse colors from the selected look. Blend into a scene-linear
+    // highlight extension using the signal upstream of its SDR shoulder.
+    highp float blend = smoothstep(0.35, 0.85, sceneY);
+    highp float targetY = mix(gradedY, max(gradedY, sceneY / sceneDiffuseWhite), blend);
+    highp vec3 hdr = graded * (1.0 + (targetY - gradedY) / max(gradedY, 1e-6));
+    highp float peak = max(hdr.r, max(hdr.g, hdr.b));
+    // As in RapidRAW, start the soft clip at three quarters of HDR peak.
+    // Scale RGB together to keep highlight chromaticity through the shoulder.
+    const highp float shoulder = 0.75 * HDR_HEADROOM;
+    const highp float span = HDR_HEADROOM - shoulder;
+    if (peak > shoulder) {
+        highp float mapped = shoulder + span * (1.0 - exp((shoulder - peak) / span));
+        hdr *= mapped / peak;
+    }
+    return hdr;
+}
+
+highp vec3 hdr_gainmap_target(highp vec3 sdr, highp vec3 sceneRec2020) {
+    highp vec3 displayLuma = u_display_p3 != 0
+        ? vec3(0.228975, 0.691739, 0.079287) : vec3(0.2126, 0.7152, 0.0722);
+    return hdr_highlights(sdr, dot(sdr, displayLuma), sceneRec2020 * u_hdr_exposure);
+}
+
 // ST2084 (PQ) opto-electronic transfer, SMPTE ST 2084: absolute nits in
 // [0, 10000] map to codes in [0, 1]. HDR stills treat graded linear 1.0
 // (SDR white) as 203 nits (ITU-R BT.2408 reference white, what Chrome,
@@ -220,6 +249,9 @@ void main() {
     #ifdef RAPIDRAW_OUTPUT_FUSED
     pixel += u_dispatch_offset;
     #endif
+    #ifdef RAWLENS_JXL
+    pixel += u_jxl_dispatch_offset;
+    #endif
     highp ivec2 scenePixel = pixel;
     if (EFFECTIVE_GAINMAP_ONLY != 0) {
         if (any(greaterThanEqual(pixel, u_gainmap_size))) return;
@@ -236,35 +268,43 @@ void main() {
     ivec2 gainPixel = pixel / 4;
     bool writeGain = EFFECTIVE_WRITE_GAINMAP != 0 && all(equal(pixel, min(gainPixel * 4 + ivec2(2), u_size - 1)));
     #else
-    highp vec3 sceneAcescg = imageLoad(img_scene, scenePixel).rgb;
+    highp vec4 sceneSample = imageLoad(img_scene, scenePixel);
+    highp vec3 sceneAcescg = sceneSample.rgb;
     ivec2 gainPixel = pixel;
     bool writeGain = EFFECTIVE_WRITE_GAINMAP != 0 && EFFECTIVE_GAINMAP_ONLY != 0;
     #endif
-    // Keep the unmodified scene tap for the HDR gain map.
     highp vec3 balancedAcescg = camera_tone_balance(sceneAcescg);
+    highp vec3 balancedRec2020 = ACESCG_TO_REC2020_D65 * balancedAcescg;
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
     highp vec3 outputLinear;
     highp vec3 basicEncoded = vec3(0.0);
     if (u_basic == 3) outputLinear = aces2_output(tl_aces_pre(balancedAcescg), u_display_p3);
-    else if (u_basic == 4) outputLinear = odrt(ACESCG_TO_REC2020_D65 * balancedAcescg, u_display_p3);
-    else if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(ACESCG_TO_REC2020_D65 * balancedAcescg);
+    else if (u_basic == 4) outputLinear = odrt(balancedRec2020, u_display_p3);
+    else if (u_basic == 2) outputLinear = outputMatrix * dt_sigmoid(balancedRec2020);
     else if (EFFECTIVE_BASIC == 1) {
-        highp vec3 sceneOutput = outputMatrix * tl_basic_pre(ACESCG_TO_REC2020_D65 * balancedAcescg);
+        highp vec3 sceneOutput = outputMatrix * tl_basic_pre(balancedRec2020);
         basicEncoded = basic_encoded(sceneOutput);
         outputLinear = vec3(0.0);
         // Ordinary SDR goes straight to encoded output, skipping decode/re-encode.
-        if (EFFECTIVE_HDR_PQ != 0 || writeGain) outputLinear = basic_decode(basicEncoded);
-        if (EFFECTIVE_HDR_PQ != 0) outputLinear += max(sceneOutput - 1.0, vec3(0.0));
+        if (writeGain) outputLinear = basic_decode(basicEncoded);
     }
     else outputLinear = compress_output_gamut(outputMatrix * agx_base(balancedAcescg));
 
-    // The sole deliberate final display-gamut mapping/clipping boundary.
-    // SDR clamps to white and encodes sRGB; HDR keeps highlight energy and
-    // encodes ST2084 (graded linear 1.0 = 203 nits, see pq_oetf).
-    highp vec3 baseLinear = (EFFECTIVE_HDR_PQ != 0) ? max(outputLinear, vec3(0.0))
-                                           : clamp(outputLinear, 0.0, 1.0);
-    highp vec3 encoded = (EFFECTIVE_HDR_PQ != 0) ? pq_oetf(baseLinear * vec3(203.0))
-                                         : ((EFFECTIVE_BASIC == 1) ? basicEncoded : srgb_oetf(baseLinear));
+    highp vec3 baseLinear = clamp(outputLinear, 0.0, 1.0);
+    highp vec3 sdr = (EFFECTIVE_BASIC == 1) ? basicEncoded : srgb_oetf(baseLinear);
+    highp vec3 encoded = photoCube(sdr);
+    #ifdef RAWLENS_JXL
+    if (EFFECTIVE_HDR_PQ != 0) {
+        highp vec3 graded = (EFFECTIVE_BASIC == 1 || u_photoCubeEnabled)
+            ? basic_decode(encoded) : baseLinear;
+        highp mat3 toRec2020 = u_display_p3 != 0
+            ? inverse(REC2020_TO_DISPLAY_P3) : inverse(REC2020_TO_SRGB);
+        highp vec3 gradedRec2020 = max(toRec2020 * graded, vec3(0.0));
+        highp vec3 hdr = hdr_highlights(
+            gradedRec2020, dot(gradedRec2020, vec3(0.2627, 0.6780, 0.0593)), balancedRec2020);
+        encoded = pq_oetf(hdr * vec3(203.0));
+    }
+    #endif
     if (EFFECTIVE_GAINMAP_ONLY == 0 && EFFECTIVE_GRAIN_AMOUNT > 0.0) {
         // Neutral, zero-mean display grain replaces sensor residual retention. Combining an
         // independent sample with a 2x2 value field gives film-like clumps without color noise.
@@ -277,6 +317,12 @@ void main() {
         highp float exposureMask = smoothstep(.015,.12,luma) * (1.0-smoothstep(.78,.99,luma));
         encoded += vec3(grain * exposureMask * EFFECTIVE_GRAIN_AMOUNT * (3.0/255.0));
     }
+    #ifdef RAWLENS_JXL
+    // Alpha carries write validity through readback and is discarded by RGB packing.
+    bool valid = sceneSample.a == 1.0 && !any(isnan(sceneAcescg)) && !any(isinf(sceneAcescg))
+        && !any(isnan(encoded)) && !any(isinf(encoded));
+    imageStore(img_encoded, pixel, valid ? vec4(encoded, 1.0) : vec4(0.0));
+    #else
     highp vec3 dither = vec3(
         hash01(pixel, 0u), hash01(pixel, 1u), hash01(pixel, 2u)
     ) - 0.5;
@@ -284,15 +330,14 @@ void main() {
     // RGBA8 conversion performs the final bounded 8-bit quantization.
     if (EFFECTIVE_GAINMAP_ONLY == 0) imageStore(img_encoded, pixel, vec4(encoded, 1.0));
 
-    // RAWR-parity Ultra HDR gain map: scene-linear HDR to SDR-base ratio.
-    // The HDR tap is the pre-tonemap scene in display-linear space (the same
-    // ACEScg -> Rec.2020 -> display conversion as the base, without AgX);
-    // the SDR tap is the clamped display-linear base. Quotients in deep
-    // shadows fade to identity (they encode the tone-curve toe, not headroom).
+    #endif
+
+    // Ultra HDR gain map: highlight-extended HDR to SDR-base ratio.
+    // Compute the exposure ratio before the creative LUT so HDR playback
+    // expands the graded base instead of undoing its look.
     if (writeGain) {
-        highp vec3 hdrScene = outputMatrix * (ACESCG_TO_REC2020_D65 * sceneAcescg);
-        highp vec3 hdrLin = max(hdrScene * max(u_hdr_exposure, 1e-6), vec3(0.0));
-        highp vec3 sdrLin = max(baseLinear, vec3(0.0));
+        highp vec3 sdrLin = baseLinear;
+        highp vec3 hdrLin = hdr_gainmap_target(sdrLin, balancedRec2020);
         highp float sdrMaxChan = max(sdrLin.x, max(sdrLin.y, sdrLin.z));
         highp float sdrMinChan = min(sdrLin.x, min(sdrLin.y, sdrLin.z));
         highp float sdrSat = (sdrMaxChan - sdrMinChan) / max(sdrMaxChan, 1e-3);
@@ -303,7 +348,7 @@ void main() {
         highp float lumaSdr = dot(sdrLin, vec3(0.2126, 0.7152, 0.0722));
         highp float logGainLuma =
             log2(max((lumaHdr + max(u_gainmap_offset_hdr, 1e-6)) / (lumaSdr + max(u_gainmap_offset_sdr, 1e-6)), 1e-9));
-        highp float toneScale = smoothstep(0.03, 0.50, lumaSdr) * (1.0 - satW);
+        highp float toneScale = 1.0 - satW;
         // Clipped-core hue fallback: a hue-less (white) HDR tap with a colored
         // SDR base keeps the luma gain so decoded HDR keeps the SDR hue.
         highp float hdrMaxChan = max(hdrLin.x, max(hdrLin.y, hdrLin.z));
