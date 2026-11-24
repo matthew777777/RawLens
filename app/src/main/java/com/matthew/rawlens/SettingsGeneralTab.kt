@@ -84,7 +84,10 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
         val hapticsStrength = lensPreferences().getInt(
             KEY_SHUTTER_HAPTICS_STRENGTH, DEFAULT_SHUTTER_HAPTICS_STRENGTH
         ).coerceIn(0, 100)
-        val strengthLabel = sectionDesc("Vibration strength: $hapticsStrength%")
+        val strengthLabel = TextView(this).apply {
+            text = "Vibration strength: $hapticsStrength%"
+            setTextColor(getColor(R.color.text_secondary))
+        }
         val strengthSlider = SettingsSlider(this).apply {
             max = 100
             progress = hapticsStrength
@@ -105,21 +108,172 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             setOnCheckedChangeListener { _, enabled ->
                 lensPreferences().edit().putBoolean(KEY_SHUTTER_HAPTICS, enabled).apply()
                 strengthSlider.isEnabled = enabled
-                strengthLabel.alpha = if (enabled) 1f else 0.5f
+                strengthLabel.visibility = if (enabled) View.VISIBLE else View.GONE
+                strengthSlider.visibility = strengthLabel.visibility
             }
         })
-        strengthLabel.alpha = if (hapticsEnabled) 1f else 0.5f
+        strengthLabel.visibility = if (hapticsEnabled) View.VISIBLE else View.GONE
+        strengthSlider.visibility = strengthLabel.visibility
         content.addView(strengthLabel)
         content.addView(strengthSlider)
         content.addView(sectionDesc("One vibration per photo or burst. 0% disables vibration. On phones without intensity control, strength adjusts pulse length."))
-        content.addView(sectionTitle("RAW capture"))
+        content.addView(sectionTitle("Viewfinder"))
         content.addView(Button(this).apply {
-            text = "DNG sensor calibration: levels, noise, color"
-            setOnClickListener { showDngMetadataOverrideEditor() }
+            fun refresh() { text = "RAW camera streams: ${controller.rawStreamMode().label}" }
+            refresh()
+            setOnClickListener {
+                p.kit.chooseEnum("RAW camera streams", controller.rawStreamMode(), { it.label }) { picked ->
+                    controller.setRawStreamMode(picked)
+                    refresh()
+                }
+            }
+        })
+        content.addView(sectionDesc(
+            "Automatic uses camera detection. RAW only also disables the ISP viewfinder. " +
+                "Preview + RAW requires both streams. Switch back to Automatic if the camera cannot start."
+        ))
+        content.addView(p.kit.settingsCheck("Always use ISP preview", ispPreviewAlways()).apply {
+            setOnCheckedChangeListener { _, checked ->
+                setIspPreviewAlways(checked)
+                setStatus(if (checked) "ISP PREVIEW • ON" else "ISP PREVIEW • OFF")
+            }
+        })
+        content.addView(p.kit.sectionDesc(
+            "Shows the camera's own ISP preview (no noise reduction, no sharpening) instead of " +
+                "the RAW viewfinder, including full-resolution capture: less GPU, battery and heat while framing, but not the RAW " +
+                "look. Some phones cannot run a preview stream together with RAW; they stay on " +
+                "the RAW viewfinder."
+        ))
+        // GPU VF: selectable superpixel resolution (480/640 full-rate / 960 balanced / 1080 detail).
+        content.addView(Button(this).apply {
+            text = "Preview resolution: ${vfResolution}px"
+            setOnClickListener {
+                p.kit.choose("Preview resolution", VfResolution.OPTIONS.toList(), vfResolution, { "${it}px" }) { picked ->
+                    selectVfResolution(picked)
+                    text = "Preview resolution: ${vfResolution}px"
+                }
+            }
         })
         content.addView(Button(this).apply {
-            text = "Vendor keys: per lens, session + request"
-            setOnClickListener { showVendorKeysEditor() }
+            text = "Preview: " + vfPreviewModeChoice().let { (mode, label) -> label(mode) }
+            setOnClickListener {
+                val (mode, modeLabel) = vfPreviewModeChoice()
+                p.kit.chooseEnum("Preview", mode, modeLabel) { picked ->
+                    selectVfPreviewMode(picked)
+                    text = "Preview: " + vfPreviewModeChoice().let { (mode, label) -> label(mode) }
+                }
+            }
+        })
+        content.addView(Button(this).apply {
+            fun refresh() { text = "Exposure overlay: ${rawExposureSettings.overlay.label}" }
+            refresh()
+            setOnClickListener {
+                p.kit.chooseEnum("Exposure overlay", rawExposureSettings.overlay, { it.label }) { picked ->
+                    saveRawExposureAssist(rawExposureSettings.copy(overlay = picked))
+                    refresh()
+                }
+            }
+        })
+        content.addView(SettingsSwitch(this).apply {
+            text = "RAW exposure meter"
+            isChecked = rawExposureSettings.spotMeter
+            setOnCheckedChangeListener { _, enabled -> saveRawExposureAssist(rawExposureSettings.copy(spotMeter = enabled)) }
+        })
+        content.addView(Button(this).apply {
+            fun refresh() { text = "RAW meter: ${rawExposureSettings.meterMode.label}" }
+            refresh()
+            setOnClickListener {
+                p.kit.chooseEnum("RAW meter", rawExposureSettings.meterMode, { it.label }) { picked ->
+                    saveRawExposureAssist(rawExposureSettings.copy(meterMode = picked))
+                    refresh()
+                }
+            }
+        })
+        content.addView(sectionDesc("RAW values before white balance, tone mapping or LOG gain. Spot follows the photo AE target; recording uses centre. Average shows the whole frame's mean EV and estimated clipped area (any RAW channel); recording measures its crop. Sparse sampling can miss tiny clipped highlights. This readout does not change exposure. Zebras mark clipping and the measured noise floor with diagonal stripes, using a learned model when available; without a reliable estimate they mark the black floor. False colour maps −10 to 0 RAW EV. Waiting means no fresh RAW data."))
+        content.addView(sectionTitle("Focus assist"))
+        content.addView(SettingsSwitch(this).apply {
+            text = "Focus peaking"
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = focusPeakingEnabled
+            setOnCheckedChangeListener { _, enabled ->
+                focusPeakingEnabled = enabled
+                lensPreferences().edit().putBoolean(KEY_FOCUS_PEAKING, enabled).apply()
+                controller.setFocusPeakingEnabled(enabled)
+                videoRecorder?.focusPeakingEnabled = enabled
+                encodedVideoRecorder?.focusPeakingEnabled = enabled
+                if (!enabled) setFocusPeakingVisible(false)
+                setStatus(if (enabled) "PEAKING ON" else "PEAKING OFF")
+            }
+        })
+        content.addView(sectionDesc("Draws thin colored contours along sharp edges during manual focus and tap-to-focus. The highlights appear only in the viewfinder."))
+        content.addView(SettingsSwitch(this).apply {
+            text = "Focus magnifier"
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = focusPeakingOverlay.magnifierEnabled
+            setOnCheckedChangeListener { _, enabled ->
+                focusPeakingOverlay.magnifierEnabled = enabled
+                lensPreferences().edit().putBoolean(KEY_FOCUS_MAGNIFIER, enabled).apply()
+            }
+        })
+        content.addView(sectionDesc("Shows a 4× inset around the focus point while peaking is active."))
+        content.addView(Button(this).apply {
+            fun refresh() {
+                text = "Peaking color: ${focusPeakingColor.label}"
+            }
+            refresh()
+            setOnClickListener {
+                p.kit.chooseEnum("Peaking color", focusPeakingColor, { it.label }) { picked ->
+                    focusPeakingColor = picked
+                    lensPreferences().edit()
+                        .putString(KEY_FOCUS_PEAKING_COLOR, focusPeakingColor.preferenceValue).apply()
+                    focusPeakingOverlay.peakingColor = focusPeakingColor
+                    refresh()
+                    setStatus("PEAKING • ${focusPeakingColor.label}")
+                }
+            }
+        })
+        content.addView(sectionDesc("Overlays, logs, and capture debug output live under the Debug tab."))
+        content.addView(sectionTitle("Location"))
+        var suppressGpsToggle = false
+        content.addView(SettingsSwitch(this).apply {
+            text = "Save GPS location (photos + MP4 video)"
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = gpsEnabled()
+            setOnCheckedChangeListener { button, enabled ->
+                if (suppressGpsToggle) return@setOnCheckedChangeListener
+                if (enabled == gpsEnabled()) return@setOnCheckedChangeListener
+                if (enabled) {
+                    if (gpsProvider?.hasPermission() == true) {
+                        setGpsEnabled(true)
+                    } else {
+                        suppressGpsToggle = true
+                        button.isChecked = false
+                        suppressGpsToggle = false
+                        requestPermissions(
+                            GpsLocationProvider.permissions(), LOCATION_PERMISSION
+                        )
+                    }
+                } else {
+                    setGpsEnabled(false)
+                }
+            }
+        })
+
+        content.addView(sectionTitle("Battery"))
+        content.addView(p.kit.settingsCheck("Pause camera while in Settings", pauseCameraInSettings()).apply {
+            setOnCheckedChangeListener { _, on ->
+                lensPreferences().edit().putBoolean(KEY_PAUSE_CAMERA_IN_SETTINGS, on).apply()
+                if (on) pauseCameraForSettings() else startCameraWhenReady()
+            }
+        })
+        content.addView(sectionDesc("Saves battery by closing the camera while Settings is open. Active recordings continue."))
+
+        content.addView(sectionTitle("RAW capture"))
+        content.addView(p.kit.navRow("DNG sensor calibration", "Black and white levels, noise and color") {
+            showDngMetadataOverrideEditor()
+        })
+        content.addView(p.kit.navRow("Vendor keys", "Per-lens session and request settings") {
+            showVendorKeysEditor()
         })
         content.addView(Button(this).apply {
             fun refresh() { text = "DNG writer backend: ${dngWriterBackend().label}" }
@@ -174,153 +328,6 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
             setTextColor(getColor(R.color.text_secondary))
             textSize = 11f
         })
-        content.addView(sectionTitle("Viewfinder"))
-        content.addView(Button(this).apply {
-            fun refresh() { text = "RAW camera streams: ${controller.rawStreamMode().label}" }
-            refresh()
-            setOnClickListener {
-                p.kit.chooseEnum("RAW camera streams", controller.rawStreamMode(), { it.label }) { picked ->
-                    controller.setRawStreamMode(picked)
-                    refresh()
-                }
-            }
-        })
-        content.addView(sectionDesc(
-            "Automatic uses camera detection. RAW only also disables the ISP viewfinder. " +
-                "Preview + RAW requires both streams. Switch back to Automatic if the camera cannot start."
-        ))
-        content.addView(p.kit.settingsCheck("Always use ISP viewfinder", ispPreviewAlways()).apply {
-            setOnCheckedChangeListener { _, checked ->
-                setIspPreviewAlways(checked)
-                setStatus(if (checked) "ISP PREVIEW • ON" else "ISP PREVIEW • OFF")
-            }
-        })
-        content.addView(p.kit.sectionDesc(
-            "Shows the camera's own ISP preview (no noise reduction, no sharpening) instead of " +
-                "the RAW viewfinder, including full-resolution capture: less GPU, battery and heat while framing, but not the RAW " +
-                "look. Some phones cannot run a preview stream together with RAW; they stay on " +
-                "the RAW viewfinder."
-        ))
-        content.addView(p.kit.settingsCheck("Pause camera while in Settings", pauseCameraInSettings()).apply {
-            setOnCheckedChangeListener { _, on ->
-                lensPreferences().edit().putBoolean(KEY_PAUSE_CAMERA_IN_SETTINGS, on).apply()
-                if (on) pauseCameraForSettings() else startCameraWhenReady()
-            }
-        })
-        content.addView(sectionDesc("Saves battery by closing the camera while Settings is open. Active recordings continue."))
-        // GPU VF: selectable superpixel resolution (480/640 full-rate / 960 balanced / 1080 detail).
-        content.addView(Button(this).apply {
-            text = "Preview resolution: ${vfResolution}px"
-            setOnClickListener {
-                p.kit.choose("Preview resolution", VfResolution.OPTIONS.toList(), vfResolution, { "${it}px" }) { picked ->
-                    selectVfResolution(picked)
-                    text = "Preview resolution: ${vfResolution}px"
-                }
-            }
-        })
-        content.addView(Button(this).apply {
-            text = "Preview: " + vfPreviewModeChoice().let { (mode, label) -> label(mode) }
-            setOnClickListener {
-                val (mode, modeLabel) = vfPreviewModeChoice()
-                p.kit.chooseEnum("Preview", mode, modeLabel) { picked ->
-                    selectVfPreviewMode(picked)
-                    text = "Preview: " + vfPreviewModeChoice().let { (mode, label) -> label(mode) }
-                }
-            }
-        })
-        content.addView(Button(this).apply {
-            fun refresh() { text = "Exposure overlay: ${rawExposureSettings.overlay.label}" }
-            refresh()
-            setOnClickListener {
-                p.kit.chooseEnum("Exposure overlay", rawExposureSettings.overlay, { it.label }) { picked ->
-                    saveRawExposureAssist(rawExposureSettings.copy(overlay = picked))
-                    refresh()
-                }
-            }
-        })
-        content.addView(SettingsSwitch(this).apply {
-            text = "RAW exposure meter"
-            isChecked = rawExposureSettings.spotMeter
-            setOnCheckedChangeListener { _, enabled -> saveRawExposureAssist(rawExposureSettings.copy(spotMeter = enabled)) }
-        })
-        content.addView(Button(this).apply {
-            fun refresh() { text = "RAW meter: ${rawExposureSettings.meterMode.label}" }
-            refresh()
-            setOnClickListener {
-                p.kit.chooseEnum("RAW meter", rawExposureSettings.meterMode, { it.label }) { picked ->
-                    saveRawExposureAssist(rawExposureSettings.copy(meterMode = picked))
-                    refresh()
-                }
-            }
-        })
-        content.addView(sectionDesc("RAW values before white balance, tone mapping or LOG gain. Spot follows the photo AE target; recording uses centre. Average shows the whole frame's mean EV and estimated clipped area (any RAW channel); recording measures its crop. Sparse sampling can miss tiny clipped highlights. This readout does not change exposure. Zebras mark clipping and the black/noise floor with diagonal stripes. False colour maps −10 to 0 RAW EV. Waiting means no fresh RAW data."))
-        content.addView(SettingsSwitch(this).apply {
-            text = "Focus peaking (manual + tap focus)"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = focusPeakingEnabled
-            setOnCheckedChangeListener { _, enabled ->
-                focusPeakingEnabled = enabled
-                lensPreferences().edit().putBoolean(KEY_FOCUS_PEAKING, enabled).apply()
-                controller.setFocusPeakingEnabled(enabled)
-                videoRecorder?.focusPeakingEnabled = enabled
-                encodedVideoRecorder?.focusPeakingEnabled = enabled
-                if (!enabled) setFocusPeakingVisible(false)
-                setStatus(if (enabled) "PEAKING ON" else "PEAKING OFF")
-            }
-        })
-        content.addView(sectionDesc("Peaking auto-shows while a manual focus distance is set or a tap-to-focus scan/lock is in flight."))
-        content.addView(SettingsSwitch(this).apply {
-            text = "Focus magnifier"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = focusPeakingOverlay.magnifierEnabled
-            setOnCheckedChangeListener { _, enabled ->
-                focusPeakingOverlay.magnifierEnabled = enabled
-                lensPreferences().edit().putBoolean(KEY_FOCUS_MAGNIFIER, enabled).apply()
-            }
-        })
-        content.addView(sectionDesc("Shows a 4× inset around the focus point while peaking is active."))
-        content.addView(Button(this).apply {
-            fun refresh() {
-                text = "Peaking color: ${focusPeakingColor.label}"
-            }
-            refresh()
-            setOnClickListener {
-                p.kit.chooseEnum("Peaking color", focusPeakingColor, { it.label }) { picked ->
-                    focusPeakingColor = picked
-                    lensPreferences().edit()
-                        .putString(KEY_FOCUS_PEAKING_COLOR, focusPeakingColor.preferenceValue).apply()
-                    focusPeakingOverlay.peakingColor = focusPeakingColor
-                    refresh()
-                    setStatus("PEAKING • ${focusPeakingColor.label}")
-                }
-            }
-        })
-        content.addView(sectionDesc("Overlays, logs, and capture debug output live under the Debug tab."))
-        content.addView(sectionTitle("Location"))
-        var suppressGpsToggle = false
-        content.addView(SettingsSwitch(this).apply {
-            text = "Save GPS location (photos + MP4 video)"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = gpsEnabled()
-            setOnCheckedChangeListener { button, enabled ->
-                if (suppressGpsToggle) return@setOnCheckedChangeListener
-                if (enabled == gpsEnabled()) return@setOnCheckedChangeListener
-                if (enabled) {
-                    if (gpsProvider?.hasPermission() == true) {
-                        setGpsEnabled(true)
-                    } else {
-                        suppressGpsToggle = true
-                        button.isChecked = false
-                        suppressGpsToggle = false
-                        requestPermissions(
-                            GpsLocationProvider.permissions(), LOCATION_PERMISSION
-                        )
-                    }
-                } else {
-                    setGpsEnabled(false)
-                }
-            }
-        })
 
         content.addView(sectionTitle("Settings backup"))
         content.addView(sectionDesc("One JSON file with every setting: camera, JPEG, video, exposure, burst, denoise, lenses, DNG calibration, and PROGRAM profiles. Importing replaces all settings and asks for a restart."))
@@ -342,6 +349,6 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
         markActive(generalTab)
         polish()
         // Keep preview switches visible directly on General, without a submenu.
-        p.kit.collapseSection("RAW capture", "RAW capture", "Sensor and capture compatibility")
+        p.kit.collapseSection("RAW capture", "RAW capture", "DNG calibration, compression and vendor keys")
         p.kit.collapseSection("Settings backup", "Backup & restore", "Export or import your preferences")
 }

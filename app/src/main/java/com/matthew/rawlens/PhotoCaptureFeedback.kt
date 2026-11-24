@@ -7,6 +7,8 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.SoundPool
+import android.os.Build
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.Settings
@@ -37,17 +39,30 @@ internal class PhotoCaptureFeedback(context: Context) : AutoCloseable {
         soundId = pool.load(context, R.raw.film_slr_shutter, 1)
     }
 
+    private fun systemHapticsEnabled(): Boolean {
+        if (Build.VERSION.SDK_INT >= 33) return true // Enforced by VibrationAttributes.USAGE_TOUCH.
+        @Suppress("DEPRECATION")
+        return Settings.System.getInt(resolver, Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) != 0
+    }
+
     fun play(shutter: View, soundEnabled: Boolean, hapticsEnabled: Boolean, strength: Int) {
         val percent = strength.coerceIn(0, 100)
         if (hapticsEnabled && percent > 0 && shutter.isHapticFeedbackEnabled &&
-            Settings.System.getInt(resolver, Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) != 0 &&
+            systemHapticsEnabled() &&
             vibrator?.hasVibrator() == true) {
             // Fixed short pulse with adjustable amplitude. Older motors vary duration instead.
             val amplitude = if (vibrator.hasAmplitudeControl()) (percent * 255 / 100).coerceAtLeast(1)
                 else VibrationEffect.DEFAULT_AMPLITUDE
             val duration = if (vibrator.hasAmplitudeControl()) 40L else 12L + percent * 40L / 100
-            vibrator.vibrate(VibrationEffect.createOneShot(duration, amplitude),
-                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION).build())
+            val effect = VibrationEffect.createOneShot(duration, amplitude)
+            if (Build.VERSION.SDK_INT >= 33) {
+                // TOUCH usage lets the platform honor the user's haptic-feedback setting.
+                vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(effect,
+                    AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION).build())
+            }
         }
         if (soundEnabled && ready &&
             audioManager?.ringerMode == AudioManager.RINGER_MODE_NORMAL &&

@@ -126,9 +126,9 @@ class DevelopQueueActivity : Activity() {
         return SettingsSlider(this).apply {
             this.max=max;this.progress=progress;contentDescription=name
             setOnSettingsSliderChangeListener(object: SettingsSlider.OnSettingsSliderChangeListener {
-                override fun onProgressChanged(bar: SettingsSlider,value: Int,user: Boolean) { label.text="$name: ${format(value)}" }
-                override fun onStartTrackingTouch(bar: SettingsSlider) {}
-                override fun onStopTrackingTouch(bar: SettingsSlider) {}
+                override fun onProgressChanged(seekBar: SettingsSlider,progress: Int,fromUser: Boolean) { label.text="$name: ${format(progress)}" }
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) {}
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {}
             })
             settingsPage.addView(this,LinearLayout.LayoutParams(-1,-2));controls+=this
         }
@@ -295,7 +295,7 @@ class DevelopQueueActivity : Activity() {
         } }
     }
     private fun toast(message: String) { Toast.makeText(this,message,Toast.LENGTH_LONG).show() }
-    @Deprecated("Deprecated in Java") override fun onBackPressed() { if(onSettings) showQueue() else super.onBackPressed() }
+    @Deprecated("Deprecated in Java") override fun onBackPressed() { if(onSettings) showQueue() else finishAfterTransition() }
     override fun onResume() { super.onResume();handler.post(refresh);ImmersiveMode.apply(window) }
     override fun onPause() { handler.removeCallbacks(refresh);saveOptions();super.onPause() }
     override fun onDestroy() {

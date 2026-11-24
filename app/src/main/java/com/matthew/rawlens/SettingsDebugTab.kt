@@ -69,6 +69,7 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
         sidecarSettingsStatus = null
         content.removeAllViews()
         content.addView(sectionTitle("Camera diagnostics"))
+        content.addView(p.kit.sectionDesc("Choose one overlay at a time. Enabling an overlay turns the other one off."))
         // The two debug overlays stack on the same corner: enabling one
         // switches the other off. The guard stops the programmatic
         // uncheck from ping-ponging back through the other listener.
@@ -121,7 +122,7 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
         })
         content.addView(sectionTitle("App log"))
         content.addView(SettingsSwitch(this).apply {
-            text = "Save app log to file (survives crashes)"
+            text = "Save app logs"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lensPreferences().getBoolean(KEY_LOGCAT_FILE, true)
             setOnCheckedChangeListener { _, enabled ->
@@ -141,6 +142,7 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
             setPadding(0, dp(4), 0, 0)
         })
         content.addView(TextView(this).apply {
+            tag = "settings-description"
             text = "The app's own logcat streams to its private folder and is " +
                 "mirrored to Download/RawLens/logs/ by itself (no permission " +
                 "needed, no taps): 8 MB sessions, newest 5 kept, crashes " +

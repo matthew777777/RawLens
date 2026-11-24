@@ -81,7 +81,27 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             setOnClickListener { recordingTools.chooseSleepDelay { refresh() } }
         })
         content.addView(sectionDesc("Preview sleep pauses monitoring and assist analysis during a take. Recording and audio continue. Tap the black preview to wake; the Preview button sleeps immediately. A/B focus: tap an empty mark to save, hold to replace, tap a saved mark to pull."))
-        content.addView(sectionTitle("Encoded Video · recording format"))
+        val rawCropRow = Button(this).apply {
+            fun refresh() { text = "RAW video crop: ${videoCropShort()}" }
+            refresh()
+            visibility = if (encodedVideoEnabled) View.GONE else View.VISIBLE
+            setOnClickListener {
+                p.kit.pickByStepping("RAW video crop", VideoCrop.entries.map { videoCropShort(it) },
+                    { videoCropShort() }, { cycleVideoCrop() }) { refresh() }
+            }
+        }
+        content.addView(sectionTitle("Encoded video"))
+        content.addView(SettingsSwitch(this).apply {
+            text = "Record encoded video"
+            setTextColor(getColor(R.color.text_primary))
+            isEnabled = !videoRecording
+            isChecked = encodedVideoEnabled
+            setOnCheckedChangeListener { _, enabled ->
+                setEncodedVideoMode(enabled)
+                if (isChecked != encodedVideoEnabled) isChecked = encodedVideoEnabled
+                rawCropRow.visibility = if (encodedVideoEnabled) View.GONE else View.VISIBLE
+            }
+        })
         content.addView(Button(this).apply {
             isEnabled = !videoRecording
             fun refresh() { text = "Encoded Video crop: ${encodedVideoCrop().label}" }
@@ -89,16 +109,6 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             setOnClickListener {
                 p.kit.pickByStepping("Encoded Video crop", listOf(VideoCrop.WIDE_16_9, VideoCrop.SCOPE_2_39, VideoCrop.UNIVISIUM_2_00).map { it.label },
                     { encodedVideoCrop().label }, { cycleEncodedVideoCrop() }) { refresh() }
-            }
-        })
-        content.addView(SettingsSwitch(this).apply {
-            text = "Encoded Video"
-            setTextColor(getColor(R.color.text_primary))
-            isEnabled = !videoRecording
-            isChecked = encodedVideoEnabled
-            setOnCheckedChangeListener { _, enabled ->
-                setEncodedVideoMode(enabled)
-                if (isChecked != encodedVideoEnabled) isChecked = encodedVideoEnabled
             }
         })
         content.addView(sectionDesc("HEVC 10-bit MP4 instead of RAW .craw: BT.709, ACES fitted BT.709, S-Log3, or HLG in this tab or the Profile quick tile. Selectable recording crop, live RAW viewfinder; sound follows the Sound toggle."))
@@ -214,7 +224,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         content.addView(sectionTitle("Monitoring & LUTs"))
         content.addView(sectionDesc("ACES fitted is a baked filmic approximation in Rec.709 gamma 2.4, not ACES scene data. S-Log3 uses S-Gamut3.Cine primaries; interpret data levels as Video/limited."))
         content.addView(Button(this).apply {
-            text = "S-Log3 LUT library: choose assist or LUT"
+            text = "Choose S-Log3 LUT"
             isEnabled = !videoRecording
             setOnClickListener { chooseEncodedVideoMonitorLut() }
         })
@@ -242,7 +252,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             setOnClickListener { removeEncodedVideoMonitorLut() }
         })
         content.addView(SettingsSwitch(this).apply {
-            text = "Bake selected LUT into S-Log3 recordings (SDR Rec.709 output)"
+            text = "Bake LUT into S-Log3 recordings"
             setTextColor(getColor(R.color.text_primary))
             isEnabled = !videoRecording
             isChecked = EncodedVideoLutLibrary(this@showVideoSettings).bakeIntoRecording
@@ -288,22 +298,8 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc("All modes preserve every RAW sample. CRAW Live is the default recording mode. CRAW Balanced trades more CPU for potentially smaller files. CRAW Live v1 — Legacy is retained for compatibility. Speed and size depend on the scene and device. Applies to the next take."))
-        content.addView(Button(this).apply {
-            fun refresh() {
-                text = if (encodedVideoEnabled) "Encoded Video crop: ${encodedVideoCrop().label}" else "RAW Video crop: ${videoCropShort()}"
-            }
-            refresh()
-            setOnClickListener {
-                // Same options and side effects as the quick tile's step-to-next.
-                if (encodedVideoEnabled) p.kit.pickByStepping("Encoded Video crop", listOf(VideoCrop.WIDE_16_9, VideoCrop.SCOPE_2_39, VideoCrop.UNIVISIUM_2_00).map { it.label },
-                    { encodedVideoCrop().label }, { cycleVideoCrop() }) { refresh() }
-                else {
-                    p.kit.pickByStepping("RAW Video crop", VideoCrop.entries.map { videoCropShort(it) },
-                        { videoCropShort() }, { cycleVideoCrop() }) { refresh() }
-                }
-            }
-        })
-        content.addView(sectionDesc("Recording crop. Encoded Video: 16:9, 2.39:1, or 2.00:1; changes apply to the next take."))
+        content.addView(rawCropRow)
+        content.addView(sectionDesc("Turn off encoded video to change the RAW video crop."))
         content.addView(SettingsSwitch(this).apply {
             text = "Binning (half resolution)"
             setTextColor(getColor(R.color.text_primary))
@@ -333,7 +329,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         })
         content.addView(sectionDesc("RGB (best): each 2x2 block is demosaiced once on the phone (edge-directed), so editors never re-demosaic a binned mosaic: no magenta/green fringes, ~90 % of full-res detail. CFA (cheap): half-res Bayer remosaiced from the RGB bin (as camera ISPs rescale raw), a quarter of the samples of RGB and smaller files; any half-res mosaic still fringes a little once your editor demosaics it. Applies to the next take; N/A in Encoded Video."))
         content.addView(SettingsSwitch(this).apply {
-            text = "DCT denoise (RAW Video)"
+            text = "DCT denoise"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lensPreferences().getBoolean(MainActivity.KEY_VIDEO_RAW_DCT_DENOISE, false)
             setOnCheckedChangeListener { _, enabled ->
@@ -420,8 +416,8 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         })
         markActive(videoTab)
         polish()
-        p.kit.collapseSection("Monitoring & LUTs", "Monitoring & LUTs", "Preview tools and display looks")
-        p.kit.collapseSection("RAW Video", "RAW Video", "CRAW format and capture options")
+        p.kit.collapseSection("Monitoring & LUTs", "Monitoring & LUTs", "S-Log3 assist and LUT settings")
+        p.kit.collapseSection("RAW Video", "RAW video", "CRAW compression, crop and capture options")
         p.kit.collapseSection("Locks on record", "Locks on record", "Exposure, white balance and focus")
         p.kit.collapseSection("Stabilization", "Stabilization", "Output and motion settings")
         p.kit.collapseSection("Recording folder", "Recording folder", "Storage and recovery")

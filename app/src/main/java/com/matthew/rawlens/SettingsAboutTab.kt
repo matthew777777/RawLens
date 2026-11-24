@@ -60,6 +60,7 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
         rawZslSettingsStatus = null
         sidecarSettingsStatus = null
         content.removeAllViews()
+        content.addView(p.kit.sectionTitle("App information"))
         content.addView(TextView(this).apply {
             @Suppress("DEPRECATION")
             val versionName = packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
@@ -74,51 +75,48 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
             setTextColor(getColor(R.color.text_primary))
             textSize = 14f
         })
-        content.addView(Button(this).apply {
-            text = "Open-source notices (RAW assist, ETTR, PROGRAM, ACES)"
-            setOnClickListener {
-                val notices = listOf("raw-exposure-NOTICE.txt", "GPL-2.0.txt", "Apache-2.0.txt",
-                    "BSD-2-Clause-libcamera.txt", "bakinglab-aces.txt", "aces2-NOTICE.txt", "khronos-neutral-NOTICE.txt", "AGPL-3.0-RapidRAW.txt")
-                    .joinToString("\n\n") { name -> assets.open("licenses/$name").bufferedReader().use { it.readText() } }
-                RawLensDialogBuilder(this@showAboutSettings).setTitle("Open-source licences").asPage()
-                    .setMessage(notices).setPositiveButton("Close", null).show()
-            }
+        content.addView(p.kit.sectionTitle("Licenses"))
+        content.addView(p.kit.navRow("Open-source notices", "Third-party credits and license terms") {
+            val notices = listOf("raw-exposure-NOTICE.txt", "GPL-2.0.txt", "Apache-2.0.txt",
+                "BSD-2-Clause-libcamera.txt", "bakinglab-aces.txt", "aces2-NOTICE.txt", "khronos-neutral-NOTICE.txt", "AGPL-3.0-RapidRAW.txt")
+                .joinToString("\n\n") { name -> assets.open("licenses/$name").bufferedReader().use { it.readText() } }
+            RawLensDialogBuilder(this@showAboutSettings).setTitle("Open-source licences").asPage()
+                .setMessage(notices).setPositiveButton("Close", null).show()
         })
-        content.addView(Button(this).apply {
-            text = "View GPLv3 license"
-            setOnClickListener {
-                val licenseText = assets.open("LICENSE").bufferedReader().use { it.readText() }
-                RawLensDialogBuilder(this@showAboutSettings)
-                    .setTitle("GNU General Public License v3").asPage()
-                    .setMessage(licenseText)
-                    .setPositiveButton("Close", null)
-                    .show()
-            }
+        content.addView(p.kit.navRow("GNU General Public License v3", null) {
+            val licenseText = assets.open("LICENSE").bufferedReader().use { it.readText() }
+            RawLensDialogBuilder(this@showAboutSettings)
+                .setTitle("GNU General Public License v3").asPage()
+                .setMessage(licenseText)
+                .setPositiveButton("Close", null)
+                .show()
         })
         // F-Droid builds leave updates to the store: no checker UI.
         if (BuildConfig.ENABLE_UPDATE_CHECK) {
-        content.addView(Button(this).apply {
-            text = "Check for updates"
-            setOnClickListener { updateFlow.checkManually() }
-        })
-        content.addView(SettingsSwitch(this).apply {
-            text = "Check for updates on startup"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = lensPreferences().getBoolean(UpdateChecker.KEY_AUTO_CHECK, true)
-            setOnCheckedChangeListener { _, enabled ->
-                lensPreferences().edit()
-                    .putBoolean(UpdateChecker.KEY_AUTO_CHECK, enabled)
-                    .apply()
-            }
-        })
-        content.addView(TextView(this).apply {
-            text = "Compares the installed version against the latest " +
-                "GitHub release (matthew777777/RawLens), at most once a " +
-                "day. Download fetches the release APK in the app and " +
-                "opens the system installer; nothing is uploaded."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-        })
+            content.addView(p.kit.sectionTitle("Updates"))
+            content.addView(Button(this).apply {
+                text = "Check for updates"
+                setOnClickListener { updateFlow.checkManually() }
+            })
+            content.addView(SettingsSwitch(this).apply {
+                text = "Check for updates on startup"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(UpdateChecker.KEY_AUTO_CHECK, true)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit()
+                        .putBoolean(UpdateChecker.KEY_AUTO_CHECK, enabled)
+                        .apply()
+                }
+            })
+            content.addView(TextView(this).apply {
+                tag = "settings-description"
+                text = "Compares the installed version against the latest " +
+                    "GitHub release (matthew777777/RawLens), at most once a " +
+                    "day. Download fetches the release APK in the app and " +
+                    "opens the system installer; nothing is uploaded."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
+            })
         }
         markActive(aboutTab)
         polish()

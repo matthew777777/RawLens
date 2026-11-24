@@ -65,8 +65,9 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         val aiSubordinate = ArrayList<View>()
 
         content.addView(sectionTitle("JPEG cleanup"))
+        content.addView(p.kit.sectionDesc("RapidRAW reduces color noise and gently enhances detail in JPEG photos, including merged photos."))
         content.addView(SettingsSwitch(this).apply {
-            text = "RapidRAW cleanup\nReduces color noise and gently enhances detail in JPEG photos, including merged photos."
+            text = "RapidRAW cleanup"
             isChecked = jpegOutputSettings().chromaCleanup.rapidRawPreprocessing
             setOnCheckedChangeListener { button, enabled ->
                 val current = jpegOutputSettings()
@@ -82,8 +83,9 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         })
 
         content.addView(sectionTitle("Capture sharpening"))
+        content.addView(p.kit.sectionDesc("Restores detail softened by the lens or demosaicing in developed photos."))
         val sharpToggle = SettingsSwitch(this).apply {
-            text = "Capture sharpening\nRestores detail lost to the lens and demosaic. Developed photos only."
+            text = "Enable capture sharpening"
             isChecked = settings.captureSharpening.enabled
         }
         // Strength is one row with a list picker, like every other value in Settings.
@@ -108,10 +110,11 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         content.addView(sharpChoices)
         refreshSharp()
 
-        content.addView(sectionTitle("Profiled wavelet (Vulkan)"))
+        content.addView(sectionTitle("Wavelet denoise"))
+        content.addView(p.kit.sectionDesc("Vulkan wavelets reduce luminance and color noise in JPEG photos after demosaicing. The DNG retains its original RAW data."))
         val waveSubordinate = ArrayList<View>()
         val waveMaster = SettingsSwitch(this).apply {
-            text = "Wavelet luma+chroma denoise (Vulkan)\nPost-demosaic darktable-profiled wavelets on camera-linear RGB; JPEG only, never the DNG."
+            text = "Enable wavelet denoise"
             setTextColor(getColor(R.color.text_primary))
             isChecked = settings.wavelet.enabled
             setOnCheckedChangeListener { button, value ->
@@ -167,7 +170,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             waveSubordinate += bar
         }
         val waveAlgorithm = SettingsSwitch(this).apply {
-            text = "RawLens Wiener algorithm\nOff: RAWR (default). On: RawLens Wiener."
+            text = "Use RawLens Wiener"
             isChecked = settings.wavelet.algorithm == WaveletAlgorithm.RAWLENS
             setOnCheckedChangeListener { button, enabled ->
                 val algorithm = if (enabled) WaveletAlgorithm.RAWLENS else WaveletAlgorithm.RAWR
@@ -194,6 +197,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             { val scales = it + 1; if (scales == 1) "1 scale" else "$scales scales" }
         ) { s, v -> s.copy(maxScale = v + 1) }
         content.addView(TextView(this).apply {
+            tag = "settings-description"
             text = "RawLens Wiener removes chroma blotches while keeping colour edges, and turns luma noise into fine, even grain; Grain sets how much of that fine grain stays (RawLens only). RAWR (default) uses the RAWR wavelet shrinkage rule with our learned noise model. Defaults: strength 0.5, detail 1.00, luma 0.25, grain 0.00, 7 scales; chroma is fixed at 0.75. Strength supports 0–8; Detail supports 0–1.80 and controls shadow texture preservation independently of Luma. Both modes learn noise per camera and raw mode, using measurements from each photo and the sensor profile as fallbacks. RawLens also denoises luma more gently when noise is barely visible (base ISO)."
             setTextColor(getColor(R.color.text_secondary))
             textSize = 12f
@@ -202,7 +206,8 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         waveSubordinate.forEach { it.isEnabled = settings.wavelet.enabled }
 
 
-        content.addView(sectionTitle("AI RAW denoise (RawNIND Bayer)"))
+        content.addView(sectionTitle("AI RAW denoise"))
+        content.addView(p.kit.sectionDesc("RawNIND Bayer writes a denoised DNG and develops the JPEG from it. Enable Keep original DNG to save the untouched sensor file as well."))
 
         val aiStatus = TextView(this).apply {
             text = aiModelStatus()
@@ -210,7 +215,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             setPadding(dp(12), dp(10), dp(12), 0)
         }
         val aiMaster = SettingsSwitch(this).apply {
-            text = "AI RAW denoise (RawNIND Bayer)\nOn writes a denoised DNG and develops the JPEG from it. Needs the trained model files in assets."
+            text = "Enable AI RAW denoise"
             setTextColor(getColor(R.color.text_primary))
             isChecked = settings.aiEnabled
             setOnCheckedChangeListener { button, value ->
@@ -226,7 +231,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             }
         }
         val keepOriginal = SettingsSwitch(this).apply {
-            text = "Save original DNG alongside\nOff halves storage; the untouched sensor DNG is skipped."
+            text = "Keep original DNG"
             setTextColor(getColor(R.color.text_primary))
             isChecked = settings.saveOriginalDng
             setOnCheckedChangeListener { button, value ->
@@ -271,6 +276,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         }
         content.addView(aiStrengthBar)
         content.addView(TextView(this).apply {
+            tag = "settings-description"
             text = "0% = untouched source, 100% = full AI output (darktable neural-restore semantics; moving the slider never re-runs the model)."
             setTextColor(getColor(R.color.text_secondary))
             textSize = 12f

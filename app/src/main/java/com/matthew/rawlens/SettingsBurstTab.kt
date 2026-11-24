@@ -66,7 +66,6 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
     val content = p.content
     fun sectionTitle(text: String): TextView = p.kit.sectionTitle(text)
     fun sectionDesc(text: String): TextView = p.kit.sectionDesc(text)
-    fun settingsButton(label: String, active: Boolean = false): Button = p.kit.settingsButton(label, active)
     fun settingsCheck(label: String, checked: Boolean): SettingsSwitch = p.kit.settingsCheck(label, checked)
     fun polish() = p.kit.polish()
     fun markActive(active: Button) = p.markActive(active)
@@ -77,11 +76,9 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
             "Staged IMG_<ts>_BURST.craw takes merge here later via MFSR, LK-R or HDR+, " +
                 "to DNG, JPEG, or both. RAW Video never lists."
         ))
-        content.addView(settingsButton("Open merges").apply {
-            setOnClickListener { openMerges() }
-        })
+        content.addView(p.kit.navRow("Merges", "Develop saved bursts") { openMerges() })
         content.addView(SettingsSwitch(this).apply {
-            text = "Save ZSL bursts to .craw for offline merge"
+            text = "Save bursts for later merging"
             setTextColor(getColor(R.color.text_primary))
             isChecked = burstCrawEnabled
             setOnCheckedChangeListener { _, enabled ->
@@ -143,7 +140,7 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
             })
         })
         var hybridTopup = lensPreferences().getBoolean(KEY_ZSL_HYBRID_TOPUP, true)
-        content.addView(settingsCheck("Top-up: complete a thin ring with fresh frames", hybridTopup).apply {
+        content.addView(settingsCheck("Top up with fresh frames", hybridTopup).apply {
             setOnCheckedChangeListener { _, enabled ->
                 hybridTopup = enabled
                 lensPreferences().edit().putBoolean(KEY_ZSL_HYBRID_TOPUP, hybridTopup).apply()
@@ -151,6 +148,7 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
                 setStatus(if (hybridTopup) "ZSL TOP-UP ON" else "ZSL TOP-UP OFF")
             }
         })
+        content.addView(sectionDesc("Top-up adds fresh frames when the zero shutter lag buffer has too few."))
         rawZslSettingsStatus = TextView(this).apply {
             text = rawZslSettingsText(rawZslStatus)
             setTextColor(getColor(R.color.text_secondary))
@@ -164,10 +162,11 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
             textSize = 12f
         }.also(content::addView)
         content.addView(Button(this).apply {
-            text = "Save sidecars next to DNGs (choose photo folder)"
+            text = "Choose photo folder"
             setOnClickListener { pickSidecarFolder() }
         })
         content.addView(TextView(this).apply {
+            tag = "settings-description"
             text = "Android forbids text sidecars under DCIM via MediaStore. " +
                 "RawLens asks for the photo folder on first install; choose " +
                 "DCIM/RawLens so burst.json + gyro/ land in " +

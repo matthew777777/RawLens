@@ -52,24 +52,24 @@ internal class PhotoSettingsTab(
         host.clearTabStatusViews()
         kit.content.removeAllViews()
         if (XiaomiUltraRaw50.supported()) {
-            kit.content.addView(kit.settingsCheck("50 MP RAW (experimental)", XiaomiUltraRaw50.enabled(activity)).apply {
+            kit.content.addView(kit.sectionTitle("RAW capture"))
+            kit.content.addView(kit.settingsCheck("50 MP RAW", XiaomiUltraRaw50.enabled(activity)).apply {
                 setOnCheckedChangeListener { _, checked ->
                     host.controller.setXiaomiRaw50Enabled(checked)
                 }
             })
-            kit.content.addView(kit.sectionDesc("Uses the full-resolution RAW mode for single photos on supported rear lenses."))
+            kit.content.addView(kit.sectionDesc("Experimental. Uses the full-resolution RAW mode for single photos on supported rear lenses."))
         }
+        kit.content.addView(kit.sectionTitle("RAW & DNG tools"))
+        kit.content.addView(kit.navRow("Develop DNGs", "Import photos and export developed images") {
+            activity.startActivity(android.content.Intent(activity, DevelopQueueActivity::class.java))
+        })
         host.controller.activeSettingsKey()?.let { key ->
             val size = host.controller.customRawReaderSizeSetting()
-            kit.content.addView(kit.settingsButton("Custom RAW reader · ${size ?: "Off"}").apply {
+            kit.content.addView(kit.settingsButton("Custom RAW reader: ${size ?: "Off"}").apply {
                 setOnClickListener { showCustomRawReader(key, size) }
             })
         }
-        kit.content.addView(kit.settingsButton("Develop DNGs · Import / export queue").apply {
-            setOnClickListener {
-                activity.startActivity(android.content.Intent(activity, DevelopQueueActivity::class.java))
-            }
-        })
         if (LapisRootProfile.supported()) {
             val profile = LapisRootProfile.preferences(activity)
             kit.content.addView(kit.sectionTitle("Redmi Note 15 Pro 5G"))
@@ -83,36 +83,35 @@ internal class PhotoSettingsTab(
                 }
             })
             if (LapisRootProfile.enabled(activity)) {
-                kit.content.addView(kit.settingsButton("Lenses shown in switcher").apply {
-                    setOnClickListener {
-                        val lenses = host.controller.lensOptions(includeHidden = true)
-                        val checked = lenses.map { LapisRootProfile.lensVisible(activity, it) }.toBooleanArray()
-                        android.app.AlertDialog.Builder(activity)
-                            .setTitle("Lenses shown in switcher")
-                            .setMultiChoiceItems(lenses.map { it.label }.toTypedArray(), checked) { dialog, index, visible ->
-                                checked[index] = visible
-                                if (checked.none { it }) {
-                                    checked[index] = true
-                                    (dialog as android.app.AlertDialog).listView.setItemChecked(index, true)
-                                }
+                kit.content.addView(kit.navRow("Lenses shown in switcher", null) {
+                    val lenses = host.controller.lensOptions(includeHidden = true)
+                    val checked = lenses.map { LapisRootProfile.lensVisible(activity, it) }.toBooleanArray()
+                    android.app.AlertDialog.Builder(activity)
+                        .setTitle("Lenses shown in switcher")
+                        .setMultiChoiceItems(lenses.map { it.label }.toTypedArray(), checked) { dialog, index, visible ->
+                            checked[index] = visible
+                            if (checked.none { it }) {
+                                checked[index] = true
+                                (dialog as android.app.AlertDialog).listView.setItemChecked(index, true)
                             }
-                            .setPositiveButton("Save") { _, _ ->
-                                lenses.forEachIndexed { index, lens ->
-                                    LapisRootProfile.setLensVisible(activity, lens, checked[index])
-                                }
-                                (activity as? MainActivity)?.updateQuickControls()
+                        }
+                        .setPositiveButton("Save") { _, _ ->
+                            lenses.forEachIndexed { index, lens ->
+                                LapisRootProfile.setLensVisible(activity, lens, checked[index])
                             }
-                            .setNegativeButton("Cancel", null)
-                            .show()
-                    }
+                            (activity as? MainActivity)?.updateQuickControls()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
                 })
-                kit.content.addView(kit.settingsCheck("200→50 MP: phase-response fit (rawr)",
+                kit.content.addView(kit.settingsCheck("200→50 MP phase correction",
                     profile.getBoolean("hexa_phase_fit", false)).apply {
                     setOnCheckedChangeListener { _, checked ->
                         profile.edit().putBoolean("hexa_phase_fit", checked).apply()
                     }
                 })
                 kit.content.addView(kit.sectionDesc("Choose 12.5 MP, 50 MP, 200→50 MP, 2× / 4× sensor RAW or DCG14 in the lens switcher. Root must be active and granted to RawLens. Sensor setup is automatic; camera settings are restored when the session closes."))
+                kit.content.addView(kit.sectionDesc("Phase correction accounts for differences in pixel response during 200→50 MP RAW development."))
                 kit.content.addView(kit.sectionDesc("DCG14: 12.5 MP DCG/DSG RAW14 output at 30 fps; automatic exposure is required. Manual ISO/shutter and flash are unavailable in this mode. 50 MP: verified RAW10. 2× / 4×: RAW14 sensor interface, delivered as 10-bit RAW; extra precision is unverified. 200→50 MP: one-shot DNG; the shutter reads the 200 MP sensor mode (about 20 s with camera restarts) and uses rawr same-colour sums + Quad Detail remosaic, saving a 50 MP Bayer CFA DNG. Preview stays at 12.5 MP; burst, HDR and ZSL are unavailable. Firmware: ${LapisRootProfile.FIRMWARE}."))
             }
         }
@@ -313,8 +312,8 @@ internal class PhotoSettingsTab(
         kit.content.addView(kit.sectionTitle("Photo output"))
         kit.content.addView(kit.sectionDesc("Ultra HDR and Display P3 targets, JPEG quality and chroma, Basic / AgX / Sigmoid / ACES 2.0 tone mapping, adaptive exposure and highlight handling."))
         var currentJpegSettings = host.jpegOutputSettings()
-        kit.content.addView(kit.settingsButton("Photo LUT · ${currentJpegSettings.photoLut?.title ?: "Off"}").apply {
-            setOnClickListener { host.showPhotoLutSettings() }
+        kit.content.addView(kit.navRow("Photo LUT", currentJpegSettings.photoLut?.title ?: "Off") {
+            host.showPhotoLutSettings()
         })
         kit.content.addView(kit.sectionDesc("Use a display-referred 3D .cube with the photo output color space. JPEG and JPEG XL save the look. DNG uses it in the viewfinder."))
         fun applyJpegOutputSettings(settings: JpegOutputSettings): Boolean {

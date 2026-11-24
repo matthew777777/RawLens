@@ -127,7 +127,7 @@ internal object RawLensUi {
         (section?.layoutParams as? LinearLayout.LayoutParams)?.let { params ->
             params.height = 0
             params.weight = 1f
-            section!!.layoutParams = params
+            section.layoutParams = params
         }
         content.setOnApplyWindowInsetsListener { view, insets ->
             val safe = safeInsets(insets, view)

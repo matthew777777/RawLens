@@ -118,9 +118,9 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
     // Name and one-line summary per page, in page-index order.
     val pageInfo = listOf(
         "General" to "RAW capture, viewfinder, location, backup & restore",
-        "Photo" to "File format and photo output",
+        "Photo" to "File format, photo output and DNG tools",
         "Video" to "RAW and encoded video, audio, stabilization, monitoring",
-        "Exposure" to "PROGRAM auto exposure, exposure brackets, face priority",
+        "Exposure" to "Shutter range, Program AE, HDR and bracketing",
         "Burst" to "Zero shutter lag, gyro sidecars, offline merges",
         "Merge" to "HDR+, MFSR and LK-R burst merges",
         "Details" to "JPEG cleanup, AI RAW denoise, wavelet denoise, capture sharpening",
@@ -268,7 +268,7 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
                 val (name, pageSummary) = pageInfo[index]
                 val summary = if (index != SETTINGS_LENSES_TAB) pageSummary else {
                     val count = selectedLensIds().size
-                    "$count RAW lens${if (count == 1) "" else "es"} enabled · discover and choose"
+                    "$count RAW lens${if (count == 1) "" else "es"} enabled"
                 }
                 content.addView(kit.navRow(name, summary, pageIcons[index]) { goTab(index) },
                     LinearLayout.LayoutParams(
@@ -344,7 +344,5 @@ internal fun MainActivity.rawZslSettingsText(status: RawZslStatus): String {
         RawZslState.ACTIVE -> "ACTIVE"
         RawZslState.FALLBACK -> "UNAVAILABLE — NORMAL RAW FALLBACK"
     }
-    return "Status: $state\n${status.detail}\n" +
-        "Keeps the selected number of full-resolution RAW frames in camera memory. " +
-        "Unsupported devices automatically use normal RAW capture."
+    return "Status: $state\n${status.detail}"
 }

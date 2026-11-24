@@ -469,30 +469,23 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         typeface = Typeface.DEFAULT_BOLD
     })
     top.addView(TextView(this).apply {
-        text = "Some phones reach one lens through several camera IDs. Tick one per lens; each becomes a viewfinder button."
+        text = "Choose one camera route per lens to show it in the viewfinder switcher."
         setTextColor(getColor(R.color.text_secondary))
         textSize = 12f
         setPadding(0, dp(4), 0, dp(8))
     })
     // Switcher label style: zoom factors (0.6×, 1×, 3×) or 35 mm-equivalent focal lengths.
     val zoomTitles = mutableListOf<Pair<TextView, DiscoveredLens>>()
-    top.addView(LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(0, 0, 0, dp(8))
-        addView(TextView(context).apply {
-            text = "Show focal length (24mm) instead of zoom (1×)"
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 13f
-        }, LinearLayout.LayoutParams(0, wrapContent(), 1f))
-        addView(SettingsSwitch(context).apply {
-            isChecked = LensZoom.focalLabels(this@showLensSelection)
-            setOnCheckedChangeListener { _, focal ->
-                lensPreferences().edit().putBoolean(LensZoom.KEY_FOCAL_LABELS, focal).apply()
-                zoomTitles.forEach { (view, lens) -> view.text = "${zoomOf(lens)} · ${lens.title}" }
-                refreshLensSwitcher()
-            }
-        })
+    top.addView(SettingsSwitch(this).apply {
+        text = "Show focal lengths"
+        setTextColor(getColor(R.color.text_primary))
+        minHeight = dp(48)
+        isChecked = LensZoom.focalLabels(this@showLensSelection)
+        setOnCheckedChangeListener { _, focal ->
+            lensPreferences().edit().putBoolean(LensZoom.KEY_FOCAL_LABELS, focal).apply()
+            zoomTitles.forEach { (view, lens) -> view.text = "${zoomOf(lens)} · ${lens.title}" }
+            refreshLensSwitcher()
+        }
     })
 
     val quickRow = LinearLayout(this).apply {
