@@ -1644,27 +1644,6 @@ class MainActivity : Activity() {
         applyDeviceOrientation(deviceOrientationDegrees, animate = false)
     }
 
-    /**
-     * Single stacking authority: scope/lens row always sits above the rule-slider
-     * row or quick panel, never behind them. Called after every visibility change.
-     * Both scope views share one slot; only the active mode is visible.
-     */
-    /**
-     * Height the scope row must clear above the panel: the manual rule
-     * slider or the quick panel (the end-side audio meter never overlaps
-     * the start-side scope, so it needs no lift).
-     */
-    private fun floatingLiftPx(): Int {
-        val floatingHeight = when {
-            ::manualPanel.isInitialized && manualPanel.visibility == View.VISIBLE ->
-                (manualPanel.height.takeIf { it > 0 } ?: dp(48))
-            ::quickPanel.isInitialized && quickPanel.visibility == View.VISIBLE ->
-                (quickPanel.height.takeIf { it > 0 } ?: dp(200))
-            else -> 0
-        }
-        return if (floatingHeight > 0) floatingHeight + dp(12) else 0
-    }
-
     // Every caller (panels, shutter, crop, rotation) seats through the one
     // rotation-aware path: a separate margin writer here used to drop the
     // quarter-turn lift and park the landscape scope behind the panel.
@@ -1833,12 +1812,23 @@ class MainActivity : Activity() {
         // behind the opaque panel in video and peeked out "cut" in landscape).
         val panelHeight =
             findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
-        val baseBottomMargin = panelHeight + dp(16) + floatingLiftPx()
-        // The zoom chip shares the scope's measured clearance above the opaque panel.
-        // Its labels rotate inside the view, so no quarter-turn bounding-box lift is needed.
+        val floatingPanel = when {
+            manualPanel.visibility == View.VISIBLE -> manualPanel
+            quickPanel.visibility == View.VISIBLE -> quickPanel
+            else -> null
+        }
+        val floatingHeight = floatingPanel?.let {
+            it.height.takeIf { height -> height > 0 } ?: dp(if (it === manualPanel) 48 else 200)
+        } ?: 0
+        val floatingBottomMargin = (floatingPanel?.layoutParams as? FrameLayout.LayoutParams)?.bottomMargin
+        val scopeAnchor = floatingBottomMargin?.plus(floatingHeight) ?: panelHeight
+        val baseBottomMargin = scopeAnchor + dp(SCOPE_GAP_DP)
+
+        // The zoom chip's labels rotate inside the view, so its clearance has no rotation inset.
         findViewById<View>(R.id.lkrZoomChip)?.let { chip ->
             (chip.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                val chipBottom = baseBottomMargin
+                val chipBottom = panelHeight + dp(16) +
+                    (if (floatingPanel != null) floatingHeight + dp(12) else 0)
                 if (params.bottomMargin != chipBottom) {
                     params.bottomMargin = chipBottom
                     chip.layoutParams = params
@@ -4776,7 +4766,8 @@ class MainActivity : Activity() {
         /** Quick panel closes itself after this long without a touch inside it. */
         const val QUICK_AUTO_HIDE_MS = 5_000L
         /** Scope gap to the screen edge (the thirds-line gap is ScopeStyle.GRID_CLEARANCE_DP). */
-        const val SCOPE_EDGE_DP = 8
+        const val SCOPE_EDGE_DP = 4
+        const val SCOPE_GAP_DP = 6
         const val MEDIA_PERMISSION = 48
         const val KEY_MEDIA_ASKED = "media_permission_asked"
         const val LOCATION_PERMISSION = 43

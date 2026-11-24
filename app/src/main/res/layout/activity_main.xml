@@ -312,15 +312,15 @@
     </LinearLayout>
 
     <!-- Floating scope (histogram / waveform share one slot): sized by the
-         views to fit the bottom-left thirds cell (never covers the grid); seated 16dp above the panel by seatScopeSlot (with
-         the quarter-turn lift in landscape). Only the active mode is visible. -->
+         views to fit the bottom-left thirds cell. seatScopeSlot places it above
+         the visible panel and adds clearance for rotation in landscape. -->
     <com.matthew.rawlens.HistogramView
         android:id="@+id/histogramView"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="start|bottom"
-        android:layout_marginStart="8dp"
-        android:layout_marginBottom="248dp"
+        android:layout_marginStart="4dp"
+        android:layout_marginBottom="238dp"
         android:clickable="true"
         android:focusable="true"
         android:contentDescription="Histogram" />
@@ -330,8 +330,8 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="start|bottom"
-        android:layout_marginStart="8dp"
-        android:layout_marginBottom="248dp"
+        android:layout_marginStart="4dp"
+        android:layout_marginBottom="238dp"
         android:clickable="true"
         android:focusable="true"
         android:contentDescription="Waveform"
