@@ -102,7 +102,7 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
             File(job,"verified.json").takeIf(File::isFile)?.readText()?.let(::JSONObject)?.let {
                 spec.hardwareVerified=process.isAlive && it.optBoolean("verified") && it.optString("mode")==mode.argument
             }
-        } },0,300,TimeUnit.MILLISECONDS)
+        } },0,100,TimeUnit.MILLISECONDS)
     }
 
     /** True while the worker still holds the sensor mode; a dead worker must be replaced. */
@@ -126,7 +126,7 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
             val previous=recovery?.getString("previousMode")
                 ?: throw IOException(report?.optString("error") ?: "Sensor restoration was not verified")
             check(previous.matches(Regex("-?[0-9]*")))
-            val previousConfig=recovery!!.optString("previousConfig")
+            val previousConfig=recovery.optString("previousConfig")
             val previousRuntime=recovery.optString("previousRuntime")
             check(previousConfig.matches(Regex("-?[0-9]*")) && previousRuntime.matches(Regex("-?[0-9]*")))
             val checkCommand="test ! -e /data/adb/rawlens-lapis/lease && " +
@@ -209,13 +209,14 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
                 android.os.Process.myUid().toString(),"400","20000000","1","1,1,1,1","v1","0")
             fun q(s:String)="'"+s.replace("'","'\\''")+"'"
             val command="CLASSPATH=${q(app.sourceDir)} exec app_process /system/bin com.matthew.rawlens.LapisRootCameraWorker "+args.joinToString(" ",transform=::q)
+            val startedAt=SystemClock.elapsedRealtime()
             val process=ProcessBuilder("su","-M","-c",command).redirectErrorStream(true).redirectOutput(File(job,"worker.log")).start()
             val session=LapisRootSession(mode,process,job,LapisRootProfile.videoFps(context))
             try {
                 val deadline=SystemClock.elapsedRealtime()+40000
                 while(!File(job,"ready.json").exists()) {
                     if(!process.isAlive||SystemClock.elapsedRealtime()>deadline)throw IOException(File(job,"worker.log").readText().takeLast(2000))
-                    Thread.sleep(100)
+                    Thread.sleep(50)
                 }
                 // A provider restart returns before camera IDs are registered again.
                 val manager=context.getSystemService(CameraManager::class.java)
@@ -224,9 +225,10 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
                     available=runCatching { manager.getCameraCharacteristics("0")
                         .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!=null }.getOrDefault(false)
                     if(available)break
-                    Thread.sleep(200)
+                    Thread.sleep(100)
                 }
                 check(available) { "Main camera did not return after sensor setup" }
+                Log.i("LapisRootSession","Prepared ${mode.argument} in ${SystemClock.elapsedRealtime()-startedAt}ms")
                 return session
             } catch(failure:Throwable) {
                 runCatching { session.close() };throw failure

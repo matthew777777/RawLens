@@ -36,7 +36,10 @@ class LapisHexaDevelopInstrumentedTest {
             val frame = JSONObject().put("width", 64).put("height", 48).put("timestamp", "1234")
                 .put("exifOrientation", 6).put("iso", 200).put("exposureTime", 20000000L)
                 .put("asShotNeutral", JSONArray(listOf(.6, 1.0, .5)))
-            val original = OfflineBurstMetadata.synthesize(container.toString(), frame.toString(), 0, "0")
+            val original = OfflineBurstMetadata.synthesize(container.toString(), frame.toString(), 0, "0").copy(
+                lensShadingMap = LensShadingSnapshot(2, 2,
+                    ImmutableFloatValues(FloatArray(16) { 1f + it * .02f })),
+                lensShadingAlreadyApplied = false)
             val sidecar = File(job, "develop-metadata.json")
             LapisHexaDng.writeDevelopMetadata(sidecar, original, 64, 48, 64f)
             val json = JSONObject(sidecar.readText())
@@ -45,6 +48,9 @@ class LapisHexaDevelopInstrumentedTest {
             assertArrayEquals(original.colorMatrix1!!.toDoubleArray(), restored.colorMatrix1!!.toDoubleArray(), 0.0)
             assertArrayEquals(original.neutralColorPoint!!.toDoubleArray(), restored.neutralColorPoint!!.toDoubleArray(), 0.0)
             assertEquals(6, restored.exifOrientation)
+            assertEquals(2, restored.lensShadingMap!!.rows)
+            assertArrayEquals(original.lensShadingMap!!.gains.toFloatArray(),
+                restored.lensShadingMap!!.gains.toFloatArray(), 0f)
             assertEquals(256f, restored.blackLevels!![0])
             assertEquals(4092f, restored.whiteLevel)
             val pixels = File(job, "develop-bayer16.bin")

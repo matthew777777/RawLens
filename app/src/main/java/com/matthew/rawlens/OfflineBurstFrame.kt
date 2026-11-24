@@ -109,6 +109,8 @@ internal object OfflineBurstMetadata {
             noiseProfile = frame.optJSONArray("noiseProfile")?.let { array ->
                 DoubleArray(array.length()) { array.getDouble(it) }
             }?.takeIf { it.size in listOf(2, 6, 8) && it.all(Double::isFinite) }?.let(::ImmutableDoubleValues),
+            sensorReadoutProfile = frame.optString("sensorReadoutProfile", "").ifBlank {
+                container.optString("sensorReadoutProfile", "") }.takeIf { it.isNotBlank() },
             sensorPixelMode = null,
             rawBinningFactorUsed = false,
             activePhysicalCameraId = null,

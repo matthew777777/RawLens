@@ -19,6 +19,7 @@ internal object CrawMetadata {
         val black = requireNotNull(chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN))
         json.put("blackLevel", JSONArray(List(4) { LapisRootSession.storageBlack(chars,it) }))
         json.put("whiteLevel", requireNotNull(LapisRootSession.storageWhite(chars)))
+        LapisRootSession.spec(chars)?.let { json.put("sensorReadoutProfile", it.mode.argument) }
         fun matrix(name: String, value: ColorSpaceTransform?) {
             if (value != null) json.put(name, JSONArray(List(9) {
                 value.getElement(it % 3, it / 3).toDouble()

@@ -8,6 +8,22 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class LapisHexaDngTest {
+    @Test fun remainingShadingMapIsExportedOnceAtReducedBayerBounds() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.cameraId).thenReturn("0")
+        val map = LensShadingSnapshot(2, 2, ImmutableFloatValues(FloatArray(16) { 1f + it * .02f }))
+        `when`(metadata.lensShadingMap).thenReturn(map)
+        val fields = LapisHexaDng.fields(metadata, 8160, 6120, 64f, "shading", 1700000000123)
+        val tags = fields.descriptors.filterIndexed { i, _ -> i % 3 == 0 }
+        assertEquals(1, tags.count { it == 51009 })
+        assertArrayEquals(TinyDngMetadata.gainMap(map, BayerPattern.GBRG,
+            RawCrop(0, 0, 8160, 6120), 0), fields.payloads[tags.indexOf(51009)])
+        `when`(metadata.lensShadingAlreadyApplied).thenReturn(true)
+        val baked = LapisHexaDng.fields(metadata, 8160, 6120, 64f, "baked", 1700000000123)
+        assertFalse(baked.descriptors.filterIndexed { i, _ -> i % 3 == 0 }.contains(51009))
+    }
+
     @Test fun serializedReducedDngPassesCfaValidation() {
         val metadata = mock(RawFrameMetadata::class.java)
         `when`(metadata.exifOrientation).thenReturn(1)

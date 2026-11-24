@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
  *   restore-restart + apply-restart).
  */
 internal object LapisRootSessionControl {
-    private const val RELEASE_GRACE_MS = 1500L
+    private const val RELEASE_GRACE_MS = 5000L
     private val executor=Executors.newSingleThreadScheduledExecutor { work -> Thread(work,"lapis-sensor-lease").apply { isDaemon=true } }
     private var owner:String?=null
     private var session:LapisRootSession?=null
@@ -29,6 +29,7 @@ internal object LapisRootSessionControl {
                 val current=session
                 if(current!=null && current.mode==mode && current.alive && (mode!=LapisRootProfile.Mode.VIDEO60 || current.spec.fps==LapisRootProfile.videoFps(context))) {
                     owner=key
+                    Log.i("LapisRootSession","Reusing ${mode.argument} root lease; no HAL restart")
                     return@runCatching current.spec
                 }
                 val handoff=current!=null && mode!=LapisRootProfile.Mode.NORMAL

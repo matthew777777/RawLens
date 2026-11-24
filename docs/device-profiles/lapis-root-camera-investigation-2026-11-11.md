@@ -596,3 +596,78 @@ Removed RawViewfinder.snapshotLens early identity return for metadataVerified ro
 ZslMergeSaveJobs and offlineHDR+ both call RawPreDemosaicPipeline.process on the merged CFA (bakes lens gains), then pass the same metadata carrying the residualmap to HdrPlusDngWriter. Writer addedOpcodeList2 GainMap again; editors therefore multiplied already-corrected corners twice. This is a definiteHDR+DNGexportbug, not yet evidence of duplicategain inJPEG orpreview.
 
 AddedUnpackedRawCfa.lensShadingApplied (defaultfalse) as pixel-domain state distinctfromsensor-sideflags. LensShadingCorrector sets it when gains are baked/alreadyapplied and skips repeatedmultiplication; saturationMap stillretainsgainthresholds forhighlightprocessing. Data-classcopies,AIandopposed preserve it. HdrPlusDngWriter omitsGainMapwhenCFAlensShadingApplied ormetadataalreadyApplied; uncorrectedCFAs stillgetopcode. All41 tests passed:RawPreDemosaicPipeline5,HdrPlusDngWriter7,VfGpuImport25,RawShadingCalibration4,none skipped. Includesapply-twiceidentity,saturationthresholdretention,andrealDNGopcodepresence/absence. DCGpreviewfixretained. Combinedreleasebuildinprogress;phonebrieflyconnectedthenADBdisappeared,so noinstallationorlivecaptureverificationyet.
+
+
+## 2026-11-24: 200→50 MP shading and non-root extended shutter
+
+200 MP worker now requests Camera2 LSC map ON and preserves the timestamp-matched
+mode-11 map instead of clearing it. The reduced CFA keeps the full field of view:
+DNG OpcodeList2 uses four GBRG GainMap opcodes at 8160×6120; JPEG sidecar retains
+the same interleaved channels plus already-applied state for normal RAW development.
+No stock/other-mode map fallback. A headless root-worker capture returned a 17×17
+map, maximum 4.2264404, and wrote a 99,886,264-byte DNG with tag 51009 (4 opcodes,
+4996 bytes). Host inspection of the pulled file confirmed the actual opcode bytes.
+Worker report restored=true; temporary vendor overrides restored. Test scene was
+dark (source sampled max78); this validates capture/metadata plumbing, not optical
+flat-field correction quality or a full JPEG image comparison. APK staged as
+/data/local/tmp/rawlens-hexa-shading.apk; evidence in
+/data/local/tmp/rawlens-hexa-shading-job and /tmp/rawlens-hexa-shading-verified.dng.
+
+Normal main Camera2 characteristics queried as shell UID2000 without su advertise
+exposure [100000,400000000] ns and max frame duration400000000ns. Nevertheless,
+ordinary AE-OFF requests produced matching RAW/results at 1,000,000,000ns and
+30,000,000,000ns; returned frame durations matched those exposures. Mode0 confirmed,
+no sensor override/vendor key or root used for these exposure tests. ISO100;
+source files /data/local/tmp/rawlens-shutter-{1s,30s}.raw16. Scene was dark, so these
+establish frame/result delivery and reported timing, not calibrated integration
+linearity. A CAMERA_ERROR4 callback occurred before the eventual matched frame;
+do not infer failed exposure merely from that callback.
+
+Added opt-in per-camera Extended manual shutter up to30s under Exposure settings.
+It extends photo manual range/clamping/request exposure and frame duration only;
+automatic Program/ETTR sensor ranges remain unchanged, active root readouts and
+video retain their limits. DCG/DSG stays AE-only. No universal hardware-support
+claim: other devices may reject/clamp requests above their advertised limits.
+12 selected exposure/CFA tests passed; /tmp/rawlens-extended-shutter.log.
+
+
+## 2026-11-24: root startup timing and extended-still save regression
+
+Baseline headless mode9 worker process-to-ready 3.17s; HAL restart368ms. Shared
+worker property reads/writes now use the same Android property service directly
+rather than spawning getprop/setprop subprocesses. All vendor hashes, mode
+verification, cleanup and watchdog checks remain. Warm lease release grace5s
+(previous1.5s), startup/verification polling shortened. Measured first optimized
+DCG process-to-ready2.12s (worker startup520ms, HAL300ms); this is one run, not a
+statistical benchmark or first-viewfinder-frame latency. Other mode-to-mode ready
+times about4.1-4.7s, dominated by required cameraserver/provider restarts.
+Headless ready/handoff sequence DCG→50MP→2x→4x→2xDSG→video60→DCG completed with
+restored=true for every worker. These check lease setup, not optical/capture
+acceptance in every mode. Final deferred HAL restart explicitly performed;
+SELinux Enforcing and no lease confirmed.
+
+Replacing one-shot seven-second sleep with readiness polling exposed Xiaomi's
+root-desktop characteristics-query behavior: public query timed out, restoration
+passed. Poll now follows captureHexadeca's desktop-override unset and explicit
+getCameraCharacteristics(id,flags=0) route; this follow-up still needs a successful
+200MP capture check. Do not describe the one-shot speedup as verified yet.
+
+User log logcat-20261124_181900_911.txt shows extended manual still requests
+4,800,600,172ns at18:20:17.924 and18:20:38.834, watchdogs at18:20:30.726 and
+18:20:51.635, zero paired forward frames. Legacy preview starvation triggered
+BGU/stream-combination fallbacks earlier. Source fix caps extended manual repeating
+preview at100ms, disables short-frame ZSL selection, flushes repeating before the
+long forward still, targets RAW only, and selects lowest advertised fixed FPS for
+that still. Full still exposure/frame duration retained. Exposure unit checks and
+compilation passed. Fresh non-root single-shot4.8s RAW again delivered matched
+metadata; the external preview-transition diagnostic hit CAMERA_ERROR4 before
+stopRepeating, so a real in-app DNG/JPEG save remains unverified. Do not claim the
+save regression resolved until that end-to-end test passes.
+
+
+Follow-up: corrected one-shot provider query tested successfully using the unminified
+2.4.35 diagnostic APK. HAL restart301ms; providerReady5187ms; 200MP→50MP CFA DNG
+99,886,264 bytes; 17×17 shading map max4.2264404; conversion1289ms; write359ms;
+restored=true. Evidence /data/local/tmp/rawlens-fast-hexa-fixed/report.json.
+This supersedes the pending one-shot readiness check above. Long-still app save
+validation remains pending; do not conflate root-startup success with that issue.

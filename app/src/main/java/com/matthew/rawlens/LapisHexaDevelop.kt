@@ -14,7 +14,10 @@ internal object LapisHexaDevelop {
              jpeg: JpegOutputSettings, denoise: DenoiseSettings): String {
         val sidecar = JSONObject(File(job, "develop-metadata.json").readText())
         val metadata = OfflineBurstMetadata.synthesize(
-            sidecar.getJSONObject("container").toString(), sidecar.getJSONObject("frame").toString(), 0, "0")
+            sidecar.getJSONObject("container").toString(), sidecar.getJSONObject("frame").toString(), 0, "0").let { m ->
+                m.copy(lensShadingAlreadyApplied = sidecar.getJSONObject("frame")
+                    .optBoolean("lensShadingAlreadyApplied", false))
+            }
         require(metadata.imageWidth == width && metadata.imageHeight == height)
         val source = File(job, "develop-bayer16.bin")
         require(source.length() == width.toLong() * height * 2)

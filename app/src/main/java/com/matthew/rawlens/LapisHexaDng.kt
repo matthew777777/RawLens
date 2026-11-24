@@ -17,7 +17,22 @@ object LapisHexaDng {
     @JvmStatic
     fun metadata(image: Image, characteristics: CameraCharacteristics, result: TotalCaptureResult,
                  exifOrientation: Int): Any =
-        RawFrameMetadataFactory.capture("0", image, characteristics, result, exifOrientation)
+        RawFrameMetadataFactory.capture("0", image, characteristics, result, exifOrientation).let { m ->
+            val map = RawShadingCalibration.readoutMap(m.lensShadingMap)
+            m.copy(sensorReadoutProfile = "200to50-rawr49b013db", lensShadingMap = map,
+                lensShadingAlreadyApplied = RawShadingCalibration.alreadyApplied(map, m.lensShadingAlreadyApplied))
+        }
+
+    @JvmStatic
+    fun recordShading(report: org.json.JSONObject, metadata: Any) {
+        val m = metadata as RawFrameMetadata
+        report.put("lensShadingMapAvailable", m.lensShadingMap != null)
+            .put("lensShadingAlreadyApplied", m.lensShadingAlreadyApplied)
+        m.lensShadingMap?.let {
+            report.put("lensShadingMapRows", it.rows).put("lensShadingMapColumns", it.columns)
+                .put("lensShadingMapMax", it.gains.toList().maxOrNull())
+        }
+    }
 
     /** Small cross-process sidecar; matrices use the existing offline-merge contract. */
     @JvmStatic
@@ -35,6 +50,14 @@ object LapisHexaDng {
         m.referenceIlluminant2?.let { container.put("referenceIlluminant2", it) }
         val frame = org.json.JSONObject().put("width", width).put("height", height)
             .put("timestamp", m.timestampNanos.toString()).put("exifOrientation", m.exifOrientation)
+        frame.put("sensorReadoutProfile", "200to50-rawr49b013db")
+        frame.put("lensShadingAlreadyApplied", m.lensShadingAlreadyApplied)
+        RawShadingCalibration.readoutMap(m.lensShadingMap)?.takeUnless { m.lensShadingAlreadyApplied }?.let { map ->
+            frame.put("lensShadingMapWidth", map.columns).put("lensShadingMapHeight", map.rows)
+                .put("lensShadingMap", org.json.JSONArray(List(4) { channel ->
+                    org.json.JSONArray(List(map.rows * map.columns) { point -> map.gains[point * 4 + channel] })
+                }))
+        }
         m.neutralColorPoint?.let { frame.put("asShotNeutral", org.json.JSONArray(it.toDoubleArray().toList())) }
         m.sensitivityIso?.let { frame.put("iso", it) }
         m.exposureTimeNanos?.let { frame.put("exposureTime", it) }
@@ -61,6 +84,13 @@ object LapisHexaDng {
             rationals(50720, doubleArrayOf(width.toDouble(), height.toDouble()))
             bytes(50710, byteArrayOf(0, 1, 2))
             shorts(50711, 1)
+            RawShadingCalibration.readoutMap(metadata.lensShadingMap)
+                ?.takeUnless { metadata.lensShadingAlreadyApplied }?.let { map ->
+                    // Same full field of view after 2x reduction. Normalized map coordinates
+                    // survive; only the output Bayer bounds change. No second sensor crop.
+                    undefined(51009, TinyDngMetadata.gainMap(map, BayerPattern.GBRG,
+                        RawCrop(0, 0, width, height), 0))
+                }
         }
     }
 
@@ -74,7 +104,10 @@ object LapisHexaDng {
             "exact 2x2 same-colour sums to Quad; Detail remosaic to ${width}x${height} GBRG CFA; " +
             "phase fit=$phaseFit; x4 source code scale, black=${black * 4}, white=4092; " +
             "reference timestamp=$timestampNs ns; single frame, CPU reference; " +
-            "no RGB intermediate; shading/distortion calibration unavailable for this readout."
+            "no RGB intermediate; shading=" +
+            (if (m.lensShadingMap != null && !m.lensShadingAlreadyApplied) "matched-frame GainMap opcode" else
+                if (m.lensShadingAlreadyApplied) "already applied" else "map unavailable") +
+            "; distortion calibration unavailable."
         val rowsPerStrip = 64
         FileOutputStream(file).use { out ->
             TinyDngImageWriter.write(out, width, height, 1, 16, 1, 32803, rowsPerStrip,
