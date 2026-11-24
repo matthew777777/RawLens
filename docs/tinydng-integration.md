@@ -93,8 +93,9 @@ Camera2 R/Ge/Go/B samples are selected using CFA color and original sensor-row
 parity, including odd stored-buffer and ActiveArea offsets. Maps are omitted when
 absent or already applied by the HAL, avoiding double correction.
 
-Android DngCreator remains the default for ordinary captures; AUTO can fall
-back to TinyDNG, and JXL selects TinyDNG explicitly. Float-CFA exports use the
+TinyDNG v3 is the default for ordinary captures. Saved writer choices are
+honored. AUTO tries Android DngCreator first and falls back to TinyDNG if the
+platform write fails. JPEG XL remains opt-in and selects TinyDNG explicitly. Float-CFA exports use the
 shared TinyDNG transport with their own metadata and quantization rules.
 
 ## Verification

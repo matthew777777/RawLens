@@ -138,7 +138,7 @@ class DngSaver(private val context: Context) {
         orientation: Int,
         overrides: DngMetadataOverrides = DngMetadataOverrides(),
         metadata: RawFrameMetadata,
-        backend: DngWriterBackend = DngWriterBackend.ANDROID,
+        backend: DngWriterBackend = DngWriterBackend.DEFAULT,
         fileNameSuffix: String? = null,
         captureId: Long = System.currentTimeMillis(),
         gps: GpsLocation? = null,

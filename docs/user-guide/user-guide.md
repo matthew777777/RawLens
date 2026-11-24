@@ -212,7 +212,7 @@ Use **Choose recording folder** to record directly to a permitted phone folder o
 |---|---|
 | DNG sensor calibration | Per-camera black/white levels, noise and colour metadata overrides. Reset restores the device declarations. Use measured values when overriding calibration. |
 | Vendor keys | Per-lens request/session options exposed by the manufacturer. Availability and accepted values depend on firmware. |
-| DNG writer backend | Choose the platform writer or the available TinyDNG/fallback option. |
+| DNG writer backend | TinyDNG v3 is the default. Android DngCreator and automatic fallback are available. |
 | DNG compression | Optional lossless JPEG XL mosaic compression on supported output paths; older RAW editors may lack DNG 1.7 support. |
 | Pause camera while in Settings | Saves power by closing the camera behind Settings. Active recordings continue. |
 | Always use ISP viewfinder | Uses the camera preview instead of RAW viewfinder rendering, including for full-resolution capture. Requires a compatible RAW + preview stream; its appearance can differ from saved RAW development. |
