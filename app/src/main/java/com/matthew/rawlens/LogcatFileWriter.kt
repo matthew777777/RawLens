@@ -43,7 +43,7 @@ import java.util.TimeZone
  * session can never be mistaken for a dead process. The same holds for the
  * spawn failure is written into the session as a marker. RawLens's own
  * diagnostics are always written in-process by [Log], independently of logd.
- * Native/framework output is supplementary; duplicate app lines can occur.
+ * Native/framework output is supplementary.
  * Downloads mirroring runs on a timer even if logcat stops delivering lines.
  */
 internal object LogcatFileWriter {
@@ -100,6 +100,9 @@ internal object LogcatFileWriter {
     @Volatile private var teeMode = TEE_BUFFER
     private val teeBuffer = ArrayDeque<TeeEntry>()
     private val teeStamp = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+    private val threadtime = Regex("""^(\d\d-\d\d \d\d:\d\d:\d\d\.\d{3})\s+(\d+)\s+(\d+)\s+([A-Z])\s+([^:]+): ?(.*)$""")
+    // Threadtime keys match the otherwise identical lines formatted by logcat and Log.
+    private val pendingTeeLines = LinkedHashMap<String, ArrayDeque<String>>()
 
     private class TeeEntry(
         val wallMs: Long,
@@ -206,6 +209,11 @@ internal object LogcatFileWriter {
             else listOf(entry.msg, entry.tr.stackTraceToString().trimEnd()).filter { it.isNotEmpty() }
                 .joinToString("\n")
         for (part in body.split('\n')) {
+            val key = logLineKey(ownPid.toString(), entry.tid.toString(), entry.level.toString(), entry.tag, part)
+            val stamps = pendingTeeLines.getOrPut(key) { ArrayDeque() }
+            if (stamps.size >= 8) stamps.removeFirst()
+            stamps.addLast(stamp)
+            if (pendingTeeLines.size > TEE_BUFFER_LINES) pendingTeeLines.remove(pendingTeeLines.keys.first())
             appendLineLocked(teeLine(stamp, ownPid, entry.tid, entry.level, entry.tag, part))
         }
     }
@@ -303,6 +311,7 @@ internal object LogcatFileWriter {
                 // Never trust startup/framework output as proof that logd will
                 // keep delivering app diagnostics (Vivo V2562 stops after it).
                 teeMode = TEE_DIRECT
+                pendingTeeLines.clear()
                 running = true
                 drainTeeBufferLocked()
                 spawnLocked()
@@ -386,16 +395,11 @@ internal object LogcatFileWriter {
     /**
      * Mirror on a timer even when logcat is blocked in readLine. RawLens
      * diagnostics are written directly throughout the session; logcat is
-     * supplementary and may contain duplicates of those app lines.
+     * supplementary.
      */
     private fun startMirrorWorkerLocked(gen: Int) {
         Thread({
             while (true) {
-                try {
-                    Thread.sleep(SILENCE_TIMEOUT_MS)
-                } catch (failure: InterruptedException) {
-                    return@Thread
-                }
                 val live = synchronized(lock) {
                     if (!running || gen != sessionGen || writer == null) false
                     else {
@@ -405,6 +409,11 @@ internal object LogcatFileWriter {
                 }
                 if (!live) return@Thread
                 maybeMirror(force = false)
+                try {
+                    Thread.sleep(SILENCE_TIMEOUT_MS)
+                } catch (failure: InterruptedException) {
+                    return@Thread
+                }
             }
         }, "logcat-mirror").apply {
             isDaemon = true
@@ -652,10 +661,27 @@ internal object LogcatFileWriter {
 
     private fun appendLine(line: String) {
         synchronized(lock) {
-            if (!running || teeMode == TEE_ACTIVE) return
+            if (!running || teeMode == TEE_ACTIVE || matchesTeeLineLocked(line)) return
             appendLineLocked(line)
-            maybeMirror(force = false)
         }
+    }
+
+    private fun logLineKey(pid: String, tid: String, level: String, tag: String, body: String): String =
+        "$pid $tid $level ${tag.trimEnd()}:$body"
+
+    private fun matchesTeeLineLocked(line: String): Boolean {
+        val match = threadtime.matchEntire(line) ?: return false
+        val (stamp, pid, tid, level, tag, body) = match.destructured
+        val key = logLineKey(pid, tid, level, tag, body)
+        val stamps = pendingTeeLines[key] ?: return false
+        val logTime = teeStamp.parse(stamp)?.time ?: return false
+        // The Log wrapper writes to the file before invoking logcat, so match
+        // only recent earlier copies on this thread. Keep genuine repeats.
+        val teeTime = stamps.firstOrNull { logTime - (teeStamp.parse(it)?.time ?: logTime) in 0L..1000L }
+            ?: return false
+        stamps.remove(teeTime)
+        if (stamps.isEmpty()) pendingTeeLines.remove(key)
+        return true
     }
 
     /** Writes one line with rotation; no mirroring, so [tee] callers never block on MediaStore. */
