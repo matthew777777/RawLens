@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #version 450
 #extension GL_EXT_control_flow_attributes : require
+#ifdef SRP_GREEN_BURST_GATHER_1X
+#define SRP_GREEN_BURST_GATHER
+#endif
 // 1:1 port of merge.py cpu_accumulate (Alg.4 Accumulation): per-HR-pixel 3x3,
 // op-for-op identical to the proven Vulkan-port decomposition
 // (merge.comp:accumulate, dual parity there).
@@ -68,7 +71,36 @@ float dirGreen(float l,float r,float u,float d) {
   float wh=1.0/(1e-8+dh*dh),wv=1.0/(1e-8+dv*dv);
   return (wh*(l+r)+wv*(u+d))/(2.0*(wh+wv));
 }
+float interpolateMeasuredGreen(vec2 position) {
+  // Evaluate the cubic on measured green sites in the diagonal lattice.
+  // This avoids smoothing missing greens before the subpixel resampling.
+  vec2 sensor = position - 0.5;
+  vec2 q = 0.5 * vec2(sensor.x + sensor.y - 1.0, sensor.x - sensor.y - 1.0);
+  ivec2 base = ivec2(floor(q));
+  vec2 t = fract(q);
+  float value = 0.0, lo = 3.402823e38, hi = -3.402823e38;
+  [[dont_unroll]] for (int k = 0; k < 16; ++k) {
+    ivec2 offset = ivec2((k & 3) - 1, (k >> 2) - 1);
+    ivec2 site = base + offset;
+    float sampleGreen = sensorGreen(site.x + site.y + 1, site.x - site.y);
+    value += greenCubic(float(offset.x) - t.x) * greenCubic(float(offset.y) - t.y) * sampleGreen;
+    lo = min(lo, sampleGreen);
+    hi = max(hi, sampleGreen);
+  }
+  return clamp(value, lo, hi);
+}
+
 float interpolateGreen(vec2 position) {
+  // Keep the directional fill near strong axis-aligned edges, where the
+  // diagonal lattice alone can imprint its sample phase on the contour.
+  ivec2 near = ivec2(floor(position));
+  near.x -= (near.x + near.y) & 1;
+  float dx = abs(sensorGreen(near.x - 1, near.y) - sensorGreen(near.x + 1, near.y));
+  float dy = abs(sensorGreen(near.x, near.y - 1) - sensorGreen(near.x, near.y + 1));
+  float strong = max(dx, dy);
+  float axial = 1.0 - min(dx, dy) / max(strong, 1e-8);
+  float guard = smoothstep(0.01, 0.05, strong) * smoothstep(0.35, 0.65, axial);
+  if (guard == 0.0) return interpolateMeasuredGreen(position);
   vec2 q=position-0.5;ivec2 base=ivec2(floor(q));vec2 t=fract(q);
   float value=0.0,lo=3.402823e38,hi=-3.402823e38;
   // One tap at a time, missing greens from 4 neighbours, sensor greens
@@ -83,7 +115,9 @@ float interpolateGreen(vec2 position) {
     value+=greenCubic(float(x)-t.x)*greenCubic(float(y)-t.y)*c;
     lo=min(lo,c);hi=max(hi,c);
   }
-  return clamp(value,lo,hi);
+  value = clamp(value, lo, hi);
+  if (guard < 1.0) return mix(interpolateMeasuredGreen(position), value, guard);
+  return value;
 }
 
 void main() {
@@ -202,19 +236,42 @@ void main() {
   // reconstruction as comparisons; this retains its original fine texture.
   bool detailGreen = bayer && wideGather && p.pad[5] != 0u &&
                      (p.pad[4] == 0u || p.beta != 1.0);
-  // With detailGreen the green taps are skipped: visit only the R/B sites
-  // of each row (j parity == row parity in RGGB), same taps in the same
-  // order, so bit-identical at half the 7x7 loop trips.
-  int djStep = detailGreen ? 2 : 1;
+#ifdef SRP_GREEN_BURST_GATHER
+  // Direct green weights are accumulated across the burst. Keep the guarded
+  // per-frame sampler at strong edges where uneven sample coverage can zipper.
+  float burstMix = 0.0;
+#ifdef SRP_GREEN_BURST_GATHER_1X
+  const float gatherScale = 1.0;
+#else
+  const float gatherScale = 2.0;
+#endif
+  if (detailGreen && p.scale == gatherScale && p.beta > 0.0) {
+    ivec2 near = ivec2(center_j, center_i);
+    near.x -= (near.x + near.y) & 1;
+    float dx = abs(sensorGreen(near.x - 1, near.y) - sensorGreen(near.x + 1, near.y));
+    float dy = abs(sensorGreen(near.x, near.y - 1) - sensorGreen(near.x, near.y + 1));
+    float contrast = max(dx, dy);
+    burstMix = 0.8 * smoothstep(0.007, 0.025, contrast)
+                   * (1.0 - smoothstep(0.045, 0.09, contrast));
+#ifdef SRP_GREEN_BURST_GATHER_1X
+    burstMix *= smoothstep(0.35, 0.85, local_r);
+#endif
+  }
+  // Skip the Bayer green sites when the interpolating path supplies them.
+  bool skipGreen = detailGreen && burstMix == 0.0;
+#else
+#define skipGreen detailGreen
+#endif
+  int djStep = skipGreen ? 2 : 1;
   for (int di = -radius; di <= radius; di++) {
     int dj0 = -radius;
-    if (detailGreen && (((center_j + dj0) ^ (center_i + di)) & 1) != 0) dj0++;
+    if (skipGreen && (((center_j + dj0) ^ (center_i + di)) & 1) != 0) dj0++;
     for (int dj = dj0; dj <= radius; dj += djStep) {
       int j = center_j + dj;
       int i2 = center_i + di;
       if (!(j >= 0 && j < int(lrW) && i2 >= 0 && i2 < int(lrH))) continue;
       uint ch = bayer ? uint(i2 % 2 + j % 2) : 0u; // RGGB hardcoded, as on CPU
-      if (detailGreen && ch == 1u) continue;
+      if (skipGreen && ch == 1u) continue;
       float c = compImg[uint(i2) * lrW + uint(j)];
       float dx = float(j) - mov_j;
       float dy = float(i2) - mov_i;
@@ -226,17 +283,38 @@ void main() {
         w *= (1.0 - smoothstep(2.5, 3.5, abs(dx))) *
              (1.0 - smoothstep(2.5, 3.5, abs(dy)));
       }
+#ifdef SRP_GREEN_BURST_GATHER
+      if (burstMix > 0.0 && ch == 1u) {
+        // Normalize the Gaussian mass analytically for density 1/2. This
+        // keeps the direct and interpolated weights on the same scale while
+        // allowing frames with better measured coverage to contribute more.
+#ifdef SRP_GREEN_BURST_GATHER_1X
+        const float sigmaSq = 0.26 * 0.26;
+#else
+        const float sigmaSq = 0.35 * 0.35;
+#endif
+        w = burstMix * p.beta * sqrt(max(det, 0.0)) / sigmaSq
+            * exp(-0.5 * (dx * dx + dy * dy) / sigmaSq);
+      }
+#endif
       val[ch] += w * local_r * c;
       acc[ch] += w * local_r;
     }
   }
+#ifndef SRP_GREEN_BURST_GATHER
+#undef skipGreen
+#endif
   if (detailGreen && local_r > 0.0 && p.beta > 0.0) {
-    // Identical frame weights at every image position: preserve source
-    // luminance grain in textured areas as well as flats. No spatial mask,
-    // narrower sampling kernel, or generated noise is involved.
+    // The per-frame green weight preserves source luminance grain.
     float weight = 3.14159265359*sqrt(max(det,0.0))*local_r*p.beta;
-    val.g = weight*interpolateGreen(vec2(mov_x,mov_y));
+#ifdef SRP_GREEN_BURST_GATHER
+    float interpolatedWeight = weight * (1.0 - burstMix);
+    val.g += interpolatedWeight * interpolateGreen(vec2(mov_x, mov_y));
+    acc.g += interpolatedWeight;
+#else
+    val.g = weight * interpolateGreen(vec2(mov_x, mov_y));
     acc.g = weight;
+#endif
   }
   // Frame equalization (gamma > 0): a narrow kernel lets whichever frame has
   // the nearest sample dominate, so frames stop averaging and Wronski needs

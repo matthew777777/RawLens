@@ -1,0 +1,214 @@
+// Fixed-flow green data step for desktop tiled Wronski replay.
+#version 450
+layout(local_size_x = 256) in;
+layout(push_constant) uniform Params {
+    int op, tw, th, tx, ty, bw, bx, by, sw, sh, sx, sy;
+    int width, height, scale, tile, fw, fh;
+    float alpha, beta, quantum;
+    int rw, rx, ry;
+    float offQuantum;
+    int bh;
+} p;
+layout(set=0,binding=0) readonly buffer Base { float green[]; };
+layout(set=0,binding=1) readonly buffer RawPatch { float samples[]; };
+layout(set=0,binding=2) readonly buffer Flow { vec2 flow[]; };
+layout(set=0,binding=3) readonly buffer Robust { float robust[]; };
+layout(set=0,binding=4) buffer Fit { int fit[]; };
+
+
+vec4 basis(float t) {
+    float u = 1.0 - t;
+    return vec4(u*u*u, 4.0-6.0*t*t+3.0*t*t*t, 1.0+3.0*t+3.0*t*t-3.0*t*t*t, t*t*t) / 6.0;
+}
+vec2 shiftAt(vec2 q) {
+    vec2 g = q / float(p.tile) - 0.5;
+    ivec2 start = ivec2(floor(g)) - 1;
+    vec4 wx = basis(fract(g.x)), wy = basis(fract(g.y));
+    vec2 f = vec2(0);
+    for (int j=0; j<4; ++j) for (int i=0; i<4; ++i) {
+        ivec2 xy = clamp(start + ivec2(i,j), ivec2(0), ivec2(p.fw-1,p.fh-1));
+        f += wx[i] * wy[j] * flow[xy.y*p.fw+xy.x];
+    }
+    return f;
+}
+vec3 footprint(float f) {
+    return p.scale == 1 ? vec3(1.0-f,f,0) : vec3(1.0-f,1.0,f)*0.5;
+}
+// Reuse one flow evaluation across an output Bayer cell. Each invocation
+// owns all four normal-equation rows. Frames are dispatched sequentially.
+float checkGreen(float value) {
+    return isnan(value) || isinf(value) ? 1.0 : value;
+}
+float loadGreen(ivec2 site) {
+    if (((site.x+site.y)&1)==0 || any(lessThan(site,ivec2(2))) ||
+        any(greaterThanEqual(site,ivec2(p.width-2,p.height-2)))) return 1.0;
+    return checkGreen(samples[site.y*p.width+site.x]);
+}
+void gatherRow(int id,vec4 values,vec4 basisWeights,float confidence) {
+    vec4 weights = confidence*mix(vec4(0),basisWeights,lessThan(values,vec4(0.98)));
+    float rhs = dot(weights,max(values-0.5,-1.0));
+    float diagonal = dot(weights,basisWeights);
+    vec4 adjacent = vec4(
+        dot(weights.yw,basisWeights.xz),
+        dot(weights.zw,basisWeights.xy),
+        weights.w*basisWeights.x,
+        weights.z*basisWeights.y);
+    ivec2 increment = ivec2(round(vec2(rhs,diagonal)*p.quantum));
+    int addr = 2*id;
+    int word = fit[addr];
+    ivec2 old = ivec2(bitfieldExtract(word,0,16),bitfieldExtract(word,16,16));
+    uvec2 sum = uvec2(clamp(old+increment,ivec2(-32768),ivec2(32767))) & 65535u;
+    fit[addr] = int(sum.x | (sum.y<<16u));
+
+    // Axial weights are at most 1/4 per frame and diagonal weights
+    // at most 1/16. The burst-specific scale fits the 9/9/7/7 bit fields.
+    uvec4 off = uvec4(round(adjacent*p.offQuantum));
+    uint encoded = off.x | (off.y<<9u) | (off.z<<18u) | (off.w<<25u);
+    fit[addr+1] = int(uint(fit[addr+1])+encoded);
+}
+void gatherNormal(int id) {
+    ivec2 guide = ivec2(id%p.rw,id/p.rw);
+    ivec2 xy = 2*guide;
+    float r = clamp(robust[id],0.0,1.0);
+    int trust = 2*p.width*p.height+id;
+    fit[trust] = min(fit[trust],int(round(1024.0*r)));
+    float confidence = r*r*smoothstep(0.65,0.98,r);
+    if (!(confidence > 0.0)) return;
+    vec2 shift = shiftAt(vec2(xy)+1.0);
+    if (any(greaterThan(abs(shift),vec2(64)))) return;
+    ivec2 base = xy+ivec2(floor(shift));
+    vec2 f = fract(shift);
+    int pixel = xy.y*p.width+xy.x;
+    vec2 u = 1.0-f;
+    vec4 weights = vec4(u.x*u.y,f.x*u.y,u.x*f.y,f.x*f.y);
+    vec3 top = vec3(1.0), mid = vec3(1.0), bottom = vec3(1.0);
+    if (all(greaterThanEqual(base,ivec2(2))) &&
+        all(lessThan(base,ivec2(p.width-4,p.height-4)))) {
+        int addr = base.y*p.width+base.x;
+        if (((base.x+base.y)&1)==0) {
+            top.y = checkGreen(samples[addr+1]);
+            mid.x = checkGreen(samples[addr+p.width]);
+            mid.z = checkGreen(samples[addr+p.width+2]);
+            bottom.y = checkGreen(samples[addr+2*p.width+1]);
+        } else {
+            top.x = checkGreen(samples[addr]);
+            top.z = checkGreen(samples[addr+2]);
+            mid.y = checkGreen(samples[addr+p.width+1]);
+            bottom.x = checkGreen(samples[addr+2*p.width]);
+            bottom.z = checkGreen(samples[addr+2*p.width+2]);
+        }
+    } else {
+        top = vec3(loadGreen(base),loadGreen(base+ivec2(1,0)),loadGreen(base+ivec2(2,0)));
+        mid = vec3(loadGreen(base+ivec2(0,1)),loadGreen(base+ivec2(1,1)),loadGreen(base+ivec2(2,1)));
+        bottom = vec3(loadGreen(base+ivec2(0,2)),loadGreen(base+ivec2(1,2)),loadGreen(base+ivec2(2,2)));
+    }
+    gatherRow(pixel,vec4(top.xy,mid.xy),weights,confidence);
+    gatherRow(pixel+1,vec4(top.yz,mid.yz),weights,confidence);
+    gatherRow(pixel+p.width,vec4(mid.xy,bottom.xy),weights,confidence);
+    gatherRow(pixel+p.width+1,vec4(mid.yz,bottom.yz),weights,confidence);
+}
+void initializeNormal(int id) {
+    ivec2 xy = ivec2(id%p.width,id/p.width);
+    int word = 0;
+    if (((xy.x+xy.y)&1)!=0 && all(greaterThanEqual(xy,ivec2(2))) &&
+        all(lessThan(xy,ivec2(p.width-2,p.height-2)))) {
+        float value = samples[id];
+        if (!isnan(value) && !isinf(value) && value < 0.98) {
+            int rhs = int(round(clamp((value-0.5)*p.quantum,-32768.0,32767.0)));
+            word = (rhs & 65535) | (int(p.quantum)<<16);
+        }
+    }
+    fit[2*id] = word;
+    fit[2*id+1] = 0;
+    if (((xy.x|xy.y)&1)==0) {
+        fit[2*p.width*p.height+(xy.y/2)*p.rw+xy.x/2] = 1024;
+    }
+}
+void main() {
+    int id = int(gl_GlobalInvocationID.x);
+    if (p.op == 0) {
+        if (id < p.tw*p.th*2) fit[id] = 0;
+        return;
+    }
+    if (p.op == 2) {
+        for (int i=id; i<p.tw*p.th*6; i+=int(gl_NumWorkGroups.x*gl_WorkGroupSize.x)) fit[i] = 0;
+        return;
+    }
+    if (p.op == 4) {
+        int stride = int(gl_NumWorkGroups.x*gl_WorkGroupSize.x);
+        for (int i=id; i<p.width*p.height; i+=stride) initializeNormal(i);
+        return;
+    }
+    if (p.op == 5) {
+        int stride = int(gl_NumWorkGroups.x*gl_WorkGroupSize.x);
+        for (int i=id; i<p.width*p.height/4; i+=stride) gatherNormal(i);
+        return;
+    }
+    if (id >= p.sw*p.sh) return;
+    ivec2 site = ivec2(id%p.sw+p.sx,id/p.sw+p.sy);
+    if (((site.x+site.y)&1)==0 || any(lessThan(site,ivec2(2))) ||
+        any(greaterThanEqual(site,ivec2(p.width-2,p.height-2)))) return;
+    float sampleValue = samples[id];
+    if (isnan(sampleValue) || isinf(sampleValue) || sampleValue >= 0.98) return;
+    vec2 m = vec2(site)+0.5;
+    vec2 q = m-shiftAt(m);
+    q = m-shiftAt(q);
+    if (any(greaterThan(abs(m-q),vec2(64)))) return;
+    if (any(lessThan(q,vec2(1))) || any(greaterThanEqual(q,vec2(p.width-1,p.height-1)))) return;
+    vec2 f = (q-0.5)*float(p.scale);
+    ivec2 xy = ivec2(floor(f));
+    ivec2 from = ivec2(p.tx,p.ty), end = from + ivec2(p.tw,p.th);
+    if (any(greaterThanEqual(xy,end)) || any(lessThan(xy+p.scale,from))) return;
+    // Rejection weights live on the reference guide grid.
+    ivec2 rxy = ivec2(q)/2 - ivec2(p.rx,p.ry);
+    float r = robust[rxy.y*p.rw+rxy.x];
+    if (r <= 0.0) return;
+    vec3 wx = footprint(fract(f.x)), wy = footprint(fract(f.y));
+    if (p.op == 3) {
+        // 1x normal equations. Store one half of the symmetric 3x3
+        // stencil. No prediction image is needed until after the merge.
+        const ivec2 offsets[4] = ivec2[4](ivec2(1,0),ivec2(0,1),ivec2(1,1),ivec2(-1,1));
+        for (int j=0; j<2; ++j) for (int i=0; i<2; ++i) {
+            ivec2 d = xy + ivec2(i,j);
+            if (any(lessThan(d,from)) || any(greaterThanEqual(d,end))) continue;
+            int pixel = (d.y-p.ty)*p.tw+d.x-p.tx;
+            int addr = 6*pixel;
+            float bw = wx[i]*wy[j];
+            float w = r*r*bw*p.quantum;
+            int rhs = int(round(w*(sampleValue-0.5)));
+            int diagonal = int(round(w*bw));
+            ivec4 offDiagonal = ivec4(0);
+            for (int k=0; k<4; ++k) {
+                ivec2 n = ivec2(i,j)+offsets[k];
+                if (any(lessThan(n,ivec2(0))) || any(greaterThan(n,ivec2(1)))) continue;
+                offDiagonal[k] = int(round(w*wx[n.x]*wy[n.y]));
+            }
+            atomicAdd(fit[addr],rhs);
+            atomicAdd(fit[addr+1],diagonal);
+            for (int k=0; k<4; ++k) if (offDiagonal[k] != 0) atomicAdd(fit[addr+2+k],offDiagonal[k]);
+        }
+        return;
+    }
+    ivec2 localBase = xy-ivec2(p.bx,p.by);
+    if (p.op == 6 && (any(lessThan(localBase,ivec2(0))) ||
+        any(greaterThanEqual(localBase+2,ivec2(p.bw,p.bh))))) return;
+    float prediction = 0.0;
+    for (int j=0; j<=p.scale; ++j) for (int i=0; i<=p.scale; ++i) {
+        ivec2 b = xy + ivec2(i,j) - ivec2(p.bx,p.by);
+        prediction += wx[i]*wy[j]*green[b.y*p.bw+b.x];
+    }
+    if (isnan(prediction) || isinf(prediction)) return;
+    float e = sampleValue-prediction;
+    float noise = sqrt(max(p.alpha*max(prediction,0.0)+p.beta,1e-8));
+    float accepted = r*r*clamp((6.0*noise-abs(e))/(3.0*noise),0.0,1.0);
+    if (p.op == 6) accepted *= smoothstep(0.35,0.85,r);
+    if (!(accepted > 0.0)) return;
+    for (int j=0; j<=p.scale; ++j) for (int i=0; i<=p.scale; ++i) {
+        ivec2 d = xy + ivec2(i,j);
+        if (any(lessThan(d,from)) || any(greaterThanEqual(d,end))) continue;
+        int pixel = (d.y-p.ty)*p.tw+d.x-p.tx;
+        float w = accepted*wx[i]*wy[j]*p.quantum;
+        atomicAdd(fit[2*pixel],int(round(w*e)));
+        atomicAdd(fit[2*pixel+1],int(round(w)));
+    }
+}

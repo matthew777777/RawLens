@@ -770,6 +770,7 @@ internal fun runKotlinPort(spec: StageSpec, inputs: Map<String, NpyArray>): List
                     kDenoise = 4.0f,
                     dTh = 0.75f,
                     dTr = 1.1f,
+                    kStretch = 4f, // Jamy-L fixture tuning, independent of the RawLens default.
                 ),
                 kernelPreprocessing = "gat",
                 kernelAlpha = ParityAlpha,

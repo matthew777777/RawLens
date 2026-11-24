@@ -9,7 +9,8 @@ package com.rawlens.srpipeline.stages
  * kDetail, kDenoise, Dth, Dtr) are exposed as MULTIPLIERS of the per-burst
  * SNR value ([BurstConfig.finalize]), so 1.0 keeps the automatic tuning at
  * every light level. Everything else is the value itself.
- * Defaults = the shipping engine before the Lab existed.
+ * The neutral constructor is the lab's original baseline. [APP_DEFAULT]
+ * is the starting point for app settings and desktop app-mode renders.
  */
 data class SrTuning(
     /** x kDetail (base kernel std, S.1): lower = sharper and noisier. */
@@ -54,7 +55,19 @@ data class SrTuning(
     val chromaScale1x: Float = 1f,
     /** Merge frame equalization gamma (0 = Wronski weights, 1 = equal frames). */
     val frameEqualize: Float = 0f,
+    /** Noise energy for experimental weak-edge gating in GAT units. Zero disables it. */
+    val weakEdgeNoise: Float = 0f,
+    /** Anchor flat width to the untuned per-burst detail width. */
+    val independentWidths: Boolean = false,
 ) {
+    companion object {
+        val APP_DEFAULT = SrTuning(
+            kDetailScale = 0.85f,
+            kDenoiseScale = 1.30f,
+            independentWidths = true,
+        )
+    }
+
     /** R/B width factor for an output [scale]. */
     fun chromaScale(scale: Float): Float = if (scale > 1f) chromaScale2x else chromaScale1x
 
@@ -67,6 +80,8 @@ data class SrTuning(
         kStretch = kStretch,
         kShrink = kShrink,
         kMin = kMin,
+        weakEdgeNoise = weakEdgeNoise,
+        flatSigma = if (independentWidths) (fin.kDetail * fin.kDenoise * kDenoiseScale).toFloat() else 0f,
     )
 
     fun robustnessParams(haveNoiseLut: Boolean, s3: Boolean): RobustnessParams = RobustnessParams(

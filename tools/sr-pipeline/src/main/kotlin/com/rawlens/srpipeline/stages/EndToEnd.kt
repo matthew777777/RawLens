@@ -155,6 +155,13 @@ data class PipelineConfig(
      */
     val twoBand: TwoBandReconstruction.Params? = null,
 ) {
+    init {
+        require(kernelParams.weakEdgeNoise.isFinite() && kernelParams.weakEdgeNoise >= 0f)
+        require(kernelParams.weakEdgeNoise == 0f || (bayer && kernelPreprocessing == "gat")) {
+            "Weak-edge gating requires Bayer input with GAT kernel preprocessing"
+        }
+    }
+
     companion object {
         /**
          * Owner choice 2026-11-20: 0.5 (was 1). Known-truth bench, static,

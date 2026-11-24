@@ -10,6 +10,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MfsrSettingsTest {
+    @Test fun mfsrLabUsesIndependentDetailAndFlatDenoiseByDefault() {
+        assertEquals(1f, MfsrTuning.Entry.INDEPENDENT_WIDTHS.defaultValue(), 0f)
+        assertEquals(0.85f, MfsrTuning.Entry.K_DETAIL.defaultValue(), 0f)
+        assertEquals(1.30f, MfsrTuning.Entry.K_DENOISE.defaultValue(), 0f)
+    }
+
     @Test fun removedLkrKernelNetSwitchIsIgnored() {
         // KernelNet was removed from LK-R (2026-11-20); a saved choice must not change anything.
         assertEquals(MfsrSettings(), MfsrSettings.fromPreferences(mapOf("lkr_kernelnet_denoise" to false)))
@@ -66,11 +72,32 @@ class MfsrSettingsTest {
         assertFalse(MfsrSettings.fromPreferences(off.toPreferences()).lkrMiddleReference)
     }
 
+    @Test fun greenFitDefaultsOnForCompatibleMfsrAndCanBeDisabled() {
+        val defaults = MfsrSettings.fromPreferences(emptyMap<String, Any>())
+        assertTrue(defaults.useGreenFit)
+        val disabled = defaults.copy(greenFit = false)
+        assertFalse(MfsrSettings.fromPreferences(disabled.toPreferences()).useGreenFit)
+        assertFalse(defaults.copy(mfsrFullRes = true).useGreenFit)
+        assertFalse(defaults.copy(zipperFix = false).useGreenFit)
+        assertFalse(defaults.copy(twoBand = true).useGreenFit)
+    }
+
     @Test fun kbSr2xDefaultsOffAndRoundTrips() {
         assertFalse(MfsrSettings().mfsrFullRes)
         assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).mfsrFullRes)
         val on = MfsrSettings(mfsrFullRes = true)
         assertTrue(MfsrSettings.fromPreferences(on.toPreferences()).mfsrFullRes)
+    }
+
+    @Test fun wronskiDefaultsAtBothScalesAndTwoBandRequiresOptIn() {
+        for (fullRes in listOf(false, true)) {
+            val settings = MfsrSettings(mfsrFullRes = fullRes)
+            val legacy = mapOf("mfsr_full_res" to fullRes, "mfsr_two_band" to true)
+            assertEquals(settings, MfsrSettings.fromPreferences(legacy))
+            assertFalse(settings.twoBand)
+            val optedIn = settings.copy(twoBand = true)
+            assertEquals(optedIn, MfsrSettings.fromPreferences(optedIn.toPreferences()))
+        }
     }
 
     @Test fun lkrDefaultsToNoPrior() {
@@ -80,6 +107,18 @@ class MfsrSettingsTest {
         assertFalse(MfsrSettings.fromPreferences(mapOf("lkr_use_prior" to true, "lkr_paper_parity_v2" to true)).lkrDctPrior)
         val on = MfsrSettings(lkrDctPrior = true)
         assertTrue(MfsrSettings.fromPreferences(on.toPreferences()).lkrDctPrior)
+    }
+
+    @Test fun lkrNpuDenoiseIsOptInAndStoredSeparately() {
+        assertFalse(MfsrSettings.fromPreferences(mapOf("lkr_network" to true)).lkrNpuDenoise)
+        val settings = MfsrSettings(lkrNpuDenoise = true, lkrNetwork = false, lkrDctPrior = true)
+        assertEquals(settings, MfsrSettings.fromPreferences(settings.toPreferences()))
+    }
+
+    @Test fun lkrNoPriorIsOptInAndPreservesSavedDenoisers() {
+        assertFalse(MfsrSettings.fromPreferences(mapOf("lkr_network" to true)).lkrNoPrior)
+        val settings = MfsrSettings(lkrNoPrior = true, lkrNetwork = true, lkrNpuDenoise = true, lkrDctPrior = true)
+        assertEquals(settings, MfsrSettings.fromPreferences(settings.toPreferences()))
     }
 
     @Test fun lkrZoomCropsTheCentreAndKeepsSensorOutput() {

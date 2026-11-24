@@ -1,0 +1,46 @@
+#version 450
+layout(local_size_x=256) in;
+layout(push_constant) uniform FitParams {
+    int width, height, first;
+    float alpha, beta, quantum;
+} p;
+layout(set=0,binding=0) readonly buffer Stats { int stats[]; };
+layout(set=0,binding=1) readonly buffer Base { float base[]; };
+layout(set=0,binding=2) readonly buffer Delta { float delta[]; };
+layout(set=0,binding=3) writeonly buffer Next { float nextDelta[]; };
+
+const ivec2 offsets[9] = ivec2[9](ivec2(0,0),ivec2(1,0),ivec2(-1,0),ivec2(0,1),
+    ivec2(0,-1),ivec2(1,1),ivec2(-1,-1),ivec2(-1,1),ivec2(1,-1));
+const int coeff[9] = int[9](1,2,2,3,3,4,4,5,5);
+
+void main() {
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= p.width*p.height) return;
+    ivec2 xy = ivec2(i%p.width,i/p.width);
+    float green = base[i];
+    if (isnan(green) || isinf(green)) { nextDelta[i] = 0.0; return; }
+    float contrast = 0.0;
+    for (int j=1; j<=4; ++j) {
+        ivec2 q = clamp(xy+offsets[j],ivec2(0),ivec2(p.width-1,p.height-1));
+        contrast += abs(base[q.y*p.width+q.x]-green)*0.25;
+    }
+    float noise = sqrt(max(p.alpha*max(green,0.0)+p.beta,1e-8));
+    float confidence = smoothstep(0.65,1.5,contrast/noise);
+    if (!(confidence > 0.0)) { nextDelta[i] = 0.0; return; }
+    const float damping = 0.25;
+    float before = p.first != 0 ? 0.0 : delta[i];
+    float residual = float(stats[6*i])/p.quantum - damping*before;
+    float mass = damping;
+    for (int j=0; j<9; ++j) {
+        ivec2 q = xy+offsets[j];
+        if (any(lessThan(q,ivec2(0))) || any(greaterThanEqual(q,ivec2(p.width,p.height)))) continue;
+        int n = q.y*p.width+q.x;
+        int owner = j>0 && (j&1)==0 ? n : i;
+        float w = float(stats[6*owner+coeff[j]])/p.quantum;
+        residual -= w*(base[n]-0.5 + (p.first != 0 ? 0.0 : delta[n]));
+        mass += w;
+    }
+    float limit = 3.0*sqrt(max(p.alpha*0.42+p.beta,1e-8))*confidence;
+    nextDelta[i] = isnan(residual) || isinf(residual) ? 0.0 :
+        clamp(before+0.95*confidence*residual/mass,-limit,limit);
+}

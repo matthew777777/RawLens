@@ -10,6 +10,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
@@ -1605,8 +1606,8 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeGrad(
 
 // Real GPU path: kernel-covariance build (kernels.comp, Alg.5) over
 // caller-owned direct buffers. `grads_buffer` holds gradW*gradH*2
-// interleaved-pair floats, `kparams_buffer` holds 9 floats (six shaping
-// scalars + selection_law/is_iso by bit pattern), `cov_buffer` receives
+// interleaved-pair floats, `kparams_buffer` holds nine kernel parameters
+// plus up to two experimental values, `cov_buffer` receives
 // covW*covH*4 floats ((xx,xy,yy,0) per cov pixel). `spirv` holds the
 // compiled shaders/kernels.comp module. Staged via StageAndRunCorr
 // (kparams staged in, cov read back). Returns srp::Status.
@@ -1625,9 +1626,11 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKernelsCov(
   const int64_t grads_count =
       static_cast<int64_t>(grad_w) * grad_h * 2;
   const int64_t cov_count = static_cast<int64_t>(cov_w) * cov_h * 4;
+  const int64_t kp_count =
+      std::clamp<int64_t>(env->GetDirectBufferCapacity(kparams_buffer) / static_cast<int64_t>(sizeof(float)), 9, 11);
   const srp::Status status = StageAndRunCorr(
       env, ctx, device, physical, grads_buffer, kparams_buffer, cov_buffer,
-      grads_count, 9, cov_count, spirv,
+      grads_count, kp_count, cov_count, spirv,
       [&](VkBuffer a, VkBuffer b, VkBuffer c, VkShaderModule module) {
         return srp::SrpKernelsCovGpu(
             ctx, static_cast<uint32_t>(grad_w), static_cast<uint32_t>(grad_h),
@@ -2267,7 +2270,9 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKernelsCovRes
   VkBuffer kp_vk = VK_NULL_HANDLE;
   VkDeviceMemory kp_mem = VK_NULL_HANDLE;
   srp::Status status = srp::Status::kDispatchFailed;
-  if (MakeStagingBuffer(device, physical, 36, kp_ptr, &kp_vk, &kp_mem)) {
+  const VkDeviceSize kp_bytes =
+      std::clamp<int64_t>(env->GetDirectBufferCapacity(kp_buffer) / static_cast<int64_t>(sizeof(float)), 9, 11) * sizeof(float);
+  if (MakeStagingBuffer(device, physical, kp_bytes, kp_ptr, &kp_vk, &kp_mem)) {
     status = srp::SrpKernelsCovGpu(
         ctx, static_cast<uint32_t>(grad_w), static_cast<uint32_t>(grad_h),
         static_cast<uint32_t>(cov_w), static_cast<uint32_t>(cov_h), grads_vk,

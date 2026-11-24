@@ -1,5 +1,6 @@
 package com.rawlens.srpipeline.cli
 
+import com.rawlens.srpipeline.stages.BlackPedestal
 import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.HotPixels
 import com.rawlens.srpipeline.stages.AlignGpu
@@ -117,7 +118,7 @@ private fun usage(): String = """
       --tune app|ipol|k=v,...
                      default app: app tuning (SrTuning), app kernels, robustness and colour difference;
                      ipol: IPOL CLI defaults (no colour difference); overrides on app tuning, keys kDetailScale kDenoiseScale
-                     dThScale dTrScale kStretch kShrink kMin t s1 s2 mt chromaScale1x chromaScale2x frameEqualize
+                     dThScale dTrScale kStretch kShrink kMin t s1 s2 mt chromaScale1x chromaScale2x frameEqualize weakEdgeNoise independentWidths
       --noise-ab a,b own noise model var = a*x + b (normalised raw) instead of the DNG/Camera2 NoiseProfile
       --heap-budget-mb N
                      peak JVM heap-pool gate in MB; fails the run when exceeded
@@ -390,7 +391,7 @@ internal fun parseArgs(args: Array<String>): Plan {
 
 /** `--tune app` = app defaults; otherwise comma-separated [SrTuning] overrides. */
 internal fun parseTune(spec: String): com.rawlens.srpipeline.stages.SrTuning {
-    var t = com.rawlens.srpipeline.stages.SrTuning()
+    var t = com.rawlens.srpipeline.stages.SrTuning.APP_DEFAULT
     if (spec == "app") return t
     for (kv in spec.split(',').filter { it.isNotBlank() }) {
         val (k, raw) = kv.split('=', limit = 2).let { if (it.size == 2) it[0].trim() to it[1].trim() else fail("--tune: \"$kv\" is not k=v") }
@@ -410,6 +411,13 @@ internal fun parseTune(spec: String): com.rawlens.srpipeline.stages.SrTuning {
             "chromaScale1x" -> t.copy(chromaScale1x = v)
             "chromaScale2x" -> t.copy(chromaScale2x = v)
             "frameEqualize" -> t.copy(frameEqualize = v)
+            "independentWidths" -> t.copy(independentWidths = when (v) {
+                0f -> false
+                1f -> true
+                else -> fail("--tune: independentWidths must be 0 or 1")
+            })
+            "weakEdgeNoise" -> t.copy(weakEdgeNoise = v.takeIf { it in 0f..2f }
+                ?: fail("--tune: weakEdgeNoise must be in 0..2"))
             else -> fail("--tune: unknown key \"$k\"")
         }
     }
@@ -537,6 +545,20 @@ private fun merge(plan: Plan) {
     require(!plan.mobilePolynomial || (plan.backend == "vulkan" && plan.kernel == "wronski" && colourDiff != null)) {
         "mobile reconstruction requires Vulkan Wronski with valid colour-difference white-balance gains"
     }
+    val greenResidual = System.getenv("SRP_GREEN_RESIDUAL") == "1"
+    val greenOnline = System.getenv("SRP_GREEN_ONLINE") == "1"
+    val residentOnline = greenOnline && System.getenv("SRP_GREEN_RESIDENT") == "1"
+    require(!greenOnline || (plan.backend == "vulkan" && plan.kernel == "wronski" &&
+        plan.scale == 1f && colourDiff != null && !greenResidual &&
+        !plan.tiledPolynomial && !plan.organicReconstruction && !plan.mobilePolynomial &&
+        !plan.twoBand && !plan.twoBandGpu)) {
+        "SRP_GREEN_ONLINE requires Vulkan Wronski, colour differences and 1x"
+    }
+    require(!greenResidual || (plan.backend == "vulkan" && plan.kernel == "wronski" &&
+        plan.scale in listOf(1f, 2f) && colourDiff != null && !plan.tiledPolynomial &&
+        !plan.organicReconstruction && !plan.mobilePolynomial && !plan.twoBand && !plan.twoBandGpu)) {
+        "SRP_GREEN_RESIDUAL requires Vulkan Wronski with Bayer colour differences at 1x or 2x"
+    }
     val config = PipelineConfig(
         scale = plan.scale,
         bayer = true,
@@ -600,16 +622,23 @@ private fun merge(plan: Plan) {
         }
         else -> {
             val dir = plan.spvDir!!
+            val greenFitShader = if (greenResidual) spv(dir, "green_residual") else null
+            val onlineShaders = if (greenOnline) spv(dir, "green_residual") to spv(dir, if (residentOnline) "green_normal_resident" else "green_normal_solve") else null
             val handle = SrpBridge.nativeCreate()
             require(handle != 0L) { "sr-pipeline: nativeCreate failed" }
             val cache = if (plan.tiledPolynomial) com.rawlens.srpipeline.stages.PolynomialTileCache(w,h,config) else null
+            val greenFit = if (greenFitShader != null) com.rawlens.srpipeline.stages.GreenResidualTiles(w, h, config) else null
             // SRP_TB=sigmaHigh,denoise(0/1),grainFloor,sigmaLow overrides the two-band defaults.
             val twoBand = if (!plan.twoBand) null else com.rawlens.srpipeline.stages.TwoBandRecorder(w, h, config,
                 System.getenv("SRP_TB")?.split(',')?.let { q -> com.rawlens.srpipeline.stages.TwoBandReconstruction.Params(
                     sigmaHigh = q[0].toDouble(), denoise = q.getOrNull(1) != "0",
                     grainFloor = q.getOrNull(2)?.toDouble() ?: 0.0, sigmaLow = q.getOrNull(3)?.toDouble() ?: 1.0) }
                     ?: com.rawlens.srpipeline.stages.TwoBandReconstruction.Params())
+            var online: com.rawlens.srpipeline.stages.GreenNormalTile? = null
             try {
+                online = onlineShaders?.let {
+                    com.rawlens.srpipeline.stages.GreenNormalTile(handle, it.first, w, h, config.tileSizes.first(), comps.size + 1, it.second.takeIf { residentOnline })
+                }
                 val fft = spv(dir, "fft")
                 val buf = VulkanPipeline.run(
                     { refImg }, compImgs.map { t -> { _: java.nio.ByteBuffer -> t() } },
@@ -659,13 +688,29 @@ private fun merge(plan: Plan) {
                         robFeather = if (plan.twoBandGpu) spv(dir, "rob_feather") else null,
                     ),
                     frameObserver = cache?.let { c -> { f, flow, r -> c.record(f,flow,r) } }
-                        ?: twoBand?.let { t -> { f, flow, r -> t.record(f, flow, r) } },
+                        ?: twoBand?.let { t -> { f, flow, r -> t.record(f, flow, r) } }
+                        ?: greenFit?.let { it::record } ?: online?.takeUnless { residentOnline }?.let { it::record },
+                    greenFit = online?.takeIf { residentOnline },
                 )
                 cache?.finish(buf)
                 twoBand?.let { t -> println("sr-pipeline: two-band reconstruction over ${t.frames} frames"); t.finish(buf) }
+                if (greenFit != null && greenFitShader != null) {
+                    val start = System.nanoTime()
+                    val guarded2x = plan.scale == 2f
+                    val pedestal = if (guarded2x && config.blackPedestal)
+                        BlackPedestal.estimate(refImg, config.kernelAlpha, config.kernelBeta).pedestal else 0f
+                    greenFit.finish(buf, handle, greenFitShader, tileSize = if (guarded2x) 768 else 256,
+                        guarded2x = guarded2x, pedestal = pedestal)
+                    println("sr-pipeline: tiled green residual fit in ${(System.nanoTime() - start) / 1_000_000} ms")
+                }
+                if (online != null && onlineShaders != null && !residentOnline) {
+                    online.finishGpu(buf, onlineShaders.second, colourDiff!!, config.kernelAlpha[1], config.kernelBeta[1])
+                }
                 buf
             } finally {
                 cache?.close()
+                greenFit?.close()
+                online?.close()
                 SrpBridge.nativeDestroy(handle)
             }
         }

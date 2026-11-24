@@ -1,0 +1,117 @@
+#version 450
+layout(local_size_x=256) in;
+layout(push_constant) uniform FitParams {
+    int width, height, pass;
+    float alpha, beta, quantum, offQuantum, pedestal, wbR, wbB;
+} p;
+layout(set=0,binding=0) readonly buffer Stats { int stats[]; };
+layout(set=0,binding=1) buffer Merged { float rgb[]; };
+layout(set=0,binding=2) buffer Scratch { float scratch[]; };
+
+const ivec2 offsets[9] = ivec2[9](ivec2(0,0),ivec2(1,0),ivec2(-1,0),ivec2(0,1),
+    ivec2(0,-1),ivec2(1,1),ivec2(-1,-1),ivec2(-1,1),ivec2(1,-1));
+float offWeight(uint word,int start,int bits) {
+    return float(bitfieldExtract(word,start,bits))/p.offQuantum;
+}
+// The green update also moves reconstructed red and blue. Measure each
+// channel's distance from the same pedestal the DNG pipeline subtracts.
+float darkeningBudget(int i, float green) {
+    float red = green + rgb[3*i] - p.pedestal*p.wbR;
+    float blue = green + rgb[3*i+2] - p.pedestal*p.wbB;
+    float headroom = min(green-p.pedestal,min(red,blue));
+    return 0.18*max(headroom,0.0);
+}
+int neighborIndex(ivec2 xy, int j) {
+    ivec2 q = clamp(xy+offsets[j],ivec2(0),ivec2(p.width-1,p.height-1));
+    return q.y*p.width+q.x;
+}
+
+// Test Bayer-period energy in the correction, including oscillation
+// riding on a nonzero correction. Two samples on either side distinguish
+// sustained axial alternation from an isolated feature.
+float phaseStrength(float center, float nearPair, float farPair) {
+    float phase = sign(center-0.5*nearPair);
+    return max(0.0,min(phase*(center-0.5*nearPair),
+                       phase*(0.5*farPair-0.5*nearPair)));
+}
+
+float selectiveCorrection(ivec2 xy, int plane, float center, float noise, float trust) {
+    float horizontal = scratch[plane+neighborIndex(xy,1)]+scratch[plane+neighborIndex(xy,2)];
+    float vertical = scratch[plane+neighborIndex(xy,3)]+scratch[plane+neighborIndex(xy,4)];
+    float diagonal = 0.0;
+    for (int j=5; j<=8; ++j) diagonal += scratch[plane+neighborIndex(xy,j)];
+    float filtered = (4.0*center+2.0*(horizontal+vertical)+diagonal)/16.0;
+    float detail = center-filtered;
+    if (abs(detail) < 1e-7 || trust <= 0.8) return filtered;
+
+    float farX = scratch[plane+neighborIndex(xy+ivec2(1,0),1)]+
+                 scratch[plane+neighborIndex(xy-ivec2(1,0),2)];
+    float farY = scratch[plane+neighborIndex(xy+ivec2(0,1),3)]+
+                 scratch[plane+neighborIndex(xy-ivec2(0,1),4)];
+    float axial = max(phaseStrength(center,horizontal,farX),phaseStrength(center,vertical,farY));
+    float checker = abs(4.0*center-2.0*(horizontal+vertical)+diagonal)/16.0;
+    float periodic = max(axial,2.0*checker);
+    float gain = smoothstep(0.8,0.98,trust)*(1.0-smoothstep(0.1,0.4,periodic/noise));
+    // Bound the restored high frequencies where the phase test is ambiguous.
+    float limit = min(0.15*noise,0.0006);
+    return filtered+gain*clamp(detail,-limit,limit);
+}
+
+void solvePixel(int i) {
+    ivec2 xy = ivec2(i%p.width,i/p.width);
+    int nPixels = p.width*p.height;
+    float green = rgb[3*i+1];
+    float budget = darkeningBudget(i,green);
+    float noise = sqrt(max(p.alpha*max(green,0.0)+p.beta,1e-8));
+    if (p.pass == 3) {
+        int guide = (xy.y/2)*(p.width/2)+xy.x/2;
+        float trust = float(stats[2*nPixels+guide])/1024.0;
+        float correction = smoothstep(0.25,0.8,trust)*
+            selectiveCorrection(xy,nPixels,scratch[nPixels+i],noise,trust);
+        rgb[3*i+1] = green + max(correction,-budget);
+        return;
+    }
+    int src = (p.pass&1)*nPixels, dst = nPixels-src;
+    vec4 sides = vec4(rgb[3*neighborIndex(xy,1)+1],rgb[3*neighborIndex(xy,2)+1],
+                      rgb[3*neighborIndex(xy,3)+1],rgb[3*neighborIndex(xy,4)+1]);
+    vec4 diffs = abs(sides-green);
+    float variation = dot(diffs,vec4(1.0));
+    float peak = max(max(diffs.x,diffs.y),max(diffs.z,diffs.w));
+    float coherence = length(sides.xz-sides.yw)/max(variation,noise);
+    // Keep the base merge on strong, coherent edges where the fit can ring.
+    float edge = smoothstep(2.5,7.0,peak/noise)*smoothstep(0.35,0.75,coherence);
+    float confidence = smoothstep(0.65,1.5,0.25*variation/noise)*(1.0-0.90*edge);
+    if (isnan(green) || isinf(green) || !(confidence > 0.0)) {
+        scratch[dst+i] = 0.0;
+        return;
+    }
+    const float damping = 0.25;
+    bool first = p.pass == 0;
+    float before = first ? 0.0 : scratch[src+i];
+    float residual = float(bitfieldExtract(stats[2*i],0,16))/p.quantum-damping*before;
+    float mass = damping;
+    bool interior = xy.x>0 && xy.x<p.width-1 && xy.y>0 && xy.y<p.height-1;
+    uint forward = uint(stats[2*i+1]);
+    for (int j=0; j<9; ++j) {
+        ivec2 q = xy+offsets[j];
+        if (!interior && (any(lessThan(q,ivec2(0))) || any(greaterThanEqual(q,ivec2(p.width,p.height))))) continue;
+        int n = q.y*p.width+q.x;
+        const int start[9] = int[9](0,0,0,9,9,18,18,25,25);
+        const int bits[9] = int[9](0,9,9,9,9,7,7,7,7);
+        uint word = j>0 && (j&1)==0 ? uint(stats[2*n+1]) : forward;
+        float w = j==0 ? float(bitfieldExtract(stats[2*i],16,16))/p.quantum :
+            offWeight(word,start[j],bits[j]);
+        residual -= w*(rgb[3*n+1]-0.5 + (first ? 0.0 : scratch[src+n]));
+        mass += w;
+    }
+    // The destination plane still holds the preceding iteration.
+    float momentum = first ? 0.0 : 0.33*(before-(p.pass == 1 ? 0.0 : scratch[dst+i]));
+    float limit = 3.0*noise*confidence;
+    scratch[dst+i] = isnan(residual) || isinf(residual) ? 0.0 :
+        clamp(before+momentum+1.32*confidence*residual/mass,-min(limit,budget),limit);
+}
+
+void main() {
+    int stride = int(gl_NumWorkGroups.x*gl_WorkGroupSize.x);
+    for (int i=int(gl_GlobalInvocationID.x); i<p.width*p.height; i+=stride) solvePixel(i);
+}

@@ -1,6 +1,7 @@
 package com.rawlens.srpipeline.stages
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -54,7 +55,7 @@ class KernelsTest {
 
     @Test
     fun `compute k linear and hard branches`() {
-        val lin = computeK(4f, 1f, KernelParams(selection = SelectionLaw.LINEAR))
+        val lin = computeK(4f, 1f, KernelParams(kStretch = 4f, selection = SelectionLaw.LINEAR))
         assertEquals(0.61270167f, lin.first, 1e-5f)
         assertEquals(3.32379001f, lin.second, 1e-5f)
         val hard = computeK(4f, 1f, KernelParams(selection = SelectionLaw.HARD_THRESHOLD))
@@ -63,9 +64,35 @@ class KernelsTest {
     }
 
     @Test
+    fun `weak-edge noise gate widens the cross-edge kernel near the noise floor`() {
+        val base = KernelParams(kDenoise = 3f)
+        val gated = base.copy(weakEdgeNoise = 1f)
+        val weak = computeK(1f, 0f, base)
+        val weakGated = computeK(1f, 0f, gated)
+        assertTrue(weakGated.first > weak.first)
+        assertEquals(computeK(0f, 0f, base), computeK(0f, 0f, gated))
+        assertEquals(computeK(1_000f, 0f, base).first, computeK(1_000f, 0f, gated).first, 0.001f)
+    }
+
+    @Test
+    fun `independent detail and denoise multipliers control opposite blend endpoints`() {
+        val burst = BurstConfig.finalize(30.0)
+        val baseline = SrTuning().kernelParams(burst)
+        val independent = SrTuning(independentWidths = true)
+        val neutral = independent.kernelParams(burst)
+        val sharper = independent.copy(kDetailScale = 0.85f).kernelParams(burst)
+        val smoother = independent.copy(kDenoiseScale = 1.30f).kernelParams(burst)
+        assertEquals(computeK(0f, 0f, baseline), computeK(0f, 0f, neutral))
+        assertEquals(computeK(0f, 0f, neutral), computeK(0f, 0f, sharper))
+        assertTrue(computeK(0f, 0f, smoother).first > computeK(0f, 0f, neutral).first)
+        assertEquals(computeK(10f, 0f, neutral), computeK(10f, 0f, smoother))
+        assertTrue(computeK(10f, 0f, sharper).second < computeK(10f, 0f, neutral).second)
+    }
+
+    @Test
     fun `kernel covariances of uniform gradients`() {
         val grads = Array(3) { Array(3) { floatArrayOf(1f, 0f) } }
-        val covs = estimateKernelCovariances(grads, KernelParams(selection = SelectionLaw.LINEAR))
+        val covs = estimateKernelCovariances(grads, KernelParams(kStretch = 4f, selection = SelectionLaw.LINEAR))
         assertEquals(0.25f, covs[1][1][0][0], 1e-5f)
         assertEquals(0f, covs[1][1][0][1], 1e-5f)
         assertEquals(16f, covs[1][1][1][1], 1e-4f)

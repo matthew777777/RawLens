@@ -1,5 +1,8 @@
 package com.rawlens.srpipeline.diag
 
+import com.rawlens.srpipeline.stages.BlackPedestal
+import com.rawlens.srpipeline.stages.GreenNormalTile
+
 import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
@@ -30,6 +33,18 @@ import kotlin.math.sqrt
  *
  * Run: ./gradlew :tools:sr-pipeline:test --tests '*WronskiVsKernelNetBench*' -PsrpDiag=1 -PsrpHeap=8g
  *      -PsrpLib=$PWD/tools/sr-pipeline/build/host/libsrpipeline_jni.dylib -Dsrpipeline.spvdir=... -i
+ * Set BENCH_TEXTURE_EXPORT to a temporary directory and BENCH_KERNELS=none
+ * to export the two retention levels and ground truth for score_texture_blend.py.
+ * BENCH_GREEN_SPV substitutes a candidate merge shader for the second render
+ * while holding retention and all other settings fixed.
+ * BENCH_FLOW_ORACLE=1 replays the known camera shifts at 2x, with and without
+ * deterministic per-frame Gaussian shift errors in sensor-pixel units.
+ * BENCH_GREEN_RESIDUAL=1 scores the one-step green fit and exports the same
+ * quantized input burst for RAWr's Mac replay tool.
+ * BENCH_GREEN_ONLINE=1 adds the 1x gather candidate and its streaming normal
+ * equations. Compile merge_splat.comp with SRP_GREEN_BURST_GATHER_1X and
+ * pass that module as BENCH_GREEN_SPV. Set BENCH_GREEN_RESIDENT=only
+ * to skip the other residual-fit variants.
  */
 class WronskiVsKernelNetBenchTest {
     private val spvDir = System.getProperty("srpipeline.spvdir")?.takeIf { it.isNotEmpty() } ?: "build/host"
@@ -96,10 +111,20 @@ class WronskiVsKernelNetBenchTest {
         )
     }
 
-    private fun run(handle: Long, frames: List<Array<FloatArray>>, c: PipelineConfig): Array<Array<FloatArray>> {
+    private fun run(handle: Long, frames: List<Array<FloatArray>>, c: PipelineConfig,
+                    shaders: VulkanPipeline.Spirvs = stageSpv,
+                    flowTransform: ((Int, Array<Array<FloatArray>>) -> Array<Array<FloatArray>>)? = null,
+                    registration: MutableList<GreenResidualFit.Registration>? = null,
+                    online: GreenNormalTile? = null, resident: GreenNormalTile? = null): Array<Array<FloatArray>> {
         val buf = VulkanPipeline.run({ frames[0].map { it.copyOf() }.toTypedArray() },
             frames.drop(1).map { f -> { _: ByteBuffer -> f.map { it.copyOf() }.toTypedArray() } },
-            c, handle, alignSpv, stageSpv)
+            c, handle, alignSpv, shaders, flowTransform = flowTransform,
+            frameObserver = registration?.let { list -> { _, flow, r ->
+                val count = frames[0].size * frames[0][0].size / 4
+                val copy = FloatArray(count)
+                r.duplicate().order(r.order()).rewind().asFloatBuffer().get(copy)
+                list += GreenResidualFit.Registration(flow.map { row -> row.map(FloatArray::clone).toTypedArray() }.toTypedArray(), copy)
+            } } ?: online?.let { it::record }, greenFit = resident)
         val h = (frames[0].size * c.scale).toInt(); val w = (frames[0][0].size * c.scale).toInt()
         val fb = buf.asFloatBuffer()
         return Array(h) { y -> Array(w) { x -> FloatArray(3) { ch -> fb.get((y * w + x) * 3 + ch).let { if (it.isNaN()) 0f else it } } } }
@@ -196,9 +221,24 @@ class WronskiVsKernelNetBenchTest {
         System.load(lib)
         val handle = SrpBridge.nativeCreate()
         check(handle != 0L) { "no Vulkan device" }
+        val textureExport = System.getenv("BENCH_TEXTURE_EXPORT")?.let { File(it).apply { mkdirs() } }
+        val candidate = System.getenv("BENCH_GREEN_SPV")?.let {
+            stageSpv.copy(mergeSplat = File(it).readBytes())
+        }
+        val oracle = System.getenv("BENCH_FLOW_ORACLE") == "1"
+        val fit = System.getenv("BENCH_GREEN_RESIDUAL") == "1"
+        val footprintFit = System.getenv("BENCH_GREEN_2X") == "1"
+        require(!footprintFit || fit)
+        val onlineFit = System.getenv("BENCH_GREEN_ONLINE") == "1"
+        val residentMode = System.getenv("BENCH_GREEN_RESIDENT")
+        val residentOnly = residentMode == "only"
+        require(!onlineFit || (fit && candidate != null))
+        require(!residentOnly || onlineFit)
+        require(!oracle || (textureExport != null && candidate != null))
+        require(!fit || textureExport != null)
         try {
             val t = Sr2xTruthTest()
-            val truths = mapOf(1 to truthWithDisc(t, 1), 2 to truthWithDisc(t, 2))
+            val truths = (1..2).associateWith { scale -> lazy { truthWithDisc(t, scale) } }
             // BENCH_SCENES=motion / BENCH_LEVELS=clean / BENCH_KERNELS=WRONSKI_NEW,WRONSKI_EVEN narrow a run.
             val sceneSel = System.getenv("BENCH_SCENES")?.split(',')?.toSet()
             val kernelSel = System.getenv("BENCH_KERNELS")?.split(',')?.toSet()
@@ -210,13 +250,158 @@ class WronskiVsKernelNetBenchTest {
                 val rng = java.util.Random(5)
                 val shifts = listOf(0.0 to 0.0) + List(7) { (rng.nextDouble() * 6 - 3) to (rng.nextDouble() * 6 - 3) }
                 val motion = List(8) { k -> if (scene != "motion") 0.0 to 0.0 else (k * 4.0) to (k * -2.5) }
+                val reuse = System.getenv("BENCH_REUSE_RAWBURST") == "1"
                 val frames = shifts.indices.map { k ->
-                    frameWithMotion(t, shifts[k].first, shifts[k].second, motion[k].first, motion[k].second, a0, b0, 100L + k,
-                        if (scene == "blur" && (k == 2 || k == 5)) 6.0 else 0.0) }
+                    if (reuse) {
+                        val dir = requireNotNull(textureExport)
+                        val raw = File(dir, "$scene-$label-rawburst/frame_%02d.raw16".format(k))
+                        val data = java.nio.ByteBuffer.wrap(raw.readBytes()).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        require(data.remaining() == t.n * t.n * 2)
+                        Array(t.n) { FloatArray(t.n) { ((data.short.toInt() and 0xffff) - 64f) / 16319f } }
+                    } else {
+                        frameWithMotion(t, shifts[k].first, shifts[k].second, motion[k].first, motion[k].second, a0, b0, 100L + k,
+                            if (scene == "blur" && (k == 2 || k == 5)) 6.0 else 0.0)
+                    }
+                }
+                if (textureExport != null && fit && !reuse) {
+                    val input = File(textureExport, "$scene-$label-rawburst").apply { mkdirs() }
+                    File(input, "bundle.txt").writeText("width=${t.n}\nheight=${t.n}\ncfa=0\nframes=${frames.size}\n")
+                    frames.forEachIndexed { index, raw ->
+                        val stem = "frame_%02d".format(index)
+                        File(input, "$stem.meta").writeText(
+                            "effectiveWhiteLevel\t16383\nblackLevelPhysicalRggb\t64,64,64,64\nrawrReferenceIndex\t0\n")
+                        val bytes = java.nio.ByteBuffer.allocate(t.n * t.n * 2)
+                            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        for (row in raw) for (x in row.indices) {
+                            val code = (64f + row[x].coerceIn(0f, 1f) * 16319f + 0.5f).toInt()
+                            bytes.putShort(code.toShort())
+                            row[x] = (code - 64f) / 16319f
+                        }
+                        File(input, "$stem.raw16").writeBytes(bytes.array())
+                    }
+                }
                 val al = DoubleArray(4) { maxOf(a0, 1e-6) }; val be = DoubleArray(4) { maxOf(b0, 1e-8) }
                 val fin = BurstConfig.finalize(BurstConfig.estimateSnr(frames[0], al, be))
                 for (scale in listOf(1, 2)) {
-                    val truth = truths[scale]!!
+                    if ((footprintFit && scale != 2) || (oracle && scale != 2) || (onlineFit && scale != 1)) continue
+                    val truth = truths.getValue(scale).value
+                    textureExport?.let { dir ->
+                        val cfg = cfg(Kernel.WRONSKI_BLUR, fin, al, be, scale.toFloat())
+                            .copy(kernelParams = SrTuning.APP_DEFAULT.kernelParams(fin))
+                        fun dump(name: String, image: Array<Array<FloatArray>>) {
+                            val row = java.nio.ByteBuffer.allocate(image[0].size * 3 * Float.SIZE_BYTES)
+                                .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                            File(dir, "$scene-$label-${scale}x-$name.f32").outputStream().buffered().use { stream ->
+                                for (pixels in image) {
+                                    row.clear()
+                                    for (pixel in pixels) for (channel in pixel) row.putFloat(channel)
+                                    stream.write(row.array())
+                                }
+                            }
+                        }
+                        val registration = if (fit && !residentOnly) mutableListOf<GreenResidualFit.Registration>() else null
+                        val base = run(handle, frames, cfg.copy(grainRetention = 0.5f), registration = registration)
+                        dump("base", base)
+                        if (registration != null && !footprintFit) {
+                            check(registration.size == frames.size)
+                            for (gain in listOf(0.75f, 1.5f)) {
+                                dump("fit-$gain", GreenResidualFit.apply(base, frames, registration, scale,
+                                    cfg.tileSizes.first(), al[1].toFloat(), be[1].toFloat(), cfg.colourDiff!!, gain, textureGate = false))
+                            }
+                        }
+                        if (registration != null) {
+                            val gated = if (footprintFit) null else GreenResidualFit.apply(base, frames, registration, scale,
+                                cfg.tileSizes.first(), al[1].toFloat(), be[1].toFloat(), cfg.colourDiff!!,
+                                step = 0.75f, textureGate = true)
+                            if (gated != null) dump("fit-gated", gated)
+                            if (footprintFit || System.getenv("BENCH_GREEN_RESIDUAL_GPU") == "1") {
+                                com.rawlens.srpipeline.stages.GreenResidualTiles(t.n, t.n, cfg).use { gpu ->
+                                    val raw = SrpBridge.directFloats(t.n * t.n)
+                                    val rob = SrpBridge.directFloats(t.n * t.n / 4)
+                                    for ((index, frame) in frames.withIndex()) {
+                                        val data = raw.asFloatBuffer()
+                                        frame.forEach { data.put(it) }
+                                        rob.asFloatBuffer().put(registration[index].robustness)
+                                        gpu.record(raw, registration[index].flow, rob)
+                                    }
+                                    val rgb = SrpBridge.directFloats(t.n * t.n * scale * scale * 3)
+                                    val data = rgb.asFloatBuffer()
+                                    for (row in base) for (sample in row) data.put(sample)
+                                    val pedestal = if (footprintFit && cfg.blackPedestal)
+                                        BlackPedestal.estimate(frames.first(), cfg.kernelAlpha, cfg.kernelBeta).pedestal else 0f
+                                    gpu.finish(rgb, handle, spv("green_residual"), tileSize = 173,
+                                        guarded2x = footprintFit, pedestal = pedestal)
+                                    data.rewind()
+                                    if (footprintFit) {
+                                        val image = Array(t.n * scale) { Array(t.n * scale) { FloatArray(3) } }
+                                        for (row in image) for (sample in row) data.get(sample)
+                                        dump("fit-footprint", image)
+                                        return@use
+                                    }
+                                    checkNotNull(gated)
+                                    var maxError = 0f
+                                    for (row in gated) for (sample in row) for (channel in sample) {
+                                        maxError = maxOf(maxError, kotlin.math.abs(data.get() - channel))
+                                    }
+                                    println("Green fit Vulkan vs CPU ${scale}x max error: $maxError")
+                                    check(maxError < 0.0002f) { "Tiled Vulkan fit exceeds CPU parity threshold: $maxError" }
+                                }
+                            }
+                        }
+                        if (candidate == null && !fit) {
+                            dump("donor", run(handle, frames, cfg.copy(grainRetention = 1f)))
+                        } else if (candidate != null) {
+                            if (onlineFit) {
+                                if (!residentOnly) GreenNormalTile(handle, spv("green_residual"), t.n, t.n, cfg.tileSizes.first(), frames.size).use { online ->
+                                    val merged = run(handle, frames, cfg, candidate, online = online)
+                                    dump("fit-gather", merged)
+                                    val wb = cfg.colourDiff!!
+                                    dump("fit-gather-online", online.finish(merged, wb, al[1].toFloat(), be[1].toFloat()))
+                                    for (passes in listOf(2, 3, 4, 6, 8)) {
+                                        val fitted = online.finish(merged, wb, al[1].toFloat(), be[1].toFloat(),
+                                            passes = passes, step = 0.95f, limitSigma = 3f)
+                                        dump("fit-online-$passes", fitted)
+                                        if (passes == 6) {
+                                            val gpu = SrpBridge.directFloats(t.n * t.n * 3)
+                                            val data = gpu.asFloatBuffer()
+                                            for (row in merged) for (pixel in row) data.put(pixel)
+                                            online.finishGpu(gpu, spv("green_normal_solve"), wb, al[1].toFloat(), be[1].toFloat())
+                                            data.rewind()
+                                            var error = 0f
+                                            for (row in fitted) for (pixel in row) for (channel in pixel) {
+                                                error = maxOf(error, kotlin.math.abs(data.get() - channel))
+                                            }
+                                            println("Six-step GPU vs CPU maximum error: $error")
+                                            check(error < 2e-5f)
+                                        }
+                                    }
+                                }
+                                if (residentOnly || residentMode == "1") {
+                                    GreenNormalTile(handle, spv("green_residual"), t.n, t.n, cfg.tileSizes.first(), frames.size,
+                                        spv("green_normal_resident")).use { fit ->
+                                        dump("fit-resident", run(handle, frames, cfg, candidate, resident = fit))
+                                    }
+                                }
+                            } else {
+                                dump("candidate", run(handle, frames, cfg.copy(grainRetention = 0.5f), candidate))
+                            }
+                            if (oracle) {
+                                for (jitter in listOf(0.0, 0.05, 0.10, 0.20)) {
+                                    val rng = java.util.Random(19)
+                                    val tag = if (jitter == 0.0) "oracle" else "jitter-$jitter"
+                                    dump(tag, run(handle, frames, cfg, candidate, flowTransform = { frame, flow ->
+                                        val (x, y) = shifts[frame]
+                                        val dx = (x + jitter * rng.nextGaussian()).toFloat()
+                                        val dy = (y + jitter * rng.nextGaussian()).toFloat()
+                                        Array(flow.size) { row ->
+                                            Array(flow[row].size) { floatArrayOf(dx, dy) }
+                                        }
+                                    }))
+                                }
+                            }
+                        }
+                        dump("truth", truth)
+                    }
                     val m = 24 * scale
                     val sweptMax = hypot(7 * 4.0, 7 * 2.5) + discR + 4
                         fun report(img: Array<Array<FloatArray>>, k: String) {

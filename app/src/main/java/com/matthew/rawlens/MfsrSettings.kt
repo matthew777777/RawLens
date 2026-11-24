@@ -43,13 +43,14 @@ data class MfsrSettings(
      * the plain Wronski Eq. 1 merge (previous output, bit for bit).
      */
     val zipperFix: Boolean = true,
+    val greenFit: Boolean = true,
     /**
      * Two-band reconstruction (sr-pipeline TwoBandReconstruction on Vulkan):
      * low band = wide Gaussian, high band = narrow Gaussian residual with an
      * overlapped DCT Wiener, no per-frame kernels. Needs the zipper fix
      * (colour differences); off = the Wronski kernel merge.
      */
-    val twoBand: Boolean = true,
+    val twoBand: Boolean = false,
     /**
      * Merge engine behind the same shutter / ZSL / save path: Wronski MFSR
      * (sr-pipeline) or LK-Reloaded (tools/lkr-lite = LK-R Lite, after Lecouat et al. 2021).
@@ -62,6 +63,8 @@ data class MfsrSettings(
     /** LK-R: learned post-fit network (colour dots / colour zipper; colour only). Stored default: on with
      *  an NPU (LkrBridge.nativeHasNpu); this constructor default only applies before settings load. */
     val lkrNetwork: Boolean = false,
+    val lkrNpuDenoise: Boolean = false,
+    val lkrNoPrior: Boolean = false,
     /**
      * LK-R: reference = sharpest of the middle three frames instead of the
      * newest three ([BurstSharpness.plan]); more frames survive motion
@@ -99,16 +102,22 @@ data class MfsrSettings(
     fun activeFrameCount(configuredCount: Int): Int =
         configuredCount.coerceIn(MIN_MERGE_FRAMES, maxFrames(engine, if (lkrFullRes && lkrZoom == LkrZoom.X1) LkrZoom.FULL_2X else lkrZoom))
 
+    internal val useGreenFit: Boolean
+        get() = greenFit && !mfsrFullRes && zipperFix && !twoBand
+
     fun toPreferences(): Map<String, Any> = mapOf(
-        "mfsr_enabled" to enabled,
+        KEY_ENABLED to enabled,
         "mfsr_keep_source_burst" to keepSourceBurst,
         "mfsr_s3" to s3,
         "mfsr_learned_noise" to learnedNoise,
         "mfsr_zipper_fix" to zipperFix,
-        "mfsr_two_band" to twoBand,
+        "mfsr_green_fit" to greenFit,
+        KEY_EXPERIMENTAL_TWO_BAND to twoBand,
         "mfsr_engine" to engine.name,
         "lkr_dct_prior" to lkrDctPrior,
         "lkr_network" to lkrNetwork,
+        "lkr_npu_denoise" to lkrNpuDenoise,
+        "lkr_no_prior" to lkrNoPrior,
         "lkr_middle_reference" to lkrMiddleReference,
         "lkr_zoom" to lkrZoom.name,
         "lkr_full_res" to lkrFullRes,
@@ -133,19 +142,25 @@ data class MfsrSettings(
     }
 
     companion object {
+        const val KEY_ENABLED = "mfsr_enabled"
+        // The old key could contain the former default from a bulk settings save.
+        const val KEY_EXPERIMENTAL_TWO_BAND = "mfsr_experimental_two_band"
         fun fromPreferences(values: Map<String, *>): MfsrSettings = MfsrSettings(
-            enabled = values["mfsr_enabled"] as? Boolean ?: false,
+            enabled = values[KEY_ENABLED] as? Boolean ?: false,
             keepSourceBurst = values["mfsr_keep_source_burst"] as? Boolean ?: false,
             s3 = values["mfsr_s3"] as? Boolean ?: true,
             learnedNoise = values["mfsr_learned_noise"] as? Boolean ?: true,
             zipperFix = values["mfsr_zipper_fix"] as? Boolean ?: true,
-            twoBand = values["mfsr_two_band"] as? Boolean ?: true,
+            greenFit = values["mfsr_green_fit"] as? Boolean ?: true,
+            twoBand = values[KEY_EXPERIMENTAL_TWO_BAND] as? Boolean ?: false,
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,
             lkrDctPrior = values["lkr_dct_prior"] as? Boolean ?: false,
             // Default: on for phones with an NPU (nearly free there; colour-only since d1affb09, no luma
             // sharpening), off otherwise (the Vulkan fallback costs GPU time). Caught here: LkrBridge's class
             // init loads the native library (absent in JVM tests).
             lkrNetwork = values["lkr_network"] as? Boolean ?: runCatching { LkrBridge.nativeHasNpu() }.getOrDefault(false),
+            lkrNpuDenoise = values["lkr_npu_denoise"] as? Boolean ?: false,
+            lkrNoPrior = values["lkr_no_prior"] as? Boolean ?: false,
             lkrMiddleReference = values["lkr_middle_reference"] as? Boolean ?: true,
             // Legacy FULL_2X (zoom and resolution in one value) splits into 1x + full res.
             lkrZoom = (LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1)

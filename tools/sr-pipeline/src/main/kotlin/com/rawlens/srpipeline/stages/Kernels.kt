@@ -56,6 +56,10 @@ data class KernelParams(
      * [2, inf) (benchmark only, see mfsr-c9-reference-parity.md).
      */
     val paperAnisotropy: Boolean = false,
+    /** Regularization energy for the GAT-domain structure tensor. */
+    val weakEdgeNoise: Float = 0f,
+    /** Absolute flat-region width in sensor pixels. Zero selects the coupled Wronski formula. */
+    val flatSigma: Float = 0f,
 )
 
 /**
@@ -315,14 +319,26 @@ fun computeK(l1: Float, l2: Float, params: KernelParams): Pair<Float, Float> {
     } else {
         1f + sqrt(maxOf(l1 - l2, 0f) / maxOf(l1 + l2, 1e-30f))
     }
-    val d = (1f - sqrt(l1) / params.dTr + params.dTh).coerceIn(0f, 1f)
+    // GAT puts gradients into approximately noise-normalized units. Discount
+    // weak responses in the denoise transition and in the cross-edge shrink.
+    val edgeEnergy = maxOf(l1, 0f)
+    val confidence = if (params.weakEdgeNoise > 0f) {
+        edgeEnergy / (edgeEnergy + params.weakEdgeNoise)
+    } else 1f
+    val d = (1f - sqrt(edgeEnergy * confidence) / params.dTr + params.dTh).coerceIn(0f, 1f)
     val (k1, k2) = when (params.selection) {
         SelectionLaw.HARD_THRESHOLD -> hardThreshold(a, params.kShrink, params.kStretch)
         SelectionLaw.LINEAR -> linearSelection(a, params.kShrink, params.kStretch)
         SelectionLaw.PAPER -> Pair(1f / (params.kShrink * a), params.kStretch * a)
     }
+    val crossEdge = if (params.weakEdgeNoise > 0f) 1f + (k1 - 1f) * confidence else k1
+    if (params.flatSigma > 0f) {
+        val flat = d * params.flatSigma
+        val detail = (1f - d) * params.kDetail
+        return Pair(maxOf(detail * crossEdge + flat, params.kMin), maxOf(detail * k2 + flat, params.kMin))
+    }
     return Pair(
-        maxOf(params.kDetail * ((1f - d) * k1 + d * params.kDenoise), params.kMin),
+        maxOf(params.kDetail * ((1f - d) * crossEdge + d * params.kDenoise), params.kMin),
         maxOf(params.kDetail * ((1f - d) * k2 + d * params.kDenoise), params.kMin),
     )
 }

@@ -24,6 +24,19 @@ class ColourDiffCliTest {
         assertEquals(3f,parseTune(plan("--tune","kStretch=2.5","--tune","app").tune!!).kStretch,0f)
     }
 
+    @Test fun `Wronski app mode defaults to independent edge and flat widths at both scales`() {
+        for (scale in listOf("1", "2")) {
+            val defaults = parseTune(plan("--scale", scale).tune!!)
+            assertTrue(defaults.independentWidths)
+            assertEquals(0.85f, defaults.kDetailScale, 0f)
+            assertEquals(1.30f, defaults.kDenoiseScale, 0f)
+            val override = parseTune(plan("--scale", scale, "--tune", "independentWidths=0,kDetailScale=1").tune!!)
+            assertFalse(override.independentWidths)
+            assertEquals(1f, override.kDetailScale, 0f)
+            assertEquals(1.30f, override.kDenoiseScale, 0f)
+        }
+    }
+
     @Test fun `actual parser consumes colour gains before the next argument`() {
         val p=plan("--colour-diff","2.2,1.6","--scale","2")
         assertArrayEquals(floatArrayOf(2.2f,1.6f),p.colourDiff,0f)

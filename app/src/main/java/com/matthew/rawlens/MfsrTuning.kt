@@ -41,6 +41,10 @@ internal object MfsrTuning {
             Kind.FLOAT, 1f, 8f, .25f, { it.kStretch }, { t, v -> t.copy(kStretch = v) }),
         K_SHRINK("Edge shrink", "Wronski kernel only. Kernel shrink across edges (k_shrink). Higher = crisper edges.",
             Kind.FLOAT, 1f, 4f, .1f, { it.kShrink }, { t, v -> t.copy(kShrink = v) }),
+        INDEPENDENT_WIDTHS("Independent detail and denoise widths", "Detail sets the edge kernel, while denoise independently sets the flat-region width.",
+            Kind.SWITCH, 0f, 1f, 1f, { if (it.independentWidths) 1f else 0f }, { t, v -> t.copy(independentWidths = v >= .5f) }),
+        WEAK_EDGE_NOISE("Weak-edge noise gate", "Experimental. Damp directional narrowing when gradients are near the sensor noise floor. Zero disables it.",
+            Kind.FLOAT, 0f, 2f, .25f, { it.weakEdgeNoise }, { t, v -> t.copy(weakEdgeNoise = v) }),
         K_MIN("Minimum kernel width", "Wronski kernel only. Smallest kernel std (px). Too small gives a checker pattern in texture.",
             Kind.FLOAT, 0f, 1.2f, .02f, { it.kMin }, { t, v -> t.copy(kMin = v) }),
         ROBUST_T("Rejection threshold t", "Robustness offset (Eq. 5). Higher rejects more (less ghosting, more noise).",
@@ -63,7 +67,7 @@ internal object MfsrTuning {
             Kind.FLOAT, 1f, 3f, .05f, { it.chromaScale2x }, { t, v -> t.copy(chromaScale2x = v) });
 
         val key: String get() = "mfsr_lab_" + name.lowercase()
-        fun defaultValue(): Float = default(SrTuning())
+        fun defaultValue(): Float = default(SrTuning.APP_DEFAULT)
     }
 
     const val KEY_SHOW_LAB = "mfsr_lab_visible"
@@ -88,7 +92,7 @@ internal object MfsrTuning {
     /** Effective tuning: code defaults plus the user's overrides. */
     fun resolve(context: Context): SrTuning {
         val p = prefs(context)
-        var t = SrTuning()
+        var t = SrTuning.APP_DEFAULT
         for (e in Entry.entries) if (p.contains(e.key)) t = e.apply(t, p.getFloat(e.key, e.defaultValue()))
         return t
     }

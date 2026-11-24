@@ -51,7 +51,19 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 }
             }
         })
-        content.addView(settingsCheck("Two-band reconstruction", mfsrSettings.twoBand).apply {
+        content.addView(settingsCheck("Green fit (MFSR 1×)", mfsrSettings.greenFit).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.greenFit) {
+                    if (applyMfsrSettings(mfsrSettings.copy(greenFit = checked))) {
+                        setStatus(if (checked) "MFSR GREEN FIT • ON" else "MFSR GREEN FIT • OFF")
+                    } else {
+                        isChecked = mfsrSettings.greenFit
+                    }
+                }
+            }
+        })
+        content.addView(sectionDesc("Uses the colour-difference merge at 1× with two-band reconstruction off."))
+        content.addView(settingsCheck("Experimental two-band reconstruction", mfsrSettings.twoBand).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.twoBand) {
                     if (applyMfsrSettings(mfsrSettings.copy(twoBand = checked))) {
@@ -107,6 +119,15 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 "RawLens improvements: DSLR look, motion and water rejection, local motion, " +
                 "shadow cleanup. Own quick tile; same shutter, ZSL and save path as MFSR."
         ))
+        content.addView(settingsCheck("LK-R: No denoising", mfsrSettings.lkrNoPrior).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.lkrNoPrior &&
+                    !applyMfsrSettings(mfsrSettings.copy(lkrNoPrior = checked))) {
+                    isChecked = mfsrSettings.lkrNoPrior
+                }
+            }
+        })
+        content.addView(sectionDesc("Bypasses the networks, DCT and additional denoising."))
         content.addView(settingsCheck("LK-R: Network", mfsrSettings.lkrNetwork).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrNetwork &&
@@ -119,6 +140,18 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             "A small learned network removes colour dots and colour zipper after the merge; " +
                 "brightness, detail and grain stay as merged. Default on for phones with an NPU (MediaTek " +
                 "APU, Qualcomm Hexagon), where it is nearly free; elsewhere it runs on the GPU and adds time."
+        ))
+        content.addView(settingsCheck("LK-R: NPU denoise", mfsrSettings.lkrNpuDenoise).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.lkrNpuDenoise &&
+                    !applyMfsrSettings(mfsrSettings.copy(lkrNpuDenoise = checked))) {
+                    isChecked = mfsrSettings.lkrNpuDenoise
+                }
+            }
+        })
+        content.addView(sectionDesc(
+            "Uses a shorter merge for regular bursts and denoises on the NPU while Vulkan fits the next tile. " +
+                "Takes precedence over Network and falls back to DCT if needed."
         ))
         content.addView(settingsCheck("LK-R shadow luma denoise", mfsrSettings.lkrDctPrior).apply {
             setOnCheckedChangeListener { _, checked ->

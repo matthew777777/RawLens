@@ -8,7 +8,12 @@ and tags. It is intentionally not repeated in the README.
 
 - Camera2 RAW capture, PROGRAM / ETTR / manual exposure, DNG, JPEG, JPEG XL and
   Ultra HDR development remain supported, subject to camera capabilities.
-- **MFSR** uses `MfsrMerge` with KernelNet or Wronski reconstruction kernels;
+- **MFSR** defaults to the Jamy-L-derived Wronski kernel merge with RawLens
+  improvements at native resolution or full-frame 2×. Independent widths use
+  0.85× detail and 1.30× flat-region denoise, with grain retention at 0.50
+  and capture sharpening off. Green detail is interpolated directly from
+  measured Bayer samples, with directional interpolation near strong axial
+  edges. Experimental two-band reconstruction is opt-in.
   **LK-R** uses `LkrMerge` and `tools/lkr-lite` (LK-R Lite; it replaced `tools/lkr-pipeline` on 2026-11-14). HDR+ remains a separate option.
   Internal MFSR/LKR identifiers remain unchanged. Earlier releases used the display names KB-SR / LK-SR.
 - B&W capture offers Off, Detail and Clean, with Clean as the default; legacy

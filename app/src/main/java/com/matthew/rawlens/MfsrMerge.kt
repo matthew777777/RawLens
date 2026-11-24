@@ -7,6 +7,7 @@ import android.content.Context
 import android.hardware.camera2.CaptureResult
 import android.os.SystemClock
 import com.rawlens.srpipeline.SrpBridge
+import com.rawlens.srpipeline.stages.GreenNormalTile
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
@@ -630,6 +631,7 @@ internal object MfsrMerge {
             return null
         }
         var nativeOut: ByteBuffer? = null
+        var greenFit: GreenNormalTile? = null
         try {
             // Same recipe as the desktop CLI / crop gate (BurstConfig SNR
             // scan sizes the tiles); scale 1 keeps the source grid.
@@ -646,15 +648,10 @@ internal object MfsrMerge {
                 }
             }
             HotPixels.correct(first, defects)
-            // RawTherapee capture sharpening: auto radius from the reference
-            // CFA, measured now so the frame need not stay alive (RT measures
-            // it on the raw too). Output pixels at 2x are half as large.
-            // Two-band sharpens inside its DCT Wiener (deconvolution of its own
-            // narrow kernel + the optics, at the RT auto radius in sensor px),
-            // so RT runs only on the Wronski path.
             val twoBand = settings.twoBand && settings.zipperFix
-            val opticsRadius = runCatching { RtCaptureSharpen.autoRadiusBayer(first) }.getOrDefault(Float.NaN)
-            val captureRadius = if (twoBand) Float.NaN else opticsRadius * scale
+            val opticsRadius = if (twoBand) {
+                runCatching { RtCaptureSharpen.autoRadiusBayer(first) }.getOrDefault(Float.NaN)
+            } else Float.NaN
             // Noise model: never the vendor NoiseProfile (owner rule). Our own
             // estimate from the reference frame (SceneNoise: same-CFA Haar
             // MADs per brightness bin, Poisson-Gaussian fit, all four planes);
@@ -740,6 +737,27 @@ internal object MfsrMerge {
             Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=wronski continuousMotion=on s3=%s zipperFix=%s twoBand=%s".format(snr, fin.tileSize, settings.s3, settings.zipperFix, twoBand))
             fun asset(name: String): ByteArray =
                 context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
+            if (settings.useGreenFit) {
+                val budget = MergeMemoryBudget.systemHeadroomBytes(context)
+                // The packed equations and robustness map add 10 bytes per sensor pixel.
+                // Allow another byte per pixel for the flow grid and staging.
+                val estimate = w.toDouble() * h * (NATIVE_BYTES_PER_PX + 11.0) *
+                    MergeMemoryBudget.ESTIMATE_MARGIN
+                if (budget == null || estimate <= budget) {
+                    greenFit = try {
+                        GreenNormalTile.createResident(
+                            handle, asset("green_residual"), asset("green_normal_resident"),
+                            w, h, config.tileSizes.first(), count,
+                        )
+                    } catch (failure: Exception) {
+                        Log.w(LOG_TAG, "sharp merge: green fit initialization failed", failure)
+                        null
+                    }
+                } else {
+                    Log.i(LOG_TAG, "sharp merge: using standard 1× reconstruction within memory budget")
+                }
+            }
+            Log.i(LOG_TAG, "sharp merge greenFit=${greenFit != null}")
             val fft = asset("fft")
             val t0 = System.nanoTime()
             // Output in native memory (see VulkanPipeline.run): released by
@@ -776,7 +794,8 @@ internal object MfsrMerge {
                     twoBandTensor = asset("twoband_tensor"),
                     robFeather = asset("rob_feather"),
                 ),
-                output = nativeOut
+                output = nativeOut,
+                greenFit = greenFit,
             )
             val mergeMs = (System.nanoTime() - t0) / 1_000_000
             VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), outW * outH * 3)
@@ -792,20 +811,6 @@ internal object MfsrMerge {
                 rgb.rewind()
                 Log.i(LOG_TAG, "sharp merge lens shading after merge in ${SystemClock.elapsedRealtime() - t0} ms")
             }
-            // RawTherapee capture sharpening (defaults: auto radius and
-            // contrast, 20 iterations) on the GPU; skipped on any failure.
-            // Wronski path only: two-band already applied its matched sharpening.
-            if (!twoBand) try {
-                val wb = zipperWb(neutral)
-                VulkanHub.open().use { vk ->
-                    val st = RtCaptureSharpenVulkan.apply(vk, { name -> context.assets.open("spirv/$name").use { it.readBytes() } },
-                        rgb.asFloatBuffer(), outW, outH, captureRadius, wb[0], wb[1])
-                    Log.i(LOG_TAG, "sharp merge capture sharpening: $st")
-                }
-            } catch (failure: Throwable) {
-                Log.w(LOG_TAG, "sharp merge capture sharpening skipped", failure)
-            }
-            rgb.rewind()
             Log.i(LOG_TAG, "sharp merge done ${outW}x$outH (x$scale) N=$count in ${mergeMs}ms tuning=$tuning")
             return EngineOut(rgb, outW, outH, mergeMs)
         } catch (failure: Exception) {
@@ -817,6 +822,7 @@ internal object MfsrMerge {
             nativeOut?.let(SrpBridge::nativeFreeDirect)
             return null
         } finally {
+            greenFit?.close()
             SrpBridge.nativeDestroy(handle)
         }
     }

@@ -28,6 +28,8 @@ layout(set = 0, binding = 2) readonly buffer KParams {
   float k_detail; float k_denoise; float D_th; float D_tr;
   float k_stretch; float k_shrink; uint selectionLaw; uint isIso;
   float k_min;  // C26 minimum kernel std (0 = paper-exact); KernelParams.kMin
+  // Optional weak-edge noise energy and absolute flat sigma, in that order.
+  float experimental[];
 };
 
 // get_real_polyroots_2: |r1| >= |r2| ordering, delta clamped at 0.
@@ -96,7 +98,10 @@ void main() {
   // compute_k (CPU: l1 may be ~0; max() guards the sqrt, identical on
   // valid PSD inputs where the CPU never sees a negative).
   float A = 1.0 + sqrt(max(l.x - l.y, 0.0) / max(l.x + l.y, 1e-30));
-  float D = clamp(1.0 - sqrt(max(l.x, 0.0)) / D_tr + D_th, 0.0, 1.0);
+  float energy = max(l.x, 0.0);
+  float noise = experimental.length() > 0 ? experimental[0] : 0.0;
+  float confidence = noise > 0.0 ? energy / (energy + noise) : 1.0;
+  float D = clamp(1.0 - sqrt(energy * confidence) / D_tr + D_th, 0.0, 1.0);
   float k1s, k2s;
   if (selectionLaw == 0u) { // hard_threshold (NaN falls to else, as on CPU)
     if (A > 1.95) {
@@ -110,8 +115,15 @@ void main() {
     k1s = (2.0 - A) + (A - 1.0) / k_shrink;
     k2s = (2.0 - A) + (A - 1.0) * k_stretch;
   }
+  if (noise > 0.0) k1s = 1.0 + (k1s - 1.0) * confidence;
   float k1 = k_detail * ((1.0 - D) * k1s + D * k_denoise);
   float k2 = k_detail * ((1.0 - D) * k2s + D * k_denoise);
+  if (experimental.length() > 1 && experimental[1] > 0.0) {
+    float flat_contribution = D * experimental[1];
+    float detail = (1.0 - D) * k_detail;
+    k1 = detail * k1s + flat_contribution;
+    k2 = detail * k2s + flat_contribution;
+  }
   k1 = max(k1, k_min);
   k2 = max(k2, k_min);
   float k1sq = k1 * k1;

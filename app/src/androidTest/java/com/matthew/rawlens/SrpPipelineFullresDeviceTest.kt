@@ -154,7 +154,7 @@ class SrpPipelineFullresDeviceTest {
                 // -e rawlensSrpColourDiff true: the app's default zipper-fix
                 // colour-difference merge (WB 1,1: same cost as the app).
                 colourDiff = if (twoBand || args.getString("rawlensSrpColourDiff") == "true") floatArrayOf(1f, 1f) else null,
-                // -e rawlensSrpTwoBand true: the app's default two-band reconstruction (implies colourDiff).
+                // -e rawlensSrpTwoBand true: opt into experimental two-band reconstruction (implies colourDiff).
                 twoBand = if (twoBand) com.rawlens.srpipeline.stages.TwoBandReconstruction.Params() else null,
             )
             Log.i("SrpFullresDevice", "fullres ${w}x$h snr=%.2f tile=%d".format(snr, fin.tileSize))

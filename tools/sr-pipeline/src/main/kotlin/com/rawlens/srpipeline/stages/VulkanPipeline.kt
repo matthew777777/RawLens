@@ -241,8 +241,11 @@ object VulkanPipeline {
         output: ByteBuffer? = null,
         /** Optional diagnostic/cache tap: borrowed colour-difference samples and reference-grid weights. */
         frameObserver: ((ByteBuffer, Array<Array<FloatArray>>, ByteBuffer) -> Unit)? = null,
+        /** Diagnostic replacement for each comparison frame's regularized flow, before robustness. */
+        flowTransform: ((Int, Array<Array<FloatArray>>) -> Array<Array<FloatArray>>)? = null,
+        greenFit: GreenNormalTile? = null,
     ): ByteBuffer = SrpBridge.NativeFloats().use { scratch ->
-        runScoped(reference, comparisons, config, handle, alignSpirvs, spirvs, output, scratch, frameObserver)
+        runScoped(reference, comparisons, config, handle, alignSpirvs, spirvs, output, scratch, frameObserver, flowTransform, greenFit)
     }
 
     private fun runScoped(
@@ -255,6 +258,8 @@ object VulkanPipeline {
         output: ByteBuffer?,
         scratch: SrpBridge.NativeFloats,
         frameObserver: ((ByteBuffer, Array<Array<FloatArray>>, ByteBuffer) -> Unit)?,
+        flowTransform: ((Int, Array<Array<FloatArray>>) -> Array<Array<FloatArray>>)?,
+        greenFit: GreenNormalTile?,
     ): ByteBuffer {
         require(handle != 0L) { "VulkanPipeline: null context handle" }
         require(!config.organicReconstruction) { "pooled polynomial reconstruction is currently a CPU prototype" }
@@ -480,7 +485,7 @@ object VulkanPipeline {
         val kpBuf = pack(floatArrayOf(kp.kDetail, kp.kDenoise, kp.dTh, kp.dTr,
             kp.kStretch, kp.kShrink,
             java.lang.Float.intBitsToFloat(if (kp.selection == SelectionLaw.HARD_THRESHOLD) 0 else 1),
-            java.lang.Float.intBitsToFloat(if (kp.iso) 1 else 0), kp.kMin))
+            java.lang.Float.intBitsToFloat(if (kp.iso) 1 else 0), kp.kMin, kp.weakEdgeNoise, kp.flatSigma))
         val mergeFlowFlat = FloatArray(ftx0 * fty0 * 2)
         val mergeFlow = SrpBridge.directFloats(ftx0 * fty0 * 2)
         // Guide-grid robustness map staging: the robust-compute output
@@ -692,6 +697,7 @@ object VulkanPipeline {
                         ColourDiff.packInto(frame, frameBuf, cd[0], cd[1]), (w * h).toLong())) }
                 }
                 frameObserver?.invoke(frameBuf, flow, rBuf)
+                greenFit?.recordResident(frameRes, flow, rBuf)
                 val greenW = if ((config.mobilePolynomial || config.detailReconstruction) && config.colourDiff != null)
                     greenFrameWeights[mergeFrameIndex++] else 1f
                 timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.nativeMergeSplatFrameRes(handle, frameRes,
@@ -800,7 +806,7 @@ object VulkanPipeline {
             // Resident grey leg on bayer (uploads frameRes as a side
             // effect); the staged greyOfInto serves the ref phase and
             // the non-bayer configuration.
-            val flow = if (resPyr != null) {
+            val estimatedFlow = if (resPyr != null) {
                 timed("frameUpload") { checkRc("frameUpload", SrpBridge.uploadResident(handle, frameRes,
                     packImageInto(frame, frameBuf), (w * h).toLong())) }
                 timed("greyFir") { checkRc("greyFir", SrpBridge.nativeGreyFirToRes(handle, frameRes, resPyr.grey,
@@ -812,11 +818,12 @@ object VulkanPipeline {
                     else greyOfInto(frame, frameBuf, kernPre, loopRows)
                 timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs, pyramidReuse) }
             }
+            motionField?.let { field ->
+                timed("motionRegularize") { field.regularize(estimatedFlow, config.robustnessParams.mt) }
+            }
+            val flow = flowTransform?.invoke(frameNo, estimatedFlow) ?: estimatedFlow
             val ftx = flow[0].size
             val fty = flow.size
-            motionField?.let { field ->
-                timed("motionRegularize") { field.regularize(flow, config.robustnessParams.mt) }
-            }
             require(ftx == ftx0 && fty == fty0) { "flow grid changed mid-run" }
             // Robustness map straight into the merge staging (same
             // bytes as the old host round-trip through `robustR`).
@@ -966,6 +973,8 @@ object VulkanPipeline {
                 push, (outW * outH).toLong())) }
             denRes
         } else numRes
+        greenFit?.solveResident(evenRes, if (evenRes == numRes) denRes else numRes,
+            config.kernelAlpha[1], config.kernelBeta[1], pedestal, requireNotNull(config.colourDiff))
         val outBuf = output?.also {
             require(it.capacity() >= total * java.lang.Float.BYTES) { "VulkanPipeline: output buffer too small" }
             it.clear()
