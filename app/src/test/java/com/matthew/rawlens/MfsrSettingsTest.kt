@@ -82,6 +82,12 @@ class MfsrSettingsTest {
         assertFalse(defaults.copy(twoBand = true).useGreenFit)
     }
 
+    @Test fun rtSharpenDefaultsOffAndRoundTrips() {
+        assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).rtSharpen)
+        val enabled = MfsrSettings(rtSharpen = true)
+        assertEquals(enabled, MfsrSettings.fromPreferences(enabled.toPreferences()))
+    }
+
     @Test fun kbSr2xDefaultsOffAndRoundTrips() {
         assertFalse(MfsrSettings().mfsrFullRes)
         assertFalse(MfsrSettings.fromPreferences(emptyMap<String, Any>()).mfsrFullRes)

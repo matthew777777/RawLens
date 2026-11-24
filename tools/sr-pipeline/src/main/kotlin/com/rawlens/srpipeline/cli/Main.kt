@@ -14,6 +14,7 @@ import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.SceneNoise
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
+import com.rawlens.srpipeline.stages.RtCaptureSharpen
 import com.rawlens.srpipeline.stages.VulkanPipeline
 import java.nio.file.Files
 import java.nio.file.Path
@@ -57,6 +58,7 @@ internal data class Plan(
     val noiseEvening: Boolean = true,
     /** Lateral chromatic aberration correction (app: on). */
     val lateralCa: Boolean = true,
+    val rtSharpen: Boolean = false,
     /** Ghost mask opening + growth (app: on). */
     val ghostGrow: Boolean = true,
     /** Blurry-frame weight exponent, 0 = off (app: 1). */
@@ -92,6 +94,8 @@ private fun usage(): String = """
       --spv-dir DIR  directory with the compiled stage .spv modules (required for --backend vulkan)
       --lut PATH     noise LUT .npz (or "auto" to simulate it in-process); enables noise correction with its curves, validated
                      against the DNG noise profile (without it, noise correction is off)
+      --rt-sharpen on|off
+                     apply RT capture sharpening to the merged linear DNG (default off)
       --colour-diff auto|off|R,B
                      zipper correction (default: auto for Vulkan with valid AsShotNeutral)
       --grain-retention F
@@ -166,6 +170,7 @@ internal fun parseArgs(args: Array<String>): Plan {
     var detailReconstruction = true
     var noiseEvening = true
     var lateralCa = true
+    var rtSharpen = false
     var ghostGrow = true
     var blurGamma = 1f
     var blackPedestal = true
@@ -302,6 +307,10 @@ internal fun parseArgs(args: Array<String>): Plan {
                 ghostGrow = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--ghost-grow requires on|off") }
                 i++
             }
+            "--rt-sharpen" -> {
+                rtSharpen = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--rt-sharpen requires on|off") }
+                i++
+            }
             "--lateral-ca" -> {
                 lateralCa = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--lateral-ca requires on|off") }
                 i++
@@ -351,8 +360,8 @@ internal fun parseArgs(args: Array<String>): Plan {
     if (b == "vulkan" && spvDir.isNullOrBlank()) fail("--spv-dir DIR is required for --backend vulkan")
 
     return Plan(
-        inputDir = Paths.get(inDir!!),
-        outputDir = Paths.get(outDir!!),
+        inputDir = Paths.get(inDir),
+        outputDir = Paths.get(outDir),
         ref = ref,
         crop = crop,
         limit = limit,
@@ -375,6 +384,7 @@ internal fun parseArgs(args: Array<String>): Plan {
         detailReconstruction = detailReconstruction,
         noiseEvening = noiseEvening,
         lateralCa = lateralCa,
+        rtSharpen = rtSharpen,
         ghostGrow = ghostGrow,
         blurGamma = blurGamma,
         blackPedestal = blackPedestal,
@@ -731,6 +741,14 @@ private fun merge(plan: Plan) {
                 a += 3; b -= 3
             }
         }
+    }
+    if (plan.rtSharpen) {
+        val radius = RtCaptureSharpen.autoRadiusBayer(refImg) * plan.scale
+        val (wbR, wbB) = RtCaptureSharpen.whiteBalance(profile.neutral)
+        val result = RtCaptureSharpen.apply(
+            rgb.asFloatBuffer(), outW, outH, radius, wbR, wbB, RtCaptureSharpen.MFSR_ITERATIONS,
+        )
+        println("sr-pipeline: RT capture sharpening $result")
     }
     Files.createDirectories(plan.outputDir)
     val out = plan.outputDir.resolve("merged.dng").toString()

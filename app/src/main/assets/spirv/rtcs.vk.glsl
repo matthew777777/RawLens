@@ -146,6 +146,7 @@ void main() {
     // Core pixels of this thread (TILE*TILE / 256 of them) in registers.
     const int PER = (TILE * TILE + 255) / 256;
     float chk[PER], bl[PER];
+    bool hasBlend = false;
     for (int q = 0; q < PER; ++q) {
         int idx = lid + q * 256;
         bl[q] = 0.0; chk[q] = -1.0;
@@ -153,9 +154,10 @@ void main() {
             int r = idx / TILE, c = idx - r * TILE;
             bl[q] = imageLoad(aImg, ivec2(ox + c, oy + r)).r;
             chk[q] = sL[(r + BORDER) * FTS + c + BORDER] * bl[q] * 0.5;
-            if (bl[q] >= 0.01) sFlag = 1; // RT minBlend: skip all-flat tiles
+            hasBlend = hasBlend || bl[q] >= 0.01; // RT minBlend: skip all-flat tiles
         }
     }
+    if (hasBlend) atomicOr(sFlag, 1);
     barrier();
     if (sFlag == 0) return;
     barrier();
@@ -197,13 +199,15 @@ void main() {
         barrier();
         // RT checkForStop: any core pixel below half its blended original.
         if (checkStop && it < iterations - 1) {
+            bool stop = false;
             for (int q = 0; q < PER; ++q) {
                 int idx = lid + q * 256;
                 if (idx < TILE * TILE) {
                     int r = idx / TILE, c = idx - r * TILE;
-                    if (sI[(r + BORDER) * FTS + c + BORDER] < chk[q]) sFlag = 1;
+                    stop = stop || sI[(r + BORDER) * FTS + c + BORDER] < chk[q];
                 }
             }
+            if (stop) atomicOr(sFlag, 1);
         }
         barrier();
         if (sFlag != 0) break;

@@ -18,6 +18,7 @@ import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.SceneNoise
 import com.rawlens.srpipeline.stages.RobustnessParams
+import com.rawlens.srpipeline.stages.RtCaptureSharpen
 import com.rawlens.srpipeline.stages.VulkanPipeline
 import java.io.File
 import java.nio.ByteBuffer
@@ -142,13 +143,14 @@ internal object MfsrMerge {
         return try {
             val sharpness = frames.map { sharp ->
                 val plane = sharp.frame.view()
-                val shorts = plane.buffer!!.duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+                val pixels = requireNotNull(plane.buffer) { "MFSR frame has no readable RAW plane" }
+                val shorts = pixels.duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
                 val rowShorts = plane.rowStride / 2
                 val colShorts = plane.pixelStride / 2
                 val pattern = sharp.norm.sensorPattern
                 val norm = sharp.norm
                 if (nativeSharpness && plane.pixelStride == 2) {
-                    val score = LkrBridge.nativeSharpness(plane.buffer!!.duplicate().also { it.rewind() },
+                    val score = LkrBridge.nativeSharpness(pixels.duplicate().also { it.rewind() },
                         sharp.metadata.imageWidth, sharp.metadata.imageHeight, rowShorts,
                         dngCodesFor(pattern), norm.blackLevels.toFloatArray())
                     if (score.isFinite()) return@map score
@@ -309,7 +311,8 @@ internal object MfsrMerge {
      */
     private fun liveVerifier(sharp: MfsrFrame, w: Int, h: Int): (Int, Int) -> Float {
         val plane = sharp.frame.view()
-        val shorts = plane.buffer!!.duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+        val shorts = requireNotNull(plane.buffer) { "MFSR frame has no readable RAW plane" }
+            .duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
         val rowShorts = plane.rowStride / 2
         val colShorts = plane.pixelStride / 2
         val norm = sharp.norm
@@ -472,7 +475,7 @@ internal object MfsrMerge {
                 }
             }, w, h,
             kept[0].metadata.noiseProfile?.toDoubleArray(), settings,
-            kept[0].norm.sensorPattern, WaveletDenoiser.NoiseSource.of(kept[0].metadata),
+            kept[0].norm.sensorPattern, RawNoiseModel.Source.of(kept[0].metadata),
             kept[0].metadata.neutralColorPoint?.toDoubleArray(),
             RawPreDemosaicPipeline.lensShadingModel(kept[0].metadata),
             kept.drop(1).take(2).map { liveVerifier(it, w, h) }
@@ -498,7 +501,7 @@ internal object MfsrMerge {
         val engine = runEngine(
             context, kept.map { decoded -> { decodeRows(decoded.cfa) } }, w, h,
             kept[0].source.metadata.noiseProfile?.toDoubleArray(), settings,
-            kept[0].cfa.pattern, WaveletDenoiser.NoiseSource.of(kept[0].source.metadata),
+            kept[0].cfa.pattern, RawNoiseModel.Source.of(kept[0].source.metadata),
             kept[0].source.metadata.neutralColorPoint?.toDoubleArray(),
             RawPreDemosaicPipeline.lensShadingModel(kept[0].source.metadata),
             kept.drop(1).take(2).map { decoded ->
@@ -578,7 +581,7 @@ internal object MfsrMerge {
             sharp.metadata.imageWidth, sharp.metadata.imageHeight,
             plane.rowStride, plane.pixelStride, 0, 0
         )
-        val cfa = RawSensorUnpacker.unpackNormalized(plane.buffer!!.duplicate(), layout, sharp.norm)
+        val cfa = RawSensorUnpacker.unpackNormalized(requireNotNull(plane.buffer) { "MFSR frame has no readable RAW plane" }.duplicate(), layout, sharp.norm)
         // C19: lens shading is NOT applied per frame any more. Gains up to
         // 4x+ in the corners scaled noise variance by gain^2 while GAT, SNR
         // and the robustness LUT assumed raw sensor noise (corner frames got
@@ -602,7 +605,7 @@ internal object MfsrMerge {
         noise: DoubleArray?,
         settings: MfsrSettings,
         pattern: BayerPattern,
-        noiseSource: WaveletDenoiser.NoiseSource?,
+        noiseSource: RawNoiseModel.Source?,
         /** Reference AsShotNeutral (R, G, B) for the Z1 colour-difference merge. */
         neutral: DoubleArray?,
         /** Reference lens-shading model, applied to the merged RGB (C19). */
@@ -649,7 +652,7 @@ internal object MfsrMerge {
             }
             HotPixels.correct(first, defects)
             val twoBand = settings.twoBand && settings.zipperFix
-            val opticsRadius = if (twoBand) {
+            val opticsRadius = if (twoBand || settings.rtSharpen) {
                 runCatching { RtCaptureSharpen.autoRadiusBayer(first) }.getOrDefault(Float.NaN)
             } else Float.NaN
             // Noise model: never the vendor NoiseProfile (owner rule). Our own
@@ -661,8 +664,8 @@ internal object MfsrMerge {
                 Log.w(LOG_TAG, "sharp merge: scene noise estimate failed: ${e.message}"); null
             }
             val learned = if (!settings.learnedNoise || noiseSource == null) null else
-                WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), noiseSource)
-                    ?.let { WaveletVulkan.predictNoise(it, noiseSource.iso.toFloat()) }
+                RawNoiseModel.storePath(RawNoiseModel.noiseDir(context), noiseSource)
+                    ?.let { RawNoiseModel.predictNoise(it, noiseSource.iso.toFloat()) }
             val (alpha, beta) = withLearnedGreen(estimated, learned)
                 ?: estimated
                 ?: (DoubleArray(4) { 1e-4 } to DoubleArray(4) { 1e-6 }).also {
@@ -797,6 +800,8 @@ internal object MfsrMerge {
                 output = nativeOut,
                 greenFit = greenFit,
             )
+            greenFit?.close()
+            greenFit = null
             val mergeMs = (System.nanoTime() - t0) / 1_000_000
             VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), outW * outH * 3)
             rgb.rewind()
@@ -811,6 +816,9 @@ internal object MfsrMerge {
                 rgb.rewind()
                 Log.i(LOG_TAG, "sharp merge lens shading after merge in ${SystemClock.elapsedRealtime() - t0} ms")
             }
+            if (settings.rtSharpen && opticsRadius.isFinite()) {
+                applyRtSharpen(context, rgb, outW, outH, opticsRadius * scale, neutral)
+            }
             Log.i(LOG_TAG, "sharp merge done ${outW}x$outH (x$scale) N=$count in ${mergeMs}ms tuning=$tuning")
             return EngineOut(rgb, outW, outH, mergeMs)
         } catch (failure: Exception) {
@@ -824,6 +832,33 @@ internal object MfsrMerge {
         } finally {
             greenFit?.close()
             SrpBridge.nativeDestroy(handle)
+        }
+    }
+
+    private fun applyRtSharpen(
+        context: Context, rgb: ByteBuffer, width: Int, height: Int, radius: Float, neutral: DoubleArray?,
+    ) {
+        val (wbR, wbB) = RtCaptureSharpen.whiteBalance(neutral)
+        val iterations = RtCaptureSharpen.MFSR_ITERATIONS
+        val gpu = try {
+            VulkanHub.openVulkan10()
+        } catch (failure: Exception) {
+            Log.w(LOG_TAG, "RT sharpening Vulkan unavailable", failure)
+            null
+        } catch (failure: LinkageError) {
+            Log.w(LOG_TAG, "RT sharpening Vulkan unavailable", failure)
+            null
+        }
+        val stats = gpu?.use { vk ->
+            RtCaptureSharpenVulkan.apply(vk, { name ->
+                context.assets.open("spirv/$name").use { it.readBytes() }
+            }, rgb.asFloatBuffer(), width, height, radius, wbR, wbB, iterations)
+        }
+        if (stats != null) {
+            Log.i(LOG_TAG, "RT sharpening: $stats")
+        } else {
+            val result = RtCaptureSharpen.apply(rgb.asFloatBuffer(), width, height, radius, wbR, wbB, iterations)
+            Log.i(LOG_TAG, "RT sharpening CPU: $result")
         }
     }
 

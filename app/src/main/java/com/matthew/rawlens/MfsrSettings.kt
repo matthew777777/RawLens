@@ -44,6 +44,7 @@ data class MfsrSettings(
      */
     val zipperFix: Boolean = true,
     val greenFit: Boolean = true,
+    val rtSharpen: Boolean = false,
     /**
      * Two-band reconstruction (sr-pipeline TwoBandReconstruction on Vulkan):
      * low band = wide Gaussian, high band = narrow Gaussian residual with an
@@ -112,6 +113,7 @@ data class MfsrSettings(
         "mfsr_learned_noise" to learnedNoise,
         "mfsr_zipper_fix" to zipperFix,
         "mfsr_green_fit" to greenFit,
+        KEY_RT_SHARPEN to rtSharpen,
         KEY_EXPERIMENTAL_TWO_BAND to twoBand,
         "mfsr_engine" to engine.name,
         "lkr_dct_prior" to lkrDctPrior,
@@ -144,6 +146,7 @@ data class MfsrSettings(
     companion object {
         const val KEY_ENABLED = "mfsr_enabled"
         // The old key could contain the former default from a bulk settings save.
+        const val KEY_RT_SHARPEN = "mfsr_rt_sharpen"
         const val KEY_EXPERIMENTAL_TWO_BAND = "mfsr_experimental_two_band"
         fun fromPreferences(values: Map<String, *>): MfsrSettings = MfsrSettings(
             enabled = values[KEY_ENABLED] as? Boolean ?: false,
@@ -152,6 +155,7 @@ data class MfsrSettings(
             learnedNoise = values["mfsr_learned_noise"] as? Boolean ?: true,
             zipperFix = values["mfsr_zipper_fix"] as? Boolean ?: true,
             greenFit = values["mfsr_green_fit"] as? Boolean ?: true,
+            rtSharpen = values[KEY_RT_SHARPEN] as? Boolean ?: false,
             twoBand = values[KEY_EXPERIMENTAL_TWO_BAND] as? Boolean ?: false,
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,
             lkrDctPrior = values["lkr_dct_prior"] as? Boolean ?: false,

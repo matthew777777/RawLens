@@ -12,7 +12,7 @@
  *  the Free Software Foundation, either version 3 of the License, or
  *  (at your option) any later version.
  */
-package com.matthew.rawlens
+package com.rawlens.srpipeline.stages
 
 import java.nio.FloatBuffer
 import java.util.stream.IntStream
@@ -45,6 +45,16 @@ import kotlin.math.sqrt
  *   (a 2x output is 50 MP); deconvolution tiles are RT's 32 px tiles.
  */
 object RtCaptureSharpen {
+    /** Iteration cap for the optional MFSR finish. RT's early-stop check also applies. */
+    const val MFSR_ITERATIONS = 4
+
+    fun whiteBalance(neutral: DoubleArray?): Pair<Float, Float> {
+        if (neutral == null || neutral.size < 3 || neutral.any { !it.isFinite() || it <= 0 }) return 1f to 1f
+        val red = (neutral[1] / neutral[0]).toFloat()
+        val blue = (neutral[1] / neutral[2]).toFloat()
+        return if (red.isFinite() && red > 0f && blue.isFinite() && blue > 0f) red to blue else 1f to 1f
+    }
+
 
     private const val MAXVALF = 65535f
     private const val EPSILON = 216f / 24389f
@@ -352,8 +362,10 @@ object RtCaptureSharpen {
             val tilesX = (w - 2 * border + TILE - 1) / TILE
             IntStream.range(0, tilesY * tilesX).parallel().forEach { t ->
                 // Tiles ending past the core are shifted inward, as RT's end tiles.
-                val ty = min(coreLo + (t / tilesX) * TILE, coreHi - TILE).coerceAtLeast(max(lo + border, border))
-                val tx = min(border + (t % tilesX) * TILE, w - border - TILE)
+                val firstY = coreLo + (t / tilesX) * TILE
+                val firstX = border + (t % tilesX) * TILE
+                val ty = min(firstY, coreHi - TILE).coerceAtLeast(max(lo + border, border))
+                val tx = min(firstX, w - border - TILE)
                 val oy = ty - border - lo; val ox = tx - border
                 var maxBlend = 0f
                 for (k in 0 until TILE) for (m in 0 until TILE) maxBlend = max(maxBlend, blend[oy + border + k][ox + border + m])
@@ -385,7 +397,7 @@ object RtCaptureSharpen {
                 }
                 for (i in border until fts - border) for (j in border until fts - border) {
                     val gy = oy + i; val gx = ox + j
-                    if (gy + lo < coreLo || gy + lo >= coreHi) continue
+                    if (gx < firstX || gy + lo < firstY || gy + lo >= coreHi) continue
                     val b = blend[gy][gx]
                     yNew[gy][gx] = b * tmpI[i * fts + j] + (1f - b) * yNew[gy][gx] // RT intp
                 }

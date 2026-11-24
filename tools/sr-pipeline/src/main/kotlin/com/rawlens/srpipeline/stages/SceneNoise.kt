@@ -6,7 +6,7 @@ import kotlin.math.sqrt
 /** Blind fallback for DNGs without NoiseProfile. Same-CFA diagonal Haar
  * coefficients cancel constant/linear scene content. Brightness-bin MADs
  * suppress texture outliers; heavy texture can still overestimate noise.
- * Uses the app's HdrPlusSceneNoise approach on normalized RGGB floats.
+ * Uses the app's RawSceneNoise approach on normalized RGGB floats.
  */
 object SceneNoise {
     fun estimate(image: Array<FloatArray>): Pair<DoubleArray, DoubleArray> {

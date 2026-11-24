@@ -14,6 +14,11 @@ java {
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
     compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+    // Kotlin 2.4.21 repeatedly corrupts this module's incremental lookup store
+    // (source-to-classes already registered / missing classpath snapshots).
+    // Gradle still skips unchanged tasks and caches their outputs; only the
+    // broken compiler-level incremental cache is disabled for this module.
+    incremental = false
 }
 
 dependencies {

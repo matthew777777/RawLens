@@ -872,7 +872,7 @@ object AlignGpu {
         val rc = if (lvl.refRes != 0L) {
             val wg = alignWg != null && lvl.radius <= 4
             ptime("alignL1Res") { SrpBridge.alignL1Res(handle, lvl.refRes, movBuf,
-                flowBuf, if (wg) alignWg!! else spirv, w, h, tc, lvl.tileSize, lvl.radius,
+                flowBuf, if (wg) alignWg else spirv, w, h, tc, lvl.tileSize, lvl.radius,
                 lvl.nTx, wg, if (resident) mov.res else 0L) }
         } else {
             ptime("alignL1") { SrpBridge.alignL1(handle,

@@ -275,7 +275,7 @@ object VulkanPipeline {
         var refBox: Array<FloatArray>? = reference()
         heapLog("ref-decoded")
         val h = refBox!!.size
-        val w = refBox!![0].size
+        val w = refBox[0].size
         // Mobile grey (FIR7/11/15): half-band taps shared with Grey.firLowpass.
         val firRadius = when (config.greyMethod) { "FIR", "FIR7" -> 7; "FIR11" -> 11; "FIR15" -> 15; else -> 0 }
         val firTaps = if (firRadius == 0) FloatArray(0) else Grey.halfBandTaps(firRadius).let { t ->
@@ -443,7 +443,7 @@ object VulkanPipeline {
         // 2. Reference local stats straight into the residents.
         if (config.robustnessEnabled) {
             timed("robustInit") { checkRc("robustInit", SrpBridge.robustInitRes(
-                handle, packImageInto(refBox!!, frameBuf), meansRes, varsRes,
+                handle, packImageInto(refBox, frameBuf), meansRes, varsRes,
                 spirvs.robust, w, h)) }
             // Supplement S.3: the reference's variance-loss map, once.
             val rp0 = config.robustnessParams
@@ -716,7 +716,7 @@ object VulkanPipeline {
                     push[2] = gw * gh
                     push[8] = java.lang.Float.floatToRawIntBits(greenW)
                     push[10] = if (evenFrames == 0) 1 else 0
-                    timed("noiseAcc") { checkRc("noiseAcc", SrpBridge.dispatchRes(handle, spirvs.noiseAcc!!,
+                    timed("noiseAcc") { checkRc("noiseAcc", SrpBridge.dispatchRes(handle, spirvs.noiseAcc,
                         longArrayOf(evenRRes, evenAccRes), longArrayOf((gw * gh).toLong(), 4L * gw * gh), push, (gw * gh).toLong())) }
                     evenFrames++; evenSumG += greenW; evenSumG2 += greenW.toDouble() * greenW
                 }
@@ -762,7 +762,7 @@ object VulkanPipeline {
             }.pedestal else 0f
         val refEnergy = if (config.blurGamma > 0f && config.bayer)
             timed("sharpness") { FrameSharpness.energy(refBox!!, sharpA, sharpB) } else 0.0
-        mergeFrame(refBox!!, zeroFlow, packInto(onesR, mergeRDirect), reference = true)
+        mergeFrame(refBox, zeroFlow, packInto(onesR, mergeRDirect), reference = true)
         refBox = null
         // Memory-tight: the ref phase's garbage (ref CFA, init pack
         // staging, pin upload scratch — ~200 MB at full-res) is dead
@@ -968,7 +968,7 @@ object VulkanPipeline {
             push[16] = java.lang.Float.floatToRawIntBits((config.kernelBeta[1] + config.kernelBeta[3]) / 2f)
             push[17] = kotlin.math.round(2f * config.scale).toInt().coerceIn(2, 6)
             push[18] = java.lang.Float.floatToRawIntBits(NOISE_EVEN_RANGE)
-            timed("noiseEven") { checkRc("noiseEven", SrpBridge.dispatchRes(handle, spirvs.noiseEven!!,
+            timed("noiseEven") { checkRc("noiseEven", SrpBridge.dispatchRes(handle, spirvs.noiseEven,
                 longArrayOf(numRes, denRes, evenAccRes), longArrayOf(total.toLong(), total.toLong(), 4L * gw * gh),
                 push, (outW * outH).toLong())) }
             denRes
@@ -996,7 +996,7 @@ object VulkanPipeline {
             push[7] = java.lang.Float.floatToRawIntBits(ca.kR)
             push[8] = java.lang.Float.floatToRawIntBits(ca.kB)
             push[11] = w; push[12] = h
-            timed("caWarp") { checkRc("caWarp", SrpBridge.dispatchRes(handle, spirvs.caWarp!!,
+            timed("caWarp") { checkRc("caWarp", SrpBridge.dispatchRes(handle, spirvs.caWarp,
                 longArrayOf(evenRes, dst), longArrayOf(total.toLong(), total.toLong()), push, (outW * outH).toLong())) }
             outBuf.clear()
             timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, dst, outBuf, total.toLong())) }

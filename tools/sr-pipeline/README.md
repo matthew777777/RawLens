@@ -99,6 +99,7 @@ CLI flags (see `Main.kt` usage text):
 | `--spv-dir DIR` | with `--backend vulkan` | directory with the compiled stage `.spv` modules; supplied by launcher |
 | `--lib PATH` | no | JNI library to load (default: `System.loadLibrary`) |
 | `--lut PATH\|auto` | no | noise LUT `.npz`, or `auto` to simulate it in-process; enables noise correction |
+| `--rt-sharpen on\|off` | no | RT capture sharpening on the merged linear DNG, with up to four Richardson–Lucy iterations (default off) |
 | `--kernel wronski\|kernelnet` | no | reconstruction kernel (`--kn-scale F`, `--kn-cap F` tune KernelNet) |
 | `--kn-floor F` | no | override the base KernelNet width floor (including reference support); positive and no greater than `--kn-cap` |
 | `--continuous-motion on\|off` | no | Wronski: KernelNet's regularized flow, smooth flow/robustness sampling and soft motion rejection (default off = IPOL parity; the app uses on; always on with KernelNet) |

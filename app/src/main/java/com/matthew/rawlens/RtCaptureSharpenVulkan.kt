@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.matthew.rawlens
 
+import com.rawlens.srpipeline.stages.RtCaptureSharpen
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -14,7 +15,7 @@ import kotlin.math.min
 
 /**
  * Daily-driver capture sharpening for the MFSR merge: RawTherapee's defaults
- * (auto radius, auto contrast, 20 iterations with the iteration check), with
+ * (auto radius, auto contrast, and the iteration check), with
  * the Richardson-Lucy work on the GPU (spirv/rtcs.vk.glsl). The CPU only
  * computes luminance per band, the auto contrast threshold (block sums, one
  * read of the image) and the final RGB ratio Ynew / Yold.
@@ -88,14 +89,24 @@ internal object RtCaptureSharpenVulkan {
                 // Luminance of the original pixels for [lo, hi).
                 val yf = yBuf.asFloatBuffer(); val lf = lBuf.asFloatBuffer()
                 val prev = saved; val prevFrom = savedFrom
-                IntStream.range(lo, hi).parallel().forEach { y ->
+                parallelRows(lo, hi) { from, to ->
                     val row = FloatArray(stride)
-                    if (prev != null && y < cs) prev.copyInto(row, 0, (y - prevFrom) * stride, (y - prevFrom + 1) * stride)
-                    else { val d = rgb.duplicate(); d.position(y * stride); d.get(row) }
-                    val yr = FloatArray(w); val lr = FloatArray(w)
-                    luma.row(row, w, yr, lr)
-                    val dy = yf.duplicate(); dy.position((y - lo) * w); dy.put(yr)
-                    val dl = lf.duplicate(); dl.position((y - lo) * w); dl.put(lr)
+                    val yr = FloatArray(w)
+                    val lr = FloatArray(w)
+                    val input = rgb.duplicate()
+                    val dy = yf.duplicate().apply { position((from - lo) * w) }
+                    val dl = lf.duplicate().apply { position((from - lo) * w) }
+                    for (y in from until to) {
+                        if (prev != null && y < cs) {
+                            prev.copyInto(row, 0, (y - prevFrom) * stride, (y - prevFrom + 1) * stride)
+                        } else {
+                            input.position(y * stride)
+                            input.get(row)
+                        }
+                        luma.row(row, w, yr, lr)
+                        dy.put(yr)
+                        dl.put(lr)
+                    }
                 }
                 val t0 = System.nanoTime()
                 vk.writeImage(images[0], yBuf.apply { rewind() })
@@ -127,14 +138,21 @@ internal object RtCaptureSharpenVulkan {
                     val d = rgb.duplicate(); d.position(savedFrom * stride); d.get(s)
                 }
                 val nf = outBuf.asFloatBuffer()
-                IntStream.range(cs, ce).parallel().forEach { y ->
+                parallelRows(cs, ce) { from, to ->
                     val row = FloatArray(stride)
-                    val d = rgb.duplicate(); d.position(y * stride); d.get(row)
-                    for (x in 0 until w) {
-                        val f = nf.get((y - cs) * w + x) // GPU luminance gain (RT factor Ynew / Yold)
-                        row[3 * x] *= f; row[3 * x + 1] *= f; row[3 * x + 2] *= f
+                    val input = rgb.duplicate().apply { position(from * stride) }
+                    val output = rgb.duplicate().apply { position(from * stride) }
+                    val gains = nf.duplicate().apply { position((from - cs) * w) }
+                    repeat(to - from) {
+                        input.get(row)
+                        for (x in 0 until w) {
+                            val f = gains.get()
+                            row[3 * x] *= f
+                            row[3 * x + 1] *= f
+                            row[3 * x + 2] *= f
+                        }
+                        output.put(row)
                     }
-                    val o = rgb.duplicate(); o.position(y * stride); o.put(row)
                 }
                 cs = ce
             }
@@ -148,16 +166,26 @@ internal object RtCaptureSharpenVulkan {
         return Stats(sigma, kr, contrast, gpuNs / 1_000_000, (totalNs - gpuNs) / 1_000_000)
     }
 
+    private fun parallelRows(from: Int, to: Int, block: (Int, Int) -> Unit) {
+        val rowsPerTask = 16
+        IntStream.range(0, (to - from + rowsPerTask - 1) / rowsPerTask).parallel().forEach { task ->
+            val start = from + task * rowsPerTask
+            block(start, min(start + rowsPerTask, to))
+        }
+    }
+
     /** RT RGB2Y (Rec.2020, clamped) and RGB2L (sRGB Y -> CIE L, 0..32768), on 0..65535 data. */
     class Luma(private val wbR: Float, private val wbB: Float) {
-        fun row(px: FloatArray, w: Int, y: FloatArray, l: FloatArray?) {
+        fun row(px: FloatArray, w: Int, y: FloatArray?, l: FloatArray?) {
             for (x in 0 until w) {
                 val r0 = px[3 * x]; val g0 = px[3 * x + 1]; val b0 = px[3 * x + 2]
                 val rr = r0 * wbR * 65535f; val gg = g0 * 65535f; val bb = b0 * wbB * 65535f
                 if (l != null) l[x] = labL(0.212671f * rr + 0.715160f * gg + 0.072169f * bb)
-                val yv = 0.2627f * max(rr, 0f) + 0.6780f * max(gg, 0f) + 0.0593f * max(bb, 0f)
-                // Sign bit = clipped (RT clipLimit 0.95 of white, any channel).
-                y[x] = if (max(r0, max(g0, b0)) >= 0.95f) -max(yv, 1e-20f) else yv
+                if (y != null) {
+                    val yv = 0.2627f * max(rr, 0f) + 0.6780f * max(gg, 0f) + 0.0593f * max(bb, 0f)
+                    // Sign bit marks clipping in any channel.
+                    y[x] = if (max(r0, max(g0, b0)) >= 0.95f) -max(yv, 1e-20f) else yv
+                }
             }
         }
         private fun labL(y: Float): Float {
@@ -170,12 +198,14 @@ internal object RtCaptureSharpenVulkan {
 
     // ---- RT buildBlendMask autoContrast, with block sums instead of rescans.
 
-    private fun lumaRows(rgb: FloatBuffer, w: Int, y0: Int, y1: Int, luma: Luma): Array<FloatArray> =
-        Array(y1 - y0) { r ->
-            val row = FloatArray(w * 3)
-            val d = rgb.duplicate(); d.position((y0 + r) * w * 3); d.get(row)
-            FloatArray(w).also { l -> luma.row(row, w, FloatArray(w), l) }
+    private fun lumaRows(rgb: FloatBuffer, w: Int, y0: Int, y1: Int, luma: Luma): Array<FloatArray> {
+        val row = FloatArray(w * 3)
+        val input = rgb.duplicate().apply { position(y0 * row.size) }
+        return Array(y1 - y0) {
+            input.get(row)
+            FloatArray(w).also { luma.row(row, w, null, it) }
         }
+    }
 
     private fun blendFactor(v: Float, t: Float): Float {
         val x = -16f + (16f / t) * v
