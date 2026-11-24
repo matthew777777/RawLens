@@ -264,6 +264,9 @@ class EncodedVideoStabilizer(private val appContext: Context) {
                 writer, sdrEgl, sdrRgb8?.buffer, sdrProgram, sdrTexture, sdrQuad
             )
             val warped = pass.run()
+            check(warped.warped > 0 && warped.degraded == 0 && pass.videoSamples == warped.warped) {
+                "incomplete stabilized video: decoded=${warped.decoded} warped=${warped.warped} encoded=${pass.videoSamples}"
+            }
             val audioCopied = copyAudioTrack(source, audioTrack, audioFormat, muxer, pass)
             muxer.stop()
             val bytes = output.length()
@@ -436,6 +439,8 @@ class EncodedVideoStabilizer(private val appContext: Context) {
         val sdrTexture: Int = 0,
         val sdrQuad: java.nio.FloatBuffer? = null,
     ) {
+        var videoSamples = 0
+            private set
         var videoMuxTrack = -1
         var audioMuxTrack = -1
         var muxerStarted = false
@@ -461,12 +466,13 @@ class EncodedVideoStabilizer(private val appContext: Context) {
         private var decEosOut = false
         private var encEosIn = false
         private var encEosOut = false
+        private var lastWarpedPtsUs = 0L
 
         fun run(): Warped {
             extractor.selectTrack(videoTrack)
             val decInfo = MediaCodec.BufferInfo()
             val encInfo = MediaCodec.BufferInfo()
-            var stallIters = 0
+            var lastProgressMs = android.os.SystemClock.elapsedRealtime()
             while (!encEosOut) {
                 var progress = false
                 if (!decEosIn) progress = feedDecoder() || progress
@@ -478,8 +484,15 @@ class EncodedVideoStabilizer(private val appContext: Context) {
                     }
                 }
                 progress = drainEncoder(encInfo) { encEosOut = true } || progress
-                if (progress) stallIters = 0
-                else if (++stallIters > MAX_STALL_ITERS) error("codec stall")
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (progress) lastProgressMs = now
+                else if (now - lastProgressMs >= CODEC_STALL_MS) {
+                    if (encEosIn && warped > 0 && videoSamples == warped) {
+                        Log.w(TAG, "stabilization encoder returned all frames without output EOS")
+                        break
+                    }
+                    error("stabilization codec stalled")
+                }
             }
             return Warped(decoded, warped, degraded)
         }
@@ -599,6 +612,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
                 degraded++
                 return
             }
+            lastWarpedPtsUs = ptsUs
             warped++
             try {
                 onProgress(warped, plan.frameCount)
@@ -775,7 +789,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
             if (inIdx < 0) return false
             return try {
                 encoder.queueInputBuffer(
-                    inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                    inIdx, 0, 0, lastWarpedPtsUs + 1, MediaCodec.BUFFER_FLAG_END_OF_STREAM
                 )
                 true
             } catch (_: Exception) {
@@ -819,6 +833,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
                     }
                     if (buf != null) {
                         muxer.writeSampleData(videoMuxTrack, buf, info)
+                        videoSamples++
                     }
                 }
                 if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
@@ -896,7 +911,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
          * Stall bound: loop iterations with zero codec progress before the
          * pass aborts (each iteration waits ≤3ms, so ~90s of wedge).
          */
-        private const val MAX_STALL_ITERS = 30_000
+        private const val CODEC_STALL_MS = 5_000L
 
         /**
          * Sidecar frame index for a decoded [ptsUs] on the take's CFR grid

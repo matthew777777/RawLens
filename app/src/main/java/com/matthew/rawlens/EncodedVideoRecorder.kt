@@ -325,6 +325,7 @@ class EncodedVideoRecorder internal constructor(
     private var drainThread: Thread? = null
     private val draining = AtomicBoolean(false)
     private var eosSeen = CountDownLatch(1)
+    @Volatile private var drainDeadlineMs = Long.MAX_VALUE
     /** Set false before [start] to record silent video without asking for the mic. */
     var audioEnabled: Boolean = true
     /**
@@ -707,6 +708,7 @@ class EncodedVideoRecorder internal constructor(
         require(sessionLutIntensity.isFinite() && sessionLutIntensity in 0f..1f)
         captureResults.clear()
         eosSeen = CountDownLatch(1)
+        drainDeadlineMs = Long.MAX_VALUE
     }
 
     /** Stage 2: characteristics, colour, thermal ladder, crop and export size. */
@@ -1785,8 +1787,7 @@ class EncodedVideoRecorder internal constructor(
                 } else {
                     // The encoder can hold every input for a few frames at the
                     // end of a take. A single 5 ms attempt that missed left the
-                    // stream without EOS: stop() then sat out the 12 s EOS wait
-                    // plus the 8 s fallback drain. Retry within a bounded window.
+                    // stream without EOS. Retry within a bounded window.
                     val deadline = SystemClock.elapsedRealtime() + 3_000L
                     var eosIdx = -1
                     while (eosIdx < 0 && SystemClock.elapsedRealtime() < deadline) {
@@ -1798,16 +1799,22 @@ class EncodedVideoRecorder internal constructor(
                             if (lastQueuedPts == Long.MIN_VALUE) 0L else lastQueuedPts + 1,
                             MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                     } else {
-                        Log.w(TAG, "no codec input for EOS; relying on the fallback drain")
+                        Log.w(TAG, "no codec input for EOS")
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.w(TAG, "cannot signal encoder EOS", e)
+            }
         }
-        try { eosSeen.await(12, TimeUnit.SECONDS) } catch (_: InterruptedException) {}
+        drainDeadlineMs = SystemClock.elapsedRealtime() + 2_000L
+        try { eosSeen.await(2_500L, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) {}
         draining.set(false)
-        // Covers a fallback drain tail + final audio flush: mux.stop() below
-        // must not run while the drain thread still writes (lost tail).
-        try { drainThread?.join(10_000) } catch (_: InterruptedException) {}
+        // The codec poll has a deadline. Let the worker finish any outstanding
+        // storage write before the muxer and recording destination are closed.
+        try { drainThread?.join() } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        if (outBufs.get() == 0 && writeFailure == null) {
+            writeFailure = java.io.IOException("Encoder produced no video samples")
+        }
         val mux = muxer
         muxer = null
         try {
@@ -3245,6 +3252,7 @@ class EncodedVideoRecorder internal constructor(
     private fun maybeStartMuxer() {
         if (muxerStarted) return
         val vf = videoFormat ?: return
+        if (!videoFormatHasCsd) return
         if (audioRequired && audioFormat == null) return
         val mux = muxer ?: return
         try {
@@ -3289,7 +3297,7 @@ class EncodedVideoRecorder internal constructor(
         val mc = codec ?: return
         val info = MediaCodec.BufferInfo()
         var outputEos = false
-        while (draining.get()) {
+        while (draining.get() && SystemClock.elapsedRealtime() < drainDeadlineMs) {
             val now = SystemClock.elapsedRealtime()
             if (directOutput != null && now - lastStorageCheckMs >= 500L) {
                 lastStorageCheckMs = now
@@ -3321,12 +3329,16 @@ class EncodedVideoRecorder internal constructor(
                 }
                 idx >= 0 -> {
                     try {
-                        // Parameter sets already travel in the track format (csd):
-                        // muxing the config buffer too adds a non-frame sample at
-                        // PTS 0 and inflates the output-frame statistics. Only
-                        // skipped when the format really carries them, so an
-                        // encoder that delivers them in-band alone is unaffected.
-                        val config = videoFormatHasCsd && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                        val config = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                        if (config && info.size > 0 && !videoFormatHasCsd) {
+                            val data = checkNotNull(mc.getOutputBuffer(idx)).duplicate()
+                            data.position(info.offset).limit(info.offset + info.size)
+                            val csd = java.nio.ByteBuffer.allocate(info.size)
+                            csd.put(data).flip()
+                            val format = videoFormat ?: mc.outputFormat.also { videoFormat = it }
+                            format.setByteBuffer("csd-0", csd)
+                            maybeStartMuxer()
+                        }
                         if (info.size > 0 && !config && muxerStarted && videoTrack >= 0) {
                             val w0 = android.os.SystemClock.elapsedRealtimeNanos()
                             muxer?.writeSampleData(videoTrack, mc.getOutputBuffer(idx)!!, info)
@@ -3354,49 +3366,17 @@ class EncodedVideoRecorder internal constructor(
                         mc.releaseOutputBuffer(idx, false)
                     } catch (e: Exception) {
                         Log.w(TAG, "drain failed: ${e.message}")
-                failRecording(e)
+                        failRecording(e)
                         try { mc.releaseOutputBuffer(idx, false) } catch (_: Exception) {}
                     }
                 }
             }
             writeAudioQueue()
         }
-        // Only a loop that exited without EOS needs the fallback drain.
-        // Once EOS was consumed there cannot be another output marker:
-        // waiting for one imposed an unconditional eight-second stop delay.
+        if (!outputEos && drainDeadlineMs != Long.MAX_VALUE) {
+            Log.w(TAG, "encoder stopped without output EOS; saved samples=${outBufs.get()}")
+        }
         try {
-            val end = SystemClock.elapsedRealtime() + 8_000
-            while (!outputEos && SystemClock.elapsedRealtime() < end) {
-                val idx = try {
-                    mc.dequeueOutputBuffer(info, 1000)
-                } catch (_: Exception) {
-                    break
-                }
-                when {
-                    idx == MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
-                    idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        try {
-                            videoFormat = mc.outputFormat
-                            maybeStartMuxer()
-                        } catch (_: Exception) {}
-                    }
-                    idx >= 0 -> {
-                        try {
-                            val config = videoFormatHasCsd && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
-                            if (info.size > 0 && !config && muxerStarted && videoTrack >= 0) {
-                                muxer?.writeSampleData(videoTrack, mc.getOutputBuffer(idx)!!, info)
-                                if (firstOutNs == 0L) firstOutNs = android.os.SystemClock.elapsedRealtimeNanos()
-                                outBufs.incrementAndGet()
-                                outBytes.addAndGet(info.size.toLong())
-                            }
-                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputEos = true
-                            mc.releaseOutputBuffer(idx, false)
-                        } catch (_: Exception) {
-                            try { mc.releaseOutputBuffer(idx, false) } catch (_: Exception) {}
-                        }
-                    }
-                }
-            }
             writeAudioQueue()
         } finally {
             eosSeen.countDown()
