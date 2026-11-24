@@ -1,0 +1,137 @@
+LK-R Lite parity with the PC solver and the two papers
+
+Sources
+  2104.06191v2, Lucas-Kanade Reloaded, PDF pp. 3–5, Eqs. 1–7.
+  2207.14671v1, High Dynamic Range and Super-Resolution from Raw Image
+  Bursts, PDF pp. 5–8, Eqs. 2, 4, 6–12.
+  PC source means the local LK-Reloaded-Super-Resolution checkout.
+  Lite source means tools/lkr-lite in RawLens.
+
+Execution order and code map
+
+1. Coarse registration and initialization
+   2021 §3.4 uses forward-additive LK on bilinear-demosaiced grayscale.
+   2022 §4.2 starts with FFT alignment and an aligned, exposure-weighted
+   demosaiced mean. Section 4.3 refines registration on learned features.
+   PC lkr_full.cpp:238 selects bilinear grayscale in paper mode. Production
+   uses binned grayscale, coarse and tile LK, plus optional local search.
+   Lite lkrl_full.cpp:297 estimates coarse motion and :614 starts tile LK.
+   lkrl_solver.cpp:542 builds the RCD seed. Line 800 schedules one or three
+   leading motion stages at 1× or 2×, inserts the weighted RAW average A,
+   and runs three or eight data updates. The average also guides the finish.
+   A coherent MHC seed gave +0.24–0.29 dB PC agreement at 1× on the two
+   crops, but the measured merge times did not justify replacing RCD.
+
+2. Forward operator and validity
+   2021 Eqs. 1–2 warp, integrate over a sensor pixel and pick its Bayer
+   channel. 2022 Eq. 4 additionally multiplies by exposure and clips.
+   PC lkr_solver.cpp:413 dispatches its FP32 residual and adjoint unless a
+   packed variant is selected. Its production warp has local translations
+   on top of the tile affine.
+   Lite shaders/lkr/resid.comp:24 computes the same affine plus interpolated
+   local translations, bilinear taps and s² average in the temporal pass.
+   The residual sign is Uz − y. An invalid or clipped sample gets zero
+   residual and zero validity. A valid, exact-zero residual still gets
+   validity one. RAW storage is packed FP16. Arithmetic and confidence
+   buffers are FP32. The scatter sums use signed 32-bit fixed point.
+   The pass now emits validity while it already has the taps. The solver
+   reuses that mask from lkrl_solver.cpp:690 onward, avoiding the second
+   traversal. Confidence rereads the original residual where an optional
+   residual guide requires it.
+
+3. Confidence, saturation and exposure
+   2021 Eq. 5 uses an unweighted least-squares data term.
+   2022 Eqs. 6–7 and 12 use a saturation mask and exposure normalization
+   across frames, multiplied by learned image confidence. Eq. 9 then uses
+   squared weights. With e relative to the chosen exposure and y'=y/e,
+   the effective coefficient on (Uz − y') is e² w².
+   PC lkr_solver.cpp:620 computes temporal confidence on the reference
+   seed and :413 combines it with the guide and minimum spread. Paper
+   mode disables this handcrafted confidence. The tested PC CLI has
+   no exposure-bracket argument corresponding to Lite's --hdr 1.
+   Lite lkrl_solver.cpp:708 computes detail tolerance, including a local
+   motion-curvature gate. It sums row statistics with weight_th.comp,
+   runs the temporal test with weight_t.comp, and optionally applies the
+   wider shadow test with weight_tv.comp and weight_td.comp. Then
+   weight_guide.comp uses Bayer-quad color statistics, weight_minh.comp
+   and weight_min.comp spread rejection, and wvalid.comp:39 applies
+   validity and any exposure factor.
+   Lite lkrl_full.cpp:653 converts observations to reference-exposure units.
+   wvalid.comp:17 uses a relative inverse-variance factor
+      (a y' + b) / (a y'/e + b/e²) / max(e²).
+   It also bypasses motion rejection near a clipped reference where a
+   shorter exposure supplies usable data. Those are separate modeling
+   choices. With fixed confidence and all frames valid, the normalized
+   Eq. 9 and Lite coefficients differed by mean absolute 0.207 in the
+   synthetic bracket check. Replacing one formula with the other would
+   change the objective and needs a separate quality justification.
+
+4. Image update
+   2021 Eq. 5 uses Uᵀ(Uz − y) plus µ(z − x), scaled by learned η.
+   2022 Eq. 9 uses Aᵀ[w²(Az − y)] plus its HQS coupling term.
+   PC lkr_solver.cpp:602 computes µ and its estimated 1/(L+µ) step size.
+   Lite shaders/adj.comp:69 evaluates the weighted residual, sends it
+   back through the same taps, and produces UᵀW1 coverage. zupd.comp:84
+   uses a per-pixel coverage-dependent approximation to multiple PC
+   updates. Lite uses independent RGB at 1× and a coupled 2× fit around
+   lkrl_solver.cpp:941. The final hybrid filter is at shaders/hyb.comp:18.
+   The simpler independent 2× fit improves agreement with PC on the
+   Paris and car crops by 1.15 and 1.96 dB, respectively. On labelled
+   synthetic rail pixels it lowers agreement with ground truth from
+   21.72 to 20.95 dB. Radius one increases chroma error on that target.
+   Retaining radius two preserves the current anti-zipper behavior.
+
+5. Motion and prior
+   2021 Eq. 7 solves affine normal equations against updated z, then the
+   ResUNet produces x for the next stage. The 2022 paper replaces image
+   registration features and confidence with learned features and uses
+   learned HQS stages for the HDR model.
+   PC lkr_solver.cpp:641 interleaves motion and z updates and :770 runs
+   the external prior inside the loop.
+   Lite lkrl_solver.cpp:980 uses leading Gauss–Newton updates, with tile
+   affine and local block reductions in jac.comp and jacblk.comp. An
+   external learned prior runs once after each tile in lkrl_adapter.cpp:312.
+   The two local TorchScript adapters form the same FP32 1×4×H×W tensor
+   from planar RGB and sqrt(0.18a + b), then run CPU inference. The
+   experimentally trained local checkpoint can therefore be shared,
+   but its input changes with the fit and its feedback schedule.
+
+Measured checks
+
+- 2021 L2 equation check, archived Vulkan PC solver versus the FP32 Torch
+  oracle, Paris 20-frame 96×96 crop at 2×, four stages, one data step per
+  stage. 137.6 dB, RGB RMS 5.93e-8, maximum affine translation difference
+  2.53e-5 LR pixels.
+- Lite operator replay, four PC input traces from Paris and car, 1× and 2×.
+  Lite produced its geometry, confidence and seed. The separate CPU
+  adjoint held those fixed. RMS gradient difference was 8.77e-8 to
+  4.26e-7 with matching FP16 RAW staging, versus 3.84e-6 to 3.30e-5 with
+  original FP32 RAW. Almost all of the additional first-step error is
+  explained by RAW storage precision. That test does not equate the two
+  confidence maps or compare the complete trained models.
+- 2022 Eq. 9, synthetic FP32 exposure bracket, analytic transpose versus
+  PyTorch autograd. Maximum absolute errors 5.96e-8 at 1× and 1.49e-8 at 2×.
+- Same local FP32 TorchScript prior on a 320×256 crop at 2×, eight Paris
+  frames, desktop CPU prior on both sides. PC used 8 prior calls in
+  4,096 ms total merge, Lite used 2 in 2,666 ms. Lite without the prior
+  took 162 ms. Agreement to the learned PC output was 43.39 dB with the
+  shared checkpoint and 43.33 dB without the Lite checkpoint. This used
+  local experimental weights. The PDFs describe training and architecture.
+- No-prior PC/Lite camera-linear comparison, same eight frames and
+  768×640 sensor crop, 16 output pixels excluded per boundary, peak 1.
+    Paris 1×   49.07 dB       Car 1×   51.34 dB
+    Paris 2×   44.59 dB       Car 2×   47.78 dB
+- Fused Lite path produced byte-identical float output for all four crops,
+  the full Paris DCT run, a synthetic ±2 EV bracket and five alternate
+  confidence configurations. Five-run desktop medians for the four crops
+  were Paris 1× 262 → 223 ms, Paris 2× 494 → 479 ms, car 1× 260 → 220 ms
+  and car 2× 465 → 452 ms. Full Paris 20-frame 1× DCT, 4032×3024,
+  averaged 8.708 → 8.384 s over two alternating runs. Dispatches fell from
+  6,400 to 6,320. No Android device was connected for timing.
+
+Reproduction
+  Enable LKR_TRACE_PREFIX on the PC CLI and select a tile trace.
+  Pass the resulting prefix to the Lite host runner:
+    lkrl_run --trace PC_TILE_PREFIX output.f32 --audit-prefix LITE_TRACE --no-prior
+    python tools/lkr-lite/research/check_data_step.py LITE_TRACE
+  The full run logs and arrays for this audit are in /tmp/lkrl-parity-fp32/.
