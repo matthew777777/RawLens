@@ -104,7 +104,7 @@ void main() {
     float c4 = lat.x - mu * bas.x, s4 = lat.y - mu * bas.y, c2 = lat.z - mu * bas.z;
     float eac = max(l2 - lat.w * mu, 1e-20);
     float f = (2.0 * (c4 * c4 + s4 * s4) + c2 * c2) / (N * eac);
-    wl = w * clamp((f - 0.4) / 0.2, 0.0, 1.0);   // 0.3: fence -5 %; 0.5: pole dots back a little
+    wl = w * (pc.s == 2 ? clamp(f, 0.0, 1.0) : 1.0) * clamp((f - 0.4) / 0.2, 0.0, 1.0);   // 0.3: fence -5 %; 0.5: pole dots back a little
     // Depth (as axn_apply): dots ripple the line, crossing twigs cut it. q = rms of the period-2 / 4 part
     // of d2 / the line's across-line d2 (mean |sv| of the two halves).
     float q = sqrt(max(2.0 * (c4 * c4 + s4 * s4) + c2 * c2, 0.0)) / N / max((abs(sh.x) + abs(sh.y)) / float(2 * n + 2), 1e-12);

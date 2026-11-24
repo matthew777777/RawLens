@@ -80,7 +80,7 @@ class HardIndex:
         return pi, (ci // nx) * self.cell + self.cell // 2, (ci % nx) * self.cell + self.cell // 2
 
 
-def batch(pairs, rng, n, p, dev, hard=None, hard_frac=0.0, grain=None):
+def batch(pairs, rng, n, p, dev, hard=None, hard_frac=0.0, grain=None, clean_merge=False):
     """grain = (lo, hi): denoiser targets. Target = clean truth + g x (luma of Lite's own grain), g drawn per
     crop and fed to the network as a 2nd condition channel: real detail is always in the target (no credit
     for smoothing), colour noise never is, and the amount of organic luma grain is a run-time input."""
@@ -103,11 +103,16 @@ def batch(pairs, rng, n, p, dev, hard=None, hard_frac=0.0, grain=None):
             g = float(rng.uniform(*grain))
             yy = cl + g * gr.mean(-1, keepdims=True)   # luma part only (equal in R, G, B: no colour)
         else:
-            yy = y[i:i + p, j:j + p].astype(np.float32)
+            target = c if c is not None else y
+            yy = target[i:i + p, j:j + p].astype(np.float32)
+        if clean_merge:
+            # Stored target = truth + noisy merge - clean merge, with matched geometry.
+            yy = yy + (x[i:i + p, j:j + p].astype(np.float32)
+                       - y[i:i + p, j:j + p].astype(np.float32))
         b = np.sqrt(np.clip(yy, 0, None))
         # noise channel: sigma x the merge's per-pixel noise gain (lost frames -> more noise there), so the
         # network does not over-smooth moving foliage nor under-clean it
-        sm = s * (np.asarray(ns[i:i + p, j:j + p], np.float32) if ns is not None else np.ones((p, p), np.float32))
+        sm = s * (np.asarray(ns[i:i + p, j:j + p], np.float32) if ns is not None and not clean_merge else np.ones((p, p), np.float32))
         k = int(rng.integers(4)); a, b, sm = np.rot90(a, k), np.rot90(b, k), np.rot90(sm, k)
         if rng.random() < 0.5: a, b, sm = a[:, ::-1], b[:, ::-1], sm[:, ::-1]
         xs.append(np.ascontiguousarray(a).transpose(2, 0, 1)); ys.append(np.ascontiguousarray(b).transpose(2, 0, 1)); ss.append((np.ascontiguousarray(sm), g))
@@ -137,6 +142,27 @@ def luma_texture(t, r=4):
     return local_energy(t.mean(1, keepdim=True), r)
 
 
+def detail_loss(output, target):
+    """Penalize missing signed luma detail in linear camera space."""
+    weights = target.new_tensor([0.25, 0.5, 0.25]).view(1, 3, 1, 1)
+    truth = highpass((target.square() * weights).sum(1, keepdim=True))
+    estimate = highpass((output.clamp_min(0).square() * weights).sum(1, keepdim=True))
+    energy = F.avg_pool2d(truth.square(), 8, stride=4)
+    missing = F.avg_pool2d(truth * (truth - estimate), 8, stride=4)
+    return (F.relu(missing) / (energy + 1e-6).sqrt()).mean()
+
+
+def shadow_loss(output, target):
+    """Penalize camera-linear shadow errors and local brightness/color bias."""
+    error = output.clamp_min(0).square() - target.square()
+    weights = target.new_tensor([0.25, 0.5, 0.25]).view(1, 3, 1, 1)
+    luma = (target.square() * weights).sum(1, keepdim=True)
+    weight = (0.09 / luma.clamp_min(0.01)).clamp(max=1.0)
+    residual = error * weight
+    bias = F.avg_pool2d(residual, 8, stride=4)
+    return (residual.square().mean() + 1e-12).sqrt() + (bias.square().mean() + 1e-12).sqrt()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('pairs'); ap.add_argument('out')
@@ -150,27 +176,51 @@ def main():
     ap.add_argument('--texfloor', type=float, default=0.0, help='one-sided luma texture term: penalise only output texture BELOW the target (anti-smearing that cannot be won by adding noise), e.g. 1')
     ap.add_argument('--energy', type=float, default=0.0, help='weight of the local fine-energy match (anti-smearing), e.g. 1')
     ap.add_argument('--hard', type=float, default=0.0, help='share of crops from hard-patch mining (Gharbi 2016), e.g. 0.5')
+    ap.add_argument('--clean-merge', action='store_true',
+                    help='target the paired noise-free Lite reconstruction and use scalar runtime conditioning')
+    ap.add_argument('--shadow-loss', type=float, default=0.0,
+                    help='weight of camera-linear shadow and local bias loss (clean targets)')
+    ap.add_argument('--detail-loss', type=float, default=0.0,
+                    help='weight of the signed camera-linear luma detail penalty')
+    ap.add_argument('--noise-dropout', type=float, default=0.0,
+                    help='probability of conditioning on the deployed shot-noise floor')
     a = ap.parse_args()
+    if a.clean_merge and (not a.clean or a.grain is not None):
+        ap.error('--clean-merge requires --clean and is incompatible with --grain')
+    if a.grain is not None and not a.clean:
+        ap.error('--grain requires --clean')
+    if a.shadow_loss < 0 or (a.shadow_loss and not a.clean):
+        ap.error('--shadow-loss must be nonnegative and requires --clean')
+    if a.detail_loss < 0:
+        ap.error('--detail-loss must be nonnegative')
+    if not 0 <= a.noise_dropout <= 1:
+        ap.error('--noise-dropout must be between 0 and 1')
     dev = 'mps' if torch.backends.mps.is_available() else 'cpu'
     pairs = load_pairs(a.pairs, a.clean)
     # fixed shuffle before the split: with several pair dirs the held-out set covers all of them
     pairs = [pairs[i] for i in np.random.default_rng(7).permutation(len(pairs))]
     val, tr = pairs[:a.val], pairs[a.val:]
     print(f'{len(tr)} train / {len(val)} val pairs, device {dev}')
+    torch.manual_seed(2021)
     m = Prior(a.ch, a.layers, 2 if a.grain else 1).to(dev)
     if a.init: m.load_state_dict(torch.load(a.init, map_location='cpu')['state']); print('init from', a.init)
     print('parameters', sum(p.numel() for p in m.parameters()))
     opt = torch.optim.Adam(m.parameters(), lr=a.lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, a.steps)
     rng = np.random.default_rng(0); vrng = np.random.default_rng(123)
-    vb = [batch(val, vrng, 16, 256, dev, grain=a.grain) for _ in range(4)]
+    vb = [batch(val, vrng, 16, 256, dev, grain=a.grain, clean_merge=a.clean_merge) for _ in range(4)]
     hidx = HardIndex(tr) if a.hard > 0 else None
     if hidx is not None: print('hard-patch cells', len(hidx.keys))
     t0 = time.time(); nskip = 0; best = float('inf')
     for it in range(1, a.steps + 1):
-        x, y, s = batch(tr, rng, a.batch, a.patch, dev, hidx, a.hard, a.grain)
+        x, y, s = batch(tr, rng, a.batch, a.patch, dev, hidx, a.hard, a.grain, a.clean_merge)
+        if a.noise_dropout:
+            dropped = rng.random(a.batch) < a.noise_dropout
+            s[torch.as_tensor(dropped, device=dev), :1] = np.sqrt(0.18e-6)
         o = m(x, s)
         loss = F.l1_loss(o, y) + 2.0 * F.l1_loss(highpass(o), highpass(y))
+        if a.detail_loss: loss = loss + a.detail_loss * detail_loss(o, y)
+        if a.shadow_loss: loss = loss + a.shadow_loss * shadow_loss(o, y)
         if a.energy > 0: loss = loss + a.energy * F.l1_loss(local_energy(o), local_energy(y))
         if a.texfloor > 0: loss = loss + a.texfloor * F.relu(luma_texture(y) - luma_texture(o)).mean()
         opt.zero_grad(); loss.backward()
@@ -187,9 +237,21 @@ def main():
                 eout = sum((local_energy(m(x, s)).mean() / local_energy(y).mean()).item() for x, y, s in vb) / len(vb)
             print(f'texture energy out/target {eout:.3f} | ', end='')
             print(f'step {it} loss {loss.item():.5f} | val L1 Lite {vin:.5f} -> prior {vout:.5f} | fine-scale {hin:.5f} -> {hout:.5f} | skipped {nskip} | {time.time() - t0:.0f} s', flush=True)
-            if not np.isfinite(vout) or vout >= best: continue   # keep the best finite checkpoint
-            best = vout
-            torch.save({'state': m.state_dict(), 'ch': a.ch, 'layers': a.layers, 'cond': m.cond}, a.out)
+            rank = vout
+            if a.shadow_loss:
+                with torch.no_grad():
+                    shadow_in = sum(shadow_loss(x, y).item() for x, y, s in vb) / len(vb)
+                    shadow_out = sum(shadow_loss(m(x, s), y).item() for x, y, s in vb) / len(vb)
+                print(f'validation linear shadow loss {shadow_in:.6f} -> {shadow_out:.6f}', flush=True)
+                rank += a.shadow_loss * shadow_out
+            if a.detail_loss:
+                with torch.no_grad():
+                    detail_out = sum(detail_loss(m(x, s), y).item() for x, y, s in vb) / len(vb)
+                print(f'validation signed detail loss {detail_out:.6f}', flush=True)
+                rank += a.detail_loss * detail_out
+            if not np.isfinite(rank) or rank >= best: continue   # keep the best finite checkpoint
+            best = rank
+            torch.save({'state': m.state_dict(), 'ch': a.ch, 'layers': a.layers, 'cond': m.cond, 'step': it}, a.out)
 
 
 if __name__ == '__main__':

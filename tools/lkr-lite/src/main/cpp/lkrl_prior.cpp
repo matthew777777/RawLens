@@ -13,12 +13,14 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #ifdef __ANDROID__
 #include <android/NeuralNetworks.h>
 #include <android/log.h>
+#include <sys/system_properties.h>
 #include "lkrl_prior_model.h"   // generated: lkrl_prior_model[] = prior_v2.bin
 #endif
 #ifndef LKRL_PRIOR_DEFAULT_BIN
@@ -71,6 +73,19 @@ const std::vector<Layer>& Layers() {
   return L;
 }
 
+const std::vector<Layer>& DenoiserLayers() {
+#ifdef __ANDROID__
+  static const auto layers = ParseLayers(std::vector<uint8_t>(
+      lkrl_denoiser_model, lkrl_denoiser_model + sizeof(lkrl_denoiser_model)));
+#else
+  static const auto layers = [] {
+    const char* path = std::getenv("LKRL_DENOISER_BIN");
+    return ParseLayers(ReadFile(path ? path : LKRL_DENOISER_DEFAULT_BIN));
+  }();
+#endif
+  return layers;
+}
+
 // Vulkan-fallback network (prior_fb.bin: slimmer, same recipe; GPUs without an NPU). Missing -> NPU network.
 const std::vector<Layer>& FallbackLayers() {
   static const std::vector<Layer> L = [] {
@@ -87,20 +102,20 @@ const std::vector<Layer>& FallbackLayers() {
 // NHWC input: sqrt of the image (ch 0-2) + 100 * sigma (ch 3), sigma = sqrt(0.18 a) (training convention).
 // Rows split over hardware threads (the conversion was single-threaded: ~20-40 ms per 1024 px tile,
 // time each tile also held its NPU turn for).
-template <class F> void ParallelRows(int H, F f) {
-  const int nt = std::max(1, std::min(int(std::thread::hardware_concurrency()), 8));
+template <class F> void ParallelRows(int H, int max_threads, F f) {
+  const int nt = std::max(1, std::min(int(std::thread::hardware_concurrency()), max_threads));
   std::vector<std::thread> th;
   for (int t = 1; t < nt; ++t) th.emplace_back(f, H * t / nt, H * (t + 1) / nt);
   f(0, H / nt);
   for (auto& x : th) x.join();
 }
 
-void MakeInput(const float* z, int H, int W, float noise_a, std::vector<float>* in) {
+void MakeInput(const float* z, int H, int W, float noise_a, std::vector<float>* in, bool denoise) {
   const size_t HW = size_t(H) * W;
   const float s100 = 100.0f * std::sqrt(std::max(noise_a, 1e-6f) * 0.18f);
   in->resize(HW * 4);
   float* o = in->data();
-  ParallelRows(H, [&](int y0, int y1) {
+  ParallelRows(H, denoise ? 2 : 8, [&](int y0, int y1) {
     for (size_t i = size_t(y0) * W; i < size_t(y1) * W; ++i) {
       o[i * 4 + 0] = std::sqrt(std::max(z[i], 0.0f));
       o[i * 4 + 1] = std::sqrt(std::max(z[HW + i], 0.0f));
@@ -119,10 +134,10 @@ bool FullCorrection() {
   return full;
 }
 
-void WriteBack(const std::vector<float>& out, int H, int W, float* z, float* delta) {
+void WriteBack(const std::vector<float>& out, int H, int W, float* z, float* delta, bool denoise) {
   const size_t HW = size_t(H) * W;
-  const bool full = FullCorrection();
-  ParallelRows(H, [&](int y0, int y1) {
+  const bool full = denoise || FullCorrection();
+  ParallelRows(H, denoise ? 2 : 8, [&](int y0, int y1) {
     for (size_t i = size_t(y0) * W; i < size_t(y1) * W; ++i) {
       float d[3];
       for (int c = 0; c < 3; ++c) { const float o = std::max(out[i * 3 + c], 0.0f); d[c] = o * o - z[size_t(c) * HW + i]; }
@@ -176,9 +191,9 @@ void RunCpu(const std::vector<Layer>& L, const std::vector<float>& in, int H, in
 }
 #else
 // ---- NNAPI, one accelerator only ----
-struct Compiled { ANeuralNetworksModel* model = nullptr; ANeuralNetworksCompilation* comp = nullptr; std::string dev; };
+struct Compiled { ANeuralNetworksModel* model = nullptr; ANeuralNetworksCompilation* comp = nullptr; std::string dev, error; };
 std::mutex g_mu;
-std::map<std::pair<int, int>, Compiled> g_cache;
+std::map<std::tuple<int, int, bool>, Compiled> g_cache;
 std::vector<std::vector<uint32_t>> g_dims;   // operand dimension storage (kept alive)
 std::vector<float> g_idw, g_idb;             // identity skip weights (kept alive: >128 B values are referenced)
 
@@ -209,11 +224,19 @@ const ANeuralNetworksDevice* PickDevice(std::string* name) {
   return nullptr;
 }
 
-bool Build(int H, int W, Compiled* out, std::string* err) {
-  const auto& L = Layers();
+bool Build(int H, int W, Compiled* out, std::string* err, bool denoise) {
+  const auto& L = denoise ? DenoiserLayers() : Layers();
   if (L.empty()) { *err = "prior weights missing"; return false; }
   std::string dname; const ANeuralNetworksDevice* dev = PickDevice(&dname);
   if (!dev) { *err = "no NPU device (MDLA / Hexagon) for the prior"; return false; }
+  if (denoise) {
+    int32_t type = ANEURALNETWORKS_DEVICE_UNKNOWN;
+    if (ANeuralNetworksDevice_getType(dev, &type) != ANEURALNETWORKS_NO_ERROR ||
+        type != ANEURALNETWORKS_DEVICE_ACCELERATOR) {
+      *err = dname + " is not a dedicated NNAPI accelerator";
+      return false;
+    }
+  }
   ANeuralNetworksModel* m = nullptr;
   if (ANeuralNetworksModel_create(&m) != ANEURALNETWORKS_NO_ERROR) { *err = "model create"; return false; }
   uint32_t nop = 0; bool ok = true; int nOps = 0;
@@ -268,13 +291,24 @@ bool Build(int H, int W, Compiled* out, std::string* err) {
   return true;
 }
 
-const Compiled* Get(int H, int W, std::string* err) {
+const Compiled* Get(int H, int W, std::string* err, bool denoise) {
   std::lock_guard<std::mutex> lk(g_mu);
-  auto it = g_cache.find({H, W});
-  if (it != g_cache.end()) return &it->second;
+  const auto key = std::make_tuple(H, W, denoise);
+  auto it = g_cache.find(key);
+  if (it != g_cache.end()) {
+    if (it->second.comp) return &it->second;
+    *err = it->second.error;
+    return nullptr;
+  }
   Compiled c;
-  if (!Build(H, W, &c, err)) return nullptr;
-  return &g_cache.emplace(std::make_pair(H, W), c).first->second;
+  if (!Build(H, W, &c, err, denoise)) {
+    if (denoise) {
+      c.error = *err;
+      g_cache.emplace(key, std::move(c));
+    }
+    return nullptr;
+  }
+  return &g_cache.emplace(key, c).first->second;
 }
 #endif
 
@@ -290,13 +324,27 @@ bool PriorEnabled() {
   return g_prior_setting.load() == 1;
 }
 
-bool PriorNpuAvailable() {
+bool NpuDenoiseEnabled() {
+  const char* setting = std::getenv("LKRL_NPU_DENOISE");
+  if (setting) return std::atoi(setting) != 0;
 #ifdef __ANDROID__
-  static const bool ok = [] { std::string n; return PickDevice(&n) != nullptr && !Layers().empty(); }();
-  return ok;
+  static const bool enabled = [] {
+    char value[PROP_VALUE_MAX]{};
+    return __system_property_get("debug.lkr.npudenoise", value) > 0 && std::atoi(value) != 0;
+  }();
+  return enabled;
+#else
+  return false;
+#endif
+}
+
+bool PriorNpuAvailable(bool denoise) {
+#ifdef __ANDROID__
+  static const bool device = [] { std::string name; return PickDevice(&name) != nullptr; }();
+  return device && !(denoise ? DenoiserLayers() : Layers()).empty();
 #else
   static const bool cpu = std::getenv("LKRL_PRIOR_CPU") && std::atoi(std::getenv("LKRL_PRIOR_CPU")) != 0;
-  return cpu && !Layers().empty();
+  return cpu && !(denoise ? DenoiserLayers() : Layers()).empty();
 #endif
 }
 
@@ -316,19 +364,19 @@ bool PriorPacked(std::vector<float>* wb, std::vector<PriorLayerInfo>* info) {
   return true;
 }
 
-bool PriorPrewarm(int H, int W, std::string* err) {
+bool PriorPrewarm(int H, int W, std::string* err, bool denoise) {
 #ifdef __ANDROID__
-  return Get(H, W, err) != nullptr;
+  return Get(H, W, err, denoise) != nullptr;
 #else
   (void)H; (void)W;
-  if (Layers().empty()) { *err = "prior weights missing"; return false; }
+  if ((denoise ? DenoiserLayers() : Layers()).empty()) { *err = "prior weights missing"; return false; }
   return true;
 #endif
 }
 
-bool PriorApply(float* z, int H, int W, float noise_a, float* delta, PriorStats* st, std::string* err) {
+bool PriorApply(float* z, int H, int W, float noise_a, float* delta, PriorStats* st, std::string* err, bool denoise) {
   const auto t0 = std::chrono::steady_clock::now();
-  const auto& L = Layers();
+  const auto& L = denoise ? DenoiserLayers() : Layers();
   if (L.empty()) { *err = "prior weights missing"; return false; }
   std::vector<float> in, out(size_t(H) * W * 3);
   // Diagnostics: LKRL_PRIOR_DUMP_PREFIX saves the FIRST tile's input / output / meta (NPU vs host check).
@@ -337,9 +385,9 @@ bool PriorApply(float* z, int H, int W, float noise_a, float* delta, PriorStats*
   const bool dump_now = dpre && *dpre && !dumped.exchange(true);
   std::vector<float> z_in;
   if (dump_now) z_in.assign(z, z + size_t(3) * H * W);
-  MakeInput(z, H, W, noise_a, &in);
+  MakeInput(z, H, W, noise_a, &in, denoise);
 #ifdef __ANDROID__
-  const Compiled* c = Get(H, W, err);
+  const Compiled* c = Get(H, W, err, denoise);
   if (!c) { __android_log_print(ANDROID_LOG_WARN, "LkrPrior", "skipped: %s", err->c_str()); return false; }
   // One execution at a time: the MDLA shim failed concurrent executions on one compilation (2 workers),
   // and the NPU runs one job at a time anyway; the other worker keeps the GPU busy meanwhile.
@@ -365,7 +413,11 @@ bool PriorApply(float* z, int H, int W, float noise_a, float* delta, PriorStats*
   RunCpu(L, in, H, W, &out);
   if (st) st->device = "cpu-reference";
 #endif
-  WriteBack(out, H, W, z, delta);
+  if (denoise && !std::all_of(out.begin(), out.end(), [](float value) { return std::isfinite(value); })) {
+    *err = "nonfinite NPU output";
+    return false;
+  }
+  WriteBack(out, H, W, z, delta, denoise);
   if (dump_now) {
     const std::string pre(dpre);
     if (FILE* f = std::fopen((pre + "-in.f32").c_str(), "wb")) { std::fwrite(z_in.data(), 4, z_in.size(), f); std::fclose(f); }

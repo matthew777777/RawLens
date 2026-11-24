@@ -12,22 +12,45 @@ float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y
 layout(std430, binding = 1) writeonly buffer M { vec4 means[]; };
 layout(std430, binding = 2) writeonly buffer V { vec4 vars[]; };
 
+// One transformed quad per lane, plus the one-quad halo for the 3x3 window.
+const int TILE = 16;
+const int PITCH = TILE + 2;
+shared vec4 quadStats[PITCH * PITCH];
+
+vec4 loadQuad(ivec2 q, int k) {
+  int t = (k * pc.h + 2 * q.y) * pc.w + 2 * q.x;
+  vec3 raw = vec3(yv(t), 0.5 * (yv(t + 1) + yv(t + pc.w)), yv(t + pc.w + 1));
+  vec3 signal = max(raw, vec3(0.0));
+  vec3 nv = (pc.a * signal + pc.b) / max(4.0 * raw, vec3(4e-5));
+  nv.y *= 0.5;
+  return vec4(sqrt(signal), nv.x + nv.y + nv.z);
+}
+
 void main() {
-  int x = int(gl_GlobalInvocationID.x), yy = int(gl_GlobalInvocationID.y), k = int(gl_GlobalInvocationID.z);
-  int w = pc.w / 2, h = pc.h / 2;
+  ivec2 local = ivec2(gl_LocalInvocationID.xy);
+  ivec2 origin = ivec2(gl_WorkGroupID.xy) * TILE;
+  ivec2 extent = ivec2(pc.w, pc.h) / 2;
+  int k = int(gl_WorkGroupID.z);
+
+  // Load the halo even in partial groups. All lanes participate in the barrier.
+  for (int index = int(gl_LocalInvocationIndex); index < PITCH * PITCH; index += TILE * TILE) {
+    ivec2 q = origin + ivec2(index % PITCH, index / PITCH) - 1;
+    quadStats[index] = loadQuad(clamp(q, ivec2(0), extent - 1), k);
+  }
+  barrier();
+
+  int x = origin.x + local.x, yy = origin.y + local.y;
+  int w = extent.x, h = extent.y;
   if (x >= w || yy >= h) return;
   vec3 m = vec3(0.0), v = vec3(0.0);
   float vn = 0.0;
-  for (int dy = -1; dy <= 1; ++dy)
-    for (int dx = -1; dx <= 1; ++dx) {
-      int qx = clamp(x + dx, 0, w - 1), qy = clamp(yy + dy, 0, h - 1);
-      int t = k * pc.w * pc.h + 2 * qy * pc.w + 2 * qx;
-      vec3 raw = vec3(yv(int(t)), 0.5 * (yv(int(t + 1)) + yv(int(t + pc.w))), yv(int(t + pc.w + 1)));
-      vec3 a = sqrt(max(raw, vec3(0.0)));
-      m += a; v += a * a;
-      vec3 nv = (pc.a * max(raw, vec3(0.0)) + pc.b) / max(4.0 * raw, vec3(4e-5));
-      nv.y *= 0.5;
-      vn += nv.x + nv.y + nv.z;
+  int topLeft = local.y * PITCH + local.x;
+  for (int dy = 0; dy < 3; ++dy)
+    for (int dx = 0; dx < 3; ++dx) {
+      vec4 q = quadStats[topLeft + dy * PITCH + dx];
+      m += q.xyz;
+      v += q.xyz * q.xyz;
+      vn += q.w;
     }
   m /= 9.0;
   v = max(v / 9.0 - m * m, vec3(0.0));

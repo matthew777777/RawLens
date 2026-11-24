@@ -61,7 +61,9 @@ internal object LkrMerge {
         /** Keep the x2 solve: 1x -> whole frame at x2; 1.5x / 2x -> crop at x2, no downsample. */
         val fullRes: Boolean = false,
         /** The frames are an LK-R HDR capture (0 EV reference first, then short / long frames). */
-        val hdrBracket: Boolean = false
+        val hdrBracket: Boolean = false,
+        val npuDenoise: Boolean = false,
+        val noPrior: Boolean = false
     )
 
     fun mergeDecoded(
@@ -226,7 +228,8 @@ internal object LkrMerge {
         LkrBridge.nativeSetNoiseModel(
             noiseSource?.let { WaveletDenoiser.storePath(WaveletDenoiser.noiseDir(context), it) },
             noiseSource?.iso?.toFloat() ?: 0f)
-        LkrBridge.nativeSetPrior(settings.network)
+        LkrBridge.nativeSetPrior(settings.network && !settings.npuDenoise && !settings.noPrior)
+        LkrBridge.nativeSetNpuDenoise(settings.npuDenoise, settings.noPrior)
         LkrBridge.nativeSetExposures(exposures)
         if (exposures != null) Log.i(LOG_TAG, "lkr HDR bracket exposures (ref first): ${exposures.joinToString { "%.4g".format(it) }}")
         val t0 = SystemClock.elapsedRealtime()

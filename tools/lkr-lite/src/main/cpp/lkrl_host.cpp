@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 
 #include "lkrl_image.h"
@@ -373,27 +374,37 @@ LkRef LkPrepare(const float* ref, int h, int w, int levels) {
   return R;
 }
 
-double LkResidual(const LkRef& ref, const float* mov, const std::array<double, 6>& p) {
+LkFitComparison LkCompareFits(const LkRef& ref, const float* mov,
+                             const std::array<double, 6>& seed,
+                             const std::array<double, 6>& candidate) {
   const int h = ref.hs[0], w = ref.ws[0];
   const double* r = ref.r[0].data();
-  double e = 0;
-  size_t n = 0;
+  LkFitComparison fit;
+  auto sample = [&](const std::array<double, 6>& p, double ux, double uy) {
+    const double x = p[0] * ux + p[1] * uy + p[2] - 0.5;
+    const double y = p[3] * ux + p[4] * uy + p[5] - 0.5;
+    if (!(x >= 0 && y >= 0 && x < w - 1 && y < h - 1))
+      return std::numeric_limits<double>::quiet_NaN();
+    const int ix = int(x), iy = int(y);
+    return tap(r, size_t(iy) * w + ix, w, x - ix, y - iy);
+  };
   for (int i = 0; i < h; ++i)
     for (int j = 0; j < w; ++j) {
-      const double ux = j + 0.5, uy = i + 0.5;
-      const double fx = p[0] * ux + p[1] * uy + p[2] - 0.5, fy = p[3] * ux + p[4] * uy + p[5] - 0.5;
-      const int x0 = int(std::floor(fx)), y0 = int(std::floor(fy));
-      if (!(x0 >= 0 && y0 >= 0 && x0 + 1 < w && y0 + 1 < h)) continue;
-      const double d = std::fabs(tap(r, size_t(y0) * w + x0, w, fx - x0, fy - y0) - mov[size_t(i) * w + j]);
-      if (!std::isfinite(d)) continue;   // masked (NaN)
-      e += d;
-      ++n;
+      const double observed = mov[size_t(i) * w + j];
+      const double seed_error = std::abs(sample(seed, j + 0.5, i + 0.5) - observed);
+      if (!std::isfinite(seed_error)) continue;
+      ++fit.seed_samples;
+      const double candidate_error = std::abs(sample(candidate, j + 0.5, i + 0.5) - observed);
+      if (!std::isfinite(candidate_error)) continue;
+      fit.seed_error += seed_error;
+      fit.candidate_error += candidate_error;
+      ++fit.common_samples;
     }
-  return n ? e / n : 1e30;
-}
-
-double LkResidual(const float* ref, const float* mov, int h, int w, const std::array<double, 6>& p) {
-  return LkResidual(LkPrepare(ref, h, w, 1), mov, p);
+  if (fit.common_samples) {
+    fit.seed_error /= fit.common_samples;
+    fit.candidate_error /= fit.common_samples;
+  }
+  return fit;
 }
 
 std::vector<std::vector<double>> LkMovPyramid(const LkRef& ref, const float* mov) {

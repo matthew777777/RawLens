@@ -21,6 +21,7 @@ void main() {
   int base = bayerChannel(i, j) * pc.H * pc.W;
   float sum = 0.0;
   bool ok = yv < pc.clip;
+  if (pc.LB == 1) ok = ok && dloc[pc.K * pc.h * pc.w + o / 2][o & 1] > 0.5;
   for (int oy = 0; oy < pc.s && ok; ++oy)
     for (int ox = 0; ox < pc.s && ok; ++ox) {
       ivec2 x0; vec2 f;

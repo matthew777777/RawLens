@@ -47,14 +47,20 @@ inline const uint16_t* RowSamples(const RawFrame& f, int y, int x0, int n, uint1
 void LoadTile(const RawFrame& f, const Grid& g, int gx, int gy, int tw, int th, const float black[4],
               float white, float* out) {
   std::vector<uint16_t> unpacked(f.packed_bits > 0 ? size_t(tw) : 0);
+  const int x = g.x0 + gx;
+  const float range[4] = {white - black[0], white - black[1], white - black[2], white - black[3]};
   for (int i = 0; i < th; ++i) {
     const int y = g.y0 + gy + i;
-    const uint16_t* row = RowSamples(f, y, g.x0 + gx, tw, unpacked.data());
-    for (int j = 0; j < tw; ++j) {
-      const int x = g.x0 + gx + j;
-      const int cell = ((y & 1) << 1) | (x & 1);
-      out[size_t(i) * tw + j] = (float(row[j]) - black[cell]) / (white - black[cell]);
+    const uint16_t* row = RowSamples(f, y, x, tw, unpacked.data());
+    float* dst = out + size_t(i) * tw;
+    const int first = ((y & 1) << 1) | (x & 1);
+    const int second = first ^ 1;
+    int j = 0;
+    for (; j + 1 < tw; j += 2) {
+      dst[j] = (float(row[j]) - black[first]) / range[first];
+      dst[j + 1] = (float(row[j + 1]) - black[second]) / range[second];
     }
+    if (j < tw) dst[j] = (float(row[j]) - black[first]) / range[first];
   }
 }
 
@@ -100,6 +106,52 @@ std::vector<float> BinnedGrey(const RawFrame& f, const Grid& g, int bin, const f
       }
       out[size_t(bi) * *bw + bj] = float(s / (bin * bin));
     }
+  return out;
+}
+
+// Average the PC bilinear RGB guide directly onto Lite's existing alignment
+// grid. Three normalized sensor rows suffice, even for packed input.
+std::vector<float> BinnedBilinearGrey(const RawFrame& frame, const Grid& g, int bin,
+                                      const float black[4], float white, int* bw, int* bh) {
+  *bw = g.w / bin;
+  *bh = g.h / bin;
+  std::vector<float> out(size_t(*bw) * *bh, 0.0f);
+  std::vector<float> rows(size_t(3) * g.w);
+  std::vector<uint16_t> unpacked(frame.packed_bits > 0 ? size_t(g.w) : 0);
+  float range[4];
+  for (int c = 0; c < 4; ++c) range[c] = white - black[c];
+  auto load = [&](int i) {
+    const int y = g.y0 + i;
+    const uint16_t* raw = RowSamples(frame, y, g.x0, g.w, unpacked.data());
+    float* row = rows.data() + size_t(i % 3) * g.w;
+    const int phase = ((y & 1) << 1) | (g.x0 & 1);
+    for (int x = 0; x < g.w; ++x) {
+      const int c = phase ^ (x & 1);
+      row[x] = (float(raw[x]) - black[c]) / range[c];
+    }
+  };
+  if (*bw == 0 || *bh == 0) return out;
+  load(0);
+  load(1);
+  const float inv = 1.0f / float(3 * bin * bin);
+  for (int y = 0; y < *bh * bin; ++y) {
+    const float* above = rows.data() + size_t((y == 0 ? 1 : y - 1) % 3) * g.w;
+    const float* center = rows.data() + size_t(y % 3) * g.w;
+    const float* below = rows.data() + size_t((y + 1 == g.h ? y - 1 : y + 1) % 3) * g.w;
+    for (int bx = 0; bx < *bw; ++bx) {
+      float sum = 0.0f;
+      for (int x = bx * bin; x < (bx + 1) * bin; ++x) {
+        const int l = x == 0 ? 1 : x - 1, r = x + 1 == g.w ? x - 1 : x + 1;
+        const float axial = above[x] + below[x] + center[l] + center[r];
+        const float diagonal = above[l] + above[r] + below[l] + below[r];
+        // Sum R+G+B from the same normalized 3x3 bilinear kernel as PC.
+        sum += ((y ^ x) & 1) ? 0.5f * (center[x] + axial) + 0.125f * diagonal
+                             : center[x] + 0.25f * (axial + diagonal);
+      }
+      out[size_t(y / bin) * *bw + bx] += sum * inv;
+    }
+    if (y + 2 < g.h) load(y + 2);
+  }
   return out;
 }
 
@@ -311,7 +363,12 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       for (float& x : v) if (x >= lim) x = std::numeric_limits<float>::quiet_NaN();
       return v;
     }
-    if (!prm.paper_parity) return BinnedGrey(frame, g, bin, black, white, bw, bh);
+    if (!prm.paper_parity) {
+      const char* bilinear = std::getenv("LKRL_COARSE_BILINEAR");
+      if (bilinear && std::atoi(bilinear) != 0)
+        return BinnedBilinearGrey(frame, g, bin, black, white, bw, bh);
+      return BinnedGrey(frame, g, bin, black, white, bw, bh);
+    }
     // Paper section 3.4: coarse forward-additive LK on bilinear-demosaiced
     // grayscale, rather than averaging Bayer cells before demosaicking.
     *bw = g.w; *bh = g.h;
@@ -383,7 +440,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
 
   // 3) Overlapping tiles, feathered accumulation into the interleaved output.
   t = now_ms();
-  const PriorFn prior = make_prior ? make_prior(S.a, S.b, S.sigma, wb) : PriorFn();
+  const PriorFn prior = !prm.solve.no_prior && make_prior ? make_prior(S.a, S.b, S.sigma, wb) : PriorFn();
   // The DCT x-step needs the solved tile (s * tile) to be a multiple of 4.
   const int tile_target = prm.tile > 0 ? prm.tile : (prm.s == 1 ? 416 : 320);
   const int tile_align = ((prm.solve.dct_prior || prm.solve.dct_fallback) && prm.s == 1) ? 4 : 2;
@@ -467,6 +524,31 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     sp.robust_pow = prm.robust_pow_day + t * (prm.robust_pow_night - prm.robust_pow_day);
     sp.shadow_chroma = prm.solve.shadow_chroma * (1.0f - t);
   }
+  // At 2x each R/B observation covers one of 16 HR Bayer phases. Weight the
+  // frame count by the diversity of the measured global shifts. Repeated
+  // frames add no new phases. Make one decision for all overlapping tiles.
+  constexpr int phase_count = 4 * 4;  // Bayer period at 2x.
+  if (prm.auto_look && look_t == 0 && s == 2 && !hdr && !holdout && !prm.paper_parity && K >= phase_count) {
+    double mass[4][4]{};
+    const double cx = g.w * 0.5, cy = g.h * 0.5;
+    for (const auto& a : P) {
+      const double x = s * ((a[0] - 1) * cx + a[1] * cy + a[2]);
+      const double y = s * (a[3] * cx + (a[4] - 1) * cy + a[5]);
+      if (!std::isfinite(x) || !std::isfinite(y)) continue;
+      const int ix = int(std::floor(x)), iy = int(std::floor(y));
+      const double fx = x - ix, fy = y - iy;
+      for (int j = 0; j < 2; ++j) for (int i = 0; i < 2; ++i)
+        mass[(iy + j) & 3][(ix + i) & 3] += (i ? fx : 1 - fx) * (j ? fy : 1 - fy);
+    }
+    double squares = 0.0, least = double(K);
+    for (const auto& row : mass) for (double value : row) {
+      squares += value * value;
+      least = std::min(least, value);
+    }
+    // Inverse concentration / 16 is one for uniform sampling.
+    const double phase_fraction = squares > 0 ? double(K) * K / (phase_count * squares) : 0.0;
+    sp.direct_rgb = least > 0 && K * phase_fraction >= phase_count;
+  }
   // Local-motion regularisation follows OUR noise level: weak in clean
   // daylight (small sways count), stiff at high ISO where per-block
   // Gauss-Newton would otherwise fit noise (flat areas got noisier).
@@ -501,6 +583,13 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // Two workers, each with its own Vulkan context and solver buffers: while
   // one waits on the prior, the other keeps the GPU busy. Tiles are
   // blended strictly in job order (ticket), so the output is deterministic.
+  const char* dense_dir = std::getenv("LKRL_DENSE_FIELD_DIR");
+  const char* raw_trace_dir = std::getenv("LKRL_RAW_TRACE_DIR");
+  if ((std::getenv("LKRL_DENSE_FIELD") && jobs.size() != 1) ||
+      (hdr && (dense_dir || std::getenv("LKRL_DENSE_FIELD")))) {
+    if (err) *err = "dense replay requires equal exposures and one field per tile";
+    return false;
+  }
   int nwork = std::max(1, std::min<int>(prm.workers, int(jobs.size())));
   if (prm.solver_budget_mb > 0) {
     // 11 HR float planes x 3 colours + 13 LR float buffers per frame (lkr_solver.cpp cache).
@@ -596,7 +685,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     }
     wg->profile(gpu->profiling());
     std::vector<float> x, field, model_tile;
-    BlockSearch bsearch(wg);
+    const bool use_block_search = sp.local_block == 16 && prm.block_search && !prm.paper_parity;
+    BlockSearch bsearch(use_block_search ? wg : nullptr);
     // CPU tile preparation (load, tile LK, sub-tile LK) runs one tile ahead on its own thread while
     // the GPU solves the current tile (2026-11-17). Before, each worker prepared and then solved, so
     // the GPU idled during the LK: Mali-G615 1x full merge 18.2-18.6 s, 14.1 s with tile LK off.
@@ -652,7 +742,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       // Quadrant size and pre-blur follow the noise level: small, sharp patches in
       // daylight; larger, smoothed ones at night (small noisy patches misaligned
       // and blurred the night treeline).
-      const int sub_size = look_t > 0.5f ? prm.sub_lk_night : prm.sub_lk;
+      const int sub_size = prm.sub_lk == 0 ? 0 : (look_t > 0.5f ? prm.sub_lk_night : prm.sub_lk);
       const int sub_blur = int(std::lround(prm.sub_lk_blur_night * look_t));
       // Any tile size (2026-11-20): quadrants of sub_size spread evenly over the tile (overlapping when n is
       // not a multiple), each 16 px field block from the nearest quadrant. The old n % sub_size == 0 rule
@@ -702,7 +792,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
           cellGrey(tf.data() + size_t(k) * n * n, gm);
           std::array<double, 6> pg{pt[0], pt[1], pt[2] * 0.5, pt[3], pt[4], pt[5] * 0.5};   // LR -> grey px
           const std::array<double, 6> pr = LkAffine(tref, gm.data(), 30, &pg);
-          if (LkResidual(tref, gm.data(), pr) < LkResidual(tref, gm.data(), pg))
+          if (LkCompareFits(tref, gm.data(), pg, pr).improves())
             pt = {pr[0], pr[1], pr[2] * 2.0, pr[3], pr[4], pr[5] * 2.0};
         }
         for (int c = 0; c < 6; ++c) p[k * 6 + c] = float(pt[c]);
@@ -723,12 +813,13 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
               std::array<double, 6> ps{pt[0], pt[1], pt[0] * qx + pt[1] * qy + tgx - qx,
                                        pt[3], pt[4], pt[3] * qx + pt[4] * qy + tgy - qy};
               const std::array<double, 6> pq = LkAffine(sr, sm.data(), 30, &ps);
-              const double r_new = LkResidual(sr, sm.data(), pq);
-              const double r_old = LkResidual(sr, sm.data(), ps);
+              const auto fit = LkCompareFits(sr, sm.data(), ps, pq);
+              const bool keep = fit.improves(prm.sub_lk_gain);
               if (std::getenv("LKR_DEBUG_SUB"))
-                std::fprintf(stderr, "sub k%d q(%d,%d) size %d blur %d: residual %.5f -> %.5f (%s)\n", k, qx, qy,
-                             sub_size, sub_blur, r_old, r_new, r_new < prm.sub_lk_gain * r_old ? "kept" : "rejected");
-              if (!(r_new < prm.sub_lk_gain * r_old))
+                std::fprintf(stderr, "sub k%d q(%d,%d) size %d blur %d: residual %.5f -> %.5f, support %zu/%zu (%s)\n",
+                             k, qx, qy, sub_size, sub_blur, fit.seed_error, fit.candidate_error,
+                             fit.common_samples, fit.seed_samples, keep ? "kept" : "rejected");
+              if (!keep)
                 continue;   // no clear improvement: keep the tile affine here
               // Quadrant affine in tile LR coords: t_LR = 2 (t' + o - A' o).
               const double ax = pq[0], bx_ = pq[1], ay = pq[3], by_ = pq[4];
@@ -768,7 +859,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         for (int k = 1; k < K; ++k) {
           const auto& pr = jobs[size_t(k - 1)].p;
           const auto& pg = pgs[size_t(k)];
-          if (LkResidual(tref, gms[size_t(k)].data(), pr) < LkResidual(tref, gms[size_t(k)].data(), pg))
+          if (LkCompareFits(tref, gms[size_t(k)].data(), pg, pr).improves())
             pts[size_t(k)] = {pr[0], pr[1], pr[2] * 2.0, pr[3], pr[4], pr[5] * 2.0};
         }
         for (int k = 0; k < K; ++k)
@@ -801,9 +892,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
             const LkRef& sr = qref[sb.qi];
             const auto& pq = sj[i].p;
             const auto& pt = pts[size_t(sb.k)];
-            const double r_new = LkResidual(sr, sms[i].data(), pq);
-            const double r_old = LkResidual(sr, sms[i].data(), sb.ps);
-            if (!(r_new < prm.sub_lk_gain * r_old)) continue;   // no clear improvement: keep the tile affine
+            if (!LkCompareFits(sr, sms[i].data(), sb.ps, pq).improves(prm.sub_lk_gain)) continue;   // no clear improvement: keep the tile affine
             const int qx = sb.qx, qy = sb.qy, k = sb.k;
             const double ax = pq[0], bx_ = pq[1], ay = pq[3], by_ = pq[4];
             const double tx = 2.0 * (pq[2] + qx - (ax * qx + bx_ * qy));
@@ -840,7 +929,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     const bool prefetch = prefetch_env && !gpu_lk;   // the GPU LK would share this worker's queue
     // Lag-1 tile pipeline (NPU prior): see solveBegin / solveEnd.
     struct InFlight { size_t ji = 0; bool ok = false, live = false; PendingPtr pend; double solve_ms = 0, prep_ms = 0, load_ms = 0; std::vector<float> yk; };
-    const bool lag = PriorEnabled() && !std::getenv("LKRL_PRIOR_NOLAG");
+    const bool lag = !sp.no_prior && (PriorEnabled() || sp.npu_denoise || NpuDenoiseEnabled()) && !std::getenv("LKRL_PRIOR_NOLAG");
     InFlight inflight;
     auto commit = [&](InFlight& f) -> bool {
       f.live = false;
@@ -926,12 +1015,32 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
           ji == size_t(std::getenv("LKRL_TRACE_TILE") ? std::atoi(std::getenv("LKRL_TRACE_TILE")) : 0))
         spt.debug_prefix = std::string(trace) + "_tile_" + std::to_string(gx) + "_" + std::to_string(gy);
 
-      if (use_sub) spt.local_init = sub_field.data();   // parallax start (block search below overrides)
+      if (dense_dir || raw_trace_dir) {
+        const std::string tile = "/tile_" + std::to_string(gx) + "_" + std::to_string(gy);
+        if (dense_dir) spt.dense_field_path = std::string(dense_dir) + tile + ".bin";
+        if (raw_trace_dir) {
+          const std::string path = std::string(raw_trace_dir) + tile + "-raw.f32";
+          FILE* f = std::fopen(path.c_str(), "wb");
+          bool ok = f != nullptr;
+          if (f) {
+            ok = std::fwrite(tf.data(), sizeof(float), tf.size(), f) == tf.size();
+            ok = std::fclose(f) == 0 && ok;
+          }
+          if (!ok) {
+            std::lock_guard<std::mutex> lock(mu);
+            failed = true;
+            fail_msg = "write raw tile trace";
+            cv.notify_all();
+            return;
+          }
+        }
+      }
+
+      if (use_sub) spt.local_init = sub_field.data();   // parallax start
       // Local motion start: MFSR block search (align.comp) on affine-prewarped greys.
-      if (spt.local_block == 16 && prm.block_search && !prm.paper_parity && bsearch.ok() &&
+      if (use_block_search && bsearch.ok() &&
           bsearch.run(tf.data(), K, n, p.data(), 3, 4, S.sigma, &field))
       {
-        spt.local_init = field.data();
         if (std::getenv("LKR_DEBUG_BS")) {
           size_t nz = 0; float mx = 0;
           for (size_t q = 0; q + 1 < field.size(); q += 2) {
@@ -940,6 +1049,15 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
           }
           std::fprintf(stderr, "block search: %zu/%zu blocks moved, max %.1f LR px\n", nz, field.size() / 2, mx);
         }
+        // A zero search result has no accepted large displacement. Keep
+        // the sub-tile estimate for those blocks.
+        if (use_sub)
+          for (size_t q = 0; q < field.size(); q += 2)
+            if (field[q] == 0.0f && field[q + 1] == 0.0f) {
+              field[q] = sub_field[q];
+              field[q + 1] = sub_field[q + 1];
+            }
+        spt.local_init = field.data();
       }
       // Two-phase solve: the GPU fit now; with the NPU prior on, this tile's prior runs while the worker
       // fits its NEXT tile, and the tile is finished / blended one iteration later (lag 1).
@@ -1060,11 +1178,11 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   }
   {
     static const float lfc_env = std::getenv("LKRL_LFC") ? float(std::atof(std::getenv("LKRL_LFC"))) : -1.0f;
-    const float lk = lfc_env >= 0.0f ? lfc_env : prm.lfc_k;
+    const float lk = lfc_env >= 0.0f ? lfc_env : (sp.direct_rgb ? 0.0f : prm.lfc_k);
     // Last NaN guard, always, before the image-wide pass that would spread it (tiles replace theirs).
     for (size_t i = 0, n3 = size_t(*out_w) * *out_h * 3; i < n3; ++i)
       if (!std::isfinite(rgb_data[i])) rgb_data[i] = 0.0f;
-    if (lk > 0.0f) {
+    if (!sp.no_prior && lk > 0.0f) {
       const double tl = now_ms();
       const float wbf[3] = {wb[0], wb[1], wb[2]};
       LfcStats ls;
@@ -1077,7 +1195,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // so writers scale instead of clamping one channel (a clamped green turns the cloud pink). 99.99th
   // percentile of the values above the white: a lone ringing overshoot does not darken the whole file.
   static const bool hl_rec_env_off = std::getenv("LKRL_HL_REC") && std::getenv("LKRL_HL_REC")[0] == '0';
-  if (prm.solve.highlight_desat && hl_cells >= 64 && !hl_rec_env_off && !std::getenv("LKRL_HL_OLD")) {
+  if (prm.solve.highlight_desat && !hl_rec_env_off && !std::getenv("LKRL_HL_OLD")) {
     std::vector<float> over;
     for (size_t i = 0, n3 = size_t(*out_w) * *out_h * 3; i < n3; ++i)
       if (rgb_data[i] > S.hdr_white) over.push_back(rgb_data[i]);

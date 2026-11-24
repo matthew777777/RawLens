@@ -18,17 +18,18 @@ struct PriorStats { double ms = 0; bool ran = false; std::string device; };
 // by the JNI layer as LKRL_PRIOR) override it for tests.
 void PriorSetEnabled(bool on);
 bool PriorEnabled();
+bool NpuDenoiseEnabled();
 // Build and compile the model for an H x W tile now (camera open), so the first merge does not pay it.
-bool PriorPrewarm(int H, int W, std::string* err);
+bool PriorPrewarm(int H, int W, std::string* err, bool denoise = false);
 // z: planar 3 x H x W linear camera RGB (Lite's result before finishing), corrected in place.
 // noise_a: Lite's signal-dependent noise coefficient (normalised units). delta (optional, 3 x H x W):
 // receives the correction (new - old) so another copy of the image can be corrected the same way.
-bool PriorApply(float* z, int H, int W, float noise_a, float* delta, PriorStats* st, std::string* err);
+bool PriorApply(float* z, int H, int W, float noise_a, float* delta, PriorStats* st, std::string* err, bool denoise = false);
 
 // A usable NPU for the prior (Android: an NNAPI NPU: MDLA, Hexagon (qti-htp / qti-dsp), or LKRL_PRIOR_DEVICE; host:
 // false unless LKRL_PRIOR_CPU=1 asks for the CPU reference). Without one, Lite runs the Vulkan
 // fallback (prior_conv.comp) inside the solver.
-bool PriorNpuAvailable();
+bool PriorNpuAvailable(bool denoise = false);
 // Folded weights for the Vulkan fallback: wb = [OHWI weights, bias] per layer; info = per layer
 // {cin, cout, k, relu, weight offset, bias offset} (floats into wb).
 struct PriorLayerInfo { int cin, cout, k, relu, woff, boff; };

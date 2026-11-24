@@ -24,8 +24,9 @@ void main() {
   int t = row + c;
   int cl = row + max(c - 2, 0), cr = row + min(c + 2, pc.w - 1);
   int cu = (k * pc.h + max(i - 2, 0)) * pc.w + c, cd = (k * pc.h + min(i + 2, pc.h - 1)) * pc.w + c;
-  float lh = yv(int(t)) - 0.5 * (yv(int(cl)) + yv(int(cr))), lv = yv(int(t)) - 0.5 * (yv(int(cu)) + yv(int(cd)));
-  float rh = r[t] - 0.5 * (r[cl] + r[cr]), rv = r[t] - 0.5 * (r[cu] + r[cd]);
+  float observed = yv(t), residual = r[t];
+  float lh = observed - 0.5 * (yv(cl) + yv(cr)), lv = observed - 0.5 * (yv(cu) + yv(cd));
+  float rh = residual - 0.5 * (r[cl] + r[cr]), rv = residual - 0.5 * (r[cu] + r[cd]);
   float dy = lh * lh + lv * lv;
   float dp = (lh + rh) * (lh + rh) + (lv + rv) * (lv + rv);
   // Motion gate (pc.rob_k = d0 > 0): the tolerance covers the reference-only start's interpolation
@@ -65,6 +66,18 @@ void main() {
     }
     float d02 = pc.rob_k * pc.rob_k;
     g = d02 / (d02 + d2);
+    // Opt-in curvature experiment: blend toward the stronger gate when both
+    // the field bends and the RAW residual exceeds the combined noise of two samples.
+    if (pc.f1 > 0.0 && pc.f2 > 1.5) {
+      float strong2 = 0.25 * d02;  // half the usual displacement tolerance
+      if (d2 >= strong2) {
+        float predicted = observed + residual;
+        float variance = max(pc.rob_a * (max(observed, 0.0) + max(predicted, 0.0)) + 2.0 * pc.rob_b, 1e-12);
+        float lo = pc.f1 * pc.f1, hi = (pc.f1 + 1.0) * (pc.f1 + 1.0);
+        float evidence = clamp((residual * residual - lo * variance) / ((hi - lo) * variance), 0.0, 1.0);
+        g = mix(g, strong2 / (strong2 + d2), evidence);
+      }
+    }
   }
   tdet[t] = 0.5 * g * min(dy, dp);
 }

@@ -106,7 +106,7 @@ void main() {
     float c4 = lat.x - mu * bas.x, s4 = lat.y - mu * bas.y, c2 = lat.z - mu * bas.z;
     float eac = max(l2 - lat.w * mu, 1e-20);
     float f = (2.0 * (c4 * c4 + s4 * s4) + c2 * c2) / (N * eac);
-    wl = w * clamp((f - 0.4) / 0.2, 0.0, 1.0);   // 0.3: fence -5 %; 0.5: pole dots back a little
+    wl = w * (pc.s == 2 ? clamp(f, 0.0, 1.0) : 1.0) * clamp((f - 0.4) / 0.2, 0.0, 1.0);   // 0.3: fence -5 %; 0.5: pole dots back a little
     // Depth: lattice dots only ripple the line (rms of the period-2 / 4 part of d2 well below the line's
     // own across-line d2); two twigs crossing a white bar 4-5 px apart look periodic but cut it nearly
     // through (133623: LK-R keeps them, the filter flattened them). q = rms / contrast.

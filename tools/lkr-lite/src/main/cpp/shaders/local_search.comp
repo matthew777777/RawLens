@@ -1,0 +1,70 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// A bounded second hypothesis for a local motion node. Score the same
+// interior green probes for all candidates so a warp cannot win by dropping taps.
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { uint raw[]; };
+layout(std430, binding = 4) writeonly buffer DOUT { vec2 dout[]; };
+
+float cost(int k, ivec2 origin, vec2 correction, out int count, out float signal) {
+  float error = 0.0;
+  count = 0;
+  signal = 0.0;
+  for (int y = 1; y < pc.LB; y += 4)
+    for (int x = 2; x < pc.LB; x += 4) {
+      ivec2 u = origin + ivec2(x, y);
+      if (u.x >= pc.w || u.y >= pc.h) continue;
+      int i = (k * pc.h + u.y) * pc.w + u.x;
+      vec2 packed = unpackHalf2x16(raw[i >> 1]);
+      float observed = packed[i & 1];
+      if (observed >= pc.clip) continue;
+      vec2 ref = warpLR(k, vec2(u) + 0.5);
+      const float radius = 3.5;
+      if (any(lessThan(ref, vec2(radius))) ||
+          any(greaterThanEqual(ref, vec2(pc.w, pc.h) - radius))) continue;
+      ivec2 base;
+      vec2 fraction;
+      if (!taps(float(pc.s) * (ref + correction), base, fraction)) continue;
+      int j = pc.H * pc.W + base.y * pc.W + base.x;
+      float predicted = mix(mix(z[j], z[j + 1], fraction.x),
+                            mix(z[j + pc.W], z[j + pc.W + 1], fraction.x), fraction.y);
+      error += abs(observed - predicted);
+      signal += max(observed, 0.0);
+      ++count;
+    }
+  return count > 0 ? error / float(count) : 0.0;
+}
+
+void main() {
+  int nx = (pc.w + pc.LB - 1) / pc.LB, ny = (pc.h + pc.LB - 1) / pc.LB;
+  int blocks = nx * ny;
+  int i = int(gl_GlobalInvocationID.x);
+  if (i >= blocks * pc.K) return;
+  int k = i / blocks, b = i % blocks;
+  vec2 current = dloc[i];
+  dout[i] = current;
+  if (k == 0) return;
+  ivec2 origin = ivec2(b % nx, b / nx) * pc.LB;
+  int count;
+  float signal;
+  float original = cost(k, origin, vec2(0.0), count, signal);
+  float sigma = sqrt(max(pc.a * signal / max(float(count), 1.0) + pc.b, 1e-12));
+  bool subpixel = pc.mode == 2;
+  if (count < 8 || original < (subpixel ? 1.25 : 2.5) * sigma) return;
+  vec2 best = vec2(0.0);
+  float lowest = original;
+  for (int y = -2; y <= 2; ++y)
+    for (int x = -2; x <= 2; ++x) {
+      if (x == 0 && y == 0) continue;
+      vec2 shift = vec2(x, y) * (subpixel ? 0.5 : 1.0);
+      float score = cost(k, origin, shift, count, signal);
+      if (score < lowest) { lowest = score; best = shift; }
+    }
+  if (subpixel ? lowest + 0.25 * sigma < 0.85 * original
+               : lowest + 0.5 * sigma < 0.75 * original)
+    dout[i] = current + best;
+}

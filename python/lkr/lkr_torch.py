@@ -172,7 +172,7 @@ def lk_reloaded(frames, s, prior, T=8, sigma_noise=0.01, sigma_max=0.1, lam=1.0,
     return x.cpu().double().numpy(), p.cpu().double().numpy()
 
 
-def unrolled(y, p, z0, prior, scale, mu, eta, refine_motion=True):
+def unrolled(y, p, z0, prior, scale, mu, eta, refine_motion=True, *, gamma=None, z_steps=1):
     """Differentiable research reference: paper equations 5/7 and CNN x-step.
 
     Explicit positive schedules may be learned; no pretrained paper weights
@@ -182,14 +182,17 @@ def unrolled(y, p, z0, prior, scale, mu, eta, refine_motion=True):
         raise ValueError('mu/eta must have equal nonzero length')
     if bool((mu <= 0).any()) or bool((eta <= 0).any()):
         raise ValueError('positive schedules required')
+    if z_steps < 1 or (gamma is not None and len(gamma) != len(mu)):
+        raise ValueError('positive z_steps and one gamma per iteration required')
     ops=Ops(y.shape[-2],y.shape[-1],scale,y.device)
     z,x=z0,z0
     trace={'reference_rgb':z0}
     for t in range(len(mu)):
         ops.setup(p)
-        residual=(ops.fwd(z)-y)*ops.valid
-        gradient=ops.adj(residual)
-        z=z-eta[t]*(gradient+mu[t]*(z-x))
+        for _ in range(z_steps):
+            residual=(ops.fwd(z)-y)*ops.valid
+            gradient=ops.adj(residual)
+            z=z-eta[t]*(gradient+mu[t]*(z-x))
         if refine_motion and len(p)>1:
             J=ops.jacobian(z)*ops.valid.flatten(1)[...,None]
             r=((ops.fwd(z)-y)*ops.valid).flatten(1)[...,None]
@@ -197,6 +200,7 @@ def unrolled(y, p, z0, prior, scale, mu, eta, refine_motion=True):
             dp=torch.linalg.solve(A.double()+1e-9*torch.eye(6,device=y.device,dtype=torch.float64),b.double())[...,0].to(p.dtype)
             mask=torch.cat([p.new_zeros(1),p.new_ones(len(p)-1)])[:,None]
             p=p-dp*mask
-        x=prior(z[None])[0]
+        prior_input = z if gamma is None else torch.cat((z, gamma[t].expand_as(z[:1])))
+        x=prior(prior_input[None])[0]
         trace.update({f'iter{t}_z':z,f'iter{t}_x':x,f'iter{t}_motion':p,f'iter{t}_residual':residual,f'iter{t}_gradient':gradient})
     return x,p,trace

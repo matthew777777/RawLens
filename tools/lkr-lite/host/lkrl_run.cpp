@@ -2,7 +2,7 @@
 // LK-R Lite desktop runner.
 //   lkrl_run --trace PREFIX OUT.f32 [--schedule GGGJGGJ] [--guide 2] [--gmode 1] [--damp D] [--mhc M]
 //            [--notch R] [--gnw 1] [--profile 1] [--repeat N]   (negative --damp / --mhc: by scale)
-//            [--audit-prefix PATH] [--data-steps N] (diagnostics; default data-step budget 24)
+//            [--audit-prefix PATH] [--data-steps N] [--estimate-affine]
 // --trace: inputs from an LK-R solver trace (LKR_TRACE_PREFIX=... lkr_full_run): normalised
 // frames, initial affine and local motion, noise fit and robust settings from _meta.txt, so
 // Lite and LK-R are compared on identical inputs. OUT.f32: z, 3 x H x W planar float32.
@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "lkrl_gpu.h"
+#include "lkrl_host.h"
 #include "lkrl_solver.h"
 
 static bool readF32(const std::string& path, std::vector<float>* v, size_t count) {
@@ -30,16 +31,18 @@ static bool readF32(const std::string& path, std::vector<float>* v, size_t count
 int main(int argc, char** argv) {
   std::string trace, out, schedule, audit_prefix;
   bool profile = false;
+  bool estimate_affine = false;
   int repeat = 1, gnw = 1, gmode = 1;
   float guide = 2.0f, damp = -1.0f;
   float mhc = -1.0f;
   float data_steps = 24.0f;
   int notch = 0, covr = -1;
-  bool dct_prior = false;
+  bool dct_prior = false, no_prior = false;
   for (int i = 1; i < argc; ++i) {
     std::string k = argv[i];
     if (k == "--trace" && i + 2 < argc) { trace = argv[++i]; out = argv[++i]; }
     else if (k == "--audit-prefix" && i + 1 < argc) audit_prefix = argv[++i];
+    else if (k == "--no-prior") no_prior = true;
     else if (k == "--prior") {
       if (i + 1 >= argc || (std::string(argv[i + 1]) != "0" && std::string(argv[i + 1]) != "1")) {
         std::fprintf(stderr, "--prior requires 0 or 1\n"); return 2;
@@ -48,6 +51,7 @@ int main(int argc, char** argv) {
     }
     else if (k == "--schedule" && i + 1 < argc) schedule = argv[++i];
     else if (k == "--profile" && i + 1 < argc) profile = std::atoi(argv[++i]) != 0;
+    else if (k == "--estimate-affine") estimate_affine = true;
     else if (k == "--gnw" && i + 1 < argc) gnw = std::atoi(argv[++i]);
     else if (k == "--guide" && i + 1 < argc) guide = float(std::atof(argv[++i]));
     else if (k == "--gmode" && i + 1 < argc) gmode = std::atoi(argv[++i]);
@@ -63,7 +67,7 @@ int main(int argc, char** argv) {
     else { std::fprintf(stderr, "unknown argument %s\n", k.c_str()); return 2; }
   }
   if (trace.empty()) {
-    std::fprintf(stderr, "usage: lkrl_run --trace PREFIX OUT.f32 [--schedule S] [--prior 0|1] [--profile 1] [--repeat N] [--audit-prefix PATH] [--data-steps N]\n");
+    std::fprintf(stderr, "usage: lkrl_run --trace PREFIX OUT.f32 [--schedule S] [--prior 0|1] [--profile 1] [--repeat N] [--audit-prefix PATH] [--data-steps N] [--estimate-affine]\n");
     return 2;
   }
   std::map<std::string, std::string> meta;
@@ -84,7 +88,20 @@ int main(int argc, char** argv) {
   prm.schedule = schedule;
   prm.debug_prefix = audit_prefix;
   prm.noise_a = float(num("a")); prm.noise_b = float(num("b"));
-  prm.clip = float(num("clip")); prm.robust_k = float(num("robust_k")); prm.robust_tau = float(num("robust_tau"));
+  // Older PC traces omit these fields. Keep Lite's defaults for missing
+  // values, especially clip, since a zero threshold rejects the burst.
+  if (meta.count("clip")) prm.clip = float(num("clip"));
+  if (meta.count("robust_k")) prm.robust_k = float(num("robust_k"));
+  if (meta.count("robust_tau")) prm.robust_tau = float(num("robust_tau"));
+  if (auto it = meta.find("wb"); it != meta.end()) {
+    float r, g, b;
+    if (std::sscanf(it->second.c_str(), "%f,%f,%f", &r, &g, &b) != 3 ||
+        !std::isfinite(r) || !std::isfinite(g) || !std::isfinite(b) || r <= 0 || g <= 0 || b <= 0) {
+      std::fprintf(stderr, "invalid white balance in trace metadata\n");
+      return 1;
+    }
+    prm.wb[0] = r; prm.wb[1] = g; prm.wb[2] = b;
+  }
   prm.profile = profile;
   prm.gn_weights = gnw;
   prm.guide = guide;
@@ -94,6 +111,7 @@ int main(int argc, char** argv) {
   prm.start_notch = notch;
   prm.cov_smooth = covr;
   prm.guide_mode = gmode;
+  dct_prior = dct_prior && !no_prior;
   prm.dct = dct_prior;
   // Match the full-frame default: final sigma is the fitted noise at middle grey,
   // with the default prior gain of 0.35.
@@ -104,6 +122,27 @@ int main(int argc, char** argv) {
       !readF32(trace + "_local_initial.f32", &d0, size_t(K) * nb * 2)) {
     std::fprintf(stderr, "trace files missing\n");
     return 1;
+  }
+  if (estimate_affine) {
+    if (h < 8 || w < 8 || h % 2 || w % 2) {
+      std::fprintf(stderr, "affine initialization needs even dimensions of at least 8 pixels\n");
+      return 2;
+    }
+    const int gh = h / 2, gw = w / 2;
+    std::vector<float> grey(size_t(K) * gh * gw);
+    for (int k = 0; k < K; ++k)
+      for (int y = 0; y < gh; ++y)
+        for (int x = 0; x < gw; ++x) {
+          const float* a = frames.data() + (size_t(k) * h + 2 * y) * w + 2 * x;
+          grey[(size_t(k) * gh + y) * gw + x] = 0.25f * (a[0] + a[1] + a[w] + a[w + 1]);
+        }
+    const auto reference = lkrl::LkPrepare(grey.data(), gh, gw, 2);
+    for (int k = 1; k < K; ++k) {
+      auto affine = lkrl::LkAffine(reference, grey.data() + size_t(k) * gh * gw, 30);
+      affine[2] *= 2;
+      affine[5] *= 2;
+      for (int i = 0; i < 6; ++i) p0[size_t(k) * 6 + i] = float(affine[i]);
+    }
   }
   lkrl::Gpu gpu;
   if (!gpu.ok()) { std::fprintf(stderr, "no Vulkan device\n"); return 1; }

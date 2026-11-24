@@ -71,6 +71,7 @@ void main() {
   lrIndex(k, i, j);
   if (j >= pc.w || i >= pc.h) return;
   int o = (k * pc.h + i) * pc.w + j;
+  if (pc.LB == 1 && dloc[pc.K * pc.h * pc.w + o / 2][o & 1] <= 0.5) return;
   float wk = wt[o];   // 0 for invalid / clipped samples (wminv)
   // pc.rpow < 0 (shift-and-add step): clipped samples enter with a tiny weight so an all-clipped HR
   // pixel averages to blown instead of 0 (taps are still checked below), without pulling single colour

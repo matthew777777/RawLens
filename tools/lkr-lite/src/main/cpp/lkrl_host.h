@@ -7,6 +7,7 @@
 // Lucas-Kanade initialisation (paper Sec. 3.4).
 
 #include <array>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -52,12 +53,24 @@ struct LkRef {
 };
 LkRef LkPrepare(const float* ref, int h, int w, int levels);
 std::array<double, 6> LkAffine(const LkRef& ref, const float* mov, int iters, const std::array<double, 6>* p0 = nullptr);
-double LkResidual(const LkRef& ref, const float* mov, const std::array<double, 6>& p);
+struct LkFitComparison {
+  double seed_error = 0;
+  double candidate_error = 0;
+  std::size_t seed_samples = 0;
+  std::size_t common_samples = 0;
+
+  bool improves(double error_ratio = 1.0) const {
+    // Require enough evidence for a six-parameter fit and retain most of the seed's support.
+    return common_samples >= 16 && common_samples >= seed_samples - seed_samples / 10 &&
+           candidate_error < error_ratio * seed_error;
+  }
+};
+LkFitComparison LkCompareFits(const LkRef& ref, const float* mov,
+                             const std::array<double, 6>& seed,
+                             const std::array<double, 6>& candidate);
 // LkAffine's pieces for the batched GPU version (lkrl_gpulk): the moving image's pyramid (same
 // blur / decimation as LkAffine) and its 6x6 solve.
 std::vector<std::vector<double>> LkMovPyramid(const LkRef& ref, const float* mov);
 bool LkSolve6(double A[6][6], double b[6], double x[6]);
-// Mean |ref(A u + t) - mov(u)| over valid pixels (alignment quality of p).
-double LkResidual(const float* ref, const float* mov, int h, int w, const std::array<double, 6>& p);
 
 }  // namespace lkrl

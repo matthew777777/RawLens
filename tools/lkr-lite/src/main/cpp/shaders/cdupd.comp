@@ -34,18 +34,29 @@ void main() {
   float Gn = G - (gG + be * (gR + gB)) / max(cG + be * (cR + cB) + pc.tau, 1e-6);
   float sig2 = max(pc.a * max(G, 0.0) + pc.b, 1e-12);
   float nR = 0.0, dR = 0.0, nB = 0.0, dB = 0.0, sw = 0.0;
-  for (int dy = -pc.LB; dy <= pc.LB; ++dy)
-    for (int dx = -pc.LB; dx <= pc.LB; ++dx) {
-      int yy = Y + dy, xx = X + dx;
-      if (yy < 0 || xx < 0 || yy >= pc.H || xx >= pc.W) continue;
-      int j = yy * pc.W + xx;
+  int xFirst = max(-pc.LB, -X), xLast = min(pc.LB, pc.W - 1 - X);
+  int yFirst = max(-pc.LB, -Y), yLast = min(pc.LB, pc.H - 1 - Y);
+  for (int dy = yFirst; dy <= yLast; ++dy) {
+    int row = (Y + dy) * pc.W + X;
+    for (int dx = xFirst; dx <= xLast; ++dx) {
+      int j = row + dx;
       float w = float((pc.LB + 1 - abs(dx)) * (pc.LB + 1 - abs(dy)));
       if (pc.robk > 0.0) { float dg = z[HW + j] - G; w *= exp(-dg * dg / (pc.robk * pc.robk * sig2)); }
       nR += w * float(acc[j]); dR += w * float(cov[j]);
       nB += w * float(acc[2 * HW + j]); dB += w * float(cov[2 * HW + j]);
       sw += w;
     }
-  float DR = (R - G) - (nR / pc.scale) / max(dR / pc.dscale + pc.tau * sw, 1e-6);
-  float DB = (B - G) - (nB / pc.scale) / max(dB / pc.dscale + pc.tau * sw, 1e-6);
+  }
+  float redCoverage = dR / pc.dscale, blueCoverage = dB / pc.dscale;
+  float redDivisor = max(redCoverage + pc.tau * sw, 1e-6);
+  float blueDivisor = max(blueCoverage + pc.tau * sw, 1e-6);
+  if (pc.mode > 0) {
+    // Convert the per-pixel coverage floor (Q8) to the kernel's summed units.
+    float support = float(pc.mode) * (sw / 256.0);
+    redDivisor /= clamp(redCoverage / support, 0.25, 1.0);
+    blueDivisor /= clamp(blueCoverage / support, 0.25, 1.0);
+  }
+  float DR = (R - G) - (nR / pc.scale) / redDivisor;
+  float DB = (B - G) - (nB / pc.scale) / blueDivisor;
   zt[i] = Gn + DR; zt[HW + i] = Gn; zt[2 * HW + i] = Gn + DB;
 }

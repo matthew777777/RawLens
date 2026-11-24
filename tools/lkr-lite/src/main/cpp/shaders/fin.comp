@@ -3,7 +3,7 @@
 // FinishLook (lkrl_finish.cpp) on the GPU, default path (notch, luma notch where frames were lost,
 // clip halo, grain, highlight desaturation). Same order of operations and arithmetic as the CPU;
 // fallback_chroma / shadow stay on the CPU path. Planes: x, z (3 HW), ns (HW), P (4 HW work planes:
-// 0 = L, 1..3 = C_c / Ln), T (HW notch scratch), M (2 HW: hot, halo), KP (3 HW: kept x).
+// 0 = L, 1..3 = C_c / Ln), T (3 HW notch scratch), M (2 HW: hot, halo), KP (3 HW: kept x).
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(std430, binding = 0) buffer X { float x[]; };
 layout(std430, binding = 1) readonly buffer Z { float z[]; };
@@ -26,6 +26,7 @@ shared float tl[20][20];
 shared float tr[20][16];
 void main() {
   int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
+  int layer = int(gl_WorkGroupID.z), plane = pc.pl + layer;
   if (pc.mode == 12) {
     int HW0 = pc.H * pc.W;
     ivec2 org = ivec2(gl_WorkGroupID.xy) * 16 - 2;
@@ -33,7 +34,7 @@ void main() {
     for (int t = lid; t < 400; t += 256) {
       int ly = t / 20, lx = t - ly * 20;
       int gy = refl(org.y + ly, pc.H), gx = refl(org.x + lx, pc.W);
-      tl[ly][lx] = P[pc.pl * HW0 + gy * pc.W + gx] * sg(gx, gy);
+      tl[ly][lx] = P[plane * HW0 + gy * pc.W + gx] * sg(gx, gy);
     }
     barrier();
     for (int t = lid; t < 320; t += 256) {
@@ -48,11 +49,11 @@ void main() {
     float s = 0.0;
     for (int d = 0; d < 5; ++d) s += k5[d] * tr[l.y + d][l.x];
     int gi = Y * pc.W + X;
-    T[gi] = P[pc.pl * HW0 + gi] - s * sg(X, Y);   // not in place: neighbours read P as apron
+    T[layer * HW0 + gi] = P[plane * HW0 + gi] - s * sg(X, Y);   // not in place: neighbours read P as apron
     return;
   }
   if (X >= pc.W || Y >= pc.H) return;
-  int HW = pc.H * pc.W, i = Y * pc.W + X;
+  int HW = pc.H * pc.W, i = Y * pc.W + X, tmp = layer * HW;
   vec3 wb = vec3(pc.wbr, pc.wbg, pc.wbb);
   vec3 q = vec3(0.25, 0.5, 0.25) * wb;
   if (pc.mode == 0) {          // hot: near-clipped
@@ -71,14 +72,14 @@ void main() {
     P[i] = L;
     for (int c = 0; c < 3; ++c) P[(1 + c) * HW + i] = wb[c] * x[c * HW + i] - L;
   } else if (pc.mode == 10) {  // notch row pass on plane pl, sign mode sm: T = rowfilter(P * sg)
-    int base = pc.pl * HW + Y * pc.W;
+    int base = plane * HW + Y * pc.W;
     float s = 0.0;
     for (int d = -2; d <= 2; ++d) { int xx = refl(X + d, pc.W); s += k5[d + 2] * (P[base + xx] * sg(xx, Y)); }
-    T[i] = s;
+    T[tmp + i] = s;
   } else if (pc.mode == 11) {  // notch column pass: P -= colfilter(T) * sg
     float s = 0.0;
-    for (int d = 0; d < 5; ++d) s += k5[d] * T[refl(Y + d - 2, pc.H) * pc.W + X];
-    P[pc.pl * HW + i] -= s * sg(X, Y);
+    for (int d = 0; d < 5; ++d) s += k5[d] * T[tmp + refl(Y + d - 2, pc.H) * pc.W + X];
+    P[plane * HW + i] -= s * sg(X, Y);
   } else if (pc.mode == 3) {   // x_c = (L + C_c) / wb_c; then Lx -> P0 and Ln -> P1
     for (int c = 0; c < 3; ++c) x[c * HW + i] = (P[i] + P[(1 + c) * HW + i]) / wb[c];
     float Lx = q.x * x[i] + q.y * x[HW + i] + q.z * x[2 * HW + i];
@@ -91,67 +92,39 @@ void main() {
     }
   } else if (pc.mode == 5) {   // halo restore, grain luma of (z - x) -> P0
     if (M[HW + i] > 0.5) for (int c = 0; c < 3; ++c) x[c * HW + i] = KP[c * HW + i];
-    P[i] = q.x * (z[i] - x[i]) + q.y * (z[HW + i] - x[HW + i]) + q.z * (z[2 * HW + i] - x[2 * HW + i]);
+    if (pc.grain > 0.0) P[i] = q.x * (z[i] - x[i]) + q.y * (z[HW + i] - x[HW + i]) + q.z * (z[2 * HW + i] - x[2 * HW + i]);
   } else if (pc.mode == 13) {  // fused notch write-back
-    P[pc.pl * HW + i] = T[i];
-  } else if (pc.mode == 7) {   // highlight reconstruction: per-channel max over (2 p0 + 1)^2 -> P1..P3
-    // Bright pixels only (own max > 0.85 clip): the merge leaves too-low values inside clipped areas of a
-    // channel (no valid samples there; Samsung cloud core: R 0.66 amid clipped R) -> dark specks once
-    // rebuilt. A channel clipped within the radius counts as clipped. Dark pixels (branches) untouched.
-    vec3 v = vec3(x[i], x[HW + i], x[2 * HW + i]), d = v;
-    if (max(v.x, max(v.y, v.z)) > 0.85 * pc.clip) {
-      int r = int(pc.p0);
-      for (int dy = -r; dy <= r; ++dy)
-        for (int dx = -r; dx <= r; ++dx) {
-          int yy = clamp(Y + dy, 0, pc.H - 1), xx = clamp(X + dx, 0, pc.W - 1), j = yy * pc.W + xx;
-          d = max(d, vec3(x[j], x[HW + j], x[2 * HW + j]));
-        }
-    }
-    P[HW + i] = d.x; P[2 * HW + i] = d.y; P[3 * HW + i] = d.z;
+    P[plane * HW + i] = T[tmp + i];
   } else if (pc.mode == 6) {   // grain add + highlight desaturation
     if (pc.grain > 0.0) {
       float den = pc.has_ns != 0 ? 1.0 + pc.eqs * (ns[i] - 1.0) : 1.0;
       for (int c = 0; c < 3; ++c) x[c * HW + i] += pc.grain * P[i] / den / wb[c];
     }
     bool rec = pc.desat == 1 && pc.hrec != 0.0;
-    if (rec) {   // highlight reconstruction (inpaint opposed, lkrl_finish.cpp)
-      float lo = 0.85 * pc.clip, hi = pc.clip;
-      vec3 v = vec3(x[i], x[HW + i], x[2 * HW + i]);
-      if (max(v.x, max(v.y, v.z)) > lo) {
-        vec3 col = vec3(pc.hr, pc.hg, pc.hb);
-        vec3 vd = max(v, vec3(P[HW + i], P[2 * HW + i], P[3 * HW + i]));   // dilated (mode 7)
-        vec3 m = clamp((vd - lo) / max(hi - lo, 1e-6), 0.0, 1.0);
-        m = m * m * (3.0 - 2.0 * m);
-        vec3 u = v * wb / col, w = 1.0 - m;   // implied scene level, unclipped weight
-        vec3 ws = vec3(w.y + w.z, w.z + w.x, w.x + w.y);
-        vec3 su = vec3(w.y * u.y + w.z * u.z, w.z * u.z + w.x * u.x, w.x * u.x + w.y * u.y);
-        vec3 rec = col * su / max(ws, 1e-6) / wb;
-        vec3 r = v + m * (max(v, rec) - v);
-        r = mix(v, r, step(vec3(1e-3), ws));   // all clipped: the white rule below
-        float mm = max(m.x, max(m.y, m.z));     // rim colour, rebuilt level (lkrl_finish.cpp)
-        float U = dot(r * wb / col, vec3(1.0 / 3.0));
-        r += mm * (U * col / wb - r);
-        x[i] = r.x; x[HW + i] = r.y; x[2 * HW + i] = r.z;
-      }
+    vec3 original = vec3(x[i], x[HW + i], x[2 * HW + i]);
+    if (rec && max(original.x, max(original.y, original.z)) > 0.85 * pc.clip) {
+      vec3 col = vec3(pc.hr, pc.hg, pc.hb);
+      vec3 m = smoothstep(vec3(0.85 * pc.clip), vec3(pc.clip), original);
+      vec3 u = original * wb / col;
+      vec3 w = 1.0 - m;
+      vec3 ws = vec3(w.y + w.z, w.z + w.x, w.x + w.y);
+      vec3 su = vec3(w.y * u.y + w.z * u.z, w.z * u.z + w.x * u.x, w.x * u.x + w.y * u.y);
+      vec3 estimate = col * su / max(ws, vec3(1e-6)) / wb;
+      // Fade the correction as the last donors approach clipping.
+      vec3 r = original + m * min(ws, vec3(1.0)) * max(estimate - original, vec3(0.0));
+      x[i] = r.x; x[HW + i] = r.y; x[2 * HW + i] = r.z;
     }
     if (pc.desat != 0) {   // blown highlights -> white (lkrl_finish.cpp); desat 2 = old all-channels rule
       bool old = pc.desat == 2;
       float lo = (old ? 0.92 : 0.85) * pc.clip, hi = pc.clip;
-      vec3 xd = vec3(x[i], x[HW + i], x[2 * HW + i]);
-      if (rec && max(xd.x, max(xd.y, xd.z)) > 0.85 * pc.clip) xd = max(xd, vec3(P[HW + i], P[2 * HW + i], P[3 * HW + i]));
+      vec3 xd = original;
       float v = (old || rec) ? min(xd.x, min(xd.y, xd.z)) : max(x[i], max(x[HW + i], x[2 * HW + i]));
       float m = clamp((v - lo) / max(hi - lo, 1e-6), 0.0, 1.0);
       if (!old) m = m * m * (3.0 - 2.0 * m);
       if (m > 0.0) {
         float L = q.x * x[i] + q.y * x[HW + i] + q.z * x[2 * HW + i];
         // output is clamped to its white per camera channel: 1, or the HDR clip (pc.clip > 1, reference units)
-        if (!old && !rec) L = min(L, min(wb.x, min(wb.y, wb.z)) * max(1.0, pc.clip));
-        if (rec) {   // all clipped: the most-gained channel's implied level, rim colour (lkrl_finish.cpp)
-          vec3 col = vec3(pc.hr, pc.hg, pc.hb);
-          vec3 u = xd * wb / col;   // dilated: the level the clipped surroundings imply
-          float U = max(u.x, max(u.y, u.z));
-          for (int c = 0; c < 3; ++c) x[c * HW + i] += m * (U * col[c] / wb[c] - x[c * HW + i]);
-        } else
+        if (!old) L = min(L, min(wb.x, min(wb.y, wb.z)) * max(1.0, pc.clip));
         for (int c = 0; c < 3; ++c) x[c * HW + i] += m * (L / wb[c] - x[c * HW + i]);
       }
     }

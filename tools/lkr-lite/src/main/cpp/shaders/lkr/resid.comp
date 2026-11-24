@@ -14,6 +14,12 @@ layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
 float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
 layout(std430, binding = 2) readonly buffer P { float p[]; };
 layout(std430, binding = 3) writeonly buffer R { float r[]; };
+layout(std430, binding = 5) writeonly buffer VM { float vm[]; };
+
+void invalid(int o) {
+  r[o] = 0.0;
+  vm[o] = 0.0;
+}
 
 void main() {
   // Frame-innermost workgroup order (dispatch gx = K * blocks), see resid_adj_w.comp:
@@ -27,7 +33,11 @@ void main() {
   if (j >= pc.w || i >= pc.h) return;
   int o = (k * pc.h + i) * pc.w + j;
   float yv = yv(int(o));
-  if (pc.mode == 0 && yv >= pc.f2) { r[o] = 0.0; return; }   // clipped: no data
+  if (pc.mode == 0 && (yv >= pc.f2 ||
+      (pc.kOff == 1 && dloc[pc.K * pc.h * pc.w + o / 2][o & 1] <= 0.5))) {
+    invalid(o);
+    return;
+  }
   int c = bayerChannel(i, j);
   int base = c * pc.H * pc.W;
   float a0 = p[k * 6 + 0], a1 = p[k * 6 + 1], a2 = p[k * 6 + 2];
@@ -39,7 +49,7 @@ void main() {
       vec2 u = subPos(i, j, ox, oy);
       precise vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
       ivec2 x0; vec2 a;
-      if (!taps(q, x0, a)) { r[o] = 0.0; return; }        // invalid LR pixel
+      if (!taps(q, x0, a)) { invalid(o); return; }
       int t = base + x0.y * pc.W + x0.x;
       sum += (z[t] * (1.0 - a.x) + z[t + 1] * a.x) * (1.0 - a.y) +
              (z[t + pc.W] * (1.0 - a.x) + z[t + pc.W + 1] * a.x) * a.y;
@@ -47,4 +57,5 @@ void main() {
   float v = sum / (sf * sf);
   float rv = pc.mode == 2 ? 1.0 : (pc.mode == 1 ? v : v - yv);
   r[o] = rv;
+  vm[o] = 1.0;
 }

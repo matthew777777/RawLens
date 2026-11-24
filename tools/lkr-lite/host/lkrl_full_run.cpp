@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,10 @@
 #include "lkrl_pack.h"
 #include "lkrl_tuning.h"
 #include "srp_dng.h"
+
+#ifdef LKRL_TORCH_PRIOR
+lkrl::PriorFactory LoadTorchPrior(const std::string& checkpoint);
+#endif
 
 // ExposureTime (33434, RATIONAL) x ISO (34855, SHORT) from IFD0 of a little-endian DNG; 0 if absent.
 static double DngExposure(const std::string& path) {
@@ -53,7 +58,7 @@ int main(int argc, char** argv) {
   int pack_bits = 0;
   bool profile = false;
   int hdr_mode = 1;
-  std::string model_error_path;
+  std::string model_error_path, learned_prior;
   for (int i = 3; i < argc; ++i) {
     std::string k = argv[i];
     auto nx = [&] { return std::atoi(argv[++i]); };
@@ -65,11 +70,19 @@ int main(int argc, char** argv) {
     else if (k == "--pgain") { prm.solve.prior_gain = float(std::atof(argv[++i])); prm.auto_look = false; }
     else if (k == "--grain") { prm.solve.grain = float(std::atof(argv[++i])); prm.auto_look = false; }
     else if (k == "--repeat-reference") repeat_reference = nx() != 0;
+    else if (k == "--no-prior") prm.solve.no_prior = true;
     else if (k == "--prior") {
       if (i + 1 >= argc || (std::string(argv[i + 1]) != "0" && std::string(argv[i + 1]) != "1")) {
         std::fprintf(stderr, "--prior requires 0 or 1\n"); return 2;
       }
       dct_prior = std::string(argv[++i]) == "1";
+    }
+    else if (k == "--learned-prior") {
+      if (i + 1 >= argc || argv[i + 1][0] == '-') {
+        std::fprintf(stderr, "--learned-prior requires a TorchScript model path\n");
+        return 2;
+      }
+      learned_prior = argv[++i];
     }
     else if (k == "--dluma") prm.solve.dct_luma = float(std::atof(argv[++i]));
     else if (k == "--aperture") prm.solve.dct_aperture = float(std::atof(argv[++i]));
@@ -138,6 +151,24 @@ int main(int argc, char** argv) {
     else if (k == "--tilelk") prm.tile_lk = nx() != 0;
     else if (k == "--mhc") prm.solve.mhc_init = nx() != 0;
     else if (k == "--llam") { prm.solve.local_lambda = float(std::atof(argv[++i])); prm.auto_local_lambda = false; }
+  }
+  lkrl::PriorFactory make;
+  if (!prm.solve.no_prior && !learned_prior.empty()) {
+#ifdef LKRL_TORCH_PRIOR
+    if (dct_prior) {
+      std::fprintf(stderr, "--learned-prior requires --prior 0\n");
+      return 2;
+    }
+    try {
+      make = LoadTorchPrior(learned_prior);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "cannot load learned prior: %s\n", error.what());
+      return 2;
+    }
+#else
+    std::fprintf(stderr, "rebuild with -DLKRL_TORCH_PRIOR=ON to enable --learned-prior\n");
+    return 2;
+#endif
   }
   std::vector<std::string> paths;
   if (DIR* d = opendir(in.c_str())) {
@@ -217,7 +248,6 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "model-error dimensions/values do not match requested reference region\n");return 2;
     }
   }
-  const lkrl::PriorFactory make;
   std::vector<float> rgb;
   int ow = 0, oh = 0;
   lkrl::FullStats st;
@@ -265,11 +295,12 @@ int main(int argc, char** argv) {
   std::fwrite(rgb.data(), 4, rgb.size(), f);
   std::fclose(f);
   std::printf("%zu frames %ux%u -> %dx%d s=%d tiles %d  sigma %.5f a %.3g b %.3g  prior %s%s\n", fr.size(), m.width,
-              m.height, ow, oh, prm.s, st.tiles, st.sigma, st.a, st.b, dct_prior ? "dct" : "none", "");
+              m.height, ow, oh, prm.s, st.tiles, st.sigma, st.a, st.b, prm.solve.no_prior ? "none" : make ? "learned" : dct_prior ? "dct" : "none", "");
   std::printf("reference frame %d (sharpest)\n", st.ref_index);
   std::printf("lfc %.0f ms, mean weight U %.2f V %.2f\n", st.lfc_ms, st.lfc_wu, st.lfc_wv);
   std::printf("DCT luma: %s; lost-frame colour cleanup: %s\n",
-              dct_prior ? "on" : "off", prm.solve.dct_fallback ? "on" : "off");
+              !prm.solve.no_prior && dct_prior ? "on" : "off",
+              !prm.solve.no_prior && prm.solve.dct_fallback ? "on" : "off");
   std::printf("look: prior %.2f grain %.2f%s  local lambda %.2f\n", st.prior_gain, st.grain,
               prm.auto_look ? " (auto from noise)" : "", st.local_lambda);
   std::printf("ms: load %.0f noise %.0f coarseLK %.0f tiles %.0f (gpu %.0f prior %.0f, %d calls) TOTAL(merge) %.0f\n",

@@ -53,7 +53,7 @@ void main() {
     float N = bas.w, mu = lat.w / N;
     float c4 = lat.x - mu * bas.x, s4 = lat.y - mu * bas.y, c2 = lat.z - mu * bas.z;
     float f = (2.0 * (c4 * c4 + s4 * s4) + c2 * c2) / (N * max(l2 - lat.w * mu, 1e-20));
-    wl = clamp((f - 0.4) / 0.2, 0.0, 1.0);   // 0.55 / 0.7: band no better, top-pole dots x2-3
+    wl = (pc.s == 2 ? clamp(f, 0.0, 1.0) : 1.0) * clamp((f - 0.4) / 0.2, 0.0, 1.0);   // 0.55 / 0.7: band no better, top-pole dots x2-3
     // (An on-edge test, gradient here vs max within +-2 px across, gave the band +10 % but top-pole
     // dots x2: removed.)
   }

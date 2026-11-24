@@ -3,7 +3,10 @@
 // MergeFull (tiling, noise fit, coarse / tile / sub-tile LK, block search, blend) is unchanged.
 // After the GPU solve it applies LK-R's no-prior finishing: x = z, FinishLook(z, x, noise_scale)
 // (Bayer notch, stronger where frames were rejected; clip halo; highlight desaturation).
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <future>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +20,60 @@ namespace {
 double now_ms() {
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+
+// Same half-pixel, block-centred interpolation and CFA tap rules as resid.comp.
+void ScoreHoldout(const float* image, int h, int w, int scale, float clip,
+                  const std::vector<float>& raw, const std::array<float, 6>& affine,
+                  const std::vector<float>& local, SolveStats* stats) {
+  const int H = h * scale, W = w * scale;
+  const int bx_count = (w + 15) / 16, by_count = (h + 15) / 16;
+  stats->ho_r.assign(raw.size(), 0.0f);
+  stats->ho_valid.assign(raw.size(), 0.0f);
+  auto mix = [](float a, float b, float t) { return a * (1 - t) + b * t; };
+  auto sample = [&](const float* plane, float u, float v, float* out) {
+    float dx = 0, dy = 0;
+    if (!local.empty()) {
+      const float bx = u / 16 - 0.5f, by = v / 16 - 0.5f;
+      const int ix = int(std::floor(bx)), iy = int(std::floor(by));
+      auto at = [&](int x, int y, int c) {
+        return local[(size_t(std::clamp(y, 0, by_count - 1)) * bx_count
+                      + std::clamp(x, 0, bx_count - 1)) * 2 + c];
+      };
+      auto offset = [&](int c) {
+        return mix(mix(at(ix, iy, c), at(ix + 1, iy, c), bx - ix),
+                   mix(at(ix, iy + 1, c), at(ix + 1, iy + 1, c), bx - ix), by - iy);
+      };
+      dx = offset(0);
+      dy = offset(1);
+    }
+    const float x = scale * (affine[0] * u + affine[1] * v + affine[2] + dx) - 0.5f;
+    const float y = scale * (affine[3] * u + affine[4] * v + affine[5] + dy) - 0.5f;
+    if (!(x >= 0 && x < W - 1 && y >= 0 && y < H - 1)) return false;
+    const int ix = int(x), iy = int(y);
+    const float* taps = plane + size_t(iy) * W + ix;
+    *out = mix(mix(taps[0], taps[1], x - ix), mix(taps[W], taps[W + 1], x - ix), y - iy);
+    return std::isfinite(*out);
+  };
+  for (int y = 0; y < h; ++y)
+    for (int x = 0; x < w; ++x) {
+      const size_t i = size_t(y) * w + x;
+      if (!(raw[i] < clip)) continue;
+      const int c = (x & 1) + (y & 1);
+      const float* plane = image + size_t(c) * H * W;
+      float sum = 0;
+      bool valid = true;
+      for (int oy = 0; oy < scale && valid; ++oy)
+        for (int ox = 0; ox < scale && valid; ++ox) {
+          float value = 0;
+          valid = sample(plane, x + (ox + 0.5f) / scale, y + (oy + 0.5f) / scale, &value);
+          sum += value;
+        }
+      if (valid) {
+        stats->ho_r[i] = sum / float(scale * scale) - raw[i];
+        stats->ho_valid[i] = 1.0f;
+      }
+    }
+}
 }  // namespace
 
 Solver::Solver(Gpu* gpu) : gpu_(gpu), lite_(gpu) { ok_ = lite_.ok(); }
@@ -26,28 +83,46 @@ std::string Solver::profileNames() const { return lite_.profileNames(); }
 struct PendingTile {
   SolveParams prm;
   std::vector<float> z, xd, nscale, delta;
-  bool dct = false, prior_ok = false, done_sync = false;
+  bool dct = false, prior_ok = false, done_sync = false, npu_denoise = false;
+  LiteParams dct_fallback;
   int H = 0, W = 0;
   double t0 = 0.0;
   SolveStats S;
   std::vector<float> x_sync;   // finished in Begin (motion look reads the frames buffer)
+  std::vector<float> holdout_raw, holdout_local;
+  std::array<float, 6> holdout_affine{};
   std::future<void> prior;
   PriorStats pst; std::string perr;
 };
 // Wait for the tile's NPU prior (if started) and apply its correction to the DCT-cleaned copy too.
-void waitPrior(PendingTile& T) {
-  if (!T.prior.valid()) return;
+bool waitPrior(PendingTile& T, LiteSolver& solver) {
+  if (!T.prior.valid()) return true;
   const double tw = now_ms();
   T.prior.wait();
   T.prior = std::future<void>();
   const double waited = now_ms() - tw;
   if (T.prior_ok) {
+    if (T.npu_denoise) {
+      T.S.prior_ms += T.pst.ms;
+      ++T.S.prior_calls;
+    }
     if (T.dct && T.xd.size() == T.z.size()) for (size_t i = 0; i < T.z.size(); ++i) T.xd[i] = std::max(T.xd[i] + T.delta[i], 0.0f);
     if (std::getenv("LKRL_PRIOR_LOG")) std::fprintf(stderr, "lkr-lite prior: %dx%d on %s %.1f ms (waited %.1f ms)\n", T.W, T.H, T.pst.device.c_str(), T.pst.ms, waited);
   } else {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "lkr-lite prior skipped: %s\n", T.perr.c_str()); warned = true; }
+    std::fprintf(stderr, "lkr-lite prior skipped: %s\n", T.perr.c_str());
+    if (T.npu_denoise && T.dct_fallback.dct) {
+      LiteStats fallback;
+      std::string err;
+      if (!solver.denoiseDct(T.z, T.H, T.W, T.dct_fallback, &T.nscale, &T.xd, &fallback, &err)) {
+        std::fprintf(stderr, "lkr-lite DCT fallback failed: %s\n", err.c_str());
+        return false;
+      }
+      T.S.prior_ms += fallback.ms_prior;
+      T.S.prior_calls += fallback.prior_calls;
+      T.S.submits += fallback.submits;
+    }
   }
+  return true;
 }
 
 void PendingDeleter::operator()(PendingTile* p) const {
@@ -62,15 +137,25 @@ bool Solver::solve(const float* frames, int K, int h, int w, float* p, const Sol
   return solveEnd(&pend, x_out, st);
 }
 
-bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, const SolveParams& prm,
-                        const PriorFn& prior, PendingPtr* pend) {
+bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, const SolveParams& requested,
+                        const PriorFn& requested_prior, PendingPtr* pend) {
   const double t0 = now_ms();
   pend->reset(new PendingTile);
   PendingTile& T = **pend;
-  T.prm = prm; T.t0 = t0;
+  T.prm = requested;
+  if (T.prm.no_prior) {
+    T.prm.dct_prior = false;
+    T.prm.notch = false;
+    T.prm.grain = 0.0f;
+    T.prm.fallback_chroma = 0.0f;
+    T.prm.shadow_chroma = 0.0f;
+  }
+  const SolveParams& prm = T.prm;
+  const PriorFn prior = prm.no_prior ? PriorFn{} : requested_prior;
+  T.t0 = t0;
   SolveStats& S = T.S;
   S = SolveStats{};
-  if (prior || (prm.dct_prior && prm.dct_aperture > 0)) {
+  if (prm.dct_prior && prm.dct_aperture > 0) {
     std::fprintf(stderr, "lkr-lite: only the plain DCT prior is implemented\n");
     return false;
   }
@@ -78,7 +163,10 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
   if (K < 1) return false;
   LiteParams lp;
   lp.s = prm.s;
+  lp.direct_rgb = prm.direct_rgb;
+  if (lp.direct_rgb) lp.chroma_from_avg = 0;
   lp.debug_prefix = prm.debug_prefix;
+  lp.dense_field_path = prm.dense_field_path;
   lp.noise_a = prm.noise_a;
   lp.noise_b = prm.noise_b;
   lp.clip = prm.clip;
@@ -89,7 +177,8 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
   lp.robust_spread = prm.robust_spread;
   lp.guide = prm.guide_confidence;
   lp.guide_residual = prm.guide_residual;
-  lp.prior_gpu = PriorEnabled() && !PriorNpuAvailable();   // Network on, no NPU: Vulkan fallback in the solver
+  const bool denoise = !prm.no_prior && !prior && (prm.npu_denoise || NpuDenoiseEnabled());
+  lp.prior_gpu = !prm.no_prior && !prior && !denoise && PriorEnabled() && !PriorNpuAvailable();   // Network on, no NPU: Vulkan fallback in the solver
   lp.robust = prm.robust;
   lp.temporal_k = prm.temporal_k; lp.temporal_tau = prm.temporal_tau; lp.temporal_detail = prm.temporal_detail;
   lp.temporal_dark_wide = prm.temporal_dark_wide; lp.temporal_dark_level = prm.temporal_dark_level;
@@ -116,7 +205,7 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
   //    mid-grey's relative grain, mid-tones / highlights untouched. Off = luma unchanged (DCT round trip, ~1e-7).
   //  --fallback 0 / LKRL_FB=0 = no DCT pass at all. LK-R's old full-image x-step is gone (no gain vs truth).
   const char* fb = std::getenv("LKRL_FB");
-  if (fb ? std::atoi(fb) != 0 : prm.dct_fallback) {
+  if (!prm.no_prior && !prior && (fb ? std::atoi(fb) != 0 : prm.dct_fallback && (denoise || !lp.direct_rgb || prm.dct_prior))) {
     lp.dct = true; lp.dct_fallback = true; lp.dct_chroma_all = true;
     lp.dct_sigma = prm.sigma_noise / std::sqrt(float(K));
   }
@@ -138,6 +227,22 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
   if (const char* v = std::getenv("LKRL_DSIG")) lp.dct_sigma *= float(std::atof(v));
   if (const char* v = std::getenv("LKRL_DLUMA")) lp.dct_luma = float(std::atof(v));
   if (const char* v = std::getenv("LKRL_DCHROMA")) lp.dct_chroma = float(std::atof(v));
+  if (denoise && PriorNpuAvailable(true)) {
+    std::string prewarm_error;
+    T.npu_denoise = PriorPrewarm(prm.s * h, prm.s * w, &prewarm_error, true);
+    if (T.npu_denoise) {
+      T.dct_fallback = lp;
+      lp.dct = false;
+      // The post-fit denoiser recovers shadow noise with fewer data updates.
+      // Keep explicit schedules and the existing HDR fit.
+      if (lp.schedule.empty() && lp.exposure.empty()) {
+        if (lp.s == 1) lp.schedule = "GJJ";
+        if (lp.s == 2) lp.schedule = "GGGJJJJJJ";
+      }
+    } else if (std::getenv("LKRL_PRIOR_LOG")) {
+      std::fprintf(stderr, "lkr-lite NPU denoiser unavailable: %s\n", prewarm_error.c_str());
+    }
+  }
   std::vector<float> pv(p, p + size_t(K) * 6), dloc;
   const int nb = ((w + 15) / 16) * ((h + 15) / 16);
   if (prm.local_init && prm.local_block > 0) dloc.assign(prm.local_init, prm.local_init + size_t(K) * nb * 2);
@@ -148,13 +253,22 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
   // Motion look is off in Lite (2026-11-14: with the hybrid merge + lost-frames cleanup it changed real
   // images by ~0.01 / 255 on average and cost CPU time); LKRL_MLOOK=1 restores it for comparisons.
   static const bool mlook = std::getenv("LKRL_MLOOK") && std::atoi(std::getenv("LKRL_MLOOK")) != 0;
-  const bool msmooth = mlook && prm.motion_smooth > 0.0f && prm.robust && prm.noise_b > 0 && K > 1 && !prm.holdout;
+  const bool msmooth = !prm.no_prior && mlook && prm.motion_smooth > 0.0f && prm.robust && prm.noise_b > 0 && K > 1 && !prm.holdout;
   if (!lite_.solve(frames, K, h, w, pv, dloc, lp, &z, &ls, &err, &nscale, msmooth ? &rr : nullptr,
                    (msmooth || prm.debug_maps) ? &wt : nullptr, lp.dct ? &xd : nullptr)) {
     std::fprintf(stderr, "lkr-lite: %s\n", err.c_str());
     return false;
   }
   std::copy(pv.begin(), pv.end(), p);
+  if (prm.holdout) {
+    const size_t pixels = size_t(h) * w;
+    T.holdout_raw.assign(frames + K * pixels, frames + Kall * pixels);
+    std::copy_n(p + size_t(K) * 6, 6, T.holdout_affine.begin());
+    if (prm.local_init && prm.local_block == 16) {
+      const float* local = prm.local_init + size_t(K) * nb * 2;
+      T.holdout_local.assign(local, local + size_t(nb) * 2);
+    }
+  }
   // Self-supervised training data (research/prior/selfsup): in holdout mode with tracing, also save the
   // held-out frame's raw tile and its motion to the reference (front-end affine + 16 px block offsets),
   // so the merged image can be re-sampled at that frame's positions and Bayer pattern.
@@ -193,16 +307,26 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
         S.dbg[size_t(Y) * W + X] = eff;
       }
   }
-  if (PriorEnabled() && PriorNpuAvailable()) {
+  if (prior) {
+    const double started = now_ms();
+    T.xd.resize(T.z.size());
+    if (!prior(T.z.data(), T.xd.data(), H, W, prm.sigma_end * prm.prior_gain,
+               T.nscale.empty() ? nullptr : T.nscale.data())) {
+      std::fprintf(stderr, "lkr-lite: external prior failed\n");
+      return false;
+    }
+    S.prior_ms += now_ms() - started;
+    ++S.prior_calls;
+  } else if (T.npu_denoise || (!prm.no_prior && !denoise && PriorEnabled() && PriorNpuAvailable())) {
     PendingTile* tp = &T;
     if (tp->dct) tp->delta.assign(tp->z.size(), 0.0f);
     tp->prior = std::async(std::launch::async, [tp]() {
-      tp->prior_ok = PriorApply(tp->z.data(), tp->H, tp->W, tp->prm.noise_a, tp->dct ? tp->delta.data() : nullptr, &tp->pst, &tp->perr);
+      tp->prior_ok = PriorApply(tp->z.data(), tp->H, tp->W, tp->prm.noise_a, tp->dct ? tp->delta.data() : nullptr, &tp->pst, &tp->perr, tp->npu_denoise);
     });
   }
   if (msmooth) {   // motion look reads the frames buffer, which the caller reuses: do it now (before finishing)
-    waitPrior(T);
-    T.x_sync = T.dct ? T.xd : T.z;
+    if (!waitPrior(T, lite_)) return false;
+    T.x_sync = T.xd.empty() ? T.z : T.xd;
     MotionLook(frames, K, h, w, rr.data(), wt.data(), pv.data(), dloc.data(), prm, T.z.data(), T.x_sync.data());
     T.done_sync = true;   // solveEnd: x = x_sync, then finishing
   }
@@ -215,10 +339,10 @@ bool Solver::solveEnd(PendingPtr* pend, std::vector<float>* x_out, SolveStats* s
   SolveStats local;
   SolveStats& S = st ? *st : local;
   const int H = T.H, W = T.W;
-  waitPrior(T);
+  if (!waitPrior(T, lite_)) return false;
   std::vector<float>& z = T.z;
   if (T.done_sync) *x_out = std::move(T.x_sync);
-  else if (T.dct) *x_out = std::move(T.xd); else *x_out = z;   // no prior: x = z (LK-R 'none')
+  else if (!T.xd.empty()) *x_out = std::move(T.xd); else *x_out = z;   // no prior: x = z (LK-R 'none')
   const double tf = now_ms();
   // GPU finish for the default options (fallback_chroma / shadow stay on the CPU path); LKRL_FIN_CPU=1.
   static const bool fin_cpu = std::getenv("LKRL_FIN_CPU") != nullptr;
@@ -226,12 +350,16 @@ bool Solver::solveEnd(PendingPtr* pend, std::vector<float>* x_out, SolveStats* s
   if (!fin_cpu && prm.fallback_chroma <= 0.0f) {
     LiteSolver::FinishArgs fa{{prm.wb[0], prm.wb[1], prm.wb[2]}, prm.clip, prm.grain, prm.equalize_strength,
                               prm.notch, prm.highlight_desat, {prm.hl_ratio[0], prm.hl_ratio[1], prm.hl_ratio[2]},
-                              !(std::getenv("LKRL_HL_REC") && std::getenv("LKRL_HL_REC")[0] == '0'), 2 * prm.s};
+                              !(std::getenv("LKRL_HL_REC") && std::getenv("LKRL_HL_REC")[0] == '0')};
     std::string ferr;
     fin_done = lite_.finish(z.data(), x_out, H, W, fa, T.nscale.empty() ? nullptr : &T.nscale, &ferr);
     if (!fin_done) std::fprintf(stderr, "lkr-lite: gpu finish failed (%s), CPU path\n", ferr.c_str());
   }
   if (!fin_done) FinishLook(z.data(), x_out->data(), H, W, prm, T.nscale.empty() ? nullptr : T.nscale.data(), nullptr);
+  if (!T.holdout_raw.empty()) {
+    ScoreHoldout(x_out->data(), H / prm.s, W / prm.s, prm.s, prm.clip, T.holdout_raw,
+                 T.holdout_affine, T.holdout_local, &T.S);
+  }
   T.S.finish_ms = now_ms() - tf;
   T.S.total_ms = now_ms() - T.t0;
   S = std::move(T.S);

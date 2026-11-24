@@ -15,6 +15,9 @@
 
 namespace lkrl {
 namespace spv {
+static const uint32_t local_search[] = {
+#include "local_search.inc"
+};
 static const uint32_t resid[] = {
 #include "resid.inc"
 };
@@ -310,7 +313,7 @@ LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   LKRL_PIPE(resid, 6); LKRL_PIPE(werr, 3); LKRL_PIPE(wavg, 2); LKRL_PIPE(wminh, 3); LKRL_PIPE(wminv, 5);
   LKRL_PIPE(adj, 7); LKRL_PIPE(adj_s1, 7); LKRL_PIPE(adj_s2, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 4); LKRL_PIPE(le_tensor, 2); LKRL_PIPE(le_blur, 2); LKRL_PIPE(le_apply, 3); LKRL_PIPE(dln_apply, 3); LKRL_PIPE(axn_apply, 3); LKRL_PIPE(gcf_apply, 3); LKRL_PIPE(canc_apply, 5); LKRL_PIPE(rcd_start, 4); LKRL_PIPE(prior_conv, 4); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 5);
 #define LKRL_KPIPE(name, nb) name##_ = gpu_->pipeline(spv::name, sizeof(spv::name), nb, sizeof(KPush))
-  LKRL_KPIPE(kresid, 5); LKRL_KPIPE(ktdet, 4); LKRL_KPIPE(kth, 5); LKRL_KPIPE(kt, 6); LKRL_KPIPE(ktv, 8);
+  LKRL_KPIPE(kresid, 6); LKRL_KPIPE(ktdet, 4); LKRL_KPIPE(kth, 5); LKRL_KPIPE(kt, 6); LKRL_KPIPE(ktv, 8);
   LKRL_KPIPE(ktd, 8); LKRL_KPIPE(kguide, 6); LKRL_KPIPE(kminh, 3); LKRL_KPIPE(kmin, 5);
   kdy_ = gpu_->pipeline(spv::kdy, sizeof(spv::kdy), 5, sizeof(DctPush));
   kdu_ = gpu_->pipeline(spv::kdu, sizeof(spv::kdu), 5, sizeof(DctPush));
@@ -347,7 +350,9 @@ std::string LiteSolver::profileNames() const {
 
 LiteSolver::~LiteSolver() {
   if (!gpu_ || !gpu_->ok()) return;
+  gpu_->destroy(local_search_);
   for (Entry& e : cache_) gpu_->free(e.buf);
+  for (Entry& e : dcache_) gpu_->free(e.buf);
   for (Entry& e : fcache_) gpu_->free(e.buf);
   for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_, &le_tensor_, &le_blur_, &le_apply_, &dln_apply_, &axn_apply_, &gcf_apply_, &canc_apply_, &rcd_start_, &prior_conv_}) gpu_->destroy(*q);
 }
@@ -390,6 +395,37 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   if (p.size() != size_t(K) * 6) return fail("p size");
   if (dloc.empty()) dloc.assign(size_t(K) * nb * 2, 0.0f);
   if (dloc.size() != size_t(K) * nb * 2) return fail("dloc size");
+  // Research replay: one displacement per sensor pixel, measured from its
+  // centre in the moving frame to the reference. Reuse the same interpolation
+  // in the forward model, confidence shaders and reconstruction adjoint.
+  const char* dense_path = prm.dense_field_path.empty() ? std::getenv("LKRL_DENSE_FIELD")
+                                                        : prm.dense_field_path.c_str();
+  std::vector<float> dense;
+  if (dense_path) {
+    if ((h & 1) || (w & 1)) return fail("dense field requires even dimensions");
+    if (!prm.exposure.empty()) return fail("dense field with exposure bracket");
+    if (std::getenv("LKRL_MLOOK")) return fail("dense field replay requires motion look off");
+    FILE* f = std::fopen(dense_path, "rb");
+    if (!f) return fail("open dense field");
+    int32_t shape[3];
+    bool valid = std::fread(shape, sizeof(int32_t), 3, f) == 3 &&
+                 shape[0] == K && shape[1] == h && shape[2] == w;
+    if (valid) {
+      // The optional tail stores one visibility value per sensor sample.
+      dense.resize(nLR * 3, 1.0f);
+      valid = std::fread(dense.data(), sizeof(float), nLR * 2, f) == nLR * 2;
+      if (valid && std::fgetc(f) != EOF) {
+        valid = std::fseek(f, -1, SEEK_CUR) == 0 &&
+                std::fread(dense.data() + nLR * 2, sizeof(float), nLR, f) == nLR;
+      }
+      valid = valid && std::fgetc(f) == EOF &&
+              std::all_of(dense.begin(), dense.end(), [](float x) { return std::isfinite(x); });
+    }
+    std::fclose(f);
+    if (!valid) return fail("invalid dense field");
+    std::fill_n(dense.begin(), size_t(h) * w * 2, 0.0f);
+    std::fill_n(dense.begin() + nLR * 2, size_t(h) * w, 1.0f);
+  }
 
   // Buffers persist per solver (one per worker) and are reused while the tile size matches:
   // per-tile allocation cost 3.4 s summed on Mali for a 63-tile 1x merge.
@@ -405,7 +441,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     }
     return en.buf;
   };
-  Buffer &y = buf((nLR + 1) / 2 * 4), &pb = buf(size_t(K) * 24, true), &db = buf(size_t(K) * nb * 8, true);
+  Buffer &y = buf((nLR + 1) / 2 * 4), &pb = buf(size_t(K) * 24, true),
+         &db = buf(dense_path ? dense.size() * sizeof(float) : size_t(K) * nb * 8, true);
   Buffer &z = buf(nHR * 4, true), &z0 = buf(nHR * 4);
   Buffer &acc = buf(nHR * 4), &cov = buf(nHR * 4, true);
   // Edge position correction / colour-difference fit scratch.
@@ -434,7 +471,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   struct Reset { Gpu* g; ~Reset() { g->resetSets(); } } reset_sets{gpu_};
 
   // Start image (2026-11-19): RCD at 1x and 2x by default (user: everything for the 2x zipper on 1x too).
-  static const int rcd_env = std::getenv("LKRL_RCD") ? std::atoi(std::getenv("LKRL_RCD")) : 2;
+  const int rcd_env = std::getenv("LKRL_RCD") ? std::atoi(std::getenv("LKRL_RCD")) : (prm.direct_rgb ? 0 : 2);
   const int rcd_mode = prm.start_notch > 0 ? (rcd_env > 0 ? 1 : 0) : rcd_env;   // the notch is host-side
   const float mhc_mix = rcd_mode > 0 ? 1.0f : (prm.mhc_mix >= 0.0f ? prm.mhc_mix : (s == 1 ? 0.75f : 1.0f));
   const float jacobi_damp = prm.jacobi_damp >= 0.0f ? prm.jacobi_damp : 0.0f;
@@ -521,8 +558,16 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     frames = frames_lb.data();
   }
   PackHalf(frames, nLR, y.as<uint32_t>());   // fp16 frames, two per uint (shaders: yv())
-  std::memcpy(pb.map, p.data(), p.size() * 4);
-  std::memcpy(db.map, dloc.data(), dloc.size() * 4);
+  if (dense_path) {
+    for (int k = 0; k < K; ++k) {
+      const float identity[6] = {1, 0, 0, 0, 1, 0};
+      std::copy_n(identity, 6, pb.as<float>() + size_t(k) * 6);
+    }
+    std::memcpy(db.map, dense.data(), dense.size() * sizeof(float));
+  } else {
+    std::memcpy(pb.map, p.data(), p.size() * 4);
+    std::memcpy(db.map, dloc.data(), dloc.size() * 4);
+  }
   // HDR bracket: the start images demosaic the reference with its clipped samples filled from the
   // other frames (the data term still excludes them). frames stays the reference elsewhere.
   std::vector<float> ref_fused;
@@ -601,6 +646,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   }
   Push q{};
   q.h = h; q.w = w; q.s = s; q.K = K; q.H = H; q.W = W; q.LB = LB; q.mode = 0;
+  if (dense_path) q.LB = 1;
   q.a = prm.noise_a; q.b = prm.noise_b; q.clip = HalfRound(prm.clip); q.robk = prm.robust_k;
   q.tau = prm.robust_tau; q.rpow = std::max(prm.robust_pow, 1.0f);
   q.scale = float(std::ldexp(1.0, 28) / K);   // |r| <= 1, <= 4 s^2 taps per frame and HR pixel
@@ -638,7 +684,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   VkDescriptorSet sAdj = gpu_->set(adjP, {&z, &y, &pb, &db, &wt, &acc, &cov});
   // LKRL_ADJ_WG=1: workgroup-per-tile adjoint (bit-identical acc; phone A/B 2026-11-14: no gain, atomics
   // are not adj's cost -- off).
-  static const bool adj_old = !(std::getenv("LKRL_ADJ_WG") && std::atoi(std::getenv("LKRL_ADJ_WG")) != 0);
+  static const bool adj_workgroup = std::getenv("LKRL_ADJ_WG") && std::atoi(std::getenv("LKRL_ADJ_WG")) != 0;
+  const bool adj_old = dense_path || !adj_workgroup;
   VkDescriptorSet sAdjW = adj_old ? VK_NULL_HANDLE : gpu_->set(adjwg_, {&z, &y, &pb, &db, &wt, &acc, &cov});
   const uint32_t gxw = div_up(uint32_t(w), 16), gyw = div_up(uint32_t(h), 16);
   VkDescriptorSet sAdjF = gpu_->set(adjP, {&z, &y2, &pb, &db, &vm, &acc, &cov});   // freq-robust average
@@ -650,7 +697,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
                   kWV = VK_NULL_HANDLE, kWD = VK_NULL_HANDLE, kG = VK_NULL_HANDLE, kMH = VK_NULL_HANDLE,
                   kM = VK_NULL_HANDLE, kV = VK_NULL_HANDLE;
   if (lkw) {
-    kRT = gpu_->set(kresid_, {&z0, &y, &pb, &rrt, &db});
+    kRT = gpu_->set(kresid_, {&z0, &y, &pb, &rrt, &db, &vm});
     kTDet = gpu_->set(ktdet_, {&rrt, &y, &tdetb, &db});
     kTH = gpu_->set(kth_, {&rrt, &y, &rwt2, &wvt2, &tdetb});
     kWT = gpu_->set(kt_, {&rrt, &y, &rwt2, &wtr, &wvt2, &kebuf});
@@ -662,7 +709,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     kV = gpu_->set(wvalid_, {&wl, &vm, &wt, &y, &fx});
   }
   KPush kq{};
-  kq.h = h; kq.w = w; kq.s = s; kq.K = K; kq.H = H; kq.W = W; kq.kOff = LB; kq.mode = 0;
+  kq.h = h; kq.w = w; kq.s = s; kq.K = K; kq.H = H; kq.W = W; kq.kOff = q.LB; kq.mode = 0;
   kq.f0 = 1e-9f; kq.f2 = HalfRound(prm.clip); kq.f3 = prm.robust_tau;
   kq.rob_a = prm.noise_a; kq.rob_b = prm.noise_b; kq.rob_k = prm.robust_k;
   kq.rob_on = (prm.robust && prm.noise_b > 0) ? std::max(1.0f, prm.robust_pow) : 0.0f;
@@ -687,8 +734,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   const int fitK = std::getenv("LKRL_FITK") ? std::min(std::max(std::atoi(std::getenv("LKRL_FITK")), 1), K) : K;
   std::vector<float> zavg;
   auto weights = [&]() {   // robust weights vs the reference-only start image, current geometry
-    gpu_->dispatch(resid_, sResid0, &q, gx, gy);   // validity (vm) of this geometry
     if (lkw && chain_done && prm.lkr_weights_once) {   // keep LK-R's weights, new validity only
+      gpu_->dispatch(resid_, sResid0, &q, gx, gy);
       gpu_->dispatch(wvalid_, kV, &q, div_up(uint32_t(nLR), 256));
       need_cov = true;
       weights_stale = false;
@@ -698,7 +745,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       chain_done = true;
       if (ktemporal && kq.rob_on > 0.5f) {
         KPush qt = kq; qt.rob_k = prm.temporal_k; qt.f3 = prm.temporal_tau;
-        gpu_->dispatch(kresid_, kRT, &qt, gx, gy, 1);   // frame-innermost (gx = K blocks)
+        // The temporal warp also writes validity for the final weight pass.
+        gpu_->dispatch(kresid_, kRT, &qt, gx, gy, 1);
         KPush qd = qt; qd.f0 = prm.temporal_detail; qd.f1 = prm.temporal_dark_wide ? 1.0f : 0.0f;
         qd.f2 = prm.temporal_dark_level;
         KPush qh = qd; qh.f1 = 0.0f;
@@ -706,8 +754,12 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         KPush qdet = qd;   // motion gate scale: the misregistration tolerance (LKRL_TDGATE A/B, 0 = off)
         static const float tdgate = std::getenv("LKRL_TDGATE") ? float(std::atof(std::getenv("LKRL_TDGATE"))) : prm.robust_tau;
         // Every scale (user 2026-11-19; at 1x it measured -10 % fine detail on the car-burst plate crop).
-        qdet.rob_k = prm.local_block > 0 ? tdgate : 0.0f;
+        qdet.rob_k = !dense_path && prm.local_block > 0 ? tdgate : 0.0f;
         static const float tdspread = std::getenv("LKRL_TDSPREAD") ? float(std::atof(std::getenv("LKRL_TDSPREAD"))) : 2.0f;
+        static const float residual_sigma = std::getenv("LKRL_TDRESID")
+            ? float(std::atof(std::getenv("LKRL_TDRESID"))) : 0.0f;
+        // Brackets need exposure-specific residual variance before using this test.
+        qdet.f1 = hdr ? 0.0f : residual_sigma;
         qdet.f2 = tdspread;   // 2 = field curvature (default), 1 = neighbour disagreement, 0 = offset size
         if (qd.f0 > 0.0f) gpu_->dispatch(ktdet_, kTDet, &qdet, g1, gy, uint32_t(K));
         gpu_->dispatch(kth_, kTH, &qh, g1, gy, uint32_t(K));
@@ -729,6 +781,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         gpu_->dispatch(werr_, sErr, &q, gx, gy);
         gpu_->dispatch(wavg_, sAvgRes, &q, gx, gy);
         qg.f1 = gres;
+      } else if (!ktemporal || kq.rob_on <= 0.5f) {
+        gpu_->dispatch(resid_, sResid0, &q, gx, gy);
       }
       gpu_->dispatch(kguide_, kG, &qg, gqx, gqy, uint32_t(K));
       KPush qm = kq; qm.f3 = float(prm.robust_spread);
@@ -758,6 +812,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       weights_stale = false;
       return;
     }
+    gpu_->dispatch(resid_, sResid0, &q, gx, gy);
     gpu_->dispatch(werr_, sErr, &q, gx, gy);
     if (!guide || prm.guide_mode == 1) gpu_->dispatch(wavg_, sAvg, &q, gx, gy);
     if (guide) {
@@ -803,15 +858,36 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   // pixels: a Bayer colour maze on moving subjects and grass at 2x, 1.9x LK-R's.)
   const int n_merge = std::max(1, int(std::count(sched.begin(), sched.end(), 'J')));
   const float steps_per_merge = prm.lkr_steps / float(n_merge);
+  // Desktop experiment. Search once after the leading motion updates,
+  // before the first weighted fusion pass. The normal path allocates nothing.
+  const char* search_opt = std::getenv("LKRL_LOCAL_SEARCH");
+  const int search_mode = search_opt ? std::atoi(search_opt) : 0;
+  bool local_search_pending = search_mode > 0 && !dense_path &&
+                              !hdr && K > 1 && !prm.direct_rgb;
+  if (local_search_pending && !local_search_.pipe) {
+    gpu_->destroy(local_search_);
+    local_search_ = gpu_->pipeline(spv::local_search, sizeof(spv::local_search), 5, sizeof(Push));
+  }
+  local_search_pending = local_search_pending && local_search_.pipe;
   int trace_j = 0;
   trace("affine-initial.f32",pb.map,size_t(K)*24);
-  trace("local-initial.f32",db.map,size_t(K)*nb*8);
+  const size_t field_bytes = dense_path ? nLR * 2 * sizeof(float) : size_t(K) * nb * 8;
+  trace("local-initial.f32",db.map,field_bytes);
   for (size_t si = 0; si < sched.size(); ++si) {
     const char c = sched[si];
     if (c == 'J' || c == 'A') {
       // 'A': restart from the weighted aligned average z = U^T W y / U^T W 1 (shift-and-add: one
       // undamped Jacobi step from z = 0) -- every frame averaged instead of the reference start.
       const bool avg = c == 'A';
+      if (local_search_pending) {
+        const VkDescriptorSet search = gpu_->set(local_search_, {&z0, &y, &pb, &db, &dtmp});
+        Push search_args = q;
+        search_args.mode = search_mode;
+        gpu_->dispatch(local_search_, search, &search_args, div_up(uint32_t(K * nb), 64));
+        gpu_->copy(dtmp, db, size_t(K) * nb * 8);
+        weights_stale = true;
+        local_search_pending = false;
+      }
       if (weights_stale) weights();
       if (avg) { gpu_->fill(z, 0); need_cov = true; }
       if (need_cov) gpu_->fill(cov, 0);
@@ -909,12 +985,19 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         trace("coverage-J1.i32",cov.map,nHR*4);
         trace("weights.f32",wt.map,nLR*4);
         trace("affine.f32",pb.map,size_t(K)*24);
-        trace("local.f32",db.map,size_t(K)*nb*8);
+        trace("local.f32",db.map,field_bytes);
         trace("adjoint-push.bin",&m,sizeof(m));
         gpu_->begin();
       }
       const int Kf = avg ? K : fitK;
       Push u = q; u.tau = jacobi_damp * float(Kf) / float(s * s); u.LB = prm.cov_smooth >= 0 ? prm.cov_smooth : (s == 1 ? 0 : 1); u.a = steps_per_merge; u.b = (prm.lkr_l > 0.0f ? prm.lkr_l : (s == 1 ? 1.45f : 1.8f)) * float(Kf) * 0.5f / float(s * s);
+      // Expected R/B coverage at 2x is K/16 under uniform sampling.
+      static const float chroma_support = std::getenv("LKRL_CHROMA_SUPPORT")
+          ? std::clamp(float(std::atof(std::getenv("LKRL_CHROMA_SUPPORT"))), 0.0f, 1.0f)
+          : 0.0f;
+      const float chroma_floor = s == 2 && !avg && !hdr && chroma_support > 0.0f
+          ? chroma_support * float(Kf) / 16.0f : 0.0f;
+      u.clip = chroma_floor;  // zupd uses clip for the experimental R/B coverage floor.
       u.mode = need_cov || std::getenv("LKRL_NO_DVCACHE") ? 1 : 0;   // 1: (re)compute the divisor, 0: cached
       // Update smoothing ([1 2 1] on the step, 2x) tried 2026-11-13: checker only partly lower, parity
       // 63.4 -> 58.9 dB on the cat crop. Off unless LKRL_UPDSMOOTH is set.
@@ -927,20 +1010,20 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       static const int avg_r = std::getenv("LKRL_AVGR") ? std::atoi(std::getenv("LKRL_AVGR")) : -1;
       if (avg) { u.a = 0.0f; u.rpow = hdr_in ? -2.0f : -1.0f; u.robk = 0.0f; u.LB = avg_r >= 0 ? avg_r : (s == 1 ? 0 : 1); }
       if (!avg && trace_j==1) trace("update-push.bin",&u,sizeof(u));
-      // Colour-difference fit (default since 2026-11-17; cdupd.comp): solve G, R-G, B-G instead of
-      // R, G, B. Synthetic ground truth (tilted / straight bars, perfect motion): the independent fit
-      // invented period-4 colour (band error 1.05-1.09 vs 1.0 = empty; step 8 alone 2.4), this is at the
-      // ~1.0 floor; real 2x burst 184641 colour zipper car 0.025 -> 0.0095, rocks 0.030 -> 0.0097, detail
-      // unchanged. LKRL_CDFIT = D radius (-1 = old independent fit), LKRL_CDK = edge stop (0 = off).
-      // Also at 1x (user 2026-11-17): the ~9 % lower fine-detail number on the car 1x crop counts
-      // zipper / false colour as detail.
-      static const int cd_r = std::getenv("LKRL_CDFIT") ? std::atoi(std::getenv("LKRL_CDFIT")) : 2;
+      // At native resolution, fit each camera channel independently. The shared
+      // green step in the colour-difference fit moves all three by the same
+      // raw increment, which shifts chromaticity along fine brightness edges
+      // (green/magenta fringes on the 133623 railings). At 2x, the sparse R/B
+      // footprints still benefit from the coupled fit's Bayer-zipper suppression.
+      static const char* cd_radius = std::getenv("LKRL_CDFIT");
+      const int cd_r = cd_radius ? std::atoi(cd_radius) : (s == 1 ? -1 : 2);
       static const float cd_k = std::getenv("LKRL_CDK") ? float(std::atof(std::getenv("LKRL_CDK"))) : 0.0f;
-      if (!avg && cd_r >= 0 && u.robk <= 0.0f) {
+      if (!avg && !prm.direct_rgb && cd_r >= 0 && u.robk <= 0.0f) {
         static const float cd_b = std::getenv("LKRL_CDB") ? float(std::atof(std::getenv("LKRL_CDB"))) : 1.0f;
         Push pc2 = q; pc2.tau = u.tau; pc2.LB = cd_r; pc2.robk = cd_k; pc2.rpow = cd_b;
         static const int cd_cl = std::getenv("LKRL_CDCL") ? std::atoi(std::getenv("LKRL_CDCL")) : 97;
         pc2.K = cd_cl;
+        pc2.mode = int(std::lround(256.0f * chroma_floor));  // coverage floor in Q8
         if (cd_k > 0.0f) {   // the edge stop reads neighbours' G: write a copy, then swap it in
           gpu_->dispatch(cdupd_, gpu_->set(cdupd_, {&z, &acc, &cov, &ztb}), &pc2, div_up(uint32_t(H * W), 256));
           gpu_->copy(ztb, z, nHR * 4);
@@ -974,7 +1057,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         gpu_->begin();
       }
     } else if (c == 'G') {
-      if (K < 2) continue;
+      if (K < 2 || dense_path) continue;
       if (weights_stale && qg.mode == 0) weights();
       gpu_->dispatch(jac_, sJac, &qg, jg, uint32_t(K - 1));
       if (!submit()) return fail("submit (jac)");
@@ -1163,35 +1246,36 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       VkDescriptorSet cS = gpu_->set(canc_apply_, {&hybO, &z0, &cA, &cB, &wt});
       for (int m = 0; m < 3; ++m) { cq.mode = m; gpu_->dispatch(canc_apply_, cS, &cq, ggx, ggy); }
     }
-    // Learned prior, Vulkan fallback (Network on, no usable NPU): the folded network, one dispatch per
-    // layer, on the merged image in place (same weights / result as the NPU path, lkrl_prior.cpp).
-    if (prm.prior_gpu) {
-      static std::vector<float> pwb; static std::vector<PriorLayerInfo> pinfo;
-      static const bool have = PriorPacked(&pwb, &pinfo);
-      if (have && !pinfo.empty()) {
-        const size_t HWs = size_t(H) * W;
-        Buffer &actA = buf(HWs * 24 * 2), &actB = buf(HWs * 24 * 2), &wbB = buf(pwb.size() * 4);
-        std::memcpy(wbB.map, pwb.data(), pwb.size() * 4);
-        Push cq = q;
-        cq.a = 100.0f * std::sqrt(std::max(prm.noise_a, 1e-6f) * 0.18f);
-        cq.b = PriorColourOnly() ? 0.0f : 1.0f;   // last layer: colour-only correction (prior_conv.comp)
-        const uint32_t ggx = div_up(uint32_t(W), 16), ggy = div_up(uint32_t(H), 16);
-        Buffer* in = &actA; Buffer* out = &actB;
-        for (size_t li = 0; li < pinfo.size(); ++li) {
-          const PriorLayerInfo& L = pinfo[li];
-          cq.mode = li == 0 ? 0 : (li + 1 == pinfo.size() ? 2 : 1);
-          cq.K = L.cin; cq.LB = L.cout; cq.s = L.relu; cq.h = L.woff; cq.w = L.boff;
-          gpu_->dispatch(prior_conv_, gpu_->set(prior_conv_, {&hybO, in, out, &wbB}), &cq, ggx, ggy, div_up(uint32_t(L.cout), 8));
-          std::swap(in, out);
-        }
+    hyb_done = true;
+  }
+  // Learned prior, Vulkan fallback (Network on, no usable NPU): the folded network, one dispatch per
+  // layer, on the merged image in place (same weights / result as the NPU path, lkrl_prior.cpp).
+  if (prm.prior_gpu && (hyb_done || prm.direct_rgb)) {
+    Buffer& merged = hyb_done ? hybO : z;
+    static std::vector<float> pwb; static std::vector<PriorLayerInfo> pinfo;
+    static const bool have = PriorPacked(&pwb, &pinfo);
+    if (have && !pinfo.empty()) {
+      const size_t HWs = size_t(H) * W;
+      Buffer &actA = buf(HWs * 24 * 2), &actB = buf(HWs * 24 * 2), &wbB = buf(pwb.size() * 4);
+      std::memcpy(wbB.map, pwb.data(), pwb.size() * 4);
+      Push cq = q;
+      cq.a = 100.0f * std::sqrt(std::max(prm.noise_a, 1e-6f) * 0.18f);
+      cq.b = PriorColourOnly() ? 0.0f : 1.0f;   // last layer: colour-only correction (prior_conv.comp)
+      const uint32_t ggx = div_up(uint32_t(W), 16), ggy = div_up(uint32_t(H), 16);
+      Buffer* in = &actA; Buffer* out = &actB;
+      for (size_t li = 0; li < pinfo.size(); ++li) {
+        const PriorLayerInfo& L = pinfo[li];
+        cq.mode = li == 0 ? 0 : (li + 1 == pinfo.size() ? 2 : 1);
+        cq.K = L.cin; cq.LB = L.cout; cq.s = L.relu; cq.h = L.woff; cq.w = L.boff;
+        gpu_->dispatch(prior_conv_, gpu_->set(prior_conv_, {&merged, in, out, &wbB}), &cq, ggx, ggy, div_up(uint32_t(L.cout), 8));
+        std::swap(in, out);
       }
     }
-    if (!trace_prefix.empty()) {
-      if (!submit()) return fail("trace hybrid submit");
-      trace("hybrid.f32",hybO.map,nHR*4);
-      gpu_->begin();
-    }
-    hyb_done = true;
+  }
+  if (hyb_done && !trace_prefix.empty()) {
+    if (!submit()) return fail("trace hybrid submit");
+    trace("hybrid.f32", hybO.map, nHR * 4);
+    gpu_->begin();
   }
   if (!submit()) return fail("final submit");
   if (hyb_done) z_out->assign(hybO.as<float>(), hybO.as<float>() + nHR);
@@ -1468,112 +1552,138 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   }
   if (z_out) trace("final-z.f32", z_out->data(), nHR * 4);   // BM3D-lite prototype input
   if (noise_scale && noise_scale->size() == size_t(H) * W) trace("noise-scale.f32", noise_scale->data(), size_t(H) * W * 4);
-  bool dct_skip = false;
-  if (x_out && prm.dct && prm.dct_fallback && noise_scale && noise_scale->size() == size_t(H) * W) {
-    // Fallback: nothing to clean where no frame was lost (LK-R's fb_skip): x = z, no DCT pass.
-    float mx = 0.0f;
-    for (float v : *noise_scale) mx = std::max(mx, v);
-    if (mx <= 1.0f && prm.dct_grain <= 0.0f && !prm.dct_chroma_all) { dct_skip = true; *x_out = *z_out; }
-  }
-  if (x_out && prm.dct && !dct_skip) {   // LK-R's DCT x-step on the final z (H, W % 4 == 0)
-    const double prior_start = now_ms();
-    if (H < 8 || W < 8 || (H & 3) || (W & 3)) return fail("dct needs H, W >= 8 and divisible by 4");
-    std::memcpy(z.map, z_out->data(), nHR * 4);   // the final image (hybrid combine is host-side)
-    const int ny = (H - 8) / 4 + 1, nx = (W - 8) / 4 + 1;
-    Buffer &xb = buf(nHR * 4, true), &dns = buf(size_t(H) * W * 4), &diw = buf(size_t(H + W + 8) * 4),
-           &dnv = buf(size_t(ny) * nx * 4);
-    static const float win[8] = {0.03806023f, 0.30865828f, 0.69134172f, 0.96193977f,
-                                 0.96193977f, 0.69134172f, 0.30865828f, 0.03806023f};
-    float* iw = diw.as<float>();
-    auto axis = [&](int n, int blocks, float* o) {
-      std::vector<float> sum(size_t(n), 0.0f);
-      for (int b = 0; b < blocks; ++b)
-        for (int i = 0; i < 8; ++i) sum[size_t(b * 4 + i)] += win[i];
-      for (int i = 0; i < n; ++i) o[i] = 1.0f / sum[size_t(i)];
-    };
-    axis(H, ny, iw);
-    axis(W, nx, iw + H);
-    const bool hns = noise_scale && noise_scale->size() == size_t(H) * W;
-    if (hns && prm.dct_fallback) {   // only the noise left by lost frames: sqrt(max(ns^2 - 1, 0))
-      float* d = dns.as<float>();
-      for (size_t i = 0; i < size_t(H) * W; ++i) d[i] = std::sqrt(std::max((*noise_scale)[i] * (*noise_scale)[i] - 1.0f, 0.0f));
-    } else if (hns) std::memcpy(dns.map, noise_scale->data(), size_t(H) * W * 4);
-    const float denom = prm.noise_a * 0.18f + prm.noise_b;
-    // Measured merged noise (2026-11-17): sigma/sqrt(K) under-reads Lite's real merged noise ~3x on
-    // real bursts (the fit does not average perfectly). In the noise-following modes the level is
-    // scaled by the ratio measured on THIS image: per 8x8 block, pixel variance of the merged luma
-    // over the model variance, on blocks with no lost frames; the 2nd percentile picks flat blocks
-    // (texture only raises a block), divided by that percentile of chi^2(63)/63 (pure noise). 1..16.
-    float noise_gain = 1.0f;
-    if (prm.dct_chroma_all || prm.dct_grain > 0.0f) {
-      static const float qf = std::getenv("LKRL_NQ") ? float(std::atof(std::getenv("LKRL_NQ"))) : 0.02f;
-      const float* zz = z_out->data();
-      const size_t HW = size_t(H) * W;
-      const float la = denom > 0 ? prm.noise_a / denom : 0.0f, lb = denom > 0 ? prm.noise_b / denom : 1.0f;
-      const float s2 = prm.dct_sigma * prm.dct_sigma;
-      std::vector<float> rr;
-      for (int by = 0; by + 8 <= H; by += 8)
-        for (int bx = 0; bx + 8 <= W; bx += 8) {
-          double sm = 0, sq = 0; bool lostb = false;
-          for (int y = by; y < by + 8; ++y)
-            for (int x = bx; x < bx + 8; ++x) {
-              const size_t i = size_t(y) * W + x;
-              if (hns && (*noise_scale)[i] > 1.0f) lostb = true;
-              const double v = 0.25 * (zz[i] * prm.wb[0] + zz[2 * HW + i] * prm.wb[2]) + 0.5 * zz[HW + i] * prm.wb[1];
-              sm += v; sq += v * v;
-            }
-          if (lostb) continue;
-          const double m = sm / 64, var = std::max(sq / 64 - m * m, 0.0) * 64.0 / 63.0;
-          const double mv = s2 * std::max(la * std::max(m, 0.0) + lb, 0.0);
-          if (mv > 0) rr.push_back(float(var / mv));
-        }
-      if (rr.size() >= 16) {
-        const size_t k = size_t(qf * (rr.size() - 1));
-        std::nth_element(rr.begin(), rr.begin() + k, rr.end());
-        // percentile of chi^2(63)/63 for pure noise ~ 1 + z_q sqrt(2/63) (z from a logistic fit of the normal)
-        const float zq = -1.7f * std::log((1.0f - qf) / qf) / 3.0f;
-        const float pq = std::max(1.0f + zq * std::sqrt(2.0f / 63.0f), 0.3f);
-        // Cap: a tile with no flat block cannot be measured (texture reads as noise); 16 = 4x the model sigma.
-        noise_gain = std::min(std::max(rr[k] / pq, 1.0f), 16.0f);
-      }
-      if (std::getenv("LKRL_NGAIN_LOG")) std::fprintf(stderr, "dct noise gain %.2f (%zu blocks)\n", noise_gain, rr.size());
-    }
-    DctPush d{H, W, ny, nx, 0, 0, H / 4, hns ? 1 : 0, prm.dct_sigma * prm.dct_sigma * noise_gain,
-              denom > 0 ? prm.noise_a / denom : 0.0f, denom > 0 ? prm.noise_b / denom : 1.0f,
-              prm.dct_luma * prm.dct_luma, prm.dct_chroma * prm.dct_chroma, prm.wb[0], prm.wb[1], prm.wb[2],
-              prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma, prm.dct_luma_cap, prm.dct_chroma_all ? 1.0f : 0.0f, prm.dct_luma_floor,
-              prm.dct_fallback ? prm.dct_grain * prm.dct_grain : 0.0f,
-              prm.dct_grain_rel * prm.dct_grain_rel, prm.dct_grain_rho, prm.dct_chroma_norm ? 1.0f : 0.0f, prm.dct_grain_tilt,
-              prm.dct_grain_sub};
-    gpu_->resetSets();
-    // LKRL_DCT_OLD (debug.lkr.dctold): the previous one-block-per-invocation shaders, for A/B.
-    static const bool dct_old = std::getenv("LKRL_DCT_OLD") && std::atoi(std::getenv("LKRL_DCT_OLD")) != 0;
-    const Pipeline &py_ = dct_old ? kdyo_ : kdy_, &pu_ = dct_old ? kduo_ : kdu_, &pv_ = dct_old ? kdvo_ : kdv_;
-    VkDescriptorSet sy = gpu_->set(py_, {&z, &xb, &dns, &diw, &dnv}), su = gpu_->set(pu_, {&z, &xb, &dns, &diw, &dnv}),
-                    sv = gpu_->set(pv_, {&z, &xb, &dns, &diw, &dnv}), sc = gpu_->set(kdyuv_, {&xb});
-    gpu_->begin();
-    gpu_->fill(xb, 0);
-    const std::pair<const Pipeline*, VkDescriptorSet> ch[3] = {{&py_, sy}, {&pu_, su}, {&pv_, sv}};
-    for (const auto& c : ch)
-      for (d.py = 0; d.py < 2; ++d.py)
-        for (d.px = 0; d.px < 2; ++d.px) {
-          if (dct_old)
-            gpu_->dispatch(*c.first, c.second, &d, uint32_t((nx + 1) / 2 + 3) / 4, uint32_t((ny + 1) / 2 + 3) / 4);
-          else   // dct_x.glsl: 8 blocks (8 row invocations each) per workgroup, blocks of this phase in x.
-            gpu_->dispatch(*c.first, c.second, &d, uint32_t(((nx + 1) / 2) * ((ny + 1) / 2) + 7) / 8, 1);
-        }
-    gpu_->dispatch(kdyuv_, sc, &d, uint32_t(W / 4 + 15) / 16, uint32_t(H + 15) / 16);
-    if (!submit()) return fail("dct submit");
-    x_out->assign(xb.as<float>(), xb.as<float>() + nHR);
-    trace("final-x.f32", x_out->data(), nHR * 4);
-    S.ms_prior += now_ms() - prior_start;
-    ++S.prior_calls;
+  if (x_out && prm.dct) {
+    if (!denoiseDct(*z_out, H, W, prm, noise_scale, x_out, &S, err)) return false;
+    if (S.prior_calls) trace("final-x.f32", x_out->data(), nHR * 4);
   }
   std::memcpy(p.data(), pb.map, p.size() * 4);
-  std::memcpy(dloc.data(), db.map, dloc.size() * 4);
+  if (!dense_path) std::memcpy(dloc.data(), db.map, dloc.size() * 4);
   if (prm.profile) S.profile = gpu_->profileReport();
   S.ms_total = now_ms() - t0;
   if (st) *st = S;
+  return true;
+}
+
+bool LiteSolver::denoiseDct(const std::vector<float>& fit, int H, int W, const LiteParams& prm,
+                            const std::vector<float>* noise_scale, std::vector<float>* x_out,
+                            LiteStats* st, std::string* err) {
+  auto fail = [&](const char* message) {
+    if (err) *err = message;
+    gpu_->resetSets();
+    return false;
+  };
+  const size_t nHR = size_t(H) * W * 3;
+  if (prm.dct_fallback && noise_scale && noise_scale->size() == size_t(H) * W &&
+      prm.dct_grain <= 0.0f && !prm.dct_chroma_all &&
+      std::none_of(noise_scale->begin(), noise_scale->end(), [](float value) { return value > 1.0f; })) {
+    *x_out = fit;
+    return true;
+  }
+  const double prior_start = now_ms();
+  size_t slot = 0;
+  auto buf = [&](size_t bytes, bool host_read = false) -> Buffer& {
+    if (dcache_.size() <= slot) dcache_.emplace_back();
+    Entry& en = dcache_[slot++];
+    if (!en.buf.map || en.bytes != bytes || en.host_read != host_read) {
+      gpu_->free(en.buf);
+      en.buf = gpu_->alloc(bytes, host_read);
+      en.bytes = bytes;
+      en.host_read = host_read;
+    }
+    return en.buf;
+  };
+  if (H < 8 || W < 8 || (H & 3) || (W & 3)) return fail("dct needs H, W >= 8 and divisible by 4");
+  const int ny = (H - 8) / 4 + 1, nx = (W - 8) / 4 + 1;
+  Buffer &z = buf(nHR * 4), &xb = buf(nHR * 4, true), &dns = buf(size_t(H) * W * 4), &diw = buf(size_t(H + W + 8) * 4),
+         &dnv = buf(size_t(ny) * nx * 4);
+  for (const auto& entry : dcache_) if (!entry.buf.map) return fail("dct buffers");
+  std::memcpy(z.map, fit.data(), nHR * 4);
+  static const float win[8] = {0.03806023f, 0.30865828f, 0.69134172f, 0.96193977f,
+                               0.96193977f, 0.69134172f, 0.30865828f, 0.03806023f};
+  float* iw = diw.as<float>();
+  auto axis = [&](int n, int blocks, float* o) {
+    std::vector<float> sum(size_t(n), 0.0f);
+    for (int b = 0; b < blocks; ++b)
+      for (int i = 0; i < 8; ++i) sum[size_t(b * 4 + i)] += win[i];
+    for (int i = 0; i < n; ++i) o[i] = 1.0f / sum[size_t(i)];
+  };
+  axis(H, ny, iw);
+  axis(W, nx, iw + H);
+  const bool hns = noise_scale && noise_scale->size() == size_t(H) * W;
+  if (hns && prm.dct_fallback) {   // only the noise left by lost frames: sqrt(max(ns^2 - 1, 0))
+    float* d = dns.as<float>();
+    for (size_t i = 0; i < size_t(H) * W; ++i) d[i] = std::sqrt(std::max((*noise_scale)[i] * (*noise_scale)[i] - 1.0f, 0.0f));
+  } else if (hns) std::memcpy(dns.map, noise_scale->data(), size_t(H) * W * 4);
+  const float denom = prm.noise_a * 0.18f + prm.noise_b;
+  // Measured merged noise (2026-11-17): sigma/sqrt(K) under-reads Lite's real merged noise ~3x on
+  // real bursts (the fit does not average perfectly). In the noise-following modes the level is
+  // scaled by the ratio measured on THIS image: per 8x8 block, pixel variance of the merged luma
+  // over the model variance, on blocks with no lost frames; the 2nd percentile picks flat blocks
+  // (texture only raises a block), divided by that percentile of chi^2(63)/63 (pure noise). 1..16.
+  float noise_gain = 1.0f;
+  if (prm.dct_chroma_all || prm.dct_grain > 0.0f) {
+    static const float qf = std::getenv("LKRL_NQ") ? float(std::atof(std::getenv("LKRL_NQ"))) : 0.02f;
+    const float* zz = fit.data();
+    const size_t HW = size_t(H) * W;
+    const float la = denom > 0 ? prm.noise_a / denom : 0.0f, lb = denom > 0 ? prm.noise_b / denom : 1.0f;
+    const float s2 = prm.dct_sigma * prm.dct_sigma;
+    std::vector<float> rr;
+    for (int by = 0; by + 8 <= H; by += 8)
+      for (int bx = 0; bx + 8 <= W; bx += 8) {
+        double sm = 0, sq = 0; bool lostb = false;
+        for (int y = by; y < by + 8; ++y)
+          for (int x = bx; x < bx + 8; ++x) {
+            const size_t i = size_t(y) * W + x;
+            if (hns && (*noise_scale)[i] > 1.0f) lostb = true;
+            const double v = 0.25 * (zz[i] * prm.wb[0] + zz[2 * HW + i] * prm.wb[2]) + 0.5 * zz[HW + i] * prm.wb[1];
+            sm += v; sq += v * v;
+          }
+        if (lostb) continue;
+        const double m = sm / 64, var = std::max(sq / 64 - m * m, 0.0) * 64.0 / 63.0;
+        const double mv = s2 * std::max(la * std::max(m, 0.0) + lb, 0.0);
+        if (mv > 0) rr.push_back(float(var / mv));
+      }
+    if (rr.size() >= 16) {
+      const size_t k = size_t(qf * (rr.size() - 1));
+      std::nth_element(rr.begin(), rr.begin() + k, rr.end());
+      // percentile of chi^2(63)/63 for pure noise ~ 1 + z_q sqrt(2/63) (z from a logistic fit of the normal)
+      const float zq = -1.7f * std::log((1.0f - qf) / qf) / 3.0f;
+      const float pq = std::max(1.0f + zq * std::sqrt(2.0f / 63.0f), 0.3f);
+      // Cap: a tile with no flat block cannot be measured (texture reads as noise); 16 = 4x the model sigma.
+      noise_gain = std::min(std::max(rr[k] / pq, 1.0f), 16.0f);
+    }
+    if (std::getenv("LKRL_NGAIN_LOG")) std::fprintf(stderr, "dct noise gain %.2f (%zu blocks)\n", noise_gain, rr.size());
+  }
+  DctPush d{H, W, ny, nx, 0, 0, H / 4, hns ? 1 : 0, prm.dct_sigma * prm.dct_sigma * noise_gain,
+            denom > 0 ? prm.noise_a / denom : 0.0f, denom > 0 ? prm.noise_b / denom : 1.0f,
+            prm.dct_luma * prm.dct_luma, prm.dct_chroma * prm.dct_chroma, prm.wb[0], prm.wb[1], prm.wb[2],
+            prm.dct_dark_level, prm.dct_dark_cap, prm.dct_dark_luma, prm.dct_luma_cap, prm.dct_chroma_all ? 1.0f : 0.0f, prm.dct_luma_floor,
+            prm.dct_fallback ? prm.dct_grain * prm.dct_grain : 0.0f,
+            prm.dct_grain_rel * prm.dct_grain_rel, prm.dct_grain_rho, prm.dct_chroma_norm ? 1.0f : 0.0f, prm.dct_grain_tilt,
+            prm.dct_grain_sub};
+  gpu_->resetSets();
+  // LKRL_DCT_OLD (debug.lkr.dctold): the previous one-block-per-invocation shaders, for A/B.
+  static const bool dct_old = std::getenv("LKRL_DCT_OLD") && std::atoi(std::getenv("LKRL_DCT_OLD")) != 0;
+  const Pipeline &py_ = dct_old ? kdyo_ : kdy_, &pu_ = dct_old ? kduo_ : kdu_, &pv_ = dct_old ? kdvo_ : kdv_;
+  VkDescriptorSet sy = gpu_->set(py_, {&z, &xb, &dns, &diw, &dnv}), su = gpu_->set(pu_, {&z, &xb, &dns, &diw, &dnv}),
+                  sv = gpu_->set(pv_, {&z, &xb, &dns, &diw, &dnv}), sc = gpu_->set(kdyuv_, {&xb});
+  gpu_->begin();
+  gpu_->fill(xb, 0);
+  const std::pair<const Pipeline*, VkDescriptorSet> ch[3] = {{&py_, sy}, {&pu_, su}, {&pv_, sv}};
+  for (const auto& c : ch)
+    for (d.py = 0; d.py < 2; ++d.py)
+      for (d.px = 0; d.px < 2; ++d.px) {
+        if (dct_old)
+          gpu_->dispatch(*c.first, c.second, &d, uint32_t((nx + 1) / 2 + 3) / 4, uint32_t((ny + 1) / 2 + 3) / 4);
+        else   // dct_x.glsl: 8 blocks (8 row invocations each) per workgroup, blocks of this phase in x.
+          gpu_->dispatch(*c.first, c.second, &d, uint32_t(((nx + 1) / 2) * ((ny + 1) / 2) + 7) / 8, 1);
+      }
+  gpu_->dispatch(kdyuv_, sc, &d, uint32_t(W / 4 + 15) / 16, uint32_t(H + 15) / 16);
+  if (!gpu_->submit()) return fail("dct submit");
+  x_out->assign(xb.as<float>(), xb.as<float>() + nHR);
+  st->ms_prior += now_ms() - prior_start;
+  ++st->prior_calls;
+  ++st->submits;
   return true;
 }
 
@@ -1593,36 +1703,47 @@ bool LiteSolver::finish(const float* z, std::vector<float>* x, int H, int W, con
     }
     return en.buf;
   };
-  const bool hns = noise_scale && noise_scale->size() == HW;
-  Buffer &bx = buf(3 * HW * 4, true), &bz = buf(3 * HW * 4), &bns = buf(hns ? HW * 4 : 16), &bp = buf(4 * HW * 4),
-         &bt = buf(HW * 4), &bm = buf(2 * HW * 4), &bk = buf(3 * HW * 4);
+  const bool hns = noise_scale && noise_scale->size() == HW &&
+      (fa.grain > 0.0f || (fa.notch && std::any_of(noise_scale->begin(), noise_scale->end(),
+                                                 [](float factor) { return factor > 1.0f; })));
+  Buffer &bx = buf(3 * HW * 4, true), &bz = buf(fa.grain > 0.0f ? 3 * HW * 4 : 16), &bns = buf(hns ? HW * 4 : 16), &bp = buf(4 * HW * 4),
+         &bt = buf(fa.notch ? 3 * HW * 4 : 16), &bm = buf(2 * HW * 4), &bk = buf(3 * HW * 4);
   for (size_t i = 0; i < slot; ++i) if (!fcache_[i].buf.map) return fail("fin buffers");
   std::memcpy(bx.map, x->data(), 3 * HW * 4);
-  std::memcpy(bz.map, z, 3 * HW * 4);
+  if (fa.grain > 0.0f) std::memcpy(bz.map, z, 3 * HW * 4);
   if (hns) std::memcpy(bns.map, noise_scale->data(), HW * 4);
   struct FinPush { int32_t H, W, mode, pl, sm, has_ns, notch, desat; float wbr, wbg, wbb, clip, grain, eqs, p0, p1;
                    float hr, hg, hb, hrec; };
   static_assert(sizeof(FinPush) == 80, "fin push");
   FinPush f{H, W, 0, 0, 0, hns ? 1 : 0, fa.notch ? 1 : 0, fa.desat ? (std::getenv("LKRL_HL_OLD") ? 2 : 1) : 0, fa.wb[0], fa.wb[1], fa.wb[2],
-            fa.clip, fa.grain, fa.eq_strength, float(fa.hl_radius), 0.0f, fa.hl_ratio[0], fa.hl_ratio[1], fa.hl_ratio[2],
+            fa.clip, fa.grain, fa.eq_strength, 0.0f, 0.0f, fa.hl_ratio[0], fa.hl_ratio[1], fa.hl_ratio[2],
             fa.hl_rec ? 1.0f : 0.0f};
   gpu_->resetSets();
   VkDescriptorSet st = gpu_->set(fin_, {&bx, &bz, &bns, &bp, &bt, &bm, &bk});
   const uint32_t gx = div_up(uint32_t(W), 16), gy = div_up(uint32_t(H), 16);
-  auto run = [&](int mode, int pl = 0, int sm = 0) { FinPush p = f; p.mode = mode; p.pl = pl; p.sm = sm; gpu_->dispatch(fin_, st, &p, gx, gy); };
-  static const bool notch2 = std::getenv("LKRL_NOTCH2") != nullptr;   // unfused row / column passes
-  auto notch = [&](int pl) { for (int sm = 0; sm < 3; ++sm) { if (notch2) { run(10, pl, sm); run(11, pl, sm); } else { run(12, pl, sm); run(13, pl, sm); } } };
+  auto run = [&](int mode, int pl = 0, int sm = 0, uint32_t planes = 1) {
+    FinPush p = f;
+    p.mode = mode;
+    p.pl = pl;
+    p.sm = sm;
+    gpu_->dispatch(fin_, st, &p, gx, gy, planes);
+  };
+  static const bool notch2 = std::getenv("LKRL_NOTCH2") != nullptr;
+  auto notch = [&](int pl, uint32_t planes = 1) {
+    for (int sm = 0; sm < 3; ++sm) {
+      run(notch2 ? 10 : 12, pl, sm, planes);
+      run(notch2 ? 11 : 13, pl, sm, planes);
+    }
+  };
   gpu_->begin();
-  gpu_->fill(bm, 0);
   if (fa.notch) {
     run(0); run(1); run(2);
-    notch(1); notch(2); notch(3);
+    notch(1, 3);
     run(3);
     if (hns) { notch(1); run(4); }
   }
   if (fa.grain > 0.0f || fa.notch) run(5);
   if (fa.grain > 0.0f && fa.notch) notch(0);
-  if (fa.desat && fa.hl_rec) run(7);   // highlight reconstruction: dilated per-channel clip (P1..P3)
   run(6);
   if (!gpu_->submit()) return fail("fin submit");
   x->assign(bx.as<float>(), bx.as<float>() + 3 * HW);

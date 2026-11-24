@@ -94,6 +94,10 @@ void main() {
   // The opt-in filtered-gradient experiment has a different operator.
   if (pc.robk <= 0.0)
     d = max(d, om * (float(cov[i]) / pc.dscale) / 1.8);
+  // Keep the direct RGB update close to its seed when local R/B support
+  // falls below the burst's expected coverage. Cache the result for later steps.
+  if (pc.clip > 0.0 && (i < pc.H * pc.W || i >= 2 * pc.H * pc.W))
+    d /= clamp(cv / pc.clip, 0.25, 1.0);
   dv[i] = d;
   z[i] -= om * g / d;
 }

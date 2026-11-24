@@ -242,3 +242,42 @@ DCT-denoised image, using the fitted middle-grey noise and default prior gain
 0.35; `0` writes the merged image without that pass. Both runners reject missing
 or invalid prior values. Prior timing and call counts include DCT passes in the
 shared solver used by the app; fallback cleanup counts only when it runs.
+
+### Desktop learned-prior comparison
+
+Build the host CLI with `-DLKRL_TORCH_PRIOR=ON` and point
+`CMAKE_PREFIX_PATH` at the PyTorch CMake package. Pass the PC experiment's
+TorchScript model to Lite with `--learned-prior MODEL.ts --prior 0`. The model
+takes planar linear camera RGB and a fourth plane containing the fitted
+mid-grey sensor sigma. Lite runs it once per fitted tile before finishing.
+Use `--prior 0 --fallback 0` for a solver-only comparison, and keep grain and
+other finishing settings identical across runs.
+
+On the two matched 8-frame 2× synthetic crops, the existing PC pilot
+checkpoint changed Lite RGB PSNR from 29.907 to 29.883 dB (static) and
+26.915 to 26.894 dB (moving). Dark-flat luma RMSE rose from 0.01251 to
+0.01269 and from 0.00617 to 0.00625, respectively. This checkpoint remains
+experimental. The TorchScript backend is host-only.
+
+### Opt-in NPU denoising
+
+The Android build embeds the clean-target, five-layer denoiser in
+`src/main/resources/prior/denoiser.bin`. Enable **LK-R: NPU denoise**
+in **Settings → Merge**. For A/B testing, set `debug.lkr.npudenoise=1`
+and restart the RawLens process. Set it to `0` and restart
+to return to the regular merge settings. The standalone runner reads
+`LKRL_NPU_DENOISE=1` for the same mode.
+
+Lite runs one luma-and-chroma denoise pass per tile on a dedicated NNAPI
+accelerator while Vulkan fits the next tile. For regular bursts, it uses
+two data updates at 1× or six at 2× when the NPU model compiles. A
+successful tile skips DCT. Lite uses the configured DCT path when the model cannot compile
+and applies the same DCT to the retained fit if execution fails.
+Keep the normal DCT options enabled when testing fallback. Set
+`debug.lkr.prior=1` if the fallback should include shadow luma denoising.
+
+Enable **LK-R: No denoising** in **Settings → Merge**, or pass
+`--no-prior` to `lkrl_full_run` or the trace runner `lkrl_run`.
+The full merge bypasses learned priors, DCT and its fallback, the Bayer
+notch, and additional luma/chroma denoising. Alignment, burst fusion,
+and highlight handling still run.
