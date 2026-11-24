@@ -131,7 +131,11 @@ class VfVulkanInstrumentedTest {
      * the driver keeps that mapping coherent (software Vulkan does not,
      * while its GPU consumers read real data).
      */
-    @Test fun syntheticRecordFirstFrameGrowsFile() {
+    @Test fun syntheticRecordFirstFrameGrowsFile() = syntheticRecord(forcePreviewCopy = false)
+
+    @Test fun syntheticRecordWithDisplayOnlyPreviewBuffer() = syntheticRecord(forcePreviewCopy = true)
+
+    private fun syntheticRecord(forcePreviewCopy: Boolean) {
         assumeTrue("vf native library unavailable", VfVulkan.available)
         assumeTrue("egl import unavailable", VfEglImport.available)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -292,7 +296,7 @@ class VfVulkanInstrumentedTest {
             val litePv = HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
                 HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
                 HardwareBuffer.USAGE_CPU_READ_OFTEN
-            var preview = tryPv(fullPv)
+            var preview = if (forcePreviewCopy) null else tryPv(fullPv)
             var pvKind = "full"
             if (preview == null) {
                 preview = tryPv(litePv)

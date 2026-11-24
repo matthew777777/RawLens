@@ -1187,8 +1187,19 @@ class EncodedVideoRecorder internal constructor(
         // effort: allocation failure only disables the monitor.
         if (previewEnabled) {
             try {
+                var directStorage = true
                 for (s in slots) {
-                    s.preview = HardwareBufferRef.createRgba8(previewWidth, previewHeight)
+                    s.preview = if (directStorage) {
+                        try {
+                            HardwareBufferRef.createRgba8(previewWidth, previewHeight)
+                        } catch (_: IllegalArgumentException) {
+                            directStorage = false
+                            Log.i(TAG, "preview using GPU copy to display buffers")
+                            HardwareBufferRef.createRgba8(previewWidth, previewHeight, directStorage = false)
+                        }
+                    } else {
+                        HardwareBufferRef.createRgba8(previewWidth, previewHeight, directStorage = false)
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "preview buffers unavailable (${e.message}); monitor off")
@@ -3799,19 +3810,20 @@ internal class HardwareBufferRef(val buffer: android.hardware.HardwareBuffer) {
             )
         }
 
-        /**
-         * RGBA8 record-preview: Vulkan STORAGE_IMAGE target, EGL-sampled
-         * by the monitor view. Same usage set as the RAW viewfinder's
-         * Vulkan export (proven EGL-importable + storage-writable).
-         */
-        fun createRgba8(w: Int, h: Int): HardwareBufferRef = HardwareBufferRef(
-            android.hardware.HardwareBuffer.create(
-                w, h, android.hardware.HardwareBuffer.RGBA_8888, 1,
-                android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
-                    android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
-                    android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
+        private val RGBA8_DISPLAY_USAGE =
+            android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
+                android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
+
+        fun createRgba8(w: Int, h: Int, directStorage: Boolean = true): HardwareBufferRef {
+            val usage = if (directStorage) {
+                RGBA8_DISPLAY_USAGE or android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER
+            } else {
+                RGBA8_DISPLAY_USAGE
+            }
+            return HardwareBufferRef(
+                android.hardware.HardwareBuffer.create(w, h, android.hardware.HardwareBuffer.RGBA_8888, 1, usage)
             )
-        )
+        }
     }
 }
 

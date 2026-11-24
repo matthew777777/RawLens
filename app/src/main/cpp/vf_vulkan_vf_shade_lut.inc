@@ -416,7 +416,8 @@ void destroyGrade(Context* ctx) {
     ctx->yuvPool = VK_NULL_HANDLE;
     for (int i = 0; i < 3; ++i) ctx->yuvSets[i] = VK_NULL_HANDLE;
     for (auto& entry : ctx->previewOuts) {
-        destroyImported(ctx, &entry.second);
+        destroyImported(ctx, &entry.second.scratch);
+        destroyImported(ctx, &entry.second.display);
         AHardwareBuffer_release(entry.first);
     }
     ctx->previewOuts.clear();

@@ -516,6 +516,125 @@ Java_com_matthew_rawlens_VfRecordPreview_initPreviewNative(JNIEnv* env, jobject,
     return VFVK_OK;
 }
 
+// Older gralloc implementations only accept GPU_DATA_BUFFER for BLOBs.
+// Keep storage writes in a private Vulkan image on those devices, then copy
+// to the EGL-sampled HardwareBuffer in the same fenced submission.
+static bool createPreviewScratch(Context* ctx, VkExtent3D extent, ImportedImage* scratch) {
+    VkImageCreateInfo image{};
+    image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image.imageType = VK_IMAGE_TYPE_2D;
+    image.format = VK_FORMAT_R8G8B8A8_UNORM;
+    image.extent = extent;
+    image.mipLevels = 1;
+    image.arrayLayers = 1;
+    image.samples = VK_SAMPLE_COUNT_1_BIT;
+    image.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    if (vkCreateImage(ctx->device, &image, nullptr, &scratch->image) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements requirements{};
+    vkGetImageMemoryRequirements(ctx->device, scratch->image, &requirements);
+    VkPhysicalDeviceMemoryProperties properties{};
+    vkGetPhysicalDeviceMemoryProperties(ctx->gpu, &properties);
+    uint32_t type = pickMemoryTypeProps(requirements.memoryTypeBits, properties,
+                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (type == UINT32_MAX) {
+        type = pickMemoryType(requirements.memoryTypeBits, properties.memoryTypeCount);
+    }
+    VkMemoryAllocateInfo allocation{};
+    allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocation.allocationSize = requirements.size;
+    allocation.memoryTypeIndex = type;
+    if (type == UINT32_MAX ||
+        vkAllocateMemory(ctx->device, &allocation, nullptr, &scratch->memory) != VK_SUCCESS ||
+        vkBindImageMemory(ctx->device, scratch->image, scratch->memory, 0) != VK_SUCCESS) return false;
+
+    VkImageViewCreateInfo view{};
+    view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image = scratch->image;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view.format = image.format;
+    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    return vkCreateImageView(ctx->device, &view, nullptr, &scratch->view) == VK_SUCCESS;
+}
+
+static int importPreviewOutput(Context* ctx, AHardwareBuffer* buffer, VkExtent3D extent,
+                               PreviewOutput* out) {
+    auto cached = ctx->previewOuts.find(buffer);
+    if (cached != ctx->previewOuts.end()) {
+        *out = cached->second;
+        return VFVK_OK;
+    }
+    AHardwareBuffer_Desc description{};
+    AHardwareBuffer_describe(buffer, &description);
+    if (description.width != extent.width || description.height != extent.height ||
+        description.format != AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM || description.layers != 1) {
+        return VFVK_BAD_ARGUMENT;
+    }
+    const bool direct = (description.usage & AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER) != 0;
+    const VkImageUsageFlags usage = direct ? VK_IMAGE_USAGE_STORAGE_BIT :
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    PreviewOutput output;
+    if (importAhb(ctx, buffer, usage, "preview-out", false, &output.display) != VFVK_OK) {
+        return VFVK_OUTPUT_IMPORT_FAILED;
+    }
+    if (!direct && !createPreviewScratch(ctx, extent, &output.scratch)) {
+        destroyImported(ctx, &output.scratch);
+        destroyImported(ctx, &output.display);
+        return VFVK_OUTPUT_IMPORT_FAILED;
+    }
+    AHardwareBuffer_acquire(buffer);
+    ctx->previewOuts.emplace(buffer, output);
+    *out = output;
+    return VFVK_OK;
+}
+
+static void dispatchPreview(Context* ctx, VkCommandBuffer cmd, const PreviewOutput& output,
+                            const PreviewParams& params, VkExtent3D extent, VkDescriptorSet set) {
+    const bool copy = output.scratch.image != VK_NULL_HANDLE;
+    if (copy) {
+        // Discard the previous pixels, but wait for any previous transfer read.
+        layoutBarrier(cmd, output.scratch.image, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
+    } else {
+        layoutBarrier(cmd, output.display.image, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_QUEUE_FAMILY_FOREIGN_EXT, ctx->queueFamily);
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ctx->previewPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ctx->previewPipelineLayout,
+                            0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(cmd, ctx->previewPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(params), &params);
+    vkCmdDispatch(cmd, (extent.width + 15) / 16, (extent.height + 15) / 16, 1);
+    if (copy) {
+        layoutBarrier(cmd, output.scratch.image,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
+        layoutBarrier(cmd, output.display.image, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_QUEUE_FAMILY_FOREIGN_EXT, ctx->queueFamily);
+        VkImageCopy region{};
+        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.dstSubresource = region.srcSubresource;
+        region.extent = extent;
+        vkCmdCopyImage(cmd, output.scratch.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       output.display.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    }
+    layoutBarrier(cmd, output.display.image,
+                  copy ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                  copy ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  ctx->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
     JNIEnv* env, jobject, jobject p010Buffer, jobject previewBuffer,
@@ -584,11 +703,10 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
         if (rr != VFVK_OK) return (rr == -20) ? -20 : -rr;
     }
     // RGBA8 preview out (STORAGE_IMAGE, byte-exact for EGL re-import).
-    ImportedImage dstImg;
-    {
-        int r = gradeImage(g, dstBuf, "preview-out", &g->previewOuts, &dstImg);
-        if (r != VFVK_OK) return -r;
-    }
+    const VkExtent3D extent{uint32_t(params.dims[0]), uint32_t(params.dims[1]), 1};
+    PreviewOutput output;
+    const int outputResult = importPreviewOutput(g, dstBuf, extent, &output);
+    if (outputResult != VFVK_OK) return -outputResult;
 
     VkCommandBuffer cmd = g->twinPreviewCmd[slot];
     if (cmd == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
@@ -597,7 +715,7 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
     inInfo.offset = 0;
     inInfo.range = VK_WHOLE_SIZE;
     VkDescriptorImageInfo outInfo{};
-    outInfo.imageView = dstImg.view;
+    outInfo.imageView = output.scratch.view != VK_NULL_HANDLE ? output.scratch.view : output.display.view;
     outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkWriteDescriptorSet writes[2]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -633,8 +751,7 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
         vkDestroySemaphore(g->device, sem, nullptr);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
     }
-    // Same-queue ordered after the encode submit (FIFO): re-acquire both
-    // buffers from FOREIGN (the encode submit just released them).
+    // Re-acquire the P010 source from FOREIGN after the encode submit.
     {
         VkBufferMemoryBarrier acquire{};
         acquire.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -648,22 +765,8 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &acquire, 0, nullptr);
     }
-    layoutBarrier(cmd, dstImg.image,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
-                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->previewPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            g->previewPipelineLayout, 0, 1, &g->previewSets[slot], 0, nullptr);
-    vkCmdPushConstants(cmd, g->previewPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                       0, sizeof(params), &params);
-    const uint32_t gx = (uint32_t)(params.dims[0] + 15) / 16;
-    const uint32_t gy = (uint32_t)(params.dims[1] + 15) / 16;
-    vkCmdDispatch(cmd, gx, gy, 1);
-    // Release for the EGL present path: ownership back to FOREIGN;
-    // completion in wall time rides the exported sync fd, which the
-    // presenter adopts before sampling (GL waits on the GPU timeline).
+    dispatchPreview(g, cmd, output, params, extent, g->previewSets[slot]);
+    // Return the P010 source to FOREIGN for the encoder.
     {
         VkBufferMemoryBarrier release{};
         release.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -677,11 +780,6 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &release, 0, nullptr);
     }
-    layoutBarrier(cmd, dstImg.image,
-                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
-                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                  g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
     vr = vkEndCommandBuffer(cmd);
     if (vr != VK_SUCCESS) {
         vkDestroySemaphore(g->device, sem, nullptr);
@@ -1006,11 +1104,10 @@ Java_com_matthew_rawlens_VfRecordPreview_previewBlockingNative(
         int rr = importP010Out(g, srcBuf, yStrideB, uvStrideB, fw, fh, &srcImg);
         if (rr != VFVK_OK) return (rr == -20) ? -20 : rr;
     }
-    ImportedImage dstImg;
-    {
-        int r = gradeImage(g, dstBuf, "preview-out", &g->previewOuts, &dstImg);
-        if (r != VFVK_OK) return r;
-    }
+    const VkExtent3D extent{uint32_t(params.dims[0]), uint32_t(params.dims[1]), 1};
+    PreviewOutput output;
+    const int outputResult = importPreviewOutput(g, dstBuf, extent, &output);
+    if (outputResult != VFVK_OK) return outputResult;
 
     VkCommandBuffer cmd = g->twinPreviewCmd[slot];
     if (cmd == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
@@ -1019,7 +1116,7 @@ Java_com_matthew_rawlens_VfRecordPreview_previewBlockingNative(
     inInfo.offset = 0;
     inInfo.range = VK_WHOLE_SIZE;
     VkDescriptorImageInfo outInfo{};
-    outInfo.imageView = dstImg.view;
+    outInfo.imageView = output.scratch.view != VK_NULL_HANDLE ? output.scratch.view : output.display.view;
     outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkWriteDescriptorSet writes[2]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1059,19 +1156,7 @@ Java_com_matthew_rawlens_VfRecordPreview_previewBlockingNative(
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &acquire, 0, nullptr);
     }
-    layoutBarrier(cmd, dstImg.image,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
-                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->previewPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            g->previewPipelineLayout, 0, 1, &g->previewSets[slot], 0, nullptr);
-    vkCmdPushConstants(cmd, g->previewPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                       0, sizeof(params), &params);
-    const uint32_t gx = (uint32_t)(params.dims[0] + 15) / 16;
-    const uint32_t gy = (uint32_t)(params.dims[1] + 15) / 16;
-    vkCmdDispatch(cmd, gx, gy, 1);
+    dispatchPreview(g, cmd, output, params, extent, g->previewSets[slot]);
     {
         VkBufferMemoryBarrier release{};
         release.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -1085,11 +1170,6 @@ Java_com_matthew_rawlens_VfRecordPreview_previewBlockingNative(
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &release, 0, nullptr);
     }
-    layoutBarrier(cmd, dstImg.image,
-                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
-                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                  g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
     vr = vkEndCommandBuffer(cmd);
     if (vr != VK_SUCCESS) {
         LOGW("vf-vk: preview blocking end failed %d", vr);

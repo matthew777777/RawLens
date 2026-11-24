@@ -272,6 +272,11 @@ struct ImportedImage {
     VkImageView view = VK_NULL_HANDLE;
 };
 
+struct PreviewOutput {
+    ImportedImage display;
+    ImportedImage scratch;  // Private storage image for display buffers without GPU_DATA_BUFFER.
+};
+
 // Byte-exact view of the sensor plane: no pitch/tiling ambiguity, unlike images.
 struct ImportedBuffer {
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -442,7 +447,7 @@ struct Context {
     VkDescriptorPool previewPool = VK_NULL_HANDLE;
     VkDescriptorSet previewSets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkCommandBuffer twinPreviewCmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
-    std::map<AHardwareBuffer*, ImportedImage> previewOuts;
+    std::map<AHardwareBuffer*, PreviewOutput> previewOuts;
     // 8-bit SDR fallback (Encoded Video): staged P010 in + full-res RGBA8
     // out for the EGL encoder present. Own set layout + per-slot sets
     // and twins; imports cached by pointer like the preview path.
