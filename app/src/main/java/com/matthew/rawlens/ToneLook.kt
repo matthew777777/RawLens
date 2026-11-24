@@ -116,7 +116,7 @@ internal object ToneLook {
         val x = FloatArray(3) { rgb[it].coerceAtLeast(0f) * v[8] }
         val y = x[0] * lum[0] + x[1] * lum[1] + x[2] * lum[2]
         if (y <= 1e-7f) return x
-        val yc = (.18 * (y / .18).toDouble().pow(v[9].toDouble())).toFloat()
+        val yc = (.18 * (y / .18).pow(v[9].toDouble())).toFloat()
         return FloatArray(3) { (yc + (x[it] * yc / y - yc) * v[10]).coerceAtLeast(0f) }
     }
 

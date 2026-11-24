@@ -24,7 +24,7 @@ internal class RawDct private constructor(
     val height: Int,
     slotCount: Int,
 ) : AutoCloseable {
-    private val lock = Object()
+    private val lock = Any()
     private val workerHeld = BooleanArray(slotCount)
     private var prevSlot = -1
     private var closed = false

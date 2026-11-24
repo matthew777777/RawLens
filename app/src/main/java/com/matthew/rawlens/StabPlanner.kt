@@ -636,7 +636,7 @@ internal object StabPlanner {
                         if (dt < 0) return null
                         if (dt in 1e-6..0.1) {
                             // trapezoid rate, body-frame right multiply
-                            val r = DoubleArray(3) { 0.5 * (w[it] + prev!![it]) * dt }
+                            val r = DoubleArray(3) { 0.5 * (w[it] + prev[it]) * dt }
                             cur = Quat.normalize(Quat.mul(cur, Quat.exp(r)))
                         }
                     }
