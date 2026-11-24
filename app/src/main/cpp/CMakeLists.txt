@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(dngCreator)
 
-add_library(rawLensLapis SHARED lapis_root_camera_jni.cpp hexa/hexa_v2.cpp)
-target_link_libraries(rawLensLapis PRIVATE vulkan)
+add_library(rawLensLapis SHARED lapis_root_camera_jni.cpp)
 target_compile_options(rawLensLapis PRIVATE -O3)
 target_link_options(rawLensLapis PRIVATE "-Wl,-z,max-page-size=16384")
 

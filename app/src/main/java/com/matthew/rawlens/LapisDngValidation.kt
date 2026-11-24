@@ -6,7 +6,8 @@ import java.io.RandomAccessFile
 
 /** Validate the actual TIFF directory before publishing, not just the worker exit status. */
 internal object LapisDngValidation {
-    fun validate(file: File, width: Int, height: Int, linear: Boolean = false) {
+    fun validate(file: File, width: Int, height: Int, reducedHexadeca: Boolean = false,
+                 expectedBlackLevel: Double = if (reducedHexadeca) 256.0 else 64.0) {
         RandomAccessFile(file, "r").use { input ->
             val order = input.readUnsignedShort()
             require(order == 0x4949 || order == 0x4d4d) { "Invalid DNG byte order" }
@@ -42,11 +43,11 @@ internal object LapisDngValidation {
             fun visit(offset: Long) {
                 val tags = directory(offset)
                 if (offset == first) main = tags
-                if (tags[262]?.let(::values) == listOf(if (linear) 34892L else 32803L)) raw = tags
+                if (tags[262]?.let(::values) == listOf(32803L)) raw = tags
                 tags[330]?.let(::values)?.forEach { if (it !in visited) visit(it) }
             }
             visit(first)
-            val tags = main + requireNotNull(raw) { if (linear) "DNG has no LinearRaw image" else "DNG has no CFA image" }
+            val tags = main + requireNotNull(raw) { "DNG has no CFA image" }
             fun field(tag: Int) = values(requireNotNull(tags[tag]) { "Missing DNG field $tag" })
             fun numbers(tag: Int): List<Double> {
                 val entry = requireNotNull(tags[tag]) { "Missing DNG field $tag" }
@@ -61,22 +62,10 @@ internal object LapisDngValidation {
                 }
             }
             require(field(256) == listOf(width.toLong()) && field(257) == listOf(height.toLong())) { "Wrong DNG dimensions" }
-            if (linear) {
-                // 200->50 MP version 2: demosaiced linear camera RGB, black 0, white 65535 per channel.
-                require(field(277) == listOf(3L) && field(258) == listOf(16L, 16L, 16L)) { "Expected 3x16-bit LinearRaw" }
-                require(field(50717) == listOf(65535L, 65535L, 65535L)) { "Unexpected LinearRaw white level" }
-                require(numbers(50728).let { it.size == 3 && it.all { v -> v.isFinite() && v > 0 } }) { "Invalid DNG white balance" }
-                require(numbers(50721).let { it.size == 9 && it.all(Double::isFinite) && it.any { v -> v != 0.0 } }) { "Invalid DNG color matrix" }
-                require(field(259) == listOf(1L)) { "Expected uncompressed DNG" }
-                val offsets = field(273); val sizes = field(279)
-                require(offsets.size == sizes.size && offsets.indices.all { offsets[it] > 0 && sizes[it] > 0 && offsets[it] + sizes[it] <= input.length() }) { "Truncated DNG image data" }
-                require(sizes.sum() == width.toLong() * height * 6) { "DNG does not contain a complete RGB raster" }
-                return
-            }
             require(field(258) == listOf(16L)) { "Expected an unpacked 16-bit RAW container" }
             require(field(33421) == listOf(2L, 2L) && field(33422) == listOf(1L, 2L, 0L, 1L)) { "Expected normal GBRG CFA" }
-            require(field(50717) == listOf(1023L)) { "Unverified DNG white level" }
-            require(field(50713) == listOf(2L, 2L) && numbers(50714).let { it.size == 4 && it.all { v -> kotlin.math.abs(v - 64) < 0.001 } }) { "Unverified DNG black levels" }
+            require(field(50717) == listOf(if (reducedHexadeca) 4092L else 1023L)) { "Unverified DNG white level" }
+            require(field(50713) == listOf(2L, 2L) && numbers(50714).let { it.size == 4 && it.all { v -> kotlin.math.abs(v - expectedBlackLevel) < 0.001 } }) { "Unverified DNG black levels" }
             require(field(50829) == listOf(0L, 0L, height.toLong(), width.toLong())) { "DNG active area is not the full RAW frame" }
             require(numbers(50719) == listOf(0.0, 0.0) && numbers(50720) == listOf(width.toDouble(), height.toDouble())) { "DNG crop truncates the sensor readout" }
             require(numbers(50728).let { it.size == 3 && it.all { v -> v.isFinite() && v > 0 } }) { "Invalid DNG white balance" }

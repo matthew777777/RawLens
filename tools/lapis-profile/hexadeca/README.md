@@ -136,3 +136,22 @@ The worker copies the frame to a private file, restores the sensor and signals
 Mali notes: per-mode specialised point shaders (no dynamic vector indexing); shared-memory
 X filters; running-sum box Y. A register-window Gaussian Y was 10x slower (too few threads).
 Next speedups to try: fp16-packed multi-channel slots, guided-filter coefficients at half resolution.
+
+## App replacement: rawr reduced CFA (2026-11-22)
+
+The app no longer calls the version-2 RGB converter. Its replacement is pinned
+at adityawarmanfw/rawr `49b013db3914927aef81969451db084c1ec3c2dd`:
+`ReducedRaw.cpp` defines the GPU sequence; unmodified `CfaRemosaic.h` and
+`PhaseFit.h` provide the CPU reference used by this port. Optional phase fit
+(stride 3, off by default), exact same-colour 2×2 sums, then Quad Detail remosaic
+at 8160×6120. Black/white are scaled by four (normally 256/4092), no RGB
+intermediate, no white-balance multiplication. A 16-bit storage container does
+not imply a 12-bit or 14-bit ADC. The factory colour matrices/neutral are retained;
+pure-readout shading and distortion calibration remain unavailable.
+
+`rawr_reduced_test.cpp` checks four CFA orders, exact CPU reference parity,
+fit on/off, 1/8 threads, immutable input and constant-level borders. Host replay
+of `bright200.raw16` produced a complete 8160×6120 CFA with both fit settings.
+These are host results, not phone performance or quality measurements. GPU
+execution and its <=4-code fit tolerance are not verified by this CPU port.
+The retired version-2 RGB converter, its shaders, and its host/prototype harnesses have been removed. Earlier sections describe historical experiments only.

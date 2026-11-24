@@ -25,7 +25,7 @@ class LapisHexaDevelopInstrumentedTest {
         assertTrue(names.contains(".dng"))
     }
 
-    @Test fun workerSidecarAndLinearRgbProduceJpegWithoutDemosaic() {
+    @Test fun workerSidecarAndReducedBayerProduceJpeg() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val job = File(context.cacheDir, "hexa-develop-test-${System.nanoTime()}").apply { mkdirs() }
         try {
@@ -38,21 +38,21 @@ class LapisHexaDevelopInstrumentedTest {
                 .put("asShotNeutral", JSONArray(listOf(.6, 1.0, .5)))
             val original = OfflineBurstMetadata.synthesize(container.toString(), frame.toString(), 0, "0")
             val sidecar = File(job, "develop-metadata.json")
-            LapisHexaDng.writeDevelopMetadata(sidecar, original, 64, 48)
+            LapisHexaDng.writeDevelopMetadata(sidecar, original, 64, 48, 64f)
             val json = JSONObject(sidecar.readText())
             val restored = OfflineBurstMetadata.synthesize(json.getJSONObject("container").toString(),
                 json.getJSONObject("frame").toString(), 0, "0")
             assertArrayEquals(original.colorMatrix1!!.toDoubleArray(), restored.colorMatrix1!!.toDoubleArray(), 0.0)
             assertArrayEquals(original.neutralColorPoint!!.toDoubleArray(), restored.neutralColorPoint!!.toDoubleArray(), 0.0)
             assertEquals(6, restored.exifOrientation)
-            assertEquals(0f, restored.blackLevels!![0])
-            assertEquals(65535f, restored.whiteLevel)
-            val pixels = File(job, "develop-rgb16.bin")
+            assertEquals(256f, restored.blackLevels!![0])
+            assertEquals(4092f, restored.whiteLevel)
+            val pixels = File(job, "develop-bayer16.bin")
             RandomAccessFile(pixels, "rw").use { io ->
-                io.setLength(64L * 48 * 6)
+                io.setLength(64L * 48 * 2)
                 val values = io.channel.map(FileChannel.MapMode.READ_WRITE, 0, io.length())
                     .order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-                for (i in 0 until 64 * 48 * 3) values.put(i, (5000 + (i / 3 % 64) * 250).toShort())
+                for (i in 0 until 64 * 48) values.put(i, (500 + (i % 64) * 30).toShort())
             }
             val name = LapisHexaDevelop.save(context, job, 64, 48, System.currentTimeMillis(),
                 JpegOutputSettings(), DenoiseSettings())

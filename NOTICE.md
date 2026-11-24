@@ -395,3 +395,13 @@ Highlight compression adapted from KhronosGroup/ToneMapping, copyright 2024 The
 Khronos Group, Inc., Apache-2.0. Reference and modifications are documented in
 `docs/rendering/basic-neutral-replacement.md`; bundled notice and license in
 `app/src/main/assets/licenses/khronos-neutral-NOTICE.txt` and `Apache-2.0.txt`.
+
+## rawr Hexadeca reduced RAW
+
+The 200→50 MP CFA route uses unmodified `CfaRemosaic.h` and `PhaseFit.h` from
+adityawarmanfw/rawr, commit `49b013db3914927aef81969451db084c1ec3c2dd`.
+Copyright (C) 2026 adityawarmanfw. GPL-3.0-only.
+The upstream LICENSE and NOTICE accompany the headers in
+`app/src/main/cpp/hexa/third_party/rawr/`.
+RawLens calls the CPU reference: optional phase fit (stride 3), 2×2 same-colour
+sums, then Quad Detail remosaic with codesPerDn=4. No RGB intermediate.

@@ -30,7 +30,10 @@ internal object LapisRootCapture {
         val job = File(context.noBackupFilesDir, "lapis-captures/${UUID.randomUUID()}").apply { check(mkdirs()) }
         try {
             if (mode == LapisRootProfile.Mode.HEXADECA_200 && outputFormat.includesJpeg)
-                File(job, "develop-request").writeText("linear-rgb16-v1")
+                File(job, "develop-request").writeText("bayer16-sum-detail-v1")
+            if (mode == LapisRootProfile.Mode.HEXADECA_200 &&
+                LapisRootProfile.preferences(context).getBoolean("hexa_phase_fit", false))
+                File(job, "phase-fit-request").writeText("rawr-stride3")
             val app = context.applicationInfo
             val args = listOf(mode.argument, job.path, app.sourceDir, app.nativeLibraryDir, Process.myUid().toString(),
                 settings.iso.toString(), settings.exposureNanos.toString(), settings.orientation.toString(),
@@ -62,17 +65,15 @@ internal object LapisRootCapture {
             val height = if (fifty) 6120 else 3060
             require(report.getInt("width") == width && report.getInt("height") == height && report.getBoolean("quadrantsPopulated"))
             val dng = File(job,"capture.dng")
-            LapisDngValidation.validate(dng,width,height,linear = mode == LapisRootProfile.Mode.HEXADECA_200)
+            LapisDngValidation.validate(dng,width,height,reducedHexadeca = mode == LapisRootProfile.Mode.HEXADECA_200,
+                expectedBlackLevel = if (mode == LapisRootProfile.Mode.HEXADECA_200) report.getDouble("blackLevel") else 64.0)
             val captureTime = System.currentTimeMillis()
             val stem = "IMG_${captureTime}_${when (mode) {
                 LapisRootProfile.Mode.FULL -> "50MP"; LapisRootProfile.Mode.HEXADECA_200 -> "200TO50MP"; else -> "SENSOR2X" }}"
             val saved = ArrayList<String>()
             val dngName = if (mode == LapisRootProfile.Mode.HEXADECA_200)
                 CaptureFileNames.fileName(captureTime, "200TO50MP", "dng") else "$stem.dng"
-            if (mode == LapisRootProfile.Mode.HEXADECA_200 && outputFormat.includesJpeg) {
-                saved += LapisHexaDevelop.save(context, job, width, height, captureTime, jpegSettings, denoise)
-            }
-            if (mode != LapisRootProfile.Mode.HEXADECA_200 || outputFormat.includesDng) {
+            fun publishDng() {
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME,dngName)
                     put(MediaStore.Images.Media.MIME_TYPE,"image/x-adobe-dng")
@@ -88,9 +89,20 @@ internal object LapisRootCapture {
                 } catch (failure: Throwable) { resolver.delete(uri,null,null); throw failure }
                 saved += dngName
             }
+            if (mode != LapisRootProfile.Mode.HEXADECA_200 || outputFormat.includesDng) publishDng()
+            if (mode == LapisRootProfile.Mode.HEXADECA_200 && outputFormat.includesJpeg) {
+                try {
+                    saved += LapisHexaDevelop.save(context, job, width, height, captureTime, jpegSettings, denoise)
+                } catch (failure: Exception) {
+                    // A development failure must never delete a validated sensor capture.
+                    if (saved.isEmpty()) publishDng()
+                    report.put("jpegError", failure.message ?: failure.javaClass.simpleName)
+                    android.util.Log.w("RawLensCamera", "200→50 MP JPEG failed; CFA DNG saved", failure)
+                }
+            }
             // Retain capture provenance privately; the RAW contains an explicit mode description too.
             File(context.noBackupFilesDir,"lapis-last-capture.json").writeText(report.put("fileName",saved.joinToString(" + ")).toString(2))
-            return saved.joinToString(" + ")
+            return saved.joinToString(" + ") + if (report.has("jpegError")) " • JPEG failed; DNG saved" else ""
         } finally {
             for (name in listOf("worker.log", "report.json")) runCatching {
                 File(job, name).takeIf(File::isFile)?.copyTo(File(context.noBackupFilesDir,"lapis-last-$name"),overwrite = true)

@@ -478,8 +478,8 @@ public final class LapisRootCameraWorker {
     private static String sha256(byte[] bytes)throws Exception{StringBuilder out=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))out.append(String.format(Locale.ROOT,"%02x",b&255));return out.toString();}
 
     /**
-     * 200 MP (16320x12240, 4x4-block CFA) readout, converted on-device (version 2: Vulkan
-     * residual-interpolation demosaic + 2x2 downsample) to a 50 MP LinearRaw DNG. Recipe matches the validated 2026-11-14 probe:
+     * 200 MP (16320x12240, 4x4-block CFA) readout, converted with rawr
+     * 2x2 same-colour sums + Quad Detail remosaic to a 50 MP Bayer CFA DNG. Recipe matches the validated 2026-11-14 probe:
      * VIDEO_RECORD template, repeating 5 fps, force mode 11, scenario 3, cell-full sensor.
      */
     /** Captured 200 MP frame, copied out of the camera buffer, converted after the camera is restored. */
@@ -548,7 +548,7 @@ public final class LapisRootCameraWorker {
             HexaPending pending=new HexaPending();
             pending.metadata=LapisHexaDng.metadata(image,corrected,result,orientation);
             // Copy the 400 MB frame to a private file-backed mapping (native memory), so the camera and
-            // the sensor mode can be released before the slow GPU conversion.
+            // the sensor mode can be released before CFA reduction and remosaic.
             pending.rawFile=new File(job,"raw200.tmp");
             try(RandomAccessFile io=new RandomAccessFile(pending.rawFile,"rw")) {
                 long bytes=(long)width*height*2;io.setLength(bytes);
@@ -563,52 +563,45 @@ public final class LapisRootCameraWorker {
             if(session!=null)session.close();if(reader!=null)reader.close();if(device!=null)device.close();thread.quitSafely();
         }
     }
-    /** Version 2: per-frame tiled gains + 4x4-aware residual-interpolation demosaic on Vulkan,
-     * 2x2 area downsample -> 50 MP linear camera RGB (LinearRaw DNG, no second demosaic). */
+    /** rawr reduced RAW: optional phase fit, same-colour sums, Quad Detail remosaic.
+     * CFA remains Bayer; source DN scale is multiplied by four by summation. */
     private static void finishHexadeca(HexaPending pending)throws Exception {
         final int width=16320,height=12240,outWidth=8160,outHeight=6120;
-        byte[] filterSpv,pointSpv,boxSpv;
-        try(ZipFile zip=new ZipFile(apkPath)) {
-            try(InputStream in=zip.getInputStream(zip.getEntry("assets/shaders/hexa/hexa_filter.spv"))){filterSpv=readAll(in);}
-            try(InputStream in=zip.getInputStream(zip.getEntry("assets/shaders/hexa/hexa_point.spv"))){pointSpv=readAll(in);}
-            try(InputStream in=zip.getInputStream(zip.getEntry("assets/shaders/hexa/hexa_box.spv"))){boxSpv=readAll(in);}
-        }
-        File rgbFile=new File(job,"rgb16.tmp");
+        final boolean phaseFit=new File(job,"phase-fit-request").isFile();
+        File bayerFile=new File(job,"bayer50.tmp");
         try {
-            ByteBuffer raw,rgb;
+            ByteBuffer raw,bayer;
             try(RandomAccessFile io=new RandomAccessFile(pending.rawFile,"r")) {
                 raw=io.getChannel().map(FileChannel.MapMode.READ_ONLY,0,(long)width*height*2);
             }
-            // 300 MB: outside the 256 MB ART heap (allocateDirect counts against it).
-            try(RandomAccessFile io=new RandomAccessFile(rgbFile,"rw")) {
-                long bytes=(long)outWidth*outHeight*3*2;io.setLength(bytes);
-                rgb=io.getChannel().map(FileChannel.MapMode.READ_WRITE,0,bytes).order(ByteOrder.LITTLE_ENDIAN);
+            try(RandomAccessFile io=new RandomAccessFile(bayerFile,"rw")) {
+                long bytes=(long)outWidth*outHeight*2;io.setLength(bytes);
+                bayer=io.getChannel().map(FileChannel.MapMode.READ_WRITE,0,bytes).order(ByteOrder.LITTLE_ENDIAN);
             }
-            double[] timing=LapisRootCameraNative.hexaV2(raw,width*2,width,height,pending.black,1023f,rgb,filterSpv,pointSpv,boxSpv);
+            double conversionMs=LapisRootCameraNative.hexaReduced(raw,width,height,pending.black,bayer,phaseFit);
             loadDngWriter();
             File dng=new File(job,"capture.dng");
             long writeStart=SystemClock.elapsedRealtime();
-            LapisHexaDng.write(dng,rgb,outWidth,outHeight,pending.metadata,pending.timestamp,
-                String.format(Locale.ROOT,"200 MP 16320x12240 4x4 GBRG readout; tiled per-frame gains; residual-interpolation demosaic (Vulkan, %d tiles, %.0f ms); 2x2 area downsample",(int)timing[3],timing[2]));
+            LapisHexaDng.write(dng,bayer,outWidth,outHeight,pending.metadata,pending.timestamp,pending.black,phaseFit);
             long writeMs=SystemClock.elapsedRealtime()-writeStart;
             if(new File(job,"develop-request").isFile()) {
                 File metadataFile=new File(job,"develop-metadata.json");
-                LapisHexaDng.writeDevelopMetadata(metadataFile,pending.metadata,outWidth,outHeight);
+                LapisHexaDng.writeDevelopMetadata(metadataFile,pending.metadata,outWidth,outHeight,pending.black);
                 android.system.Os.chown(metadataFile.getPath(),owner,owner);
-                File retained=new File(job,"develop-rgb16.bin");
-                Files.move(rgbFile.toPath(),retained.toPath());
+                File retained=new File(job,"develop-bayer16.bin");
+                Files.move(bayerFile.toPath(),retained.toPath());
                 android.system.Os.chown(retained.getPath(),owner,owner);
             }
             android.system.Os.chown(dng.getPath(),owner,owner);
             report.put("mode","200mp").put("width",outWidth).put("height",outHeight).put("sourceWidth",width).put("sourceHeight",height)
-                .put("driverCode",pending.driverCode).put("cfa","GBRG").put("sourceBlock",4).put("whiteLevel",1023).put("blackLevel",pending.black)
+                .put("driverCode",pending.driverCode).put("cfa","GBRG").put("sourceBlock",4).put("whiteLevel",4092).put("blackLevel",pending.black*4)
                 .put("sourceBusBits",10).put("deliveredBits",10).put("precision14Verified",false)
-                .put("remosaic",LapisHexaDng.ALGORITHM).put("linearRaw",true).put("gainsMs",timing[0]).put("gpuMs",timing[1])
-                .put("conversionMs",timing[2]).put("tiles",(int)timing[3]).put("dngWriteMs",writeMs)
+                .put("remosaic",LapisHexaDng.ALGORITHM).put("linearRaw",false).put("phaseFit",phaseFit).put("backend","upstream-cpu-reference")
+                .put("conversionMs",conversionMs).put("dngWriteMs",writeMs)
                 .put("iso",pending.iso).put("exposureNanos",pending.exposure)
                 .put("timestampNanos",pending.timestamp).put("dngBytes",dng.length());
         } finally {
-            Files.deleteIfExists(rgbFile.toPath());Files.deleteIfExists(pending.rawFile.toPath());
+            Files.deleteIfExists(bayerFile.toPath());Files.deleteIfExists(pending.rawFile.toPath());
         }
     }
 
