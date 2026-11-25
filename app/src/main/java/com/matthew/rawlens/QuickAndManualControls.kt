@@ -221,8 +221,9 @@ internal fun MainActivity.refreshLensSwitcher() {
     // that the row scrolls (lensScroll). Idle discs sit slightly smaller
     // so the selected lens reads as the one in front.
     val gap = dp(6)
-    // Panel row minus the track's 4dp padding on each side.
-    val rowWidth = resources.displayMetrics.widthPixels - dp(32) - dp(8)
+    // Reserve the fixed AF-ON/AE-L buttons, their margins and track padding.
+    // The remaining viewport scrolls independently of those controls.
+    val rowWidth = resources.displayMetrics.widthPixels - dp(32 + 108 + 12 + 8)
     val discSize = ((rowWidth - gap * (options.size - 1)) / options.size)
         .coerceIn(dp(36), dp(44))
     var selectedButton: View? = null

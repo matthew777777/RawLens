@@ -341,6 +341,7 @@ class RawCameraController(
     // the lens switcher, and zoom labels re-resolve the same IDs on the main thread.
     // Characteristics are immutable per boot, so memoize per controller lifetime.
     private val cameraRouteCache = CameraIdCache { id: String -> resolveCameraRoute(id) }
+    private val switcherLabelCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     @Volatile private var captureTimeout: Runnable? = null
     private var characteristics: CameraCharacteristics? = null
     private var camera: CameraDevice? = null
@@ -775,7 +776,10 @@ class RawCameraController(
         try {
             val configuredIds = enabledCameraIds()
             val candidates = if (configuredIds.isEmpty()) cameraManager.cameraIdList.toList() else configuredIds.toList()
-            rawCameraIds = candidates.filter { resolveAvailableOpenCameraId(it) != null }
+            rawCameraIds = candidates.filter { id ->
+                LapisRootProfile.keepSwitcherLens(LapisRootProfile.enabled(context), id in configuredIds,
+                    resolveAvailableOpenCameraId(id) != null)
+            }
                 .sortedWith(compareBy<String> { isFrontCamera(it) }.thenBy { opticalMetric(it) })
                 // Settings → Lenses order wins; lenses it doesn't know keep widest-first.
                 .let { LensListStore.applyOrder(it, lensListStore.order()) }
@@ -5365,7 +5369,12 @@ class RawCameraController(
         val options=rawCameraIds.map { id ->
             if(extended && id=="0") LensOption(id,"${mainLabel()} · 12.5 MP",id==selectedCameraId && mode==LapisRootProfile.Mode.NORMAL,
                 "normal","Main camera, 12.5 megapixel RAW")
-            else LensOption(id,lensListStore.name(id) ?: zoomLabel(id),id==selectedCameraId)
+            else {
+                val label = lensListStore.name(id) ?: if (cachedCameraRoute(id) != null) {
+                    zoomLabel(id).also { switcherLabelCache[id] = it }
+                } else switcherLabelCache[id] ?: "Camera $id"
+                LensOption(id,label,id==selectedCameraId)
+            }
         }.toMutableList()
         if(extended) {
             val at=options.indexOfFirst { it.cameraId=="0" }+1
@@ -5407,7 +5416,7 @@ class RawCameraController(
                 virtual.description.ifBlank { "Custom lens on camera ${virtual.baseCameraId}" }))
         }
         val visible = if (extended && !includeHidden)
-            options.filter { LapisRootProfile.lensVisible(context, it) } else options
+            options.filter { LapisRootProfile.showSwitcherLens(it, LapisRootProfile.lensVisible(context, it)) } else options
         // Always retain a way to select a camera if saved visibility is stale.
         return disambiguatedLensLabels(visible.ifEmpty { options.take(1) })
     }

@@ -54,6 +54,13 @@ internal object LapisRootProfile {
             .putBoolean(VIDEO_60,mode==Mode.VIDEO60).putBoolean(DSG_2X,mode==Mode.CROP_2X_DSG).putBoolean(SENSOR_ZOOM_4X,mode==Mode.CROP_4X).putBoolean(SENSOR_ZOOM,mode==Mode.CROP_2X).putBoolean(DCG_ENABLED,mode==Mode.DCG14).putBoolean(HEXADECA_200,mode==Mode.HEXADECA_200).apply()
     }
 
+    /** A root HAL restart may temporarily hide another enabled camera route. */
+    fun keepSwitcherLens(rootEnabled: Boolean, explicitlyEnabled: Boolean, routeAvailable: Boolean): Boolean =
+        routeAvailable || (rootEnabled && explicitlyEnabled)
+
+    /** Never hide the active selection behind an older per-mode visibility preference. */
+    fun showSwitcherLens(lens: LensOption, savedVisible: Boolean): Boolean = lens.selected || savedVisible
+
     private fun visibilityKey(lens: LensOption) = "show_lens:${lens.cameraId}:${lens.readout}"
     fun lensVisible(context: Context, lens: LensOption): Boolean =
         preferences(context).getBoolean(visibilityKey(lens), true)
