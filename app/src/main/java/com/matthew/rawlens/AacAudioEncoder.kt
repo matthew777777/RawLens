@@ -206,5 +206,39 @@ class AacAudioEncoder(
         private object Poison
 
         fun bitrateFor(channels: Int): Int = if (channels >= 2) 128_000 else 64_000
+
+        /** MPEG-4 sampling_frequency_index table (ISO/IEC 14496-3 Table 1.18). */
+        private val SAMPLING_INDEX = mapOf(
+            96000 to 0, 88200 to 1, 64000 to 2, 48000 to 3, 44100 to 4, 32000 to 5,
+            24000 to 6, 22050 to 7, 16000 to 8, 12000 to 9, 11025 to 10, 8000 to 11,
+        )
+
+        /**
+         * AAC-LC AudioSpecificConfig (the MP4 `esds` decoder-specific info):
+         * 5 bits object type (2 = AAC-LC), 4 bits sampling index, 4 bits channel
+         * configuration, 3 zero bits. Null for rates or channel counts the table
+         * cannot express (channel configuration 1..7 only).
+         */
+        fun audioSpecificConfig(sampleRate: Int, channels: Int): ByteArray? {
+            val freq = SAMPLING_INDEX[sampleRate] ?: return null
+            if (channels !in 1..7) return null
+            val bits = (2 shl 11) or (freq shl 7) or (channels shl 3)
+            return byteArrayOf((bits shr 8).toByte(), (bits and 0xFF).toByte())
+        }
+
+        /**
+         * Muxer track format for AAC-LC output. Built up front, not taken from the
+         * encoder's INFO_OUTPUT_FORMAT_CHANGED: that arrives only after the first
+         * packet, and the muxer cannot start (and video cannot be written) until
+         * every track format is known.
+         */
+        fun trackFormat(sampleRate: Int, channels: Int): MediaFormat? {
+            val csd = audioSpecificConfig(sampleRate, channels) ?: return null
+            return MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channels).apply {
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitrateFor(channels))
+                setByteBuffer("csd-0", ByteBuffer.wrap(csd))
+            }
+        }
     }
 }
