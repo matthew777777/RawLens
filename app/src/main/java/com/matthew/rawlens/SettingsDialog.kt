@@ -44,7 +44,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
 import android.os.Build
@@ -123,7 +122,7 @@ internal fun MainActivity.showSettings(initialTab: Int = SETTINGS_ROOT) {
         "Exposure" to "Shutter range, Program AE, HDR and bracketing",
         "Burst" to "Zero shutter lag, gyro sidecars, offline merges",
         "Merge" to "HDR+, MFSR and LK-R burst merges",
-        "Details" to "JPEG cleanup, AI RAW denoise, wavelet denoise, capture sharpening",
+        "Details" to "RAW denoise (classic or network), capture sharpening",
         "Lenses" to "",
         "Debug" to "App log, camera diagnostics, debug frames",
         "About" to "Version, licences, updates",

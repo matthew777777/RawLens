@@ -64,7 +64,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
 import android.os.Build
@@ -602,4 +601,27 @@ internal fun MainActivity.syncRecordingWhiteBalance() {
     videoRecorder?.setVideoWhiteBalance(selection.wbKelvin, selection.wbPreset)
     encodedVideoRecorder?.setVideoWhiteBalance(selection.wbKelvin, selection.wbPreset)
     wbControl.text = controlText("WB", controller.whiteBalanceLabel())
+}
+
+private val PORTRAIT_QUICK_STOPS = floatArrayOf(1.4f, 1.8f, 2.8f, 4.0f)
+
+/** Off -> f/1.4 -> f/1.8 -> f/2.8 -> f/4 -> Off; frozen per shot like every output choice. */
+internal fun MainActivity.cycleQuickPortrait() {
+    if (isVideoMode || !PortraitNetsHolder.available(this)) return
+    val current = jpegOutputSettings()
+    val portrait = current.portrait
+    val next = when {
+        !portrait.enabled -> portrait.copy(enabled = true, fNumber = PORTRAIT_QUICK_STOPS[0])
+        else -> {
+            val i = PORTRAIT_QUICK_STOPS.indexOfFirst { it >= portrait.fNumber - 0.05f }
+            if (i < 0 || i == PORTRAIT_QUICK_STOPS.lastIndex) portrait.copy(enabled = false)
+            else portrait.copy(fNumber = PORTRAIT_QUICK_STOPS[i + 1])
+        }
+    }
+    if (!applyPhotoOutputSettings(current.copy(portrait = next))) {
+        setStatus("SETTINGS AFTER SAVES")
+        return
+    }
+    updateQuickControls()
+    setStatus(if (next.enabled) "PORTRAIT • ${PortraitSettings.label(next.fNumber).uppercase(Locale.US)}" else "PORTRAIT OFF")
 }

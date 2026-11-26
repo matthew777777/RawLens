@@ -46,7 +46,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
 
@@ -309,7 +308,6 @@ class MainActivity : Activity() {
                 .putBoolean(KEY_HDR_ENABLED, hdrEnabled)
                 .apply()
         }
-        preloadRawNindIfEnabled()
         hdrPlusSettings = HdrPlusSettings.fromPreferences(lensPreferences().all)
         captureExposureMode = CaptureExposureMode.entries.getOrElse(
             lensPreferences().getInt(KEY_CAPTURE_EXPOSURE_MODE, CaptureExposureMode.AUTO.ordinal)
@@ -439,7 +437,7 @@ class MainActivity : Activity() {
             if (quickPanel.visibility == View.VISIBLE) armQuickAutoHide()
         }
         for (id in intArrayOf(R.id.gridQuick, R.id.histogramQuick, R.id.aeMeteringQuick,
-            R.id.timerQuick, R.id.releaseQuick, R.id.lightQuick, R.id.monoQuick,
+            R.id.timerQuick, R.id.releaseQuick, R.id.lightQuick, R.id.monoQuick, R.id.portraitQuick,
             R.id.dLightingQuick, R.id.encodedVideoCropQuick, R.id.videoResolutionQuick,
             R.id.videoFpsQuick, R.id.videoModeQuick)) {
             findViewById<QuickControlTileView>(id).showsChoice = true
@@ -767,6 +765,7 @@ class MainActivity : Activity() {
         if (gpsEnabled()) gpsProvider?.start()
         // The mode switcher owns the practical capture intent; Settings remain advanced defaults.
         controller.setCaptureExposureMode(captureExposureMode)
+        controller.setZslReactionLatencyMs(lensPreferences().getInt(KEY_ZSL_REACTION_LATENCY_MS, 0))
         controller.setZslHybridTopup(lensPreferences().getBoolean(KEY_ZSL_HYBRID_TOPUP, true))
         applyIspPreviewSettings()
         controller.setCaptureFormat(captureFormat)
@@ -878,7 +877,7 @@ class MainActivity : Activity() {
                 galleryThumb.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
                 galleryThumb.setImageBitmap(thumb)
             } else {
-                val pad = dp(13)
+                val pad = dp(15)
                 galleryThumb.setPadding(pad, pad, pad, pad)
                 galleryThumb.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
                 galleryThumb.setImageResource(R.drawable.ic_gallery)
@@ -937,6 +936,7 @@ class MainActivity : Activity() {
         wireVideoQuickControls()
         findViewById<View>(R.id.dLightingQuick).setOnClickListener { cycleQuickDLighting() }
         findViewById<View>(R.id.monoQuick).setOnClickListener { cycleQuickMono() }
+        findViewById<View>(R.id.portraitQuick).setOnClickListener { cycleQuickPortrait() }
         levelQuick.setOnClickListener { toggleLevel() }
         aeMeteringQuick.setOnClickListener { cycleAeMeteringMode() }
         hdrPlusQuick.setOnClickListener { toggleHdrPlus() }
@@ -1541,8 +1541,6 @@ class MainActivity : Activity() {
         // RAW/BGU VF media-overlay surfaces cover it unless an ISP preview toggle shows it.
         // Fill the exact viewport: letterboxing (fillViewport=false + 3:4) leaves a
         // black strip between the preview and the bottom panel on tall screens.
-        // Both islands tuck over the preview by exactly their corner radius so
-        // the joints never show a hairline, on any aspect ratio.
         viewfinder.fillViewport = true
         // The camera UI is portrait-locked. Establish the 3:4 viewbox before the camera session
         // is opened so a cold start (including phone flat/upside-down) never gets measured first
@@ -1568,16 +1566,16 @@ class MainActivity : Activity() {
         var contentHeight = panel.paddingTop + panel.paddingBottom
         for (i in 0 until panel.childCount) {
             val child = panel.getChildAt(i)
-            if (child.visibility == View.GONE) continue
+            // Weighted spacers only absorb the spare height.
+            if (child.visibility == View.GONE || child is android.widget.Space) continue
             val margins = child.layoutParams as ViewGroup.MarginLayoutParams
             contentHeight += child.measuredHeight + margins.topMargin + margins.bottomMargin
         }
         val naturalPanelHeight = contentHeight.coerceAtLeast(dp(232))
         var panelHeight = naturalPanelHeight
-        // Both islands overlap the preview by exactly their corner radius
-        // (16dp, shared top and bottom): the minimum that fills the curves
-        // with picture instead of root black.
-        val sealOverlap = dp(16)
+        // Square islands meet the preview exactly: they must not cover the
+        // picture, or the visible field of view is smaller than the saved one.
+        val sealOverlap = 0
         // Photo, RAW video and Encoded Video share one 3:4 viewport between the
         // same two islands, so the frame never moves on the mode switch.
         val noTopIsland = topBar.visibility != View.VISIBLE
@@ -1877,11 +1875,7 @@ class MainActivity : Activity() {
         // clip to invisible. Keep horizontal so they stay visible in the top bar.
         // flashControl is GONE (torch lives on the top bar) so it never rotates.
         findViewById(R.id.galleryThumb),
-        // Rotate this square TextView as a whole: canvas-only rotation clips
-        // the single-line text layout in landscape. Its circular background is invariant.
-        findViewById(R.id.rawExposureToggle),
         findViewById(R.id.quickButton), findViewById(R.id.modeButton),
-        findViewById(R.id.vfEngineButton),
         findViewById(R.id.manualLimitsButton),
         findViewById(R.id.manualControlSlider),
         findViewById(R.id.manualAutoButton)
@@ -3596,6 +3590,7 @@ class MainActivity : Activity() {
             }
             putString(MonoMode.PREFERENCE_KEY, settings.mono.mode.name)
             putBoolean(MonoMode.KEY_KEEP_COLOR_DNG, settings.mono.keepColorDng)
+            settings.portrait.save(this)
         }.apply()
         return true
     }
@@ -3784,7 +3779,7 @@ class MainActivity : Activity() {
         rawVfDebugOverlay.contentDescription =
             "RAW viewfinder engine ${mode.name}. Tap to switch the GPU / CPU / BGU / BGU-CPU engine."
         vfEngineButton?.apply {
-            text = chipCaption(if (mode == VfEngineMode.BGU_CPU) "BGU·CPU" else mode.name, "RAW VF", getColor(R.color.text_secondary))
+            text = "RAW VF\n" + if (mode == VfEngineMode.BGU_CPU) "BGU·CPU" else mode.name
             contentDescription = rawVfDebugOverlay.contentDescription
         }
     }
@@ -4087,6 +4082,7 @@ class MainActivity : Activity() {
         highlightShoulder = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_SHOULDER, 1f),
         hlReconstruction = HighlightReconstructionDefaults.read(lensPreferences()),
         mono = MonoSettings.read(lensPreferences()),
+        portrait = PortraitSettings.read(lensPreferences()),
         toneLook = ToneLookSettings.load(lensPreferences())
     ).resolvedForPlatform()
 
@@ -4101,24 +4097,7 @@ class MainActivity : Activity() {
         hdrTransferName = lensPreferences().getString(KEY_JXL_HDR_TRANSFER, null)
     )
 
-    internal fun denoiseSettings(): DenoiseSettings {
-        val prefs = lensPreferences()
-        return DenoiseSettings(
-            captureSharpening = CaptureSharpeningSettings.read(prefs),
-            aiEnabled = prefs.getBoolean(KEY_AI_DENOISE_ENABLED, false),
-            saveOriginalDng = prefs.getBoolean(KEY_SAVE_ORIGINAL_DNG, true),
-            aiStrength = prefs.getInt(KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,
-            wavelet = WaveletSettings(
-                enabled = prefs.getBoolean(KEY_WAVELET_ENABLED, false),
-                strength = prefs.getInt(KEY_WAVELET_STRENGTH_PCT, 50).coerceIn(0, 800) / 100f,
-                detail = prefs.getInt(KEY_WAVELET_DETAIL_PCT, 100).coerceIn(0, 180) / 100f,
-                luma = prefs.getInt(KEY_WAVELET_LUMA_PCT, 25).coerceIn(0, 100) / 100f,
-                maxScale = prefs.getInt(KEY_WAVELET_SCALES, 7).coerceIn(1, 7),
-                algorithm = WaveletAlgorithm.fromOrdinal(prefs.getInt(KEY_WAVELET_ALGORITHM, WaveletAlgorithm.RAWR.ordinal)),
-                grain = prefs.getInt(KEY_WAVELET_GRAIN_PCT, (WaveletSettings.DEFAULT_GRAIN * 100).toInt()).coerceIn(0, 100) / 100f
-            )
-        )
-    }
+    internal fun denoiseSettings(): DenoiseSettings = DenoiseSettings.read(lensPreferences())
 
     internal fun persistDenoiseSettings(settings: DenoiseSettings): Boolean {
         if (!controller.setDenoiseSettings(settings)) {
@@ -4128,42 +4107,14 @@ class MainActivity : Activity() {
         lensPreferences().edit()
             .putBoolean(CaptureSharpeningSettings.ENABLED_KEY, settings.captureSharpening.enabled)
             .putString(CaptureSharpeningSettings.LEVEL_KEY, settings.captureSharpening.level.name)
-            .putBoolean(KEY_AI_DENOISE_ENABLED, settings.aiEnabled)
-            .putBoolean(KEY_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
-            .putInt(KEY_AI_STRENGTH_PCT, (settings.aiStrength * 100 + 0.5f).toInt().coerceIn(0, 100))
-            .putBoolean(KEY_WAVELET_ENABLED, settings.wavelet.enabled)
-            .putInt(KEY_WAVELET_STRENGTH_PCT, (settings.wavelet.strength * 100 + 0.5f).toInt().coerceIn(0, 800))
-            .putInt(KEY_WAVELET_DETAIL_PCT, (settings.wavelet.detail * 100 + 0.5f).toInt().coerceIn(0, 180))
-            .putInt(KEY_WAVELET_LUMA_PCT, (settings.wavelet.luma * 100 + 0.5f).toInt().coerceIn(0, 100))
-            .putInt(KEY_WAVELET_SCALES, settings.wavelet.maxScale.coerceIn(1, 7))
-            .putInt(KEY_WAVELET_ALGORITHM, settings.wavelet.algorithm.ordinal)
-            .putInt(KEY_WAVELET_GRAIN_PCT, (settings.wavelet.grain * 100 + 0.5f).toInt().coerceIn(0, 100))
+            .putBoolean(RawDenoiseSettings.KEY_ENABLED, settings.rawDenoise.enabled)
+            .putInt(RawDenoiseSettings.KEY_TEXTURE_PCT, (settings.rawDenoise.texture * 100 + 0.5f).toInt())
+            .putInt(RawDenoiseSettings.KEY_LUMA_PCT, (settings.rawDenoise.luma * 100 + 0.5f).toInt())
+            .putInt(RawDenoiseSettings.KEY_CHROMA_PCT, (settings.rawDenoise.chroma * 100 + 0.5f).toInt())
+            .putString(RawDenoiseSettings.KEY_ENGINE, settings.rawDenoise.engine.name)
+            .putInt(RawDenoiseSettings.KEY_NETWORK_PCT, (settings.rawDenoise.networkStrength * 100 + 0.5f).toInt())
             .apply()
         return true
-    }
-
-    /**
-     * Warm-starts the available RawNIND models when AI denoise is enabled
-     * (process-wide singleton, background init): model load plus Vulkan
-     * pipeline creation are slow on first use and must never block the
-     * save thread. No-op when AI is off so non-AI users pay nothing.
-     */
-    internal fun preloadRawNindIfEnabled() {
-        if (lensPreferences().getBoolean(KEY_AI_DENOISE_ENABLED, false)) {
-            runCatching { RawNindNcnnProcessor.start(applicationContext) }
-        }
-    }
-
-    /** One-line AI model state for the Denoise tab; never blocks (no waitReady). */
-    internal fun aiModelStatus(): String {
-        val proc = RawNindNcnnProcessor.getInstance()
-        if (proc == null) return "AI denoise: starts when enabled"
-        return when {
-            proc.isReady -> "AI denoise: ready"
-            proc.isBayerReady -> "AI denoise: Bayer model ready"
-            proc.isLoading || proc.isBayerLoading -> "AI denoise: loading…"
-            else -> "AI denoise: unavailable; captures use standard processing"
-        }
     }
 
     /**
@@ -4338,12 +4289,12 @@ class MainActivity : Activity() {
         isoControl.contentDescription = when {
             !inProgram -> "ISO control"
             lock == ProgramLockMode.ISO_LOCK -> "ISO locked. Tap for slider, hold to release. Auto in slider releases both locks."
-            else -> "ISO auto. Tap for Program shift, hold to lock ISO and let shutter adjust."
+            else -> "ISO auto. Tap for ISO slider (locks ISO, shutter adjusts), hold to lock."
         }
         shutterControl.contentDescription = when {
             !inProgram -> "Shutter control"
             lock == ProgramLockMode.SHUTTER_LOCK -> "Shutter locked. Tap for slider, hold to release. Auto in slider releases both locks."
-            else -> "Shutter auto. Tap for Program shift, hold to lock shutter and let ISO adjust."
+            else -> "Shutter auto. Tap for shutter slider (locks shutter, ISO adjusts), hold to lock."
         }
     }
 
@@ -4518,13 +4469,12 @@ class MainActivity : Activity() {
 
     private fun refreshRawExposureToggle() {
         findViewById<TextView>(R.id.rawExposureToggle).apply {
-            text = chipCaption(when (rawExposureSettings.overlay) {
+            text = "OVERLAY\n" + when (rawExposureSettings.overlay) {
                 RawExposureOverlayMode.OFF -> "OFF"
                 RawExposureOverlayMode.ZEBRAS -> "ZEBRA"
                 RawExposureOverlayMode.FALSE_COLOR -> "FALSE"
-            }, "OVERLAY", getColor(R.color.text_secondary))
+            }
             isSelected = rawExposureSettings.overlay != RawExposureOverlayMode.OFF
-            setTextColor(getColor(if (isSelected) R.color.accent else R.color.text_secondary))
             contentDescription = "RAW exposure assist: ${rawExposureSettings.overlay.label}. Tap to cycle Off, Zebra, False colour."
         }
     }
@@ -4685,6 +4635,15 @@ class MainActivity : Activity() {
             contentDescription = "Black and white ${mono.label}. Tap to cycle Off, Detail, Clean."
             setQuickTileState(this, mono.enabled)
         }
+        findViewById<TextView>(R.id.portraitQuick).apply {
+            val portrait = jpegOutputSettings().portrait
+            visibility = if (isVideoMode || !PortraitNetsHolder.available(this@MainActivity)) View.GONE else View.VISIBLE
+            text = "PORTRAIT\n" + if (portrait.enabled) PortraitSettings.label(portrait.fNumber).uppercase(Locale.US) else "OFF"
+            contentDescription = "Portrait background blur " +
+                (if (portrait.enabled) PortraitSettings.label(portrait.fNumber) else "off") +
+                ". Tap to cycle Off, f/1.4, f/1.8, f/2.8, f/4."
+            setQuickTileState(this, portrait.enabled)
+        }
         applyMonoPreview()
         setQuickTileState(grid, gridEnabled)
         setQuickTileState(histogram, histogramEnabled)
@@ -4836,6 +4795,7 @@ class MainActivity : Activity() {
         const val KEY_BURST_FUSION_TAU = "burst_fusion_tau"
         const val KEY_BURST_FUSION_KEEP_SOURCE_BURST = "burst_fusion_keep_source_burst"
         // Future SR hook: KEY_RAW_SR_ENABLED / KEY_RAW_SR_DNG_MODE here.
+        const val KEY_ZSL_REACTION_LATENCY_MS = "zsl_reaction_latency_ms"
         const val KEY_ZSL_HYBRID_TOPUP = "zsl_hybrid_topup"
         const val KEY_ISP_PREVIEW_ALWAYS = "isp_preview_always"
         const val KEY_DYNAMIC_EXPOSURE = "dynamic_exposure"
@@ -4888,16 +4848,6 @@ class MainActivity : Activity() {
         const val KEY_JXL_HDR_TRANSFER = "jxl_hdr_transfer"
         const val KEY_DEVELOPED_FORMAT = "developed_format"
         const val LEGACY_KEY_JPEG_ADAPTIVE_PHOTO = "jpeg_adaptive_photo"
-        const val KEY_AI_DENOISE_ENABLED = "ai_denoise_enabled"
-        const val KEY_SAVE_ORIGINAL_DNG = "save_original_dng"
-        const val KEY_AI_STRENGTH_PCT = "ai_denoise_strength_pct"
-        const val KEY_WAVELET_ENABLED = "wavelet_enabled"
-        const val KEY_WAVELET_STRENGTH_PCT = "wavelet_strength_pct"
-        const val KEY_WAVELET_DETAIL_PCT = "wavelet_detail_pct"
-        const val KEY_WAVELET_LUMA_PCT = "wavelet_luma_pct"
-        const val KEY_WAVELET_SCALES = "wavelet_scales"
-        const val KEY_WAVELET_ALGORITHM = "wavelet_algorithm"
-        const val KEY_WAVELET_GRAIN_PCT = "wavelet_grain_pct"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"
         const val SLIDER_STEPS = 10_000
         const val SLIDER_UPDATE_INTERVAL_MS = 32L

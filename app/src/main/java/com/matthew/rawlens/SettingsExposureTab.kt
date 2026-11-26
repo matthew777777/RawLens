@@ -60,7 +60,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
 import android.os.Build
@@ -455,4 +454,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         })
         markActive(exposureTab)
         polish()
+        p.kit.collapseSection("ETTR", "ETTR", "Expose to the right: headroom and limits")
+        p.kit.collapseSection("RAW HDR", "RAW HDR", "Two-exposure RAW HDR")
+        p.kit.collapseSection("Exposure brackets", "Exposure brackets", "Bracket spacing and merge")
 }

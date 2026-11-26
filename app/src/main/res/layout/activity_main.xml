@@ -408,17 +408,24 @@
                     <com.matthew.rawlens.QuickControlTileView android:id="@+id/videoBinningQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="BINNING" />
                 </LinearLayout>
             </LinearLayout>
-            <LinearLayout android:id="@+id/monitorQuickSection" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:orientation="horizontal" android:baselineAligned="false">
+            <LinearLayout android:id="@+id/monitorQuickSection" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:orientation="vertical">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:baselineAligned="false">
                 <com.matthew.rawlens.QuickControlTileView android:id="@+id/gridQuick" style="@style/QuickControlTile" android:text="GRID\nTHIRDS" />
                 <com.matthew.rawlens.QuickControlTileView android:id="@+id/histogramQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="SCOPE\nHISTO" />
                 <com.matthew.rawlens.QuickControlTileView android:id="@+id/levelQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LEVEL\nOFF" />
                 <com.matthew.rawlens.QuickControlTileView android:id="@+id/aeMeteringQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="AE METER\nAUTO" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:orientation="horizontal" android:baselineAligned="false">
+                    <com.matthew.rawlens.QuickControlTileView android:id="@+id/rawExposureToggle" style="@style/QuickControlTile" android:text="OVERLAY\nOFF" />
+                    <com.matthew.rawlens.QuickControlTileView android:id="@+id/vfEngineButton" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="RAW VF\nAUTO" />
+                </LinearLayout>
             </LinearLayout>
             <LinearLayout android:id="@+id/toolsQuickSection" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:orientation="horizontal" android:baselineAligned="false">
                 <com.matthew.rawlens.QuickControlTileView android:id="@+id/ettrQuick" style="@style/QuickControlTile" android:text="ETTR\nOFF" />
                 <com.matthew.rawlens.QuickControlTileView android:id="@+id/resetTargetsQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="AF / AE\nRESET" />
                 <com.matthew.rawlens.QuickControlTileView android:id="@+id/lightQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LIGHT\nOFF" />
                 <com.matthew.rawlens.QuickControlTileView android:id="@+id/monoQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="B&amp;W\nOFF" />
+                <com.matthew.rawlens.QuickControlTileView android:id="@+id/portraitQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="PORTRAIT\nOFF" />
                 <com.matthew.rawlens.QuickControlTileView android:id="@+id/recordingPreviewSleep" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="Preview sleep" />
             </LinearLayout>
             <LinearLayout android:id="@+id/mergeQuickSection" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingTop="4dp">
@@ -545,6 +552,7 @@
                 android:textColor="@color/text_primary"
                 android:textSize="12sp"
                 android:textStyle="bold" />
+
         </LinearLayout>
 
         <LinearLayout
@@ -588,169 +596,149 @@
                 android:text="LIGHT OFF" />
         </LinearLayout>
 
-        <!-- Shutter area: fixed two-row structure, no code sizing. Every
-             vertical gap in the panel is 8dp (top pad, lens -> tiles,
-             tiles -> ring, ring -> row B) and every side control is 48dp
-             tall, so left and right columns line up. Row A
-             (quick | shutter | mode) is 92dp tall with every child vertically
-             centered, so the shutter, quick, and mode centers share one line
-             by construction. Row B carries the video dot and preview format.
-             Identical XML in photo and video: the mode switch cannot jump. -->
+        <!-- Shutter area, mirrored around the shutter: each side has one large
+             control (gallery | mode dial). The dial is ring-sized (its face
+             is 12dp smaller than the view) and mirrors the shutter. The spacers centre the area in any spare height, so it
+             sits lower on tall screens. Same XML in photo and video. -->
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
         <LinearLayout
             android:id="@+id/capturePanel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
             android:paddingTop="6dp">
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="92dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+            <!-- Newest capture; quick controls and the photo/video toggle. -->
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1">
 
-                <!-- Left and right groups take equal weight so the shutter
-                     stays centered whatever each side holds. -->
                 <LinearLayout
-                    android:layout_width="0dp"
+                    android:layout_width="104dp"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center_vertical|start"
-                    android:orientation="horizontal">
+                    android:layout_gravity="start"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical">
 
-                    <!-- Quick access first: same 48dp column as the red
-                         record dot below it. -->
-                    <com.matthew.rawlens.RotatingImageButton
-                        android:id="@+id/quickButton"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:background="@drawable/capture_control_round"
-                        android:contentDescription="Quick controls"
-                        android:padding="12dp"
-                        android:tint="@color/capture_control_tint"
-                        android:src="@drawable/ic_tune" />
-
-                    <!-- Newest capture (photo or video): tap opens the
-                         system viewer. Empty glass circle until the first
-                         capture lands. -->
                     <ImageView
                         android:id="@+id/galleryThumb"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:layout_marginStart="8dp"
+                        android:layout_marginVertical="6dp"
+                        android:layout_width="56dp"
+                        android:layout_height="56dp"
                         android:background="@drawable/glass_button"
                         android:contentDescription="Open last capture"
-                        android:padding="13dp"
+                        android:padding="15dp"
                         android:scaleType="fitCenter"
                         android:src="@drawable/ic_gallery" />
-                </LinearLayout>
 
-                <!-- 88dp ring centered in the 92dp row: 2dp clear top and
-                     bottom, so the ring can never clip. -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:baselineAligned="false"
+                        android:orientation="horizontal">
+
+                        <com.matthew.rawlens.RotatingImageButton
+                            android:id="@+id/quickButton"
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:background="@drawable/capture_control_round"
+                            android:contentDescription="Quick controls"
+                            android:padding="12dp"
+                            android:tint="@color/capture_control_tint"
+                            android:src="@drawable/ic_tune" />
+
+                        <View
+                            android:id="@+id/videoRecordButton"
+                            android:layout_marginStart="8dp"
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:background="@drawable/video_enter"
+                            android:contentDescription="Enter video mode"
+                            android:clickable="true"
+                            android:focusable="true" />
+                    </LinearLayout>
+                </LinearLayout>
+            </FrameLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <!-- The 20dp bottom margin lifts the centred ring 10dp. -->
                 <FrameLayout
-                    android:layout_width="88dp"
-                    android:layout_height="88dp"
+                    android:layout_width="@dimen/shutter_ring_size"
+                    android:layout_height="@dimen/shutter_ring_size"
+                    android:layout_marginBottom="20dp"
                     android:background="@drawable/shutter_ring"
                     android:padding="8dp">
 
                     <View
                         android:id="@+id/shutter"
-                        android:layout_width="72dp"
-                        android:layout_height="72dp"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
                         android:background="@drawable/shutter_core"
                         android:contentDescription="Capture RAW photo" />
                 </FrameLayout>
+            </LinearLayout>
 
-                <FrameLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1">
+            <!-- Exposure mode. -->
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1">
 
+                <!-- Fixed height so the row never shifts when the chip shows or hides.
+                     Both children carry the same 20dp lift and are centred on one line,
+                     so the chip and the dial share a centre. -->
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="96dp"
+                    android:layout_gravity="end"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <com.matthew.rawlens.RotatingTextView
+                        android:id="@+id/lkrResChip"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:layout_marginEnd="6dp"
+                        android:layout_marginBottom="20dp"
+                        android:background="@drawable/control_chip_round"
+                        android:gravity="center"
+                        android:includeFontPadding="false"
+                        android:lineSpacingMultiplier="0.9"
+                        android:text="12.5\nMP"
+                        android:textColor="@color/text_primary"
+                        android:textSize="9sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+
+                    <!-- Larger than the gallery thumb, smaller than the ring; lifted like the ring so the
+                         dial sits level with the shutter. -->
                     <com.matthew.rawlens.CaptureModeDial
                         android:id="@+id/modeButton"
-                        android:layout_width="68dp"
-                        android:layout_height="68dp"
-                        android:layout_gravity="end|center_vertical"
-                        android:layout_marginEnd="8dp"
+                        android:layout_width="@dimen/mode_dial_size"
+                        android:layout_height="@dimen/mode_dial_size"
+                        android:layout_marginBottom="20dp"
                         android:background="?android:attr/selectableItemBackgroundBorderless"
                         android:focusable="true" />
-                </FrameLayout>
-            </LinearLayout>
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <!-- Dedicated RAW Video entry: red record dot below the quick
-                     panel access. Never part of the mode switcher. Tap = enter
-                     video / toggle recording, long-press in video = exit. -->
-                <View
-                    android:id="@+id/videoRecordButton"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:background="@drawable/video_enter"
-                    android:contentDescription="Enter video mode"
-                    android:clickable="true"
-                    android:focusable="true" />
-
-                <Space
-                    android:layout_width="0dp"
-                    android:layout_height="1dp"
-                    android:layout_weight="1" />
-
-                <TextView
-                    android:id="@+id/rawExposureToggle"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginEnd="8dp"
-                    android:background="@drawable/capture_control_round"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:gravity="center"
-                    android:maxLines="2"
-                    android:lineSpacingMultiplier="0.9"
-                    android:text="OFF"
-                    android:includeFontPadding="false"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="10sp"
-                    android:fontFamily="sans-serif-condensed-medium" />
-
-                <!-- LK-R output resolution: sensor MP <-> x2 super-resolution.
-                     Round like its OFF / AUTO neighbours; shown only while
-                     LK-R is the active merge in photo mode. -->
-                <com.matthew.rawlens.RotatingTextView
-                    android:id="@+id/lkrResChip"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_chip_round"
-                    android:gravity="center"
-                    android:includeFontPadding="false"
-                    android:lineSpacingMultiplier="0.9"
-                    android:text="12.5\nMP"
-                    android:textColor="@color/text_primary"
-                    android:textSize="9sp"
-                    android:textStyle="bold"
-                    android:visibility="gone" />
-
-                <!-- RAW VF engine: shows the current engine, tap cycles it
-                     (same as tapping the RAW VF debug overlay). -->
-                <com.matthew.rawlens.RotatingTextView
-                    android:id="@+id/vfEngineButton"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:background="@drawable/capture_control_round"
-                    android:gravity="center"
-                    android:includeFontPadding="false"
-                    android:lineSpacingMultiplier="0.9"
-                    android:text="AUTO"
-                    android:textColor="@color/text_primary"
-                    android:textSize="10sp"
-                    android:fontFamily="sans-serif-condensed-medium" />
-            </LinearLayout>
+                </LinearLayout>
+            </FrameLayout>
         </LinearLayout>
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
     </LinearLayout>
 </FrameLayout>

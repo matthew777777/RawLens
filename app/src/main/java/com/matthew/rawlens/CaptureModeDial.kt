@@ -100,6 +100,9 @@ class CaptureModeDial(context: Context, attrs: AttributeSet) : TextView(context,
         val cy = height / 2f
         val radius = min(cx, cy) - 6f * density
         if (radius <= 0f) return
+        // Marks, ticks and the name scale with the face, so a larger dial
+        // reads as the same control (drawn at 28dp radius originally).
+        val scale = (radius / (28f * density)).coerceAtLeast(1f)
         val checkpoint = canvas.save()
         canvas.rotate(contentRotation, cx, cy)
 
@@ -107,25 +110,25 @@ class CaptureModeDial(context: Context, attrs: AttributeSet) : TextView(context,
         dialPaint.color = face
         canvas.drawCircle(cx, cy, radius, dialPaint)
         dialPaint.style = Paint.Style.STROKE
-        dialPaint.strokeWidth = density
+        dialPaint.strokeWidth = density * scale
         dialPaint.color = rim
         canvas.drawCircle(cx, cy, radius, dialPaint)
         val rimCheckpoint = canvas.save()
         canvas.rotate(wheelAngle, cx, cy)
         repeat(36) {
-            canvas.drawLine(cx, cy - radius, cx, cy - radius + 2f * density, dialPaint)
+            canvas.drawLine(cx, cy - radius, cx, cy - radius + 2.5f * density * scale, dialPaint)
             canvas.rotate(360f / 36, cx, cy)
         }
 
         canvas.restoreToCount(rimCheckpoint)
 
         dialPaint.color = gold
-        dialPaint.strokeWidth = 2f * density
-        canvas.drawLine(cx - 3f * density, cy - radius - 3f * density,
-            cx + 3f * density, cy - radius - 3f * density, dialPaint)
+        dialPaint.strokeWidth = 2f * density * scale
+        canvas.drawLine(cx - 3f * density * scale, cy - radius - 3f * density,
+            cx + 3f * density * scale, cy - radius - 3f * density, dialPaint)
 
         dialPaint.style = Paint.Style.FILL
-        dialPaint.textSize = 10f * density
+        dialPaint.textSize = 10f * density * scale
         val markRadius = radius * 0.76f
         val baseline = -(dialPaint.ascent() + dialPaint.descent()) / 2
         MARKS.indices.forEach { position ->
@@ -137,7 +140,7 @@ class CaptureModeDial(context: Context, attrs: AttributeSet) : TextView(context,
                 cy - markRadius * cos(angle).toFloat() + baseline, dialPaint)
         }
         dialPaint.color = ivory
-        dialPaint.textSize = 8f * density
+        dialPaint.textSize = 8f * density * scale
         val nameWidth = dialPaint.measureText(mode.name)
         dialPaint.textScaleX = (radius * 1.08f / nameWidth).coerceAtMost(1f)
         canvas.drawText(mode.name, cx, cy - (dialPaint.ascent() + dialPaint.descent()) / 2, dialPaint)
@@ -152,7 +155,7 @@ class CaptureModeDial(context: Context, attrs: AttributeSet) : TextView(context,
                 startX = event.x
                 startY = event.y
                 lastAngle = touchAngle(event)
-                rimGesture = hypot(startX - width / 2f, startY - height / 2f) >= 14f * density
+                rimGesture = hypot(startX - width / 2f, startY - height / 2f) >= min(width, height) * 0.2f
                 dragAngle = 0f
                 dragging = false
             }

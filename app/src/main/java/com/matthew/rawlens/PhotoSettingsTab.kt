@@ -60,6 +60,24 @@ internal class PhotoSettingsTab(
             })
             kit.content.addView(kit.sectionDesc("Experimental. Uses the full-resolution RAW mode for single photos on supported rear lenses."))
         }
+        if (VivoCameraGate.supported()) {
+            kit.content.addView(kit.sectionTitle("vivo"))
+            kit.content.addView(kit.settingsButton("High-res access: ${VivoCameraGate.mode(activity).label}").apply {
+                setOnClickListener {
+                    val modes = VivoCameraGate.Mode.entries
+                    AlertDialog.Builder(activity).setTitle("vivo high-res access")
+                        .setSingleChoiceItems(modes.map { it.label }.toTypedArray(),
+                            VivoCameraGate.mode(activity).ordinal) { dialog, which ->
+                            VivoCameraGate.setMode(activity, modes[which])
+                            host.controller.setVivoGateMode(modes[which])
+                            dialog.dismiss()
+                            host.reshow()
+                        }
+                        .setNegativeButton("Cancel", null).show()
+                }
+            })
+            kit.content.addView(kit.sectionDesc("Experimental. Opens the camera with vivo's own-camera permission for full-size RAW. Used only by the H and F lenses, or by a Custom RAW reader of about 50 MP or more."))
+        }
         kit.content.addView(kit.sectionTitle("RAW & DNG tools"))
         kit.content.addView(kit.navRow("Develop DNGs", "Import photos and export developed images") {
             activity.startActivity(android.content.Intent(activity, DevelopQueueActivity::class.java))
@@ -112,7 +130,7 @@ internal class PhotoSettingsTab(
                 })
                 kit.content.addView(kit.sectionDesc("Choose 12.5 MP, 50 MP, 200→50 MP, 2× / 4× sensor RAW or DCG14 in the lens switcher. Root must be active and granted to RawLens. Sensor setup is automatic; camera settings are restored when the session closes."))
                 kit.content.addView(kit.sectionDesc("Phase correction accounts for differences in pixel response during 200→50 MP RAW development."))
-                kit.content.addView(kit.sectionDesc("DCG14: 12.5 MP DCG/DSG RAW14 output at 30 fps; automatic exposure is required. Manual ISO/shutter and flash are unavailable in this mode. 50 MP: verified RAW10. 2× / 4×: RAW14 sensor interface, delivered as 10-bit RAW; extra precision is unverified. 200→50 MP: one-shot DNG; the shutter reads the 200 MP sensor mode (about 20 s with camera restarts) and uses rawr same-colour sums + Quad Detail remosaic, saving a 50 MP Bayer CFA DNG. Preview stays at 12.5 MP; burst, HDR and ZSL are unavailable. Firmware: ${LapisRootProfile.FIRMWARE}."))
+                kit.content.addView(kit.sectionDesc("DCG14: 12.5 MP DCG/DSG RAW14 output at 30 fps; automatic exposure is required. Manual ISO/shutter and flash are unavailable in this mode. 50 MP: verified RAW10. 2× / 4×: RAW14 sensor interface, delivered as 10-bit RAW; extra precision is unverified. 200→50 MP: one-shot DNG; the shutter reads the 200 MP sensor mode (about 20 s with camera restarts) and uses rawr same-colour sums + Quad Detail remosaic, saving a 50 MP Bayer CFA DNG. Preview stays at 12.5 MP; burst, HDR and ZSL are unavailable. Camera libraries are hash-checked before every root session; an OTA that changes them disables these modes safely."))
             }
         }
         // JPEG XL container options, mirroring darktable's export panel:
@@ -332,9 +350,6 @@ internal class PhotoSettingsTab(
                 .putString(MainActivity.KEY_JPEG_DEMOSAIC, resolved.demosaic.name)
                 .putBoolean(ChromaCleanup.KEY_FALSE_COLOR, resolved.chromaCleanup.falseColorSuppression)
                 .putFloat(ChromaCleanup.KEY_DEFRINGE, resolved.chromaCleanup.defringeStrength)
-                .putBoolean(ChromaCleanup.KEY_RAPIDRAW, resolved.chromaCleanup.rapidRawPreprocessing)
-                .putFloat(ChromaCleanup.KEY_RAPIDRAW_COLOR_NR, resolved.chromaCleanup.rapidRawColorNoiseReduction)
-                .putFloat(ChromaCleanup.KEY_RAPIDRAW_SHARPENING, resolved.chromaCleanup.rapidRawSharpening)
                 .putFloat(MainActivity.KEY_JPEG_AGX_PURITY, resolved.agxPurityBoost)
                 .putString(PhotoToneMapper.PREFERENCE_KEY, resolved.toneMapper.name)
                 .putString(AgxLook.PREFERENCE_KEY, resolved.agxLook.name)
@@ -354,6 +369,7 @@ internal class PhotoSettingsTab(
                 .putBoolean(MainActivity.KEY_JPEG_HL_RECONSTRUCTION, resolved.hlReconstruction)
                 .putBoolean(HighlightReconstructionDefaults.APPLIED, true)
                 .also { resolved.toneLook.save(it) }
+                .also { resolved.portrait.save(it) }
                 .apply()
             host.onMonoChanged(resolved.mono)
             return true
@@ -378,6 +394,47 @@ internal class PhotoSettingsTab(
                         mono = currentJpegSettings.mono.copy(keepColorDng = checked)))) isChecked = !checked
             }
         })
+        if (PortraitSettings.AVAILABLE) {
+            kit.content.addView(kit.sectionTitle("Portrait"))
+            kit.content.addView(SettingsSwitch(activity).apply {
+                text = "Portrait background blur"
+                isChecked = currentJpegSettings.portrait.enabled
+                isEnabled = PortraitNetsHolder.available(activity)
+                setOnCheckedChangeListener { _, checked ->
+                    if (!applyJpegOutputSettings(currentJpegSettings.copy(
+                            portrait = currentJpegSettings.portrait.copy(enabled = checked)))) isChecked = !checked
+                }
+            })
+            kit.content.addView(Button(activity).apply {
+                fun refresh() { text = "Portrait aperture: ${PortraitSettings.label(currentJpegSettings.portrait.fNumber)}" }
+                refresh()
+                setOnClickListener {
+                    kit.choose("Portrait aperture", PortraitSettings.F_STOPS.toList(),
+                        PortraitSettings.F_STOPS.minByOrNull { kotlin.math.abs(it - currentJpegSettings.portrait.fNumber) }!!,
+                        { PortraitSettings.label(it) }) { next ->
+                        if (applyJpegOutputSettings(currentJpegSettings.copy(
+                                portrait = currentJpegSettings.portrait.copy(fNumber = next)))) refresh()
+                    }
+                }
+            })
+            kit.content.addView(Button(activity).apply {
+                val levels = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+                fun refresh() { text = "Cat's-eye bokeh: ${(currentJpegSettings.portrait.catEye * 100).toInt()} %" }
+                refresh()
+                setOnClickListener {
+                    kit.choose("Cat's-eye bokeh", levels,
+                        levels.minByOrNull { kotlin.math.abs(it - currentJpegSettings.portrait.catEye) }!!,
+                        { "${(it * 100).toInt()} %" }) { next ->
+                        if (applyJpegOutputSettings(currentJpegSettings.copy(
+                                portrait = currentJpegSettings.portrait.copy(catEye = next)))) refresh()
+                    }
+                }
+            })
+            kit.content.addView(kit.sectionDesc(if (PortraitNetsHolder.available(activity))
+                "DSLR-style background blur on the JPEG (single frame and HDR+). An on-device depth network (MiDaS, NPU) plus a person cutout put the subject on the focal plane; the blur is a layered lens render in scene-linear light, so highlights become bright bokeh discs. Aperture is the look of an 85 mm full-frame lens at portrait distance. DNG stays untouched."
+            else "Not available in this build (no on-device network runtime)."))
+        }
+        kit.content.addView(kit.sectionTitle("Light & color"))
         kit.content.addView(Button(activity).apply {
             fun refresh() { text = "Active D-Lighting: ${currentJpegSettings.activeDLighting.label}" }
             refresh()
@@ -417,6 +474,7 @@ internal class PhotoSettingsTab(
             }
         })
         }
+        kit.content.addView(kit.sectionTitle("Processing"))
         kit.content.addView(SettingsSwitch(activity).apply {
             text = "Highlight reconstruction (inpaint opposed)"
             setTextColor(activity.getColor(R.color.text_primary))
@@ -495,6 +553,7 @@ internal class PhotoSettingsTab(
         kit.content.addView(defringeButton)
         kit.content.addView(kit.sectionDesc("Fused into the demosaic's final pass (no extra memory). False-color suppression: two-radius color-difference median against moire and color speckles on fine detail. Defringe: removes purple/magenta edges only at high-contrast edges."))
         if (host.developedFormat == DevelopedFormat.JPEG) {
+        kit.content.addView(kit.sectionTitle("JPEG quality"))
         var jpegQuality = currentJpegSettings.jpegQuality.coerceIn(1, 100)
         val jpegQualityLabel = TextView(activity).apply {
             text = "JPEG quality: $jpegQuality%"
@@ -575,7 +634,7 @@ internal class PhotoSettingsTab(
                 })
             })
         }
-        kit.content.addView(kit.sectionDesc("Tone Mapper"))
+        kit.content.addView(kit.sectionTitle("Tone mapper"))
         kit.content.addView(LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             for (mode in PhotoToneMapper.selectable) {
@@ -891,6 +950,9 @@ internal class PhotoSettingsTab(
         kit.polish()
         kit.collapseRange(advancedLookStart, kit.content.childCount, "Advanced tone & color",
             "Tone mapping, color and highlight controls")
+        kit.collapseSection("Black & white", "Black & white", "Mode and colour DNG")
+        kit.collapseSection("Processing", "Processing", "Demosaic, highlight reconstruction and color cleanup")
+        kit.collapseSection("RAW & DNG tools", "RAW & DNG tools", "Develop DNGs and custom RAW reader")
 
     }
 
@@ -903,7 +965,7 @@ internal class PhotoSettingsTab(
         }
         val dialog = AlertDialog.Builder(activity)
             .setTitle("Custom RAW reader")
-            .setMessage("Enter a photo RAW resolution for this lens. RawLens will request RAW_SENSOR with ImageReader usage 0x00100000. The camera HAL must accept the combination.")
+            .setMessage("Enter a photo RAW resolution for this lens. For full-size RAW (50 MP and more) the known keys for this phone are added by themselves. The camera HAL must accept the size.")
             .setView(input)
             .setPositiveButton("Apply", null)
             .setNeutralButton("Turn off") { _, _ ->

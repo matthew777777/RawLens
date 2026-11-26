@@ -13,7 +13,7 @@ import android.content.pm.PackageManager
  * the loader, the 1.1 physical device, the AHardwareBuffer extension, and
  * a real buffer import that reports any failing stage as "unsupported".
  * RawLens needs this floor: every native context requests Vulkan 1.1
- * (`vf_vulkan_vf.cpp`, `wavelet_host.cpp`), and the record/RCD path
+ * (`vf_vulkan_vf.cpp`, `rawdn.cpp`), and the record/RCD path
  * additionally allocates RGBA_FP16 HardwareBuffers ([EncodedVideoRecorder],
  * [VulkanEncoderBridge]) guarded by [isFp16BufferSupported]. Pipelines
  * without Vulkan fall back (CPU viewfinder tier, DNG-only stills); callers

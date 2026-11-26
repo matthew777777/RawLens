@@ -56,7 +56,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
 import android.os.Build
@@ -117,6 +116,67 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
         content.addView(strengthLabel)
         content.addView(strengthSlider)
         content.addView(sectionDesc("One vibration per photo or burst. 0% disables vibration. On phones without intensity control, strength adjusts pulse length."))
+        content.addView(sectionTitle("RAW capture"))
+        content.addView(p.kit.navRow("DNG sensor calibration", "Black and white levels, noise and color") {
+            showDngMetadataOverrideEditor()
+        })
+        content.addView(p.kit.navRow("Vendor keys", "Per-lens session and request settings") {
+            showVendorKeysEditor()
+        })
+        content.addView(Button(this).apply {
+            fun refresh() { text = "DNG writer backend: ${dngWriterBackend().label}" }
+            refresh()
+            setOnClickListener {
+                val entries = DngWriterBackend.entries.toTypedArray()
+                val current = dngWriterBackend()
+                RawLensDialogBuilder(this@showGeneralSettings)
+                    .setTitle("DNG writer backend")
+                    .setSingleChoiceItems(entries.map { it.label }.toTypedArray(), current.ordinal) { dialog, which ->
+                        val selected = entries[which]
+                        lensPreferences().edit().putString(KEY_DNG_WRITER_BACKEND, selected.preferenceValue).apply()
+                        setStatus("WRITER • ${selected.name}")
+                        refresh()
+                        dialog.dismiss()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        })
+        content.addView(TextView(this).apply {
+            tag = "settings-description"
+            text = "Android DngCreator is the default. AUTO falls back to TinyDNG. Compatibility applies lens shading to single-frame Bayer pixels for editors such as RapidRAW: permanent correction, larger uncompressed 32-bit files, no JXL. It requires a shading map or shading already applied by the camera. It does not straighten distortion or change merged/AI DNG saves."
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+        })
+        content.addView(Button(this).apply {
+            fun refresh() { text = "DNG compression: ${dngCompression().label}" }
+            refresh()
+            setOnClickListener {
+                val entries = DngCompression.entries.toTypedArray()
+                val current = dngCompression()
+                RawLensDialogBuilder(this@showGeneralSettings)
+                    .setTitle("DNG compression")
+                    .setSingleChoiceItems(entries.map { it.label }.toTypedArray(), current.ordinal) { dialog, which ->
+                        val selected = entries[which]
+                        lensPreferences().edit().putString(KEY_DNG_COMPRESSION, selected.preferenceValue).apply()
+                        setStatus("DNG • ${selected.name}")
+                        refresh()
+                        dialog.dismiss()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        })
+        content.addView(TextView(this).apply {
+            tag = "settings-description"
+            text = "JXL stores the mosaic losslessly (DNG 1.7, like iPhone ProRAW) at roughly half the size. " +
+                "Needs Lightroom / Adobe DNG Converter 16+ or Apple Photos — darktable and most LibRaw tools cannot read JXL DNGs yet. " +
+                "Single-frame and HDR+ merged DNGs; packed and float/linear merges stay uncompressed. " +
+                "Single-frame GPS files stay uncompressed to preserve location; merged JXL keeps GPS."
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+        })
+
         content.addView(sectionTitle("Viewfinder"))
         content.addView(Button(this).apply {
             fun refresh() { text = "RAW camera streams: ${controller.rawStreamMode().label}" }
@@ -268,67 +328,6 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
         })
         content.addView(sectionDesc("Saves battery by closing the camera while Settings is open. Active recordings continue."))
 
-        content.addView(sectionTitle("RAW capture"))
-        content.addView(p.kit.navRow("DNG sensor calibration", "Black and white levels, noise and color") {
-            showDngMetadataOverrideEditor()
-        })
-        content.addView(p.kit.navRow("Vendor keys", "Per-lens session and request settings") {
-            showVendorKeysEditor()
-        })
-        content.addView(Button(this).apply {
-            fun refresh() { text = "DNG writer backend: ${dngWriterBackend().label}" }
-            refresh()
-            setOnClickListener {
-                val entries = DngWriterBackend.entries.toTypedArray()
-                val current = dngWriterBackend()
-                RawLensDialogBuilder(this@showGeneralSettings)
-                    .setTitle("DNG writer backend")
-                    .setSingleChoiceItems(entries.map { it.label }.toTypedArray(), current.ordinal) { dialog, which ->
-                        val selected = entries[which]
-                        lensPreferences().edit().putString(KEY_DNG_WRITER_BACKEND, selected.preferenceValue).apply()
-                        setStatus("WRITER • ${selected.name}")
-                        refresh()
-                        dialog.dismiss()
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-        })
-        content.addView(TextView(this).apply {
-            tag = "settings-description"
-            text = "Android DngCreator is the default. AUTO falls back to TinyDNG. Compatibility applies lens shading to single-frame Bayer pixels for editors such as RapidRAW: permanent correction, larger uncompressed 32-bit files, no JXL. It requires a shading map or shading already applied by the camera. It does not straighten distortion or change merged/AI DNG saves."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-        })
-        content.addView(Button(this).apply {
-            fun refresh() { text = "DNG compression: ${dngCompression().label}" }
-            refresh()
-            setOnClickListener {
-                val entries = DngCompression.entries.toTypedArray()
-                val current = dngCompression()
-                RawLensDialogBuilder(this@showGeneralSettings)
-                    .setTitle("DNG compression")
-                    .setSingleChoiceItems(entries.map { it.label }.toTypedArray(), current.ordinal) { dialog, which ->
-                        val selected = entries[which]
-                        lensPreferences().edit().putString(KEY_DNG_COMPRESSION, selected.preferenceValue).apply()
-                        setStatus("DNG • ${selected.name}")
-                        refresh()
-                        dialog.dismiss()
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-        })
-        content.addView(TextView(this).apply {
-            tag = "settings-description"
-            text = "JXL stores the mosaic losslessly (DNG 1.7, like iPhone ProRAW) at roughly half the size. " +
-                "Needs Lightroom / Adobe DNG Converter 16+ or Apple Photos — darktable and most LibRaw tools cannot read JXL DNGs yet. " +
-                "Single-frame and HDR+ merged DNGs; packed and float/linear merges stay uncompressed. " +
-                "Single-frame GPS files stay uncompressed to preserve location; merged JXL keeps GPS."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-        })
-
         content.addView(sectionTitle("Settings backup"))
         content.addView(sectionDesc("One JSON file with every setting: camera, JPEG, video, exposure, burst, denoise, lenses, DNG calibration, and PROGRAM profiles. Importing replaces all settings and asks for a restart."))
         content.addView(Button(this).apply {
@@ -348,7 +347,7 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
         })
         markActive(generalTab)
         polish()
-        // Keep preview switches visible directly on General, without a submenu.
         p.kit.collapseSection("RAW capture", "RAW capture", "DNG calibration, compression and vendor keys")
+        p.kit.collapseSection("Viewfinder", "Viewfinder", "Camera streams, preview, exposure overlay and RAW meter")
         p.kit.collapseSection("Settings backup", "Backup & restore", "Export or import your preferences")
 }

@@ -4,6 +4,7 @@
 package com.matthew.rawlens
 
 import com.matthew.rawlens.MainActivity.Companion.KEY_ZSL_HYBRID_TOPUP
+import com.matthew.rawlens.MainActivity.Companion.KEY_ZSL_REACTION_LATENCY_MS
 
 import com.matthew.rawlens.MainActivity.Companion.MAX_RAW_ZSL_FRAMES
 
@@ -55,11 +56,12 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
 import android.os.Build
 import android.os.SystemClock
+
+private const val LATENCY_STEP_MS = 10
 
 /** Settings → Burst. Moved verbatim from MainActivity.showSettings (showBurstTab). */
 internal fun MainActivity.showBurstSettings(p: SettingsPage) {
@@ -149,6 +151,38 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc("Top-up adds fresh frames when the zero shutter lag buffer has too few."))
+        var latencyMs = lensPreferences().getInt(KEY_ZSL_REACTION_LATENCY_MS, 0)
+            .coerceIn(0, ZslPolicy.MAX_REACTION_LATENCY_MS)
+        fun latencyText() = "Reaction latency compensation: " + if (latencyMs == 0) "off" else "$latencyMs ms"
+        val latencyLabel = TextView(this).apply {
+            text = latencyText()
+            setTextColor(getColor(R.color.text_primary))
+            textSize = 14f
+            setPadding(dp(12), dp(8), dp(12), 0)
+        }
+        content.addView(latencyLabel)
+        content.addView(SettingsSlider(this).apply {
+            max = ZslPolicy.MAX_REACTION_LATENCY_MS / LATENCY_STEP_MS
+            progress = latencyMs / LATENCY_STEP_MS
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
+                    latencyMs = progress * LATENCY_STEP_MS
+                    latencyLabel.text = latencyText()
+                }
+
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
+                    lensPreferences().edit().putInt(KEY_ZSL_REACTION_LATENCY_MS, latencyMs).apply()
+                    controller.setZslReactionLatencyMs(latencyMs)
+                    setStatus(if (latencyMs == 0) "REACTION LATENCY OFF" else "REACTION LATENCY -$latencyMs MS")
+                }
+            })
+        })
+        content.addView(sectionDesc(
+            "ZSL uses frames from this long before the shutter press, to make up for your reaction time. " +
+                "Each 100 ms keeps about 3 more RAW frames in memory. Saved _BURST.craw takes still hold the whole buffer."
+        ))
         rawZslSettingsStatus = TextView(this).apply {
             text = rawZslSettingsText(rawZslStatus)
             setTextColor(getColor(R.color.text_secondary))
@@ -179,4 +213,5 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
         })
         markActive(burstTab)
         polish()
+        p.kit.collapseSection("Burst gyro sidecars", "Burst gyro sidecars", "Gyro data saved beside bursts")
 }
