@@ -104,6 +104,9 @@ internal object LkrBridge {
     /** Select the NPU denoiser for the next merge on this thread. */
     @JvmStatic external fun nativeSetNpuDenoise(enabled: Boolean, noPrior: Boolean)
 
+    /** Local-colour highlight recovery for the NEXT merge on this thread (true = default). */
+    @JvmStatic external fun nativeSetHighlightRecovery(enabled: Boolean)
+
     /** A usable NPU for the network (MDLA / Hexagon through NNAPI, every op on that one device). */
     @JvmStatic external fun nativeHasNpu(): Boolean
 

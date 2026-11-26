@@ -116,7 +116,13 @@ data class UnpackedRawCfa(
     /** Original sensor clip evidence retained through LSC, AI and highlight reconstruction. */
     val captureSharpeningClipState: CaptureSharpeningClipState? = null,
     /** Residual lens-shading gains are already baked into these values (not just sensor metadata). */
-    val lensShadingApplied: Boolean = false
+    val lensShadingApplied: Boolean = false,
+    /**
+     * Opposed-highlights clip evidence taken in the sensor domain, before lens shading gains
+     * (a 0.95 sensor value shaded by 1.1 must not count as clipped). Used only when
+     * [highlightClipping] is null; see [OpposedHighlights.clipMaskOf].
+     */
+    val opposedClipping: CfaHighlightClipping? = null
 ) {
     fun requireAmazeCompatible() {
         require(width >= 4 && height >= 4 && width % 2 == 0 && height % 2 == 0) {

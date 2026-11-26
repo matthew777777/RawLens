@@ -141,7 +141,9 @@ object RawDefectCorrector {
         cfa: UnpackedRawCfa,
         metadataDefects: List<IntPointSnapshot>,
         settings: DefectCorrectionSettings = DefectCorrectionSettings(),
-        sameColorPeriod: Int = 2
+        sameColorPeriod: Int = 2,
+        /** Index of every pixel replaced (metadata or detected defect), for masks that must forget it. */
+        onCorrected: ((Int) -> Unit)? = null
     ): DefectCorrectionStats {
         require(sameColorPeriod == 2 || sameColorPeriod == 4)
         require(cfa.values.size == cfa.width * cfa.height) { "CFA buffer size mismatch" }
@@ -165,6 +167,7 @@ object RawDefectCorrector {
                 val neighbors = sameColorNeighbors(source, cfa.width, cfa.height, x, y, sameColorPeriod)
                 if (neighbors.size >= MIN_NEIGHBORS) {
                     cfa.values[y * cfa.width + x] = median(neighbors)
+                    onCorrected?.invoke(y * cfa.width + x)
                     corrected++
                 }
             }
@@ -188,6 +191,7 @@ object RawDefectCorrector {
                 }
                 if (isKnown || isAutomatic) {
                     cfa.values[y * cfa.width + x] = median
+                    onCorrected?.invoke(y * cfa.width + x)
                     if (isKnown) knownCount++ else automaticCount++
                 }
             }
@@ -267,23 +271,36 @@ object RawPreDemosaicPipeline {
     fun process(
         input: UnpackedRawCfa,
         metadata: RawFrameMetadata,
-        settings: PreDemosaicSettings = PreDemosaicSettings()
+        settings: PreDemosaicSettings = PreDemosaicSettings(),
+        /** Single-frame opposed highlights: keep sensor-domain clip evidence before lens shading. */
+        opposedClipEvidence: Boolean = false
     ): PreDemosaicResult {
         val startedAt = SystemClock.elapsedRealtime()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         val shadingStatus = lensShadingStatus(metadata)
         val shading = lensShadingModel(metadata)
-        val sensorInput = if (input.captureSharpeningClipState == null && !metadata.quadBayer &&
+        val withCaptureClip = if (input.captureSharpeningClipState == null && !metadata.quadBayer &&
             input.width % 2 == 0 && input.height % 2 == 0) {
             input.copy(captureSharpeningClipState = CaptureSharpeningClipState.fromSensorCfa(input))
         } else input
+        val sensorInput = if (opposedClipEvidence && withCaptureClip.highlightClipping == null &&
+            withCaptureClip.opposedClipping == null) {
+            withCaptureClip.copy(opposedClipping = OpposedHighlights.clipMaskFromValues(withCaptureClip))
+        } else withCaptureClip
         val corrected = LensShadingCorrector.applyOwnedInPlace(sensorInput, shading)
         val shadingAt = SystemClock.elapsedRealtime()
+        // A hot pixel that read as clipped before repair must not stay in the opposed clip mask:
+        // the mask is taken before lens shading, so it predates this stage.
+        val repaired = if (corrected.cfa.opposedClipping != null) ArrayList<Int>() else null
         val defectStats = RawDefectCorrector.correctInPlace(
             corrected.cfa,
             metadata.hotPixels,
-            settings.defectCorrection
+            settings.defectCorrection,
+            onCorrected = repaired?.let { list -> { index: Int -> list += index } }
         )
+        val output = if (!repaired.isNullOrEmpty()) corrected.cfa.copy(
+            opposedClipping = corrected.cfa.opposedClipping!!.cleared(repaired.toIntArray())
+        ) else corrected.cfa
         val defectsAt = SystemClock.elapsedRealtime()
         Log.i(
             "RawLensDevelop",
@@ -291,6 +308,6 @@ object RawPreDemosaicPipeline {
                 "lensShading=${shadingAt - startedAt}ms " +
                 "defects=${defectsAt - shadingAt}ms total=${defectsAt - startedAt}ms"
         )
-        return PreDemosaicResult(corrected.cfa, shadingStatus, defectStats)
+        return PreDemosaicResult(output, shadingStatus, defectStats)
     }
 }

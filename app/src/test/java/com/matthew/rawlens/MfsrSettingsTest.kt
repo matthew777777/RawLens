@@ -39,9 +39,10 @@ class MfsrSettingsTest {
 
     @Test fun followsZslWithMfsrOnlyCeiling() {
         val settings = MfsrSettings(enabled = true)
-        for (count in 2..16) assertEquals(count, settings.activeFrameCount(count))
+        val ceiling = MfsrSettings.MAX_MERGE_FRAMES   // 30 since a157caaa (merges use the whole burst)
+        for (count in 2..ceiling) assertEquals(count, settings.activeFrameCount(count))
         assertEquals(2, settings.activeFrameCount(1))
-        assertEquals(16, settings.activeFrameCount(30))
+        assertEquals(ceiling, settings.activeFrameCount(ceiling + 10))
     }
 
     @Test fun lkrFollowsTheFullBurstRange() {
@@ -61,8 +62,8 @@ class MfsrSettingsTest {
         assertEquals("MFSR\nUNAVAILABLE", on.quickText(m, 12, 12, false, false))
         assertEquals("MFSR\nWARMING", on.quickText(m, 12, 8, true, false))
         assertEquals("MFSR\n×12", on.quickText(m, 12, 12, true, false))
-        assertEquals("MFSR\nWARMING", on.quickText(m, 30, 15, true, false))
-        assertEquals("MFSR\n×16", on.quickText(m, 30, 16, true, false))
+        assertEquals("MFSR\nWARMING", on.quickText(m, 40, 29, true, false))
+        assertEquals("MFSR\n×30", on.quickText(m, 40, 30, true, false))
     }
 
     @Test fun lkrMiddleReferenceDefaultsOnAndRoundTrips() {

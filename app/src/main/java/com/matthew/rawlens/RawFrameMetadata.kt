@@ -210,7 +210,17 @@ object RawFrameMetadataFactory {
         val physical = physicalResults[physicalId]
         fun <T> sensorKey(key: CaptureResult.Key<T>): T? = physical?.get(key) ?: result.get(key)
 
-        val dynamicBlack = sensorKey(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+        // Lapis DCG14 stores RAW14 with its own levels while the HAL still reports the 10-bit ones
+        // (see LapisRootSession.storageWhite). Only frames whose own samples pass 10 bits take the
+        // storage levels: the mode switch still delivers a few 10-bit frames, and 1024 / 16383 on
+        // those would read every pixel as below black.
+        val levelSample = image.buffer?.let { buffer ->
+            DngLevelRepair.sample(buffer, image.rowStride, image.pixelStride, image.width, image.height)
+        }
+        val lapisDcg = LapisRootSession.spec(characteristics)?.dcg == true &&
+            (levelSample == null || levelSample.max > 1023)
+        val dcgBlack = if (lapisDcg) FloatArray(4) { LapisRootSession.storageBlack(characteristics, it).toFloat() } else null
+        val dynamicBlack = dcgBlack ?: sensorKey(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
             ?.takeIf { it.size == 4 && it.all(Float::isFinite) }
         val staticBlack = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
             ?.let { pattern -> FloatArray(4) { index ->
@@ -223,8 +233,8 @@ object RawFrameMetadataFactory {
             else -> BlackLevelSource.MISSING
         }
 
-        val dynamicWhite = sensorKey(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
-            ?.takeIf { it > 0 }?.toFloat()
+        val dynamicWhite = (if (lapisDcg) LapisRootSession.storageWhite(characteristics)?.toFloat() else null)
+            ?: sensorKey(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.takeIf { it > 0 }?.toFloat()
         val staticWhite = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
             ?.takeIf { it > 0 }?.toFloat()
         val (reportedBlack, reportedWhite) = levelOverrides.captureSensorLevels(
@@ -241,17 +251,24 @@ object RawFrameMetadataFactory {
         // placeholders or white <= black) would fail the save or write a
         // black DNG. Sample the frame's own bytes instead; the tags stay
         // self-consistent with the payload. Sane HALs never sample.
-        val sampled = if (DngLevelRepair.needsRepair(reportedBlack, reportedWhite)) {
-            image.buffer?.let { buffer ->
-                DngLevelRepair.sample(buffer, image.rowStride, image.pixelStride,
-                    image.width, image.height)
-            }
-        } else null
+        val sampled = if (DngLevelRepair.needsRepair(reportedBlack, reportedWhite)) levelSample else null
         val repaired = sampled?.let(DngLevelRepair::repair)
-        val black = repaired?.first ?: reportedBlack
-        val white = repaired?.second ?: reportedWhite
-        val blackSource = if (repaired != null) BlackLevelSource.SAMPLED else reportedBlackSource
-        val whiteSource = if (repaired != null) WhiteLevelSource.SAMPLED else reportedWhiteSource
+        // DCG / deeper storage on any phone: 10- or 12-bit levels reported for a 12- or 14-bit payload
+        // (samples past the reported white) scale up by the matching power of two. User overrides and
+        // device profiles (levelOverrides) win; a repaired pair already came from the samples.
+        val deeper = if (repaired == null && levelOverrides.blackLevels == null &&
+            levelOverrides.whiteLevel == null && reportedBlack != null && reportedWhite != null) {
+            levelSample?.let { DngLevelRepair.deeperStorage(reportedBlack, reportedWhite, it) }
+        } else null
+        if (deeper != null) {
+            android.util.Log.i("RawLensLevels", "DEEPER_STORAGE route=$cameraId frame=${result.frameNumber} " +
+                "reported=${reportedBlack?.joinToString()}/$reportedWhite -> ${deeper.first.joinToString()}/${deeper.second} " +
+                "sampleMax=${levelSample?.max}")
+        }
+        val black = repaired?.first ?: deeper?.first ?: reportedBlack
+        val white = repaired?.second ?: deeper?.second ?: reportedWhite
+        val blackSource = if (repaired != null || deeper != null) BlackLevelSource.SAMPLED else reportedBlackSource
+        val whiteSource = if (repaired != null || deeper != null) WhiteLevelSource.SAMPLED else reportedWhiteSource
 
         if (levelOverrides.blackLevels != null || levelOverrides.whiteLevel != null) {
             android.util.Log.i("RawLensLevels", "CAPTURE_LEVELS route=$cameraId frame=${result.frameNumber} " +

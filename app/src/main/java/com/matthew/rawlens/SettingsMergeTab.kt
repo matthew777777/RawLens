@@ -139,6 +139,15 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionDesc("Bypasses the networks, DCT and additional denoising."))
+        content.addView(settingsCheck("Highlight recovery", mfsrSettings.lkrHighlightRecovery).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.lkrHighlightRecovery &&
+                    !applyMfsrSettings(mfsrSettings.copy(lkrHighlightRecovery = checked))) {
+                    isChecked = mfsrSettings.lkrHighlightRecovery
+                }
+            }
+        })
+        content.addView(sectionDesc("Rebuilds blown lamps, bulbs and sky from the neighbouring unclipped colour. Off keeps the old neutral white."))
         content.addView(settingsCheck("Network denoise", mfsrSettings.lkrNetwork).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.lkrNetwork &&

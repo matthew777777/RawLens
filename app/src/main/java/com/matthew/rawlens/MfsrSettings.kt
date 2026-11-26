@@ -66,6 +66,8 @@ data class MfsrSettings(
     val lkrNetwork: Boolean = false,
     val lkrNpuDenoise: Boolean = false,
     val lkrNoPrior: Boolean = false,
+    /** LK-R: rebuild clipped highlights (lamps, bulbs, sky) from the neighbours' local colour; off keeps the old neutral rule. */
+    val lkrHighlightRecovery: Boolean = true,
     /**
      * LK-R: reference = sharpest of the middle three frames instead of the
      * newest three ([BurstSharpness.plan]); more frames survive motion
@@ -120,6 +122,7 @@ data class MfsrSettings(
         "lkr_network" to lkrNetwork,
         "lkr_npu_denoise" to lkrNpuDenoise,
         "lkr_no_prior" to lkrNoPrior,
+        "lkr_highlight_rec" to lkrHighlightRecovery,
         "lkr_middle_reference" to lkrMiddleReference,
         "lkr_zoom" to lkrZoom.name,
         "lkr_full_res" to lkrFullRes,
@@ -165,6 +168,7 @@ data class MfsrSettings(
             lkrNetwork = values["lkr_network"] as? Boolean ?: runCatching { LkrBridge.nativeHasNpu() }.getOrDefault(false),
             lkrNpuDenoise = values["lkr_npu_denoise"] as? Boolean ?: false,
             lkrNoPrior = values["lkr_no_prior"] as? Boolean ?: false,
+            lkrHighlightRecovery = values["lkr_highlight_rec"] as? Boolean ?: true,
             lkrMiddleReference = values["lkr_middle_reference"] as? Boolean ?: true,
             // Legacy FULL_2X (zoom and resolution in one value) splits into 1x + full res.
             lkrZoom = (LkrZoom.entries.firstOrNull { it.name == values["lkr_zoom"] } ?: LkrZoom.X1)

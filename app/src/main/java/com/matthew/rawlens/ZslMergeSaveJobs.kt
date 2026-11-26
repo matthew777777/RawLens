@@ -396,7 +396,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
             // Same shutter / ZSL / save tail for both engines; only the merge differs.
             if (settings.engine == MfsrEngine.LKR)
                 MergeGpuQuiet.during { LkrMerge.mergeLive(context, ordered,
-                    LkrMerge.Settings(network = settings.lkrNetwork, npuDenoise = settings.lkrNpuDenoise, noPrior = settings.lkrNoPrior, dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
+                    LkrMerge.Settings(network = settings.lkrNetwork, npuDenoise = settings.lkrNpuDenoise, noPrior = settings.lkrNoPrior, highlightRecovery = settings.lkrHighlightRecovery, dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
                         zoom = settings.lkrZoom, fullRes = settings.lkrFullRes, hdrBracket = hdr),
                     releaseInputs = host::releaseInputs) }
             else MfsrMerge.merge(context, ordered, settings)

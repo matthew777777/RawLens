@@ -198,7 +198,7 @@ class RawDevelopmentCoordinator(context: Context) {
 
     private fun reconstructBayer(cfa: UnpackedRawCfa, enabled: Boolean, metadata: RawFrameMetadata, owned: Boolean = false): UnpackedRawCfa {
         if (!enabled) return cfa
-        val clipping = cfa.highlightClipping
+        val clipping = OpposedHighlights.clipMaskOf(cfa)
         if (clipping != null) { if (!clipping.any) return cfa }
         else if (cfa.values.none { it >= OpposedHighlights.CLIP }) return cfa
         // Opposed references must be achromatic in the same neutral basis as demosaic.
@@ -309,7 +309,15 @@ class RawDevelopmentCoordinator(context: Context) {
                     geometry.processingCrop, ByteOrder.nativeOrder()
                 )
             }
-            preDemosaic = RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic)
+            // Denoised values are smoothed: take the opposed clip evidence from the untouched sensor plane.
+            val opposedSource = if (opposedEnabled && denoised != null) unpacked.copy(
+                opposedClipping = OpposedHighlights.clipMaskFromRawSensor(
+                    meterPlane, requireNotNull(sensorLayout), sensorNormalization, geometry.processingCrop
+                )
+            ) else unpacked
+            preDemosaic = RawPreDemosaicPipeline.process(
+                opposedSource, metadata, settings.preDemosaic, opposedClipEvidence = opposedEnabled
+            )
             cpuCfa = requireNotNull(preDemosaic.cfa)
             preparedAt = SystemClock.elapsedRealtime()
         }
@@ -691,7 +699,9 @@ class RawDevelopmentCoordinator(context: Context) {
                 geometry.processingCrop, ByteOrder.nativeOrder()
             )
         }
-        val cfa = requireNotNull(RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic).cfa)
+        val cfa = requireNotNull(RawPreDemosaicPipeline.process(
+            unpacked, metadata, settings.preDemosaic, opposedClipEvidence = look.hlReconstruction
+        ).cfa)
         return monoFromCfa(cfa, metadata, look, wantMono, wantPacked)
     }
 
