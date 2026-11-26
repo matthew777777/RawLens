@@ -176,7 +176,10 @@ internal class LapisRootSession private constructor(val mode: LapisRootProfile.M
         fun bind(characteristics: CameraCharacteristics,spec: Spec) { bindings[characteristics]=spec }
         fun spec(characteristics: CameraCharacteristics): Spec? = bindings[characteristics]
         fun previewCrop(c: CameraCharacteristics,crop: Rect?,width: Int,height: Int): Rect? {
-            val spec=spec(c)?.takeIf { it.metadataVerified && it.width==width && it.height==height } ?: return crop
+            // Outside Lapis the RAW buffer is never cropped (stills use it whole): SCALER_CROP_REGION is
+            // the processed-output crop, in logical-camera coordinates on physical routes (Moto 2x lens
+            // came back ~3x zoomed), so the viewfinder shows the full frame like the photo.
+            val spec=spec(c)?.takeIf { it.metadataVerified && it.width==width && it.height==height } ?: return null
             val active=c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return Rect(0,0,width,height)
             val source=crop ?: active
             fun x(v:Int)=((v-active.left).toLong()*spec.width/active.width()).toInt().coerceIn(0,width)
