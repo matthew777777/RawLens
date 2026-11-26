@@ -1616,9 +1616,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         // shaders output grey. Zero extra GPU work (no pass, no branch).
         // Digital gain past the sensor ISO max (manual or PROGRAM AE): show it
         // in both preview modes so the VF matches the saved still.
-        val digitalGain = DigitalGain.gainFor(result?.get(CaptureResult.SENSOR_SENSITIVITY),
+        // PROGRAM also folds in the residual to the still's exposure (rawr), so
+        // sensor steps and request latency never show; it may be below 1.
+        val digitalGain = DigitalGain.viewfinderGainFor(result?.get(CaptureResult.SENSOR_SENSITIVITY),
+            result?.get(CaptureResult.SENSOR_EXPOSURE_TIME),
             c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.upper)
-        if (digitalGain > 1f && !renderJpeg) for (i in out.matrix.indices) out.matrix[i] *= digitalGain
+        if (digitalGain != 1f && !renderJpeg) for (i in out.matrix.indices) out.matrix[i] *= digitalGain
         if (monoPreview) {
             foldLuma(out.matrix, LUMA_709)
             foldLuma(out.camToAces, LUMA_AP1)
@@ -1629,7 +1632,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         out.photoLut = previewPhotoLut
         out.displayP3 = previewP3
         out.lensGreenRow = VfGpuImport.lensGreenRow(channels)
-        out.exposureEv = previewExposureEv + DigitalGain.ev(digitalGain).toFloat()
+        out.exposureEv = previewExposureEv +
+            (if (digitalGain > 0f) (kotlin.math.ln(digitalGain.toDouble()) / kotlin.math.ln(2.0)).toFloat() else 0f)
         out.basicTone = basicTone
         out.agxPunchy = agxPunchy
         out.agxContrast = agxContrast

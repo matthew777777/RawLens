@@ -117,7 +117,9 @@ internal object VfGpuImport {
         pattern: BayerPattern? = null,
         sensorOriginX: Int = 0,
         sensorOriginY: Int = 0,
-        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning(),
+        /** One sensor frame (always, for the VF): mirror the still develop's singleFrame rules. */
+        singleFrame: Boolean = true
     ): Double {
         require(left % 2 == 0 && top % 2 == 0 && step >= 2 && step % 2 == 0)
         require(width > 0 && height > 0 && levels.size == 4)
@@ -221,8 +223,40 @@ internal object VfGpuImport {
                 y += stride
             }
         }
+        // Same single-frame rules as the still develop (analyzeRaw singleFrame = true):
+        // clipped photosites leave the highlight guards, and the frame's own blind
+        // noise fit gates the night/HDR decisions. Without them the VF metered darker
+        // whenever anything clipped and brighter than the photo at night.
+        val noise = if (singleFrame) {
+            val shorts = if (pixelStride == 2 && rowStride % 2 == 0) input.asShortBuffer() else null
+            val shortsPerRow = rowStride / 2
+            // The visited span (same crop the save path's analyzeRaw meters); reads past
+            // the plane return NaN, which the sampler skips.
+            RawSceneNoise.sampleNormalized(spanW, spanH, AdaptiveDevelopmentExposure.CLIP_LEVEL) { cx, cy ->
+                val px = left + cx
+                val py = top + cy
+                val index = (py and 1) * 2 + (px and 1)
+                val code = if (shorts != null) {
+                    val at = py.toLong() * shortsPerRow + px
+                    if (at >= shorts.capacity()) return@sampleNormalized Float.NaN
+                    shorts.get(at.toInt()).toInt() and 0xffff
+                } else {
+                    val at = base + py.toLong() * rowStride + px.toLong() * pixelStride
+                    if (at + 2 > input.limit()) return@sampleNormalized Float.NaN
+                    input.getShort(at.toInt()).toInt() and 0xffff
+                }
+                var n = (code - levels[index]) * invRange[index]
+                if (applyLens) {
+                    val sx = sensorOriginX + px
+                    val sy = sensorOriginY + py
+                    n *= lens.gainAt(sx, sy, pattern.colorAt(sx, sy))
+                }
+                n
+            }?.let { RawSceneNoise.fit(listOf(it)) }
+        } else null
         return AdaptiveDevelopmentExposure.analyzeSamples(
-            samples, count, tuning, weights = if (useWeights) weights else null
+            samples, count, tuning, weights = if (useWeights) weights else null,
+            excludeClipped = singleFrame, noise = noise
         ).correctionEv
     }
 

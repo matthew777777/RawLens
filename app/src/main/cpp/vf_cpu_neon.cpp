@@ -15,6 +15,9 @@
 // (caller + 3 workers, created once, no per-frame spawn). Bands are
 // disjoint by construction. All plane access ends before return.
 #include <jni.h>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 #include "vf_linear_sample.h"
 
 #include <android/log.h>
@@ -345,4 +348,77 @@ Java_com_matthew_rawlens_VfCpuNeon_copyNative(
     job.rowStride = rowStride;
     job.pixelStride = pixelStride;
     return vfcpu::runThreaded(job);
+}
+
+namespace vfcpu {
+
+// RAW10: 4 pixels in 5 bytes, top 8 bits first, low 2 bits shared in byte 4.
+static void unpackRow10(const uint8_t* s, uint16_t* d, int width) {
+    int x = 0;
+#if defined(__aarch64__)
+    static const uint8_t kHigh[16] = {0, 255, 1, 255, 2, 255, 3, 255, 5, 255, 6, 255, 7, 255, 8, 255};
+    static const uint8_t kLow[16] = {4, 255, 4, 255, 4, 255, 4, 255, 9, 255, 9, 255, 9, 255, 9, 255};
+    static const int16_t kShift[8] = {0, -2, -4, -6, 0, -2, -4, -6};
+    const uint8x16_t high = vld1q_u8(kHigh), low = vld1q_u8(kLow);
+    const int16x8_t shift = vld1q_s16(kShift);
+    const uint16x8_t three = vdupq_n_u16(3);
+    // Each step loads 16 bytes but uses 10: stop while the load stays inside the row.
+    const int rowBytes = width / 4 * 5;
+    for (int b = 0; b + 16 <= rowBytes; b += 10, x += 8) {
+        const uint8x16_t v = vld1q_u8(s + b);
+        const uint16x8_t hi = vreinterpretq_u16_u8(vqtbl1q_u8(v, high));
+        const uint16x8_t lo = vshlq_u16(vreinterpretq_u16_u8(vqtbl1q_u8(v, low)), shift);
+        vst1q_u16(d + x, vorrq_u16(vshlq_n_u16(hi, 2), vandq_u16(lo, three)));
+    }
+#endif
+    for (; x + 4 <= width; x += 4) {
+        const uint8_t* p = s + x / 4 * 5;
+        for (int i = 0; i < 4; ++i)
+            d[x + i] = static_cast<uint16_t>((p[i] << 2) | ((p[4] >> (2 * i)) & 3));
+    }
+}
+
+// RAW12: 2 pixels in 3 bytes, low nibbles shared in byte 2.
+static void unpackRow12(const uint8_t* s, uint16_t* d, int width) {
+    int x = 0;
+#if defined(__aarch64__)
+    for (; x + 16 <= width; x += 16) {
+        const uint8x8x3_t v = vld3_u8(s + x / 2 * 3);
+        uint16x8x2_t o;
+        o.val[0] = vorrq_u16(vshll_n_u8(v.val[0], 4), vmovl_u8(vand_u8(v.val[2], vdup_n_u8(15))));
+        o.val[1] = vorrq_u16(vshll_n_u8(v.val[1], 4), vmovl_u8(vshr_n_u8(v.val[2], 4)));
+        vst2q_u16(d + x, o);
+    }
+#endif
+    for (; x + 2 <= width; x += 2) {
+        const uint8_t* p = s + x / 2 * 3;
+        d[x] = static_cast<uint16_t>((p[0] << 4) | (p[2] & 15));
+        d[x + 1] = static_cast<uint16_t>((p[1] << 4) | (p[2] >> 4));
+    }
+}
+
+}  // namespace vfcpu
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfCpuNeon_unpackNative(
+    JNIEnv* env, jobject, jobject srcBuf, jint srcOffset, jint rowStride,
+    jobject dstBuf, jint width, jint height, jint bits) {
+    if (!srcBuf || !dstBuf || width <= 0 || width % 4 != 0 || height <= 0 || srcOffset < 0 ||
+        (bits != 10 && bits != 12)) return VF_CPU_BAD_ARGUMENT;
+    const auto* src = static_cast<const uint8_t*>(env->GetDirectBufferAddress(srcBuf));
+    auto* dst = static_cast<uint16_t*>(env->GetDirectBufferAddress(dstBuf));
+    if (!src || !dst) return VF_CPU_NOT_DIRECT;
+    const int64_t rowBytes = static_cast<int64_t>(width) * bits / 8;
+    if (rowStride < rowBytes ||
+        srcOffset + static_cast<int64_t>(height - 1) * rowStride + rowBytes >
+            env->GetDirectBufferCapacity(srcBuf) ||
+        static_cast<int64_t>(width) * height * 2 > env->GetDirectBufferCapacity(dstBuf))
+        return VF_CPU_OVERFLOW;
+    for (int y = 0; y < height; ++y) {
+        const uint8_t* s = src + srcOffset + static_cast<int64_t>(y) * rowStride;
+        uint16_t* d = dst + static_cast<int64_t>(y) * width;
+        if (bits == 10) vfcpu::unpackRow10(s, d, width);
+        else vfcpu::unpackRow12(s, d, width);
+    }
+    return VF_CPU_OK;
 }

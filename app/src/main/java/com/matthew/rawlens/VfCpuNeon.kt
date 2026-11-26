@@ -41,6 +41,23 @@ internal object VfCpuNeon {
         available = loaded
     }
 
+    /**
+     * Native RAW10/RAW12 unpack to tight native-order 16-bit codes. False (nothing
+     * usable written) when the library or direct buffers are missing: the caller
+     * decodes in Kotlin. Geometry and [source] size are validated by the caller.
+     */
+    fun unpackPacked(
+        source: ByteBuffer, rowStride: Int, destination: ByteBuffer,
+        width: Int, height: Int, format: PackedRawFormat
+    ): Boolean = available && source.isDirect && destination.isDirect && unpackNative(
+        source, source.position(), rowStride, destination, width, height, format.bitsPerPixel
+    ) == OK
+
+    private external fun unpackNative(
+        source: ByteBuffer, sourceOffset: Int, rowStride: Int, destination: ByteBuffer,
+        width: Int, height: Int, bits: Int
+    ): Int
+
     fun describe(code: Int): String = when (code) {
         OK -> "ok"
         BAD_ARGUMENT -> "bad-argument"

@@ -24,12 +24,12 @@ class VfOverlayEffectBitsTest {
         assertEquals(listOf("UHDR"), vfOverlayEffectBits(true, settings))
     }
 
-    @Test fun `wavelet flag adds badge`() {
+    @Test fun `denoise flag adds badge`() {
         val settings = JpegOutputSettings(toneMapper = PhotoToneMapper.AGX)
-        assertEquals(listOf("WAVELET"), vfOverlayEffectBits(false, settings, wavelet = true))
+        assertEquals(listOf("DENOISE"), vfOverlayEffectBits(false, settings, denoise = true))
         assertEquals(
-            listOf("UHDR", "WAVELET"),
-            vfOverlayEffectBits(false, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, ultraHdr = true), wavelet = true)
+            listOf("UHDR", "DENOISE"),
+            vfOverlayEffectBits(false, JpegOutputSettings(toneMapper = PhotoToneMapper.AGX, ultraHdr = true), denoise = true)
         )
         assertTrue(vfOverlayEffectBits(false, settings).isEmpty())
     }

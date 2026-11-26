@@ -276,11 +276,13 @@ internal class LiveScopes(
     fun publishDevelopedJxlScope(developed: DevelopedJxl) {
         if (!histogramEnabled) return
         guard.run("developed-jxl-scope") {
+            // Scopes need statistics only: bound the Java-heap copy for 50 MP frames.
+            val step = maxOf(1, (maxOf(developed.width, developed.height) + 4095) / 4096)
             val rgba8 = JxlPixelPack.halfRgbaToScopeRgba8(
-                developed.halfRgba, developed.width, developed.height
+                developed.halfRgba, developed.width, developed.height, step
             )
             val bitmap = Bitmap.createBitmap(
-                developed.width, developed.height, Bitmap.Config.ARGB_8888
+                developed.width / step, developed.height / step, Bitmap.Config.ARGB_8888
             )
             try {
                 bitmap.copyPixelsFromBuffer(rgba8)

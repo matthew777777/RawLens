@@ -4,8 +4,8 @@ package com.matthew.rawlens
 
 /**
  * Viewfinder box (photo, RAW video and Encoded Video): the 3:4 portrait viewport seated between the
- * opaque top island and the bottom control panel, bottom-aligned so the
- * panel's rounded top corners fill with picture. Pure integer math so the
+ * opaque top island and the bottom control panel, bottom-aligned against
+ * the panel. Pure integer math so the
  * geometry is unit-testable. Width always fills the root; on shorter screens
  * the picture extends behind the opaque chrome. The activity falls back to full-bleed when
  * measurements are missing (null).
@@ -24,7 +24,7 @@ object PhotoViewfinderBox {
      * @param rootH root height px (>0)
      * @param topBarH measured top-island height px (0 when not laid out yet)
      * @param panelH measured bottom-panel height px (0 when not laid out yet)
-     * @param sealOverlap px the islands overlap the picture (corner radius)
+     * @param sealOverlap px the islands overlap the picture (0 = fully visible)
      * @return the full-width 3:4 box (height rounded up to a pixel) plus its top margin, or null when the
      *   measurements cannot seat a box yet.
      */
