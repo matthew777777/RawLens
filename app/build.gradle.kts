@@ -141,6 +141,11 @@ if (isPackagingBuild && !freezeVersion) {
 }
 
 android {
+    // Lint vital ran on every release build (Kotlin analysis over the whole app) and was the
+    // slowest step: 10+ min on an 8 GB Mac. Run `./gradlew lint` explicitly when wanted.
+    lint {
+        checkReleaseBuilds = false
+    }
     namespace = "com.matthew.rawlens"
     compileSdk = 37
     // Pinned so local, CI, and F-Droid builds use the same NDK.
