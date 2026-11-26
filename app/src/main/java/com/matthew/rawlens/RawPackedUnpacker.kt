@@ -119,9 +119,10 @@ object RawPackedUnpacker {
             require(bytes <= Int.MAX_VALUE)
             val output = storage?.takeIf { it.capacity() >= bytes }
                 ?: ByteBuffer.allocateDirect(bytes.toInt()).order(ByteOrder.nativeOrder()).also { storage = it }
-            if (row.size < width) row = ShortArray(width)
             output.clear()
             output.limit(bytes.toInt())
+            if (VfCpuNeon.unpackPacked(source, rowStride, output, width, height, format)) return output
+            if (row.size < width) row = ShortArray(width)
             val shorts = output.asShortBuffer()
             val origin = source.position()
             for (y in 0 until height) {
@@ -133,8 +134,8 @@ object RawPackedUnpacker {
     }
 
     /**
-     * Sparse native-code sampler for metering loops: decodes one packed row
-     * at a time and caches it, so histograms and peaking pay per visited
+     * Sparse native-code sampler for metering loops: decodes packed rows on
+     * demand and caches the latest even and odd row (a Bayer quad reads both), so histograms and peaking pay per visited
      * row instead of per full frame. Throws like the full entry on bad
      * geometry; out-of-range samples throw [IllegalArgumentException].
      */
@@ -149,8 +150,8 @@ object RawPackedUnpacker {
     ) {
         private val input = source.duplicate().order(byteOrder)
         private val origin = input.position() + planeOffset
-        private var cachedRow = -1
-        private val rowCodes = ShortArray(width)
+        private val cachedRows = intArrayOf(-1, -1)
+        private val rowCodes = Array(2) { ShortArray(width) }
 
         init {
             require(width > 0 && height > 0) { "Packed plane must be non-empty" }
@@ -168,11 +169,13 @@ object RawPackedUnpacker {
             require(x in 0 until width && y in 0 until height) {
                 "Packed sample ($x, $y) outside ${width}x$height"
             }
-            if (y != cachedRow) {
-                decodeRow(input, origin + y * rowStrideBytes, rowCodes, 0, width, format)
-                cachedRow = y
+            val slot = y and 1
+            val codes = rowCodes[slot]
+            if (y != cachedRows[slot]) {
+                decodeRow(input, origin + y * rowStrideBytes, codes, 0, width, format)
+                cachedRows[slot] = y
             }
-            return rowCodes[x].toInt() and 0xffff
+            return codes[x].toInt() and 0xffff
         }
     }
 

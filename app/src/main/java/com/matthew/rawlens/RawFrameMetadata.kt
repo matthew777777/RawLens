@@ -171,6 +171,11 @@ object RawFrameMetadataFactory {
         boundPhysicalId: String? = null
     ): String? = (boundPhysicalId ?: activePhysicalId)?.takeIf { it in availableIds }
 
+    /** The physical-result id [capture] would pick for [result], for preview-side caches. */
+    fun previewPhysicalId(result: TotalCaptureResult, boundPhysicalId: String?): String? =
+        selectPhysicalResultId(result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID),
+            physicalCaptureResults(result).keys, boundPhysicalId)
+
     fun capture(
         cameraId: String,
         image: Image,
@@ -191,9 +196,10 @@ object RawFrameMetadataFactory {
         exifOrientation: Int,
         levelOverrides: DngMetadataOverrides = DngMetadataOverrides(),
         vendorFullResolution: Boolean = false,
-        boundPhysicalId: String? = null
+        boundPhysicalId: String? = null,
+        cfaOverride: Int? = null
     ): RawFrameMetadata {
-        val cfaValue = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+        val cfaValue = cfaOverride ?: characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         val cfaResult = runCatching { cfaValue?.let(BayerPattern::fromCamera2) }
         val cfa = cfaResult.getOrNull()
 
@@ -284,15 +290,18 @@ object RawFrameMetadataFactory {
             }
         val hotPixels = sensorKey(CaptureResult.STATISTICS_HOT_PIXEL_MAP)
             ?.map { it.snapshot() }.orEmpty()
-        val halGains = sensorKey(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
+        val reportedGains = sensorKey(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
             ImmutableFloatValues(floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue))
         }
-        val halNeutral = sensorKey(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
-            ?.toDoubleValues()
-        // Direct-opened Xiaomi aux lenses run no AWB (unity gains, NaN
-        // neutral): estimate from the frame so JPEG and DNG are not green.
-        val fallbackNeutral = if (RawWhiteBalanceFallback.halAwbMissing(
-                halNeutral?.toDoubleArray(), halGains?.toFloatArray()) &&
+        val reportedNeutral = sensorKey(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.toDoubleValues()
+        val awbMode = if (result.get(CaptureResult.CONTROL_MODE) == CaptureResult.CONTROL_MODE_OFF) 0
+            else sensorKey(CaptureResult.CONTROL_AWB_MODE)
+        // Xiaomi tele stills return AWB still SEARCHING with a stale neutral (StillAwbRepair):
+        // estimate from this frame's RAW like a missing AWB; the converged preview is the backup.
+        val stillAwbUnsettled = StillAwbRepair.unsettled(awbMode, sensorKey(CaptureResult.CONTROL_AWB_STATE))
+        val awbMissing = RawWhiteBalanceFallback.halAwbMissing(
+            reportedNeutral?.toDoubleArray(), reportedGains?.toFloatArray())
+        val fallbackNeutral = if ((awbMissing || stillAwbUnsettled) &&
             cfaValue != null && black != null && white != null && plane != null
         ) {
             runCatching {
@@ -303,8 +312,19 @@ object RawFrameMetadataFactory {
                         sensorKey(CaptureResult.SENSOR_SENSITIVITY), sensorKey(CaptureResult.LENS_APERTURE)))
             }.getOrNull()
         } else null
-        val gains = fallbackNeutral?.let { ImmutableFloatValues(RawWhiteBalanceFallback.gainsFor(it)) } ?: halGains
-        val neutral = fallbackNeutral?.let(::ImmutableDoubleValues) ?: halNeutral
+        val previewAwb = if (fallbackNeutral == null && stillAwbUnsettled) StillAwbRepair.replacementFor(
+            cameraId, physicalId, awbMode, sensorKey(CaptureResult.CONTROL_AWB_STATE),
+            sensorKey(CaptureResult.SENSOR_TIMESTAMP)) else null
+        if (stillAwbUnsettled && !awbMissing) {
+            android.util.Log.i("RawLensColor", "STILL_AWB_REPAIR route=$cameraId frame=${result.frameNumber} " +
+                "stillNeutral=${reportedNeutral?.toDoubleArray()?.joinToString { "%.4f".format(java.util.Locale.US, it) }} " +
+                "rawEstimate=${fallbackNeutral?.joinToString { "%.4f".format(java.util.Locale.US, it) }} " +
+                "previewNeutral=${previewAwb?.neutral?.joinToString { "%.4f".format(java.util.Locale.US, it) }}")
+        }
+        val gains = fallbackNeutral?.let { ImmutableFloatValues(RawWhiteBalanceFallback.gainsFor(it)) }
+            ?: previewAwb?.let { ImmutableFloatValues(it.gains) } ?: reportedGains
+        val neutral = fallbackNeutral?.let(::ImmutableDoubleValues)
+            ?: previewAwb?.let { ImmutableDoubleValues(it.neutral) } ?: reportedNeutral
         val noise = sensorKey(CaptureResult.SENSOR_NOISE_PROFILE)?.let { pairs ->
             ImmutableDoubleValues(DoubleArray(pairs.size * 2) { index ->
                 if (index and 1 == 0) pairs[index / 2].first else pairs[index / 2].second

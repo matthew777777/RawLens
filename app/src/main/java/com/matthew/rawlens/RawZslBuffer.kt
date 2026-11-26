@@ -103,17 +103,19 @@ internal class RawZslBuffer(private val capacity: Int) {
 
     /** OFF retains incomplete selections; ON transfers every returned frame to the caller. */
     fun takeForCapture(cutoffNanos: Long, realtimeTimestamps: Boolean, count: Int,
-                       hybridTopup: Boolean): List<BufferedRawFrame> =
-        if (hybridTopup) takeUpTo(cutoffNanos, realtimeTimestamps, count)
-        else takeBest(cutoffNanos, realtimeTimestamps, count)
+                       hybridTopup: Boolean, latencyNanos: Long = 0L): List<BufferedRawFrame> =
+        if (hybridTopup) takeUpTo(cutoffNanos, realtimeTimestamps, count, latencyNanos)
+        else takeBest(cutoffNanos, realtimeTimestamps, count, latencyNanos)
 
     @Synchronized
     fun takeBest(
         cutoffNanos: Long,
         realtimeTimestamps: Boolean,
-        count: Int
+        count: Int,
+        latencyNanos: Long = 0L
     ): List<BufferedRawFrame> {
-        val eligible = eligibleFrames(cutoffNanos, realtimeTimestamps)
+        val eligible = compensateLatency(
+            eligibleFrames(cutoffNanos, realtimeTimestamps), cutoffNanos, count, latencyNanos)
         if (eligible.size < count) return emptyList()
         return takeRanked(eligible, cutoffNanos, realtimeTimestamps, count)
     }
@@ -129,10 +131,12 @@ internal class RawZslBuffer(private val capacity: Int) {
     fun takeUpTo(
         cutoffNanos: Long,
         realtimeTimestamps: Boolean,
-        maxCount: Int
+        maxCount: Int,
+        latencyNanos: Long = 0L
     ): List<BufferedRawFrame> {
         if (maxCount <= 0) return emptyList()
-        val eligible = eligibleFrames(cutoffNanos, realtimeTimestamps)
+        val eligible = compensateLatency(
+            eligibleFrames(cutoffNanos, realtimeTimestamps), cutoffNanos, maxCount, latencyNanos)
         if (eligible.isEmpty()) return emptyList()
         return takeRanked(eligible, cutoffNanos, realtimeTimestamps, minOf(maxCount, eligible.size))
     }
@@ -146,6 +150,21 @@ internal class RawZslBuffer(private val capacity: Int) {
             val ageNanos = cutoffNanos - completedAt
             ageNanos in 0L..MAX_FRAME_AGE_NANOS
         }
+    }
+
+    /**
+     * Reaction latency compensation: only frames whose exposure began by
+     * [latencyNanos] before the press, so the newest one shows the moment the
+     * photographer reacted to. A ring too short for that is completed with the
+     * later frames nearest that moment; compensation never refuses a shutter.
+     */
+    private fun compensateLatency(
+        eligible: List<BufferedRawFrame>, cutoffNanos: Long, count: Int, latencyNanos: Long
+    ): List<BufferedRawFrame> {
+        if (latencyNanos <= 0L) return eligible
+        val (before, after) = eligible.sortedBy { it.timestampNanos }
+            .partition { it.timestampNanos <= cutoffNanos - latencyNanos }
+        return before + after.take((count - before.size).coerceAtLeast(0))
     }
 
     /**

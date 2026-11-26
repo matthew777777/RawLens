@@ -264,6 +264,26 @@ class RawZslBufferTest {
         assertEquals(listOf(200L), last.map { it.timestampNanos })
     }
 
+    @Test fun `reaction latency takes the frames before the compensated moment`() {
+        val buffer = RawZslBuffer(8)
+        (1..6).forEach { buffer.addTestFrame(frame(it.toLong()), it * 100L) }
+        val selected = buffer.takeBest(700L, false, 2, latencyNanos = 250L)
+        assertEquals(listOf(300L, 400L), selected.map { it.timestampNanos })
+    }
+
+    @Test fun `reaction latency completes a short ring with the nearest later frames`() {
+        val buffer = RawZslBuffer(8)
+        (1..6).forEach { buffer.addTestFrame(frame(it.toLong()), it * 100L) }
+        val selected = buffer.takeForCapture(700L, false, 4, false, latencyNanos = 500L)
+        assertEquals(listOf(100L, 200L, 300L, 400L), selected.map { it.timestampNanos })
+    }
+
+    @Test fun `latency ring margin covers the delay`() {
+        assertEquals(0, ZslPolicy.latencyExtraFrames(0, 30))
+        assertEquals(7, ZslPolicy.latencyExtraFrames(200, 30))
+        assertEquals(13, ZslPolicy.latencyExtraFrames(200, 60))
+    }
+
     private fun frame(timestamp: Long): TestFrame {
         val image = Mockito.mock(Image::class.java)
         val result = Mockito.mock(TotalCaptureResult::class.java)

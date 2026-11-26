@@ -671,7 +671,7 @@ object AdaptiveDevelopmentExposure {
     private const val MAX_SAMPLES = 65_536
     private const val MIN_SAMPLES = 64
     /** Normalized sensor level treated as clipped (white level minus a small black/noise margin). */
-    private const val CLIP_LEVEL = 0.97f
+    internal const val CLIP_LEVEL = 0.97f
     internal const val SHADOW_FLOOR = 1e-4f
     private const val TARGET_MIDDLE = 0.18
     // Defaults for [AdaptiveExposureTuning]; wired from JpegOutputSettings.

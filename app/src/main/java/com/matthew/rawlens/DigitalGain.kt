@@ -24,6 +24,33 @@ object DigitalGain {
     /** Gain the PROGRAM AE asks for on top of its sensor pair; 1 = none. */
     @Volatile var autoGain: Float = 1f
 
+    /**
+     * PROGRAM: exposure (ISO x ns x digital) a still taken now gets; 0 = not
+     * PROGRAM-driven. The viewfinder brings every frame to it ([viewfinderGainFor]).
+     */
+    @Volatile var programStillTotal: Double = 0.0
+
+    /** rawr residual clamp (kMinResidualEv / kMaxResidualEv). */
+    private const val MIN_RESIDUAL = 0.25f
+    private const val MAX_RESIDUAL = 16f
+
+    /**
+     * Viewfinder gain for one frame (rawr residual gain): in PROGRAM the frame
+     * is shown at the exposure a still taken now would get, whatever exposure
+     * the frame itself landed with (request latency, integer ISO, flicker
+     * rounding, the deadband). Elsewhere the plain digital gain.
+     */
+    fun viewfinderGainFor(sensorIso: Int?, exposureNanos: Long?, sensorMax: Int?): Float {
+        val total = programStillTotal
+        if (total > 0.0 && requestedIso == null && sensorIso != null && sensorIso > 0 &&
+            exposureNanos != null && exposureNanos > 0L
+        ) {
+            val residual = (total / (sensorIso.toDouble() * exposureNanos)).toFloat()
+            if (residual.isFinite()) return residual.coerceIn(MIN_RESIDUAL, MAX_RESIDUAL)
+        }
+        return gainFor(sensorIso, sensorMax)
+    }
+
     /** Digital gain for a frame captured at [sensorIso] with sensor max [sensorMax]. */
     fun gainFor(sensorIso: Int?, sensorMax: Int?): Float {
         if (sensorIso == null || sensorMax == null || sensorIso <= 0) return 1f

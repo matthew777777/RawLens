@@ -9,6 +9,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RawStreamPlanTest {
+    @Test fun `still-only RAW never joins the repeating request`() {
+        assertFalse(RawStreamPlan.plan(idle.copy(rawStillOnly = true)).anyRaw)
+    }
+
     private val idle = RawStreamPlan.Inputs(
         allowRawZsl = true, zslRestartFitsReader = true, zslRequested = true, zslBlocked = false,
         zslCapacity = 8, readerPresent = true, rawRetryReady = true, captureInProgress = false,

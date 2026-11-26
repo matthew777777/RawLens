@@ -30,6 +30,7 @@ import android.widget.TextView
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
+import kotlin.math.abs
 import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.CheckBox
@@ -47,7 +48,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
 import android.os.Build
@@ -155,32 +155,12 @@ internal fun MainActivity.showProgramPanelHintOnce() {
     setStatus("PROGRAM AE • TAP ISO OR SHUTTER TO SHIFT")
 }
 
+/**
+ * Tap ISO/SHUTTER in PROGRAM: open that axis's ruler slider directly (moving it
+ * locks the axis, AUTO releases). Priority presets live in the LIMITS editor.
+ */
 internal fun MainActivity.showProgramShift(isIso: Boolean) {
-    if (!controller.hasManualSensorControl()) {
-        setStatus("ANDROID AE • NO MANUAL SENSOR")
-        return
-    }
-    val profile = programProfile()
-    if (profile.lockMode == if (isIso) ProgramLockMode.ISO_LOCK else ProgramLockMode.SHUTTER_LOCK) {
-        showProgramAxisSlider(isIso)
-        return
-    }
-    closeFloatingPanels()
-    val balances = floatArrayOf(0f, 0.5f, 1f)
-    val labels = arrayOf("Lower ISO", "Balanced", "Faster shutter")
-    val selected = if (profile.lockMode == ProgramLockMode.NONE) {
-        balances.indexOfFirst { it == profile.balance }
-    } else -1
-    RawLensDialogBuilder(this)
-        .setTitle("Program shift")
-        .setSingleChoiceItems(labels, selected) { dialog, index ->
-            saveProgramProfile(programProfile().copy(balance = balances[index], lockMode = ProgramLockMode.NONE))
-            setStatus("PROGRAM • ${labels[index]}")
-            dialog.dismiss()
-        }
-        .setNeutralButton("Advanced") { _, _ -> showProgramPanel() }
-        .setNegativeButton("Cancel", null)
-        .show()
+    showProgramAxisSlider(isIso)
 }
 
 internal fun MainActivity.programBalanceText(balance: Float): String = when {
@@ -266,7 +246,7 @@ internal fun MainActivity.showProgramPanel() {
         })
     }
     container.addView(TextView(this).apply {
-        text = "Hold ISO or shutter to lock it. Tap a locked value to adjust it."
+        text = "Tap ISO or shutter for its slider; moving it locks that value. Hold to release."
         setTextColor(getColor(R.color.text_secondary))
         textSize = 11f
         setPadding(0, dp(4), 0, 0)
@@ -302,10 +282,43 @@ internal fun MainActivity.showProgramPanel() {
         contentDescription = "PROGRAM ISO and shutter balance"
         setLabelFormatter { programBalanceText(it / 100f) }
     }
+    // Priority presets: one row of chips that snap the balance slider.
+    val presetRow = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(0, dp(6), 0, dp(2))
+    }
+    val presets = listOf("Lower ISO" to 0f, "Balanced" to 0.5f, "Faster shutter" to 1f)
+    val presetButtons = presets.map { (label, _) ->
+        Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = 12f
+            minWidth = 0
+            minimumWidth = 0
+        }
+    }
+    fun refreshPresets() = presetButtons.forEachIndexed { i, button ->
+        styleDialogButton(button, active = abs(profile.balance - presets[i].second) < 0.01f)
+    }
+    presetButtons.forEachIndexed { i, button ->
+        presetRow.addView(button, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            if (i > 0) marginStart = dp(6)
+        })
+        button.setOnClickListener {
+            profile = profile.copy(balance = presets[i].second)
+            balanceSlider.progress = (profile.balance * 100).toInt()
+            balanceLabel.text = programBalanceText(profile.balance)
+            refreshPresets()
+            apply()
+        }
+    }
+    refreshPresets()
+    container.addView(presetRow)
     container.addView(balanceSlider)
     bindSlider(balanceSlider) { progress ->
         profile = profile.copy(balance = progress / 100f)
         balanceLabel.text = programBalanceText(profile.balance)
+        refreshPresets()
     }
     val lockButton = Button(this).also { styleDialogButton(it) }
     val lockedIsoButton = Button(this).also { styleDialogButton(it) }

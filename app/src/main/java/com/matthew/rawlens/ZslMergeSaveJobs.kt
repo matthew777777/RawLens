@@ -176,9 +176,6 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
         val merged = requireNotNull(RawPreDemosaicPipeline.process(
             mergedRaw, refMetadata, PreDemosaicSettings()).cfa)
         val developer = host.developer()
-        val effectiveMerged = if (denoise.aiEnabled) {
-            developer.denoiseCfa(merged, refMetadata) ?: merged
-        } else merged
         var referenceDng: String? = null
         val timings = host.hdrPlusProcessor().lastTimings
         val motion = host.hdrPlusProcessor().lastMotion
@@ -223,7 +220,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
         // B&W photosite mode: one Vulkan pass on the merged CFA feeds both the
         // monochrome DNG and the develop. Any failure keeps the colour path.
         val mono = if (outputSettings.mono.enabled && !refMetadata.quadBayer) runCatching {
-            developer.monoFromCfa(effectiveMerged, refMetadata, outputSettings,
+            developer.monoFromCfa(merged, refMetadata, outputSettings,
                 wantMono = outputFormat.includesDng, wantPacked = outputFormat.includesJpeg, merged = true)
         }.onFailure { Log.w(LOG_TAG, "HDR+ B&W failed; saving colour", it) }.getOrNull() else null
         try {
@@ -234,7 +231,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             }
             if (mono == null || outputSettings.mono.keepColorDng) {
                 val colorDng = DngSaver(context).saveMerged(
-                    effectiveMerged, refMetadata, captureTimeMillis, gps = captureGps,
+                    merged, refMetadata, captureTimeMillis, gps = captureGps,
                     displayName = CaptureFileNames.hdrPlusDng(captureTimeMillis),
                     sixteenBit = true, hdrPlusProvenance = provenance,
                     dngCompression = saveSettings.dngCompression
@@ -248,7 +245,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             // itself (same highlight guards as single-frame). The DNG above stays
             // linear and dark; only this developed still lifts.
             if (developedFormat == DevelopedFormat.JXL) {
-                val developed = developMergedOrMonoJxl(mono, effectiveMerged, refMetadata,
+                val developed = developMergedOrMonoJxl(mono, merged, refMetadata,
                     RawDevelopmentSettings(
                         denoise = denoise,
                         exposureEv = 0.0,
@@ -259,13 +256,13 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
                             outputSettings, saveSettings.focusView
                         )
                     ), look = outputSettings, jxl = jxlSettings)
+                host.publishDevelopedJxlScope(developed)
                 JxlSaver(context).save(developed, refMetadata, refResult,
                     captureTimeMillis = captureTimeMillis,
                     typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = captureGps)
-                host.publishDevelopedJxlScope(developed)
                 host.reportSaveState(if (referenceDng != null) "HDR+ MERGED+DNG • JXL" else "HDR+ MERGED • JXL")
             } else {
-                val developed = developMergedOrMonoJpeg(mono, effectiveMerged, refMetadata,
+                val developed = developMergedOrMonoJpeg(mono, merged, refMetadata,
                     RawDevelopmentSettings(
                         denoise = denoise,
                         exposureEv = 0.0,
@@ -438,10 +435,10 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
                     val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
                         merged.refMetadata, development,
                         look = outputSettings, jxl = jxlSettings, hdrWhite = merged.hdrWhite)
+                    host.publishDevelopedJxlScope(developed)
                     JxlSaver(context).save(developed, merged.refMetadata, merged.refResult,
                         captureTimeMillis = captureTimeMillis,
                         typeSuffix = settings.mergeFileSuffix(), gps = captureGps)
-                    host.publishDevelopedJxlScope(developed)
                     host.reportSaveState(if (referenceDng != null) "${settings.label} MERGED+DNG • JXL" else "${settings.label} MERGED • JXL")
                 } else {
                     val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,

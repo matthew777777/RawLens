@@ -37,8 +37,7 @@ internal data class RawFrameSaveInput(
 )
 
 /**
- * One RAW frame's save, run on a writer thread: the DNG (original or
- * AI-denoised) and, when the capture
+ * One RAW frame's save, run on a writer thread: the DNG and, when the capture
  * format includes it, the developed JPEG or JXL. The camera Image stays owned
  * by the enclosing OwnedCaptureJob. Extracted verbatim from
  * RawCameraController.saveRawFrame (W3); algorithm stages are called, not
@@ -50,10 +49,12 @@ internal class RawFrameSaveJob(
     private val result: CaptureResult,
     private val input: RawFrameSaveInput,
     private val host: Host,
+    /** CPU copy read instead of [image]. */
+    private val raw: RawImageView? = null,
 ) {
     /** Controller services the job needs; all safe to call from a writer thread. */
     interface Host {
-        /** Shared developer (lazily created; JPEG/JXL/AI work is serialized by the caller's executor). */
+        /** Shared developer (lazily created; JPEG/JXL work is serialized by the caller's executor). */
         fun developer(): RawDevelopmentCoordinator
         fun pendingSaves(): Int
         /** Posts a status line to the camera thread if the session is still current. */
@@ -86,18 +87,6 @@ internal class RawFrameSaveJob(
                         input.outputSettings, input.focusView
                     )
                 )
-                // The AI-denoised CFA is shared by the denoised-DNG write
-                // and the JPEG; null means the legacy paths below run
-                // unchanged.
-                val aiCfa: UnpackedRawCfa? = if (input.denoise.aiEnabled &&
-                    (input.outputFormat.includesDng || input.outputFormat.includesJpeg)
-                ) {
-                    val aiPlane = image.planes.singleOrNull()?.buffer
-                    if (aiPlane != null) {
-                        developer.denoiseCaptureCfa(aiPlane, input.frameMetadata, devSettings)
-                    } else null
-                } else null
-                val denCfa: UnpackedRawCfa? = aiCfa
                 // B&W photosite mode: one Vulkan pass feeds the mono DNG and the
                 // develop. Any failure falls back to the colour outputs.
                 if (input.outputSettings.mono.enabled && !input.frameMetadata.quadBayer &&
@@ -105,10 +94,8 @@ internal class RawFrameSaveJob(
                     mono = runCatching {
                         val wantMono = input.outputFormat.includesDng
                         val wantPacked = input.outputFormat.includesJpeg
-                        if (denCfa != null) developer.monoFromCfa(denCfa, input.frameMetadata,
-                            input.outputSettings, wantMono, wantPacked)
-                        else developer.monoFromRaw(
-                            requireNotNull(image.planes.singleOrNull()?.buffer) { "RAW image must have one plane" },
+                        developer.monoFromRaw(
+                            requireNotNull((raw ?: RawImageView.of(image)).buffer) { "RAW image must have one plane" },
                             input.frameMetadata, devSettings, input.outputSettings, wantMono, wantPacked)
                     }.onFailure { Log.w(LOG_TAG, "B&W failed; saving colour", it) }.getOrNull()
                 }
@@ -118,7 +105,7 @@ internal class RawFrameSaveJob(
                         image, input.characteristics, result, input.orientation, input.dngOverrides,
                         input.frameMetadata, input.dngBackend, captureId = input.captureTimeMillis,
                         gps = input.gps, fileNameSuffix = input.fileNameSuffix,
-                        subfolder = input.subfolder, dngCompression = input.dngCompression
+                        subfolder = input.subfolder, dngCompression = input.dngCompression, raw = raw
                     ).also {
                         Log.i(
                             LOG_TAG,
@@ -142,27 +129,6 @@ internal class RawFrameSaveJob(
                 }
                 if (monoFrame != null && !input.outputSettings.mono.keepColorDng) {
                     // B&W replaces the colour DNG.
-                } else if (aiCfa != null) {
-                    if (input.outputFormat.includesDng) {
-                        try {
-                            dngName = DngSaver(context).saveAiDenoised(
-                                aiCfa, input.frameMetadata, captureId = input.captureTimeMillis,
-                                fileNameSuffix = input.fileNameSuffix, gps = input.gps,
-                                subfolder = input.subfolder
-                            )
-                            Log.i(
-                                LOG_TAG,
-                                "AI DNG saved name=$dngName pendingSaves=${host.pendingSaves()}"
-                            )
-                        } catch (failure: Exception) {
-                            dngFailure = failure
-                            Log.e(LOG_TAG, "AI DNG save failed", failure)
-                        }
-                        if (input.denoise.saveOriginalDng) {
-                            val ogName = saveOriginalDng()
-                            if (dngName == null) dngName = ogName
-                        }
-                    }
                 } else if (input.outputFormat.includesDng) {
                     val colorDng = saveOriginalDng()
                     if (dngName == null) dngName = colorDng
@@ -173,22 +139,14 @@ internal class RawFrameSaveJob(
                             LOG_TAG,
                             "RAW development input timestamp=${input.frameMetadata.timestampNanos} " +
                                 "frame=${input.frameMetadata.frameNumber} cfa=${input.frameMetadata.cfaPattern} " +
-                                "geometry=${input.frameMetadata.bufferGeometry}" +
-                                if (aiCfa != null) " aiDenoised" else ""
+                                "geometry=${input.frameMetadata.bufferGeometry}"
                         )
                         if (input.developedFormat == DevelopedFormat.JXL) {
                             val developed = if (monoFrame != null) {
                                 developer.developMonoJxl(monoFrame, input.frameMetadata, devSettings,
                                     input.outputSettings, input.jxl)
-                            } else if (denCfa != null) {
-                                developer.developCfaJxl(
-                                    denCfa, input.frameMetadata,
-                                    settings = devSettings,
-                                    look = input.outputSettings,
-                                    jxl = input.jxl
-                                )
                             } else {
-                                val rawPlane = image.planes.singleOrNull()?.buffer
+                                val rawPlane = (raw ?: RawImageView.of(image)).buffer
                                     ?: throw UnsupportedOperationException("RAW image must have one plane")
                                 developer.developJxl(
                                     rawPlane, input.frameMetadata,
@@ -198,6 +156,7 @@ internal class RawFrameSaveJob(
                                 )
                             }
                             host.releaseRawFrame()
+                            host.publishDevelopedJxlScope(developed)
                             jpegName = JxlSaver(context).save(
                                 developed, input.frameMetadata, result,
                                 captureTimeMillis = input.captureTimeMillis,
@@ -205,7 +164,6 @@ internal class RawFrameSaveJob(
                                 gps = input.gps,
                                 subfolder = input.subfolder
                             )
-                            host.publishDevelopedJxlScope(developed)
                             Log.i(
                                 LOG_TAG,
                                 "Developed JXL saved name=$jpegName " +
@@ -215,14 +173,8 @@ internal class RawFrameSaveJob(
                             val developed = if (monoFrame != null) {
                                 developer.developMonoJpeg(monoFrame, input.frameMetadata, devSettings,
                                     input.outputSettings)
-                            } else if (denCfa != null) {
-                                developer.developCfaJpeg(
-                                    denCfa, input.frameMetadata,
-                                    settings = devSettings,
-                                    outputSettings = input.outputSettings
-                                )
                             } else {
-                                val rawPlane = image.planes.singleOrNull()?.buffer
+                                val rawPlane = (raw ?: RawImageView.of(image)).buffer
                                     ?: throw UnsupportedOperationException("RAW image must have one plane")
                                 developer.developJpeg(
                                     rawPlane, input.frameMetadata,
@@ -262,7 +214,6 @@ internal class RawFrameSaveJob(
                     }
                 }
                 val label = input.captureLabel?.let { " • $it" }.orEmpty() +
-                    (if (aiCfa != null) " • AI" else "") +
                     (mono?.let { " • B&W ${it.mode.label.uppercase()}" } ?: "")
                 val shadingNote = if (
                     input.frameMetadata.lensShadingMap == null &&

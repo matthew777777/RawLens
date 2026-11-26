@@ -11,6 +11,9 @@ package com.matthew.rawlens
  * docs/refactor/controller-remaining-plan.md).
  */
 internal object ZslPolicy {
+    /** Upper end of the reaction latency compensation slider. */
+    const val MAX_REACTION_LATENCY_MS = 500
+
     /**
      * Pure MotionCam-style fixed-rate selection: prefer the exact fixed
      * [requestedFps, requestedFps] range, then the narrowest range containing it,
@@ -50,6 +53,10 @@ internal object ZslPolicy {
         val halfBurstMs = (count / 2).toLong() * frameNanos / 1_000_000L
         return halfBurstMs.coerceIn(0L, maxDelayMs)
     }
+
+    /** Ring frames needed on top of the burst to reach [latencyMs] before the press. */
+    internal fun latencyExtraFrames(latencyMs: Int, fps: Int): Int =
+        if (latencyMs <= 0 || fps <= 0) 0 else (latencyMs * fps + 999) / 1000 + 1
 
     /**
      * Pure ZSL selection size behind [RawCameraController.zslSelectedFrameCount].

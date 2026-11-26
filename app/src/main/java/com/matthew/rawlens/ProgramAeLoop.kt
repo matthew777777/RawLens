@@ -3,6 +3,9 @@
 
 package com.matthew.rawlens
 
+import kotlin.math.abs
+import kotlin.math.ln
+
 /**
  * PROGRAM custom-AE live state: RAW brightness drives sensor ISO + shutter
  * directly (AE_OFF repeating + still). ETTR is AUTO-only and never touches
@@ -16,6 +19,12 @@ package com.matthew.rawlens
  * guard, which had no reference (docs/refactor/exposure-audit.md).
  */
 internal class ProgramAeLoop {
+    companion object {
+        /** rawr kRequestDeadbandEv. */
+        const val REQUEST_DEADBAND_EV = 1.0 / 48.0
+        private val LN2 = ln(2.0)
+    }
+
     /** Applied (live) pair; also seeded from hardware AE before the RAW loop runs. */
     var iso: Int? = null
     var shutterNanos: Long? = null
@@ -45,6 +54,22 @@ internal class ProgramAeLoop {
     private var lockedIso = 0
     private var lockedShutterNanos = 0L
     private var flickerPeriodNanos = 0L
+    /** [targetLimits] with ISO capped at the sensor's analog max (rawr). */
+    private var analogLimits: ExposureBalanceLimits? = null
+    /** Digital factor a locked ISO above the analog max carries (request runs at the analog max). */
+    private var isoLockDigital = 1.0
+
+    /**
+     * Exposure a still taken now gets: live pair x [digitalGain]. The viewfinder
+     * scales each frame by this over that frame's own exposure (rawr residual
+     * gain), so request latency, integer ISO and flicker steps never show.
+     */
+    val stillTotal: Double
+        get() {
+            val i = iso ?: return 0.0
+            val t = shutterNanos ?: return 0.0
+            return i.toDouble() * t * digitalGain
+        }
 
     enum class Step { START, GLIDE }
 
@@ -61,6 +86,8 @@ internal class ProgramAeLoop {
         targetIso = null
         targetShutterNanos = null
         targetLimits = null
+        analogLimits = null
+        isoLockDigital = 1.0
         converged = false
         brightness = Float.NaN
         targetTotal = 0.0
@@ -85,6 +112,8 @@ internal class ProgramAeLoop {
         flickerPeriodNanos: Long,
         mode: ProgramAgc.ConstraintMode = ProgramAgc.ConstraintMode.NORMAL,
         lighting: ActiveDLighting = ActiveDLighting.OFF,
+        /** SENSOR_MAX_ANALOG_SENSITIVITY; requests never go above it (0 = no cap). */
+        analogIsoMax: Int = 0,
     ): Step? {
         if (currentIso <= 0 || currentShutterNanos <= 0L) return null
         val metered = RawProgramMeter.brightness(sample, profile.metering).toDouble()
@@ -109,8 +138,14 @@ internal class ProgramAeLoop {
         // Past the highest ISO and shutter the rest becomes digital gain (rawr-style),
         // capped per lens. The metered raw never includes that gain, so the AGC
         // keeps measuring against the physical exposure and stays stable.
-        maxDigitalGain = Math.pow(2.0, profile.digitalGainEv.toDouble())
-        val maxTotal = limits.isoMax.toDouble() * limits.shutterMaxNanos * maxDigitalGain
+        // ISO above the analog max is HAL integer gain (clips, coarse steps):
+        // requests stop at the analog max and the same reach comes from float
+        // digital gain instead, so the cap never makes a scene darker.
+        val analogMax = if (analogIsoMax > 0) analogIsoMax.coerceIn(limits.isoMin, limits.isoMax) else limits.isoMax
+        val analog = limits.copy(isoMax = analogMax)
+        val profileDigital = Math.pow(2.0, profile.digitalGainEv.toDouble())
+        maxDigitalGain = profileDigital * limits.isoMax / analogMax
+        val maxTotal = limits.isoMax.toDouble() * limits.shutterMaxNanos * profileDigital
         targetTotal = (current * protectedGain).coerceIn(1.0, maxTotal)
         val (lIso, lShutter) = ProgramAeSolver.resolveLockedValues(
             profile, limits, iso ?: currentIso, shutterNanos ?: currentShutterNanos,
@@ -121,8 +156,11 @@ internal class ProgramAeLoop {
         lockedIso = lIso
         lockedShutterNanos = lShutter
         targetLimits = limits
+        analogLimits = analog
+        isoLockDigital = if (lockMode == ProgramLockMode.ISO_LOCK && lIso > analogMax)
+            lIso.toDouble() / analogMax else 1.0
         this.flickerPeriodNanos = flickerPeriodNanos
-        val target = split(targetTotal, limits)
+        val target = split(targetTotal, analog)
         targetIso = target.iso
         targetShutterNanos = target.shutterNanos
         val starting = filteredTotal <= 0.0
@@ -136,15 +174,26 @@ internal class ProgramAeLoop {
      * Null without a target; else (pair changed, settled in the stable region).
      */
     fun tick(frames: Int): Pair<Boolean, Boolean>? {
-        val limits = targetLimits ?: return null
+        val limits = analogLimits ?: targetLimits ?: return null
         if (targetTotal <= 0.0) return null
         filteredTotal = ProgramAgc.filter(filteredTotal, targetTotal, frames, frameIndex)
         frameIndex += frames.coerceAtLeast(1)
-        val pair = split(filteredTotal, limits)
+        var pair = split(filteredTotal, limits)
+        val liveIso = iso
+        val liveShutter = shutterNanos
+        // rawr request deadband: a pair within 1/48 EV of the live one is not
+        // re-submitted (the viewfinder residual gain covers the difference),
+        // so the filter's tail does not rebuild the repeating request each frame.
+        if (liveIso != null && liveShutter != null && liveIso > 0 && liveShutter > 0L &&
+            (pair.iso != liveIso || pair.shutterNanos != liveShutter) &&
+            pair.isoLimited == isoLimited && pair.shutterLimited == shutterLimited &&
+            abs(ln(pair.iso.toDouble() * pair.shutterNanos / (liveIso.toDouble() * liveShutter))) <
+            REQUEST_DEADBAND_EV * LN2
+        ) pair = pair.copy(iso = liveIso, shutterNanos = liveShutter)
         isoLimited = pair.isoLimited
         shutterLimited = pair.shutterLimited
         val physical = pair.iso.toDouble() * pair.shutterNanos
-        val extra = if (pair.isoLimited && physical > 0.0) filteredTotal / physical else 1.0
+        val extra = if ((pair.isoLimited || isoLockDigital > 1.0) && physical > 0.0) filteredTotal / physical else 1.0
         digitalGain = if (extra > 1.02) extra.coerceAtMost(maxDigitalGain).toFloat() else 1f
         val changed = iso != pair.iso || shutterNanos != pair.shutterNanos
         iso = pair.iso
@@ -156,8 +205,11 @@ internal class ProgramAeLoop {
 
     /** Total exposure -> ISO + shutter: PhotonCamera curve, then flicker rounding. */
     private fun split(total: Double, limits: ExposureBalanceLimits): ExposureBalanceResult {
+        // A locked ISO past the analog max: the shutter is set for the user's ISO,
+        // the request runs at the analog max and tick() adds the rest digitally.
         val r = AutoExposureBalance.applyProgramEnergy(
-            total.coerceAtLeast(1.0), balance, limits, lockMode, lockedIso, lockedShutterNanos
+            (total / isoLockDigital).coerceAtLeast(1.0), balance, limits, lockMode,
+            lockedIso.coerceAtMost(limits.isoMax), lockedShutterNanos
         )
         if (lockMode != ProgramLockMode.NONE) return r
         val (shutter, isoScale) = ProgramAgc.roundForFlicker(r.shutterNanos, flickerPeriodNanos)

@@ -41,10 +41,13 @@ internal data class RawStreamPlan(
         val exposureModeManual: Boolean,
         val programCustomActive: Boolean,
         val hasRawViewfinder: Boolean,
+        /** The sensor mode serves RAW to single stills only; repeating RAW crashes the HAL. */
+        val rawStillOnly: Boolean = false,
     )
 
     companion object {
         fun plan(i: Inputs): RawStreamPlan {
+            if (i.rawStillOnly) return RawStreamPlan(false, false, false, false, false)
             val readerReady = i.readerPresent && i.rawRetryReady
             // Split gate: a reserved capture slot (ZSL burst being assembled in the
             // retry wait) must NOT block the ZSL ring itself; only a physically
