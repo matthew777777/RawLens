@@ -1091,7 +1091,16 @@ class RawCameraController(
             val verified = runCatching { lensVerdicts.verifiedIds() }.getOrDefault(emptySet())
             val retryUnpacked = retryUnpackedOnStarvation && session != null && rawStreamImages == 0 &&
                 clearPackedFormatPreference(reason)
-            val next = if (retryUnpacked) failed else deviceFaultRecovery.next(failed, rawCameraIds.filter { id ->
+            // A session that streamed no RAW only because of a saved "needs preview" verdict: the
+            // preview combo is what fails here (Moto front: no frames, then error 4 every time), so
+            // drop the verdict and retry the same lens raw-only.
+            val retryRawOnly = !retryUnpacked && session != null && rawStreamImages == 0 &&
+                ispPreviewRequestNeeded(failed)
+            if (retryRawOnly) {
+                Log.w(LOG_TAG, "$reason; preview combo streamed no RAW, clearing ISP preview verdict for $failed")
+                persistIspPreviewVerdict(failed, false)
+            }
+            val next = if (retryUnpacked || retryRawOnly) failed else deviceFaultRecovery.next(failed, rawCameraIds.filter { id ->
                 id in verified && resolveAvailableOpenCameraId(id) != null
             })
             // Invalidate callbacks and release the dead session before waiting for the HAL.
