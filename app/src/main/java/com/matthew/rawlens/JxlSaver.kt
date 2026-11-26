@@ -22,6 +22,8 @@ import java.io.IOException
 class JxlSaver(private val context: Context) {
     @Throws(IOException::class)
     /**
+     * Takes ownership of [developed]: its pixels are released here, before the encode.
+     *
      * @param result live capture result for the AWB EXIF tag;
      * null for offline merges, which carry no Camera2 result (the tag is omitted).
      */
@@ -34,6 +36,18 @@ class JxlSaver(private val context: Context) {
         gps: GpsLocation? = null,
         // Burst folder grouping, mirrors JpegSaver.save: null keeps flat.
         subfolder: String? = null
+    ): String = developed.use {
+        saveOwned(developed, metadata, result, captureTimeMillis, typeSuffix, gps, subfolder)
+    }
+
+    private fun saveOwned(
+        developed: DevelopedJxl,
+        metadata: RawFrameMetadata,
+        result: CaptureResult?,
+        captureTimeMillis: Long,
+        typeSuffix: String?,
+        gps: GpsLocation?,
+        subfolder: String?
     ): String {
         val startedAt = SystemClock.elapsedRealtime()
         val settings = developed.settings.resolved()
@@ -59,6 +73,8 @@ class JxlSaver(private val context: Context) {
             rgb = JxlPixelPack.packRgb(
                 developed.halfRgba, developed.width, developed.height, settings
             ) { HdrPlusVulkan.allocBuffer(it.toLong()) }
+            // Free before libjxl makes its own copies.
+            developed.close()
             val packedAt = SystemClock.elapsedRealtime()
             val boxes = JxlMetadataBoxes.build(
                 metadata = metadata,

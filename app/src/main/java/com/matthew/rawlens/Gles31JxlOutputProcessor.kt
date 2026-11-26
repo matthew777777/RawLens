@@ -15,13 +15,22 @@ import java.nio.ByteOrder
  * Half-float RGBA pixels developed for JPEG XL, with the resolved settings.
  * Row 0 is the image top row (same convention as the RGBA8 JPEG readback,
  * which needs no vertical flip).
+ *
+ * [halfRgba] is native memory ([HdrPlusVulkan.allocBuffer]): 50 MP needs 402 MB,
+ * more than the Java heap can hold. [JxlSaver.save] releases it; read it before.
  */
 data class DevelopedJxl(
     val halfRgba: ByteBuffer,
     val width: Int,
     val height: Int,
     val settings: JxlOutputSettings
-)
+) : java.io.Closeable {
+    private val closed = java.util.concurrent.atomic.AtomicBoolean()
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) HdrPlusVulkan.freeBuffer(halfRgba)
+    }
+}
 
 internal class JxlGpuOutputException(message: String) : IllegalStateException(message)
 
@@ -62,7 +71,7 @@ class Gles31JxlOutputProcessor(context: Context) {
         val startedAt = SystemClock.elapsedRealtime()
         require(scene.internalFormat == AmazeTextureFormat.RGBA16F)
         require(scene.colorDomain == AmazeColorDomain.ACESCG) {
-            "JXL develop needs scene-linear ACEScg, not camera-linear (wavelet tail missing?)"
+            "JXL develop needs scene-linear ACEScg, not camera-linear (camera-linear tail missing?)"
         }
         val resolvedLook = look.resolvedForPlatform()
         val resolved = jxl.resolved()
@@ -150,6 +159,7 @@ class Gles31JxlOutputProcessor(context: Context) {
             for (alpha in 3 until samples.limit() step 4) {
                 if (samples.get(alpha).toInt() != HALF_ONE) {
                     val pixel = alpha / 4
+                    HdrPlusVulkan.freeBuffer(pixels)
                     throw JxlGpuOutputException(
                         "Invalid JXL readback at (${pixel % scene.width}, ${pixel / scene.width})"
                     )
@@ -200,6 +210,7 @@ class Gles31JxlOutputProcessor(context: Context) {
             check(framebuffer != 0) { "Could not allocate JXL readback framebuffer" }
             MemoryLeakDiagnostics.glFramebufferAllocated()
         }
+        var pending: ByteBuffer? = null
         try {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer)
             GLES30.glFramebufferTexture2D(
@@ -209,8 +220,8 @@ class Gles31JxlOutputProcessor(context: Context) {
             check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) == GLES30.GL_FRAMEBUFFER_COMPLETE) {
                 "JXL output framebuffer is incomplete"
             }
-            val pixels = ByteBuffer
-                .allocateDirect(width * height * 8)
+            val pixels = HdrPlusVulkan.allocBuffer(width.toLong() * height * 8L)
+                .also { pending = it }
                 .order(ByteOrder.nativeOrder())
             GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 2)
             try {
@@ -231,8 +242,10 @@ class Gles31JxlOutputProcessor(context: Context) {
                 GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
             }
             pixels.rewind()
+            pending = null
             return pixels
         } finally {
+            pending?.let(HdrPlusVulkan::freeBuffer)
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         }
     }

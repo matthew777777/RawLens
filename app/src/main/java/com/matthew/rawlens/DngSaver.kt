@@ -25,47 +25,6 @@ import java.nio.ByteOrder
  */
 class DngSaver(private val context: Context) {
     /**
-     * Writes an AI-denoised CFA as a float DNG next to its capture stem
-     * (`IMG_<ts>_AI.dng`, or `IMG_<ts>_F00AI.dng` for burst frames).
-     * Same float-DNG flavor as [saveMerged] (normalized values, zero black
-     * level, preserved CFA pattern); the CFA must already be denoised.
-     */
-    fun saveAiDenoised(
-        cfa: UnpackedRawCfa,
-        metadata: RawFrameMetadata,
-        captureId: Long = System.currentTimeMillis(),
-        fileNameSuffix: String? = null,
-        gps: GpsLocation? = null,
-        subfolder: String? = null
-    ): String {
-        if (subfolder != null) BurstSidecar.requireSubfolder(subfolder)
-        val displayName = CaptureFileNames.aiDng(captureId, fileNameSuffix)
-        val resolver = context.contentResolver
-        val relativePath = if (subfolder != null) "DCIM/RawLens/$subfolder" else "DCIM/RawLens"
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/x-adobe-dng")
-            put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
-            put(MediaStore.Images.Media.IS_PENDING, 1)
-        }
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Could not create AI DNG media entry")
-        try {
-            resolver.openOutputStream(uri, "w")?.use {
-                FloatCfaDngWriter.write(it, cfa, metadata, gps,
-                    description = "Captured with RawLens\nAI-denoised CFA DNG (32-bit float, normalized, zero black level)",
-                    captureTimeMillis = captureId)
-            } ?: throw IOException("Could not open AI DNG output stream")
-            values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish AI DNG")
-            return displayName
-        } catch (failure: Exception) {
-            resolver.delete(uri, null, null)
-            throw failure
-        }
-    }
-
-    /**
      * @param sixteenBit selects the 16-bit normalized writer
      *   ([HdrPlusDngWriter]) instead of the 32-bit float writer
      *   ([FloatCfaDngWriter]). HDR+ merges use 16-bit; fusion/SR keep
@@ -131,7 +90,7 @@ class DngSaver(private val context: Context) {
      * before publication for both backends.
      */
     @Throws(IOException::class)
-    fun save(
+    internal fun save(
         image: Image,
         characteristics: CameraCharacteristics,
         result: CaptureResult,
@@ -146,8 +105,11 @@ class DngSaver(private val context: Context) {
         // layout; non-null must pass BurstSidecar.requireSubfolder and
         // places this frame under DCIM/RawLens/<subfolder>/.
         subfolder: String? = null,
-        dngCompression: DngCompression = DngCompression.UNCOMPRESSED
+        dngCompression: DngCompression = DngCompression.UNCOMPRESSED,
+        /** CPU copy to read instead of [image], whose planes may be unreadable or already released. */
+        raw: RawImageView? = null
     ): String {
+        val view = raw ?: RawImageView.of(image)
         check(orientation == metadata.exifOrientation) { "DNG orientation snapshot mismatch" }
         overrides.validate()
         if (subfolder != null) BurstSidecar.requireSubfolder(subfolder)
@@ -179,7 +141,7 @@ class DngSaver(private val context: Context) {
         val preCorrection = characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
         val pixelArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
         val platformGeometryMatches = PlatformDngCompatibility.matches(
-            image.width, image.height, preCorrection?.width(), preCorrection?.height(),
+            view.width, view.height, preCorrection?.width(), preCorrection?.height(),
             pixelArray?.width, pixelArray?.height)
         val effectiveBackend = if (backend == DngWriterBackend.SHADED_FLOAT) {
             backend
@@ -188,7 +150,7 @@ class DngSaver(private val context: Context) {
             // declaration still describes the unrelated 200MP sensor coordinate space.
             DngWriterBackend.TINY_DNG
         } else if (!platformGeometryMatches && backend != DngWriterBackend.TINY_DNG) {
-            Log.w(LOG_TAG, "RAW ${image.width}x${image.height} differs from platform DNG sensor dimensions; forcing TinyDNG for $displayName")
+            Log.w(LOG_TAG, "RAW ${view.width}x${view.height} differs from platform DNG sensor dimensions; forcing TinyDNG for $displayName")
             DngWriterBackend.TINY_DNG
         } else if (levelsSampled && !userPinnedLevels && backend != DngWriterBackend.TINY_DNG) {
             Log.w(LOG_TAG, "HAL black/white levels unusable (sampled black=" +
@@ -208,7 +170,7 @@ class DngSaver(private val context: Context) {
         // first and save through the 16-bit HDR+ writer, which keeps GPS.
         // White/black levels stay format-independent Camera2 sensor
         // properties, so the same metadata normalizes both containers.
-        val packedFormat = PackedRawFormat.ofInt(image.format)
+        val packedFormat = PackedRawFormat.ofInt(view.format)
         if (dngCompression == DngCompression.JXL && packedFormat != null) {
             Log.w(LOG_TAG, "JXL DNG compression needs the single-frame path; " +
                 "packed frame $displayName stays uncompressed")
@@ -224,26 +186,25 @@ class DngSaver(private val context: Context) {
                 if (dngCompression == DngCompression.JXL) {
                     Log.i(LOG_TAG, "Shading compatibility DNG uses uncompressed float samples")
                 }
-                val plane = image.planes.single()
                 resolver.openOutputStream(uri, "w")?.use { output ->
-                    ShadedFloatDngWriter.write(output,plane.buffer,plane.rowStride,plane.pixelStride,
-                        image.format,metadata,overrides,gps,captureId)
+                    ShadedFloatDngWriter.write(output,requireNotNull(view.buffer),view.rowStride,view.pixelStride,
+                        view.format,metadata,overrides,gps,captureId)
                 } ?: throw IOException("Could not open DNG output stream")
                 DngWriterBackend.SHADED_FLOAT
             } else if (packedFormat != null) {
-                savePackedCfa(uri, image, metadata, gps, overrides, displayName)
+                savePackedCfa(uri, view, metadata, gps, overrides, displayName)
                 DngWriterBackend.TINY_DNG
             } else when (compressionBackend) {
                 DngWriterBackend.ANDROID -> {
                     resolver.openOutputStream(uri, "w")?.use { output ->
-                        writeAndroid(output, image, characteristics, result, orientation, gps)
+                        writeAndroid(output, image, raw, characteristics, result, orientation, gps)
                     } ?: throw IOException("Could not open DNG output stream")
                     DngWriterBackend.ANDROID
                 }
 
                 DngWriterBackend.TINY_DNG -> {
                     resolver.openOutputStream(uri, "w")?.use { output ->
-                        NativeDngWriter.write(output, image, metadata, result, overrides, jxl = useJxl)
+                        NativeDngWriter.write(output, view, metadata, result, overrides, jxl = useJxl)
                     } ?: throw IOException("Could not open DNG output stream")
                     DngWriterBackend.TINY_DNG
                 }
@@ -251,6 +212,8 @@ class DngSaver(private val context: Context) {
                 DngWriterBackend.AUTO -> writeAuto(
                     uri = uri,
                     image = image,
+                    raw = raw,
+                    view = view,
                     characteristics = characteristics,
                     result = result,
                     orientation = orientation,
@@ -298,7 +261,7 @@ class DngSaver(private val context: Context) {
      */
     private fun savePackedCfa(
         uri: android.net.Uri,
-        image: Image,
+        view: RawImageView,
         metadata: RawFrameMetadata,
         gps: GpsLocation?,
         overrides: DngMetadataOverrides,
@@ -306,10 +269,9 @@ class DngSaver(private val context: Context) {
     ) {
         val normalization = metadata.normalizationOrNull()
             ?: throw IOException("Packed DNG normalization metadata is missing")
-        val plane = image.planes.single()
         val cfa = RawPackedUnpacker.unpackFrameNormalized(
-            plane.buffer, image.width, image.height,
-            plane.rowStride, plane.pixelStride, image.format, normalization,
+            requireNotNull(view.buffer), view.width, view.height,
+            view.rowStride, view.pixelStride, view.format, normalization,
             byteOrder = ByteOrder.LITTLE_ENDIAN
         )
         context.contentResolver.openOutputStream(uri, "w")?.use { output ->
@@ -324,6 +286,7 @@ class DngSaver(private val context: Context) {
     private fun writeAndroid(
         output: java.io.OutputStream,
         image: Image,
+        raw: RawImageView?,
         characteristics: CameraCharacteristics,
         result: CaptureResult,
         orientation: Int,
@@ -337,7 +300,9 @@ class DngSaver(private val context: Context) {
                 creator.setOrientation(orientation)
                 creator.setDescription("RawLens • Android Camera2 DngCreator")
                 gps?.let { creator.setLocation(it.toAndroidLocation()) }
-                creator.writeImage(output, image)
+                if (raw == null) creator.writeImage(output, image)
+                else creator.writeByteBuffer(output, android.util.Size(raw.width, raw.height),
+                    requireNotNull(raw.buffer).duplicate().also { it.rewind() }, 0L)
             }
         } catch (failure: AssertionError) {
             throw IOException("Android DNG writer rejected RAW metadata: ${failure.message}", failure)
@@ -352,6 +317,8 @@ class DngSaver(private val context: Context) {
     private fun writeAuto(
         uri: android.net.Uri,
         image: Image,
+        raw: RawImageView?,
+        view: RawImageView,
         characteristics: CameraCharacteristics,
         result: CaptureResult,
         orientation: Int,
@@ -364,7 +331,7 @@ class DngSaver(private val context: Context) {
         try {
             try {
                 FileOutputStream(temp).use { output ->
-                    writeAndroid(output, image, characteristics, result, orientation, gps)
+                    writeAndroid(output, image, raw, characteristics, result, orientation, gps)
                 }
                 resolver.openOutputStream(uri, "w")?.use { destination ->
                     FileInputStream(temp).use { source -> source.copyTo(destination, COPY_BUFFER_BYTES) }
@@ -379,7 +346,7 @@ class DngSaver(private val context: Context) {
                     platformFailure
                 )
                 resolver.openOutputStream(uri, "w")?.use { output ->
-                    NativeDngWriter.write(output, image, metadata, result, overrides)
+                    NativeDngWriter.write(output, view, metadata, result, overrides)
                 } ?: throw IOException("Could not open DNG output stream for TinyDNG fallback")
                 return DngWriterBackend.TINY_DNG
             }

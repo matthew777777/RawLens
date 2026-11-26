@@ -1,7 +1,6 @@
 package com.matthew.rawlens
 
 import android.hardware.camera2.CaptureResult
-import android.media.Image
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.math.roundToInt
@@ -21,7 +20,7 @@ internal fun isContiguousUnpackedRaw(
 ): Boolean = bufferOffset == 0 && rowStride == width * 2 && pixelStride == 2
 
 /** Camera2 metadata/stride bridge into the pinned TinyDNG v3 writer. */
-object NativeDngWriter {
+internal object NativeDngWriter {
     @Synchronized
     /**
      * @param jxl store the mosaic as a lossless JPEG XL codestream (DNG 1.7,
@@ -29,16 +28,16 @@ object NativeDngWriter {
      */
     fun write(
         outputStream: OutputStream,
-        image: Image,
+        image: RawImageView,
         metadata: RawFrameMetadata,
         result: CaptureResult,
         overrides: DngMetadataOverrides,
         jxl: Boolean = false
     ) {
         overrides.validate()
-        val plane = image.planes.singleOrNull()
+        val plane = image.buffer?.takeIf { image.planeCount == 1 }
             ?: error("RAW_SENSOR must expose exactly one image plane")
-        require(plane.pixelStride >= 2) { "RAW_SENSOR pixel stride cannot hold 16 bits" }
+        require(image.pixelStride >= 2) { "RAW_SENSOR pixel stride cannot hold 16 bits" }
 
         val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
         val originX = geometry?.sensorOriginX ?: 0
@@ -83,13 +82,13 @@ object NativeDngWriter {
 
     init { System.loadLibrary("rawLensDng") }
 
-    private fun contiguousRawBuffer(image: Image, plane: Image.Plane): ByteBuffer {
-        val source = plane.buffer.duplicate()
+    private fun contiguousRawBuffer(image: RawImageView, plane: ByteBuffer): ByteBuffer {
+        val source = plane.duplicate()
         val offset = source.position()
-        val required = offset.toLong() + (image.height - 1L) * plane.rowStride +
-            (image.width - 1L) * plane.pixelStride + 2L
+        val required = offset.toLong() + (image.height - 1L) * image.rowStride +
+            (image.width - 1L) * image.pixelStride + 2L
         require(required <= source.limit()) { "RAW_SENSOR plane is truncated" }
-        if (isContiguousUnpackedRaw(offset, plane.rowStride, plane.pixelStride, image.width)) {
+        if (isContiguousUnpackedRaw(offset, image.rowStride, image.pixelStride, image.width)) {
             source.position(0)
             return source
         }
@@ -103,7 +102,7 @@ object NativeDngWriter {
         output.limit(requiredBytes)
         for (y in 0 until image.height) {
             for (x in 0 until image.width) {
-                val index = offset + y * plane.rowStride + x * plane.pixelStride
+                val index = offset + y * image.rowStride + x * image.pixelStride
                 output.put(source.get(index))
                 output.put(source.get(index + 1))
             }
