@@ -12,8 +12,8 @@ import android.provider.OpenableColumns
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
-import org.json.JSONObject
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 
@@ -29,19 +29,10 @@ class DevelopQueueActivity : Activity() {
     private lateinit var mainPage: LinearLayout
     private lateinit var settingsPage: SettingsCardColumn
     private lateinit var settingsLink: LinearLayout
-    private lateinit var tone: Button
-    private lateinit var auto: SettingsSwitch
-    private lateinit var p3: SettingsSwitch
-    private lateinit var falseColor: SettingsSwitch
     private lateinit var exposure: SettingsSlider
-    private lateinit var quality: SettingsSlider
-    private lateinit var shoulder: SettingsSlider
-    private lateinit var defringe: SettingsSlider
     private lateinit var kit: SettingsKit
-    private var mapper=PhotoToneMapper.SIGMOID
     private var onSettings=false
     private var last: List<DevelopQueueItem>?=null
-    private val controls=mutableListOf<View>()
     private val previews=android.util.LruCache<String,Bitmap>(200)
     private val previewExecutor=Executors.newSingleThreadExecutor()
     private val previewCancel=CancellationSignal()
@@ -66,9 +57,7 @@ class DevelopQueueActivity : Activity() {
     }
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        val saved=runCatching { DevelopQueueOptions.read(JSONObject(getSharedPreferences("develop_queue",0).getString("options","{}") ?: "{}")) }
-            .getOrDefault(DevelopQueueOptions())
-        mapper=saved.mapper
+        DevelopQueueLook.ensureSeeded(this)
         val root=column().apply { setPadding(dp(16),dp(8),dp(16),dp(12));setBackgroundColor(getColor(R.color.surface)) }
         val header=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
         header.addView(icon("‹","Back") { if(onSettings) showQueue() else finish() },LinearLayout.LayoutParams(dp(48),dp(48)))
@@ -92,33 +81,35 @@ class DevelopQueueActivity : Activity() {
         summary=text("",12f);queueHeader.addView(summary)
         mainPage.addView(queueHeader)
         list=column();mainPage.addView(list)
-        buildSettings(saved)
+        buildSettings()
         run=button("Export photos") { handlePrimaryAction() }
         root.addView(run,LinearLayout.LayoutParams(-1,dp(50)).apply { topMargin=dp(10) })
         setContentView(root);ImmersiveMode.apply(window);updateSettingsLink();refreshQueue()
     }
-    private fun buildSettings(saved: DevelopQueueOptions) {
-        settingsPage.addView(kit.sectionTitle("Tone & exposure"))
-        tone=kit.settingsButton("Tone mapping: ${mapper.label}").apply {
-            setOnClickListener { kit.choose("Tone mapping", PhotoToneMapper.selectable, mapper, { it.label }) {
-                mapper=it;tone.text="Tone mapping: ${it.label}"
-            } }
-        };settingsPage.addView(tone);controls+=tone
-        auto=toggle("Automatic exposure",saved.autoExposure)
-        exposure=slider("Exposure compensation",80,((saved.exposureEv+4)*10).toInt()) { "${String.format(java.util.Locale.US,"%+.1f",it/10.0-4)} EV" }
-        shoulder=slider("Highlight shoulder",100,(saved.shoulder*100).toInt()) { "$it%" }
-        settingsPage.addView(kit.sectionTitle("Color cleanup"))
-        falseColor=toggle("False-color suppression",saved.falseColor)
-        defringe=slider("Purple defringe",100,(saved.defringe*100).toInt()) { "$it%" }
-        settingsPage.addView(kit.sectionDesc("Defringe targets narrow purple edges. Turn false-color suppression off to retain tiny colored details such as flowers."))
-        settingsPage.addView(kit.sectionTitle("JPEG output"))
-        quality=slider("Quality",99,saved.quality-1) { "${it+1}" }
-        p3=toggle("Display P3",saved.displayP3)
-        settingsPage.addView(kit.sectionDesc("Exports create new JPEGs with 4:4:4 color, source orientation and capture time. Original DNGs stay unchanged. These settings apply to waiting photos when export starts."))
-        kit.polish()
+    /** Settings → Photo look, edited here and remembered for the queue only. */
+    private val lookHost=object: JpegLookHost {
+        override fun jpegOutputSettings() = DevelopQueueLook.settings(this@DevelopQueueActivity)
+        override fun applyPhotoOutputSettings(settings: JpegOutputSettings) = true
+        override fun lensPreferences() = DevelopQueueLook.prefs(this@DevelopQueueActivity)
+        override fun setStatus(message: String) = toast(message)
+        override fun showPhotoLutSettings() = Unit
+        override fun reshow() { saveExposure();buildSettings();updateSettingsLink() }
     }
-    private fun toggle(name: String,checked: Boolean)=kit.settingsCheck(name,checked).also {
-        settingsPage.addView(it);controls+=it
+    private fun buildSettings() {
+        settingsPage.removeAllViews()
+        settingsPage.addView(kit.sectionTitle("Camera look"))
+        settingsPage.addView(kit.settingsButton("Copy from camera settings").apply {
+            setOnClickListener {
+                saveExposure();DevelopQueueLook.copyFromCamera(this@DevelopQueueActivity)
+                buildSettings();updateSettingsLink();toast("Copied camera look")
+            }
+        })
+        settingsPage.addView(kit.sectionDesc("Copies every tone, JPEG and colour setting from Photo settings. Changes made here are remembered for the queue and leave the camera unchanged."))
+        settingsPage.addView(kit.sectionTitle("Exposure"))
+        exposure=slider("Exposure compensation",80,((DevelopQueueLook.exposureEv(this)+4)*10).toInt()) { "${String.format(java.util.Locale.US,"%+.1f",it/10.0-4)} EV" }
+        settingsPage.addView(kit.sectionDesc("Added to every queued photo on top of the look below."))
+        JpegLookSettingsSection(kit,lookHost,cameraOnly=false).show()
+        kit.polish()
     }
     private fun slider(name: String,max: Int,progress: Int,format: (Int)->String): SettingsSlider {
         val label=text("$name: ${format(progress)}")
@@ -130,15 +121,13 @@ class DevelopQueueActivity : Activity() {
                 override fun onStartTrackingTouch(seekBar: SettingsSlider) {}
                 override fun onStopTrackingTouch(seekBar: SettingsSlider) {}
             })
-            settingsPage.addView(this,LinearLayout.LayoutParams(-1,-2));controls+=this
+            settingsPage.addView(this,LinearLayout.LayoutParams(-1,-2))
         }
     }
-    private fun currentOptions()=DevelopQueueOptions(mapper,auto.isChecked,exposure.progress/10.0-4,
-        quality.progress+1,p3.isChecked,shoulder.progress/100f,falseColor.isChecked,defringe.progress/100f)
-    private fun saveOptions() { getSharedPreferences("develop_queue",0).edit().putString("options",currentOptions().json().toString()).apply() }
+    private fun saveExposure() { if(::exposure.isInitialized) DevelopQueueLook.setExposureEv(this,exposure.progress/10.0-4) }
     private fun updateSettingsLink() {
-        val options=currentOptions()
-        val summary="${options.mapper.label} · ${if(options.autoExposure) "Auto exposure" else "Manual exposure"} · Quality ${options.quality}"
+        val look=DevelopQueueLook.settings(this)
+        val summary="${look.toneMapper.label} · ${if(look.adaptiveExposureAuto) "Auto exposure" else "Manual exposure"} · Quality ${look.jpegQuality}"
         settingsLink.removeAllViews()
         settingsLink.addView(kit.navRow("Export settings",summary,R.drawable.ic_tune) {
             onSettings=true;mainPage.visibility=View.GONE;settingsPage.visibility=View.VISIBLE
@@ -146,7 +135,7 @@ class DevelopQueueActivity : Activity() {
         })
     }
     private fun showQueue() {
-        saveOptions();onSettings=false;mainPage.visibility=View.VISIBLE;settingsPage.visibility=View.GONE
+        saveExposure();onSettings=false;mainPage.visibility=View.VISIBLE;settingsPage.visibility=View.GONE
         heading.text="Develop queue";importer.visibility=View.VISIBLE;updateSettingsLink();refreshQueue()
     }
     private fun handlePrimaryAction() {
@@ -157,9 +146,13 @@ class DevelopQueueActivity : Activity() {
             val again=if(items.any { it.state=="Exported" }) "Exported" else "Failed"
             items.filter { it.state==again }.forEach { DevelopQueue.update(this,it.copy(state="Waiting",detail="")) }
         }
-        saveOptions();DevelopQueue.prepare(this,currentOptions())
+        saveExposure()
         runCatching { DevelopQueueService.start(this) }.onFailure { toast(it.message ?: "Could not start export") }
         refreshQueue()
+    }
+    private fun setEnabledTree(view: View,enabled: Boolean) {
+        view.isEnabled=enabled
+        (view as? ViewGroup)?.let { group -> for(i in 0 until group.childCount) setEnabledTree(group.getChildAt(i),enabled) }
     }
     private fun showQueueActions(anchor: View) {
         val menu=PopupMenu(this,anchor)
@@ -202,7 +195,7 @@ class DevelopQueueActivity : Activity() {
     }
     private fun refreshQueue() {
         val items=DevelopQueue.snapshot(this);val busy=DevelopQueueService.running
-        controls.forEach { it.isEnabled=!busy };importer.isEnabled=!busy
+        setEnabledTree(settingsPage,!busy);importer.isEnabled=!busy
         val waiting=items.count { it.state=="Waiting" };val done=items.count { it.state=="Exported" };val failed=items.count { it.state=="Failed" }
         summary.text=if(busy) "Exporting · $done / ${items.size}" else when {
             waiting>0 -> "$waiting waiting · $done saved"
@@ -297,7 +290,7 @@ class DevelopQueueActivity : Activity() {
     private fun toast(message: String) { Toast.makeText(this,message,Toast.LENGTH_LONG).show() }
     @Deprecated("Deprecated in Java") override fun onBackPressed() { if(onSettings) showQueue() else finishAfterTransition() }
     override fun onResume() { super.onResume();handler.post(refresh);ImmersiveMode.apply(window) }
-    override fun onPause() { handler.removeCallbacks(refresh);saveOptions();super.onPause() }
+    override fun onPause() { handler.removeCallbacks(refresh);saveExposure();super.onPause() }
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null);previewCancel.cancel();previewExecutor.shutdownNow()
         previewWaiters.clear();previews.evictAll();super.onDestroy()

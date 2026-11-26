@@ -88,12 +88,16 @@ Java_com_matthew_rawlens_DngImportReader_decodeNative(JNIEnv* env,jobject,jstrin
         if(!document.ctx) throw std::runtime_error(error.message);
         tinydng_open_options open{};open.flags=TINYDNG_OPEN_PARSE_SUBIFDS|TINYDNG_OPEN_PREFER_MMAP|TINYDNG_OPEN_METADATA_ONLY;
         if(tinydng_open_file(document.ctx,path,&open,&document.doc,&error)!=TINYDNG_OK) throw std::runtime_error(error.message);
-        size_t chosen=SIZE_MAX;
+        // Prefer a CFA image for one plane; a single-plane LinearRaw (B&W) DNG has no CFA and is the fallback.
+        size_t chosen=SIZE_MAX, linear=SIZE_MAX;
         for(size_t i=0;i<tinydng_image_count(document.doc);++i) {
             const auto* image=tinydng_image_get(document.doc,i);
-            if(image->width==uint32_t(width) && image->height==uint32_t(height) && image->samples_per_pixel==channels &&
-                (channels!=1 || image->cfa.present)) { chosen=i;break; }
+            if(image->width==uint32_t(width) && image->height==uint32_t(height) && image->samples_per_pixel==channels) {
+                if(channels!=1 || image->cfa.present) { chosen=i;break; }
+                if(linear==SIZE_MAX) linear=i;
+            }
         }
+        if(chosen==SIZE_MAX) chosen=linear;
         if(chosen==SIZE_MAX) throw std::runtime_error("Cannot locate full-resolution DNG image");
         const auto* image=tinydng_image_get(document.doc,chosen);
         if(image->compression==52546) {

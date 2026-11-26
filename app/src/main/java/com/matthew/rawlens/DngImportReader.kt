@@ -22,9 +22,12 @@ internal object DngImportReader {
         fun scalar(tag: Int,default: Int)=tags[tag]?.first()?.toInt() ?: default
         val width=scalar(256,0);val height=scalar(257,0);val channels=scalar(277,1)
         require(width>0 && height>0 && width.toLong()*height<=50_000_000) { "DNG dimensions exceed the 50 MP limit" }
-        require(tags[50728]?.let { it.size==3 && it.all { n -> n.isFinite() && n>0 } }==true) { "DNG has no valid AsShotNeutral white balance" }
         require(channels==3 || channels==1) { "Unsupported DNG color-plane count" }
         val cfa=scalar(262,0)==32803
+        // Single-plane non-CFA DNG = B&W LinearRaw (our mono writer). It is already
+        // white-balanced luminance, so it needs no AsShotNeutral and no colour matrix.
+        val mono=!cfa && channels==1
+        if(!mono) require(tags[50728]?.let { it.size==3 && it.all { n -> n.isFinite() && n>0 } }==true) { "DNG has no valid AsShotNeutral white balance" }
         val pattern=if(cfa) {
             require(tags[33421]?.contentEquals(doubleArrayOf(2.0,2.0))==true) { "This DNG uses a non-Bayer CFA layout" }
             val colors=tags[33422] ?: error("Missing CFA pattern")
@@ -39,7 +42,7 @@ internal object DngImportReader {
                 else -> error("Unsupported DNG CFA colors")
             }
         } else null
-        require((cfa && channels==1) || (!cfa && channels==3)) { "Unsupported DNG image layout" }
+        require((cfa && channels==1) || (!cfa && channels==3) || mono) { "Unsupported DNG image layout" }
         require(scalar(50711,1)==1) { "Staggered DNG CFA layouts are not supported" }
         val bits=tags[258]?.first()?.toInt() ?: 16
         require(bits in 1..32) { "Unsupported DNG bit depth" }
@@ -64,7 +67,9 @@ internal object DngImportReader {
         require(cropX>=left && cropY>=top && w>0 && h>0 && cropX.toLong()+w<=right && cropY.toLong()+h<=bottom) { "DNG default crop is outside active area" }
         if(cfa) { w=w and -2;h=h and -2;require(w>=4 && h>=4) { "Bayer DNG is too small" } }
         val fullCrop=cropX==0 && cropY==0 && w==width && h==height
-        val result=if(fullCrop) raw else ByteBuffer.allocateDirect(Math.multiplyExact(Math.multiplyExact(w,h),channels*4)).order(ByteOrder.nativeOrder())
+        // B&W input is replicated to RGB so the colour develop path can run unchanged.
+        val outChannels=if(mono) 3 else channels
+        val result=if(fullCrop && !mono) raw else ByteBuffer.allocateDirect(Math.multiplyExact(Math.multiplyExact(w,h),outChannels*4)).order(ByteOrder.nativeOrder())
         val linearization=tags[50712]
         val deltaH=tags[50715];val deltaV=tags[50716]
         require(deltaH==null || deltaH.size==right-left) { "Invalid horizontal black-level correction" }
@@ -82,7 +87,7 @@ internal object DngImportReader {
             require(code.isFinite() && b.isFinite() && whiteLevel.isFinite() && whiteLevel>b) { "DNG has invalid sample or black/white levels" }
             var value=((code-b)/(whiteLevel-b)).coerceAtLeast(0.0)
             gains.forEach { gain -> value*=gain.at(sx,sy,c,width,height) }
-            result.putFloat(((y*w+x)*channels+c)*4,value.toFloat())
+            for(o in 0 until outChannels) if(mono || o==c) result.putFloat(((y*w+x)*outChannels+o)*4,value.toFloat())
         }
         result.position(0)
         // AnalogBalance belongs before CameraCalibration in the DNG color contract.
@@ -96,6 +101,13 @@ internal object DngImportReader {
                 require(matrix.size==9)
                 resolved[id]=DoubleArray(9) { matrix[it]*balance[it/3] }
             }
+        }
+        if(mono) {
+            // Unity neutral and identity matrices: the develop path maps the grey luminance to neutral grey.
+            val identity=doubleArrayOf(1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0)
+            resolved.putIfAbsent(50728,doubleArrayOf(1.0,1.0,1.0))
+            resolved.putIfAbsent(50721,identity)
+            resolved.putIfAbsent(50722,identity)
         }
         return Image(w,h,result,scalar(274,1).takeIf { it in 1..8 } ?: 1,resolved,pattern?.shifted(cropX,cropY))
     }

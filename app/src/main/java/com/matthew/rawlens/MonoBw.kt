@@ -22,13 +22,16 @@ import kotlin.math.roundToInt
  *
  * DETAIL keeps full resolution (ratio-corrected flat mosaic, see
  * assets/spirv/mono.vk.glsl); CLEAN is rwmono `bin luma` (2x2 average,
- * half linear resolution, about 1 stop cleaner). Off is the default.
+ * half linear resolution, about 1 stop cleaner); QUINCUNX is rwmono `quincunx`
+ * (green photosites only on a 45-degree lattice, roughly half the pixels,
+ * rotated; Gr/Gb balanced). Off is the default.
  * Noise is measured on the frame ([MonoNoise]); no Camera2 noise profile is used.
  */
 enum class MonoMode(val label: String, val token: String) {
     OFF("Off", "COLOR"),
     DETAIL("Detail", "B&W D"),
     CLEAN("Clean", "B&W C"),
+    QUINCUNX("Quincunx", "B&W Q"),
     ;
 
     val enabled: Boolean get() = this != OFF
@@ -189,12 +192,12 @@ internal class MonoVulkan(
     constructor(vk: VulkanHub.Handle, assets: AssetManager) :
         this(vk, { name: String -> assets.open(name).use { it.readBytes() } })
 
-    private val modules = LongArray(2)
-    private val pipelines = LongArray(2)
+    private val modules = LongArray(3)
+    private val pipelines = LongArray(3)
 
     init {
         try {
-            listOf("spirv/mono_detail.spv", "spirv/mono_clean.spv").forEachIndexed { i, name ->
+            listOf("spirv/mono_detail.spv", "spirv/mono_clean.spv", "spirv/mono_quincunx.spv").forEachIndexed { i, name ->
                 modules[i] = vk.loadModule(loadShader(name))
                 pipelines[i] = vk.createPipeline(modules[i], 3, UBO_BYTES, intArrayOf(1, 2, 4), intArrayOf(1, 1, 0))
             }
@@ -204,7 +207,7 @@ internal class MonoVulkan(
     }
 
     override fun close() {
-        for (i in 0..1) {
+        for (i in 0..2) {
             if (pipelines[i] != 0L) vk.destroyPipeline(pipelines[i])
             if (modules[i] != 0L) vk.destroyModule(modules[i])
             pipelines[i] = 0L; modules[i] = 0L
@@ -225,10 +228,11 @@ internal class MonoVulkan(
         val noise = MonoNoise.estimate(cfa, balance)
         val mode = requested
         val clean = mode == MonoMode.CLEAN
-        val pipeline = pipelines[if (clean) 1 else 0]
+        val lattice = if (mode == MonoMode.QUINCUNX) QuincunxLattice.of(w, h, cfa.pattern) else null
+        val pipeline = pipelines[when (mode) { MonoMode.CLEAN -> 1; MonoMode.QUINCUNX -> 2; else -> 0 }]
         check(pipeline != 0L) { "Mono session is closed" }
-        val ow = if (clean) w / 2 else w
-        val oh = if (clean) h / 2 else h
+        val ow = lattice?.width ?: if (clean) w / 2 else w
+        val oh = lattice?.height ?: if (clean) h / 2 else h
         val images = mutableListOf<Long>()
         fun image(x: Int, y: Int, format: Int) = vk.createImage(x, y, format).also { images += it }
         val started = System.nanoTime()
@@ -241,11 +245,11 @@ internal class MonoVulkan(
             vk.bindImage(pipeline, 2, packedImg)
             vk.bindImage(pipeline, 4, src)
             val u = ByteBuffer.allocateDirect(UBO_BYTES).order(ByteOrder.nativeOrder())
-            u.putInt(w).putInt(h).putInt((if (wantMono) 1 else 0) or (if (wantPacked) 2 else 0)).putInt(0)
+            u.putInt(w).putInt(h).putInt((if (wantMono) 1 else 0) or (if (wantPacked) 2 else 0)).putInt(lattice?.c0 ?: 0)
             for (i in 0..3) u.putInt(cfa.pattern.colorAt(i and 1, i shr 1).ordinal)
             u.putFloat(balance[0]).putFloat(balance[1]).putFloat(balance[2]).putFloat(OpposedHighlights.CLIP)
             u.putFloat(neutral[0]).putFloat(neutral[1]).putFloat(neutral[2]).putFloat(0f)
-            u.putFloat(noise.a).putFloat(noise.b).putFloat(0f).putFloat(0f)
+            u.putFloat(noise.a).putFloat(noise.b).putFloat(if (lattice != null) quincunxGreenBalance(cfa) else 1f).putFloat(0f)
             u.flip(); vk.writeUniforms(pipeline, u)
             vk.dispatch(pipeline, (ow + LOCAL_X - 1) / LOCAL_X,
                 (oh + (if (clean) 8 else 16) - 1) / (if (clean) 8 else 16), 1)
@@ -268,12 +272,46 @@ internal class MonoVulkan(
         }
     }
 
+    /** mean(Gr) / mean(Gb) over the CFA, as rwmono quincunx balances Gb to Gr (1 if a class is empty). */
+    private fun quincunxGreenBalance(cfa: UnpackedRawCfa): Float {
+        val w = cfa.width
+        val cells = IntArray(4) { cfa.pattern.colorAt(it and 1, it shr 1).ordinal }
+        var gr = 0.0; var grCount = 0L; var gb = 0.0; var gbCount = 0L
+        for (y in 0 until cfa.height) for (x in 0 until w) {
+            if (cells[(x and 1) + 2 * (y and 1)] != CfaColor.GREEN.ordinal) continue
+            val beside = cells[((x xor 1) and 1) + 2 * (y and 1)]
+            val v = cfa.values[y * w + x].toDouble()
+            // Same rule as mono.vk.glsl: a green beside blue sits on a blue row (Gb).
+            if (beside == CfaColor.BLUE.ordinal) { gb += v; gbCount++ } else { gr += v; grCount++ }
+        }
+        if (grCount == 0L || gbCount == 0L) return 1f
+        val mGr = gr / grCount; val mGb = gb / gbCount
+        return if (mGr > 0.0 && mGb > 0.0) (mGr / mGb).toFloat() else 1f
+    }
+
     private companion object {
         const val LOG_TAG = "RawLensMono"
         const val UBO_BYTES = 80
         const val LOCAL_X = 16
         const val FORMAT_R32F = 0
         const val FORMAT_R32UI = 1
+    }
+}
+
+/**
+ * rwmono quincunx lattice: green sites r + c - c0 even, re-indexed as
+ * J = (c - c0 - r) / 2 and i = (r + c - c0) / 2 (mono.vk.glsl QUINCUNX).
+ * [c0] is the column of the first green site in row 0; output x = J - jMin, y = i.
+ */
+internal class QuincunxLattice(val width: Int, val height: Int, val c0: Int, val jMin: Int) {
+    companion object {
+        fun of(w: Int, h: Int, pattern: BayerPattern): QuincunxLattice {
+            val c0 = if (pattern.colorAt(0, 0) == CfaColor.GREEN) 0 else 1
+            val jMin = -((h - 1 + c0) / 2)
+            val jMax = (w - 1 - c0) / 2
+            val iMax = (h - 1 + w - 1 - c0) / 2
+            return QuincunxLattice(jMax - jMin + 1, iMax + 1, c0, jMin)
+        }
     }
 }
 

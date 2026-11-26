@@ -66,9 +66,11 @@ class DevelopQueueService : Service() {
                 val exif=ExifInterface(cache)
                 val image=DngImportReader.read(cache)
                 val metadata=image.frameMetadata(exif)
-                val look = item.options.look().copy(photoLut = PhotoLutSelection(applicationContext).current())
-                val settings=RawDevelopmentSettings(exposureEv=item.options.exposureEv+(image.tags[50730]?.first() ?: 0.0),
-                    adaptiveExposureStrength=if(item.options.autoExposure) 1f else 0f,
+                DevelopQueueLook.ensureSeeded(this)
+                val look = DevelopQueueLook.settings(this).copy(photoLut = PhotoLutSelection(applicationContext).current())
+                val queueExposure = DevelopQueueLook.exposureEv(this)
+                val settings=RawDevelopmentSettings(exposureEv=queueExposure+(image.tags[50730]?.first() ?: 0.0),
+                    adaptiveExposureStrength=if(look.adaptiveExposureAuto) 1f else 0f,
                     adaptiveExposureTuning=AdaptiveExposureTuning.fromOutputSettings(look))
                 DevelopQueue.update(this,item.copy(state="Developing",detail="Developing ${image.width} × ${image.height}…"))
                 val developer=RawDevelopmentCoordinator(this)
@@ -87,8 +89,8 @@ class DevelopQueueService : Service() {
                         JpegSaver(this).save(developed,metadata,null,captureTimeMillis=time,
                             typeSuffix="DEVELOPED",subfolder="Developed",
                             description="RawLens development queue\nSource: ${item.name}\nTone mapper: ${look.toneMapper.label}\n"+
-                                "Automatic exposure: ${item.options.autoExposure}\nExposure compensation: ${item.options.exposureEv} EV\n"+
-                                "Calibrated Basic highlight guards: ${look.toneMapper==PhotoToneMapper.BASIC && item.options.autoExposure}\n",
+                                "Automatic exposure: ${look.adaptiveExposureAuto}\nExposure compensation: $queueExposure EV\n"+
+                                "Calibrated Basic highlight guards: ${look.toneMapper==PhotoToneMapper.BASIC && look.adaptiveExposureAuto}\n",
                             sourceCamera=exif.getAttribute(ExifInterface.TAG_MAKE) to exif.getAttribute(ExifInterface.TAG_MODEL),
                             onPublished={ outputUri=it.toString() })
                         requireNotNull(outputUri)

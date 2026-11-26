@@ -39,7 +39,37 @@ void store(ivec2 o, float y) {
     }
 }
 
-#ifdef CLEAN
+#if defined(QUINCUNX)
+// rwmono quincunx (flat output would keep every photosite; this keeps greens only).
+// Output (x, y) -> J = x + jMin, i = y; the photosite is r = i - J, c = i + J + c0,
+// with c0 = column of the first green site in row 0 (p.size.w). Greens lie on the
+// lattice r + c - c0 even, so every in-range lattice site is a real green. Gb sites
+// (green on a row with blue) are scaled by p.noise.z = mean(Gr) / mean(Gb), as rwmono.
+// Out-of-frame lattice points stay 0. Output is roughly W*H/2 pixels, rotated 45 degrees.
+void main() {
+    int w = p.size.x, h = p.size.y, c0 = p.size.w;
+    int jMin = -((h - 1 + c0) / 2);
+    int jMax = (w - 1 - c0) / 2;
+    int iMax = (h - 1 + w - 1 - c0) / 2;
+    ivec2 o = ivec2(gl_GlobalInvocationID.xy);
+    if (o.x > jMax - jMin || o.y > iMax) return;
+    int J = o.x + jMin;
+    int r = o.y - J;
+    int c = o.y + J + c0;
+    float y = 0.0;
+    if (r >= 0 && r < h && c >= 0 && c < w) {
+        int col = p.cells[(c & 1) + 2 * (r & 1)];
+        if (col == 1) {
+            // Green on a row that also holds red is Gr; green beside blue is Gb.
+            int beside = p.cells[((c ^ 1) & 1) + 2 * (r & 1)];
+            float gb = beside == 2 ? p.noise.z : 1.0;
+            float raw = texelFetch(srcTex, ivec2(c, r), 0).r;
+            y = min(raw * gainOf(1) * gb, p.gain.w * p.gain.y);
+        }
+    }
+    store(o, y);
+}
+#elif defined(CLEAN)
 void main() {
     ivec2 o = ivec2(gl_GlobalInvocationID.xy);
     if (o.x >= p.size.x / 2 || o.y >= p.size.y / 2) return;
