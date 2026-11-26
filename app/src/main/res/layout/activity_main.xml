@@ -697,21 +697,23 @@
                 android:layout_weight="1">
 
                 <!-- Fixed height so the row never shifts when the chip shows or hides.
-                     Both children carry the same 20dp lift and are centred on one line,
-                     so the chip and the dial share a centre. -->
+                     The 20dp bottom padding gives the same lift as the shutter ring, and both
+                     children centre in the remaining 76dp, so they share the shutter's centre.
+                     Not a child bottom margin: center_vertical subtracts it from the child's
+                     top, which pushed the dial 10dp above the row and clipped its top. -->
                 <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="96dp"
                     android:layout_gravity="end"
                     android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                    android:orientation="horizontal"
+                    android:paddingBottom="20dp">
 
                     <com.matthew.rawlens.RotatingTextView
                         android:id="@+id/lkrResChip"
                         android:layout_width="48dp"
                         android:layout_height="48dp"
                         android:layout_marginEnd="6dp"
-                        android:layout_marginBottom="20dp"
                         android:background="@drawable/control_chip_round"
                         android:gravity="center"
                         android:includeFontPadding="false"
@@ -728,7 +730,6 @@
                         android:id="@+id/modeButton"
                         android:layout_width="@dimen/mode_dial_size"
                         android:layout_height="@dimen/mode_dial_size"
-                        android:layout_marginBottom="20dp"
                         android:background="?android:attr/selectableItemBackgroundBorderless"
                         android:focusable="true" />
 
