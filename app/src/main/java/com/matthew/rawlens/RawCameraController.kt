@@ -2435,6 +2435,18 @@ class RawCameraController(
             return
         }
         val fps = SessionStreamSelection.rawFpsForProbeWindow(ISP_PROBE_FRAMES - 1, endNs - fpsProbeFirstNs)
+        // Low light: AE stretches exposure inside the fps range (Moto front, 60 ms -> 16.6 fps), which
+        // is not an ISP stall. Rebuilding with a preview target then left the front camera without RAW
+        // frames (stuck VF). When the rate matches what exposure / frame duration allow, give no verdict.
+        val last = latestPreviewResult
+        val limitNs = maxOf(last?.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L,
+            last?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L)
+        if (limitNs > 0L && fps >= 0.85 * 1e9 / limitNs &&
+            SessionStreamSelection.previewRequestNeededForFps(fps)) {
+            Log.i(LOG_TAG, "ISP frame-rate probe: %.1f fps is exposure-limited (frame %.1f ms); no verdict"
+                .format(fps, limitNs / 1e6))
+            return
+        }
         val needed = SessionStreamSelection.previewRequestNeededForFps(fps)
         persistIspPreviewVerdict(cameraId, needed)
         Log.i(
@@ -9456,7 +9468,7 @@ class RawCameraController(
          */
         private const val ISP_PREVIEW_REQUEST_PREFS = "raw_isp_preview_request"
         // Re-probe old verdicts: v1 misclassified healthy 24 fps aux streams.
-        private const val ISP_PREVIEW_REQUEST_KEY_PREFIX = "needs_preview_request_v2_"
+        private const val ISP_PREVIEW_REQUEST_KEY_PREFIX = "needs_preview_request_v3_" // v3: v2 verdicts could be low-light false stalls
         /**
          * RAW frames counted before the ISP frame-rate probe renders its
          * verdict (~1.5 s at full rate, ~2.25 s on a stalled 20 fps stream).
