@@ -89,4 +89,30 @@ class OpposedHighlightsTest {
         assertArrayEquals(expected.map { it.toRawBits() }.toIntArray(),actual.map { it.toRawBits() }.toIntArray())
     }
 
+    @Test fun shadedEdgeNonClippedSensorValuesAreNotFlaggedAsClipped() {
+        // Sensor 0.95 with a 1.1 lens gain becomes 1.045 after shading: above CLIP, but not clipped.
+        val sensor = cfa(values = FloatArray(48 * 48) { 0.95f })
+        val mask = OpposedHighlights.clipMaskFromValues(sensor)
+        assertFalse(mask.any)
+        val shaded = sensor.copy(values = FloatArray(sensor.values.size) { sensor.values[it] * 1.1f },
+            opposedClipping = mask)
+        assertTrue(shaded.values.all { it >= OpposedHighlights.CLIP })
+        assertSame(mask, OpposedHighlights.clipMaskOf(shaded))
+        assertArrayEquals(shaded.values.map { it.toRawBits() }.toIntArray(),
+            OpposedHighlights.cpu(shaded).values.map { it.toRawBits() }.toIntArray())
+    }
+
+    @Test fun sensorClipMaskIsUsedAfterShadingAndMergeMaskWins() {
+        // Truly clipped sensor pixel (1.0) shaded to 1.1 stays clipped via the sensor-domain mask.
+        val sensor = cfa(values = FloatArray(48 * 48) { 0.5f })
+        val clippedAt = 24 * 48 + 24
+        sensor.values[clippedAt] = 1f
+        val mask = OpposedHighlights.clipMaskFromValues(sensor)
+        assertTrue(mask.isClipped(clippedAt))
+        assertFalse(mask.isClipped(0))
+        val merge = CfaHighlightClipping.from(48, 48) { false }
+        val withMerge = sensor.copy(highlightClipping = merge, opposedClipping = mask)
+        assertSame(merge, OpposedHighlights.clipMaskOf(withMerge))
+        assertSame(mask, OpposedHighlights.clipMaskOf(sensor.copy(opposedClipping = mask)))
+    }
 }

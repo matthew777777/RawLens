@@ -53,7 +53,7 @@ internal object OpposedHighlightsVulkan {
             val roi = intArrayOf(0, 0, w, h)
             fun buffer(n: Int) = ByteBuffer.allocateDirect(n * 4).order(ByteOrder.nativeOrder())
             try {
-                val clipping = cfa.highlightClipping
+                val clipping = OpposedHighlights.clipMaskOf(cfa)
                 require(clipping == null || (clipping.width == w && clipping.height == h))
                 val eligibility = image(clipping?.wordsPerRow ?: 1, if (clipping != null) h else 1, 1)
                 if (clipping != null) {

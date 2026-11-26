@@ -11,7 +11,37 @@ package com.matthew.rawlens
 internal object OpposedHighlights {
     const val CLIP = 0.987f
     private fun clipped(cfa: UnpackedRawCfa, index: Int): Boolean =
-        cfa.highlightClipping?.isClipped(index) ?: (cfa.values[index] >= CLIP)
+        clipMaskOf(cfa)?.isClipped(index) ?: (cfa.values[index] >= CLIP)
+
+    /** Explicit merge mask first, then the sensor-domain opposed mask; null means threshold on values. */
+    fun clipMaskOf(cfa: UnpackedRawCfa): CfaHighlightClipping? = cfa.highlightClipping ?: cfa.opposedClipping
+
+    /** Clip mask from CFA values that are still sensor-domain (before lens shading or reconstruction). */
+    fun clipMaskFromValues(cfa: UnpackedRawCfa): CfaHighlightClipping =
+        CfaHighlightClipping.fromParallel(cfa.width, cfa.height) { cfa.values[it] >= CLIP }
+
+    /**
+     * Clip mask from the untouched RAW sensor plane, for the denoised path whose CFA values are
+     * already smoothed. Same normalization as the sensor unpacker, cropped like the processing CFA.
+     */
+    fun clipMaskFromRawSensor(
+        raw: java.nio.ByteBuffer, layout: RawPlaneLayout, normalization: RawNormalization, crop: RawCrop
+    ): CfaHighlightClipping {
+        require(crop.left >= 0 && crop.top >= 0 && crop.left + crop.width <= layout.width &&
+            crop.top + crop.height <= layout.height)
+        val input = raw.duplicate().order(java.nio.ByteOrder.nativeOrder())
+        val base = input.position()
+        val sx = layout.sensorOriginX + crop.left
+        val sy = layout.sensorOriginY + crop.top
+        // Absolute getShort reads are position-free, so row shards share the buffer safely.
+        return CfaHighlightClipping.fromParallel(crop.width, crop.height) { index ->
+            val x = index % crop.width; val y = index / crop.width
+            val code = input.getShort(base + (crop.top + y) * layout.rowStride +
+                (crop.left + x) * layout.pixelStride).toInt() and 0xffff
+            val black = normalization.blackAt(sx + x, sy + y)
+            (code - black) * (1f / (normalization.whiteLevel - black)) >= CLIP
+        }
+    }
 
     fun cells(cfa: UnpackedRawCfa) = IntArray(4) {
         cfa.pattern.colorOrdinalAt(it and 1, it shr 1)
