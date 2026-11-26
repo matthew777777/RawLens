@@ -19,7 +19,7 @@ See the [README](../README.md) for a quick start and [current repository state](
 - **Ultra HDR** JPEG (SDR base + fitted gain map, ISO 21496-1) and Display P3 output
 - **JPEG XL** output (Settings → Photo): the same AgX develop up to 16-bit integer (plus 16/32-bit float) with darktable-style bit depth, quality, effort and decoding-speed options and embedded EXIF/XMP
 - Optional lossless **JPEG XL DNG** (Settings → General → DNG compression, off by default): TinyDNG encodes single-frame RAW16 and 16-bit HDR+ mosaics directly with DNG 1.7 version tags and retained EXIF/GPS. Packed input and float-CFA exports keep their uncompressed paths. See [DNG integration](../docs/tinydng-integration.md)
-- Denoise: profiled wavelet (Vulkan) and optional AI RAW denoise (RawNIND Bayer), which writes a denoised DNG and develops from it
+- Denoise: RAW-domain denoise (Vulkan) before demosaicing for JPEG and JPEG XL, removing luma and chroma, luma only or chroma only; the DNG is not changed
 - Complete capture metadata (aperture, focal length, focus distance, flash, AE/AWB mode, exposure compensation, zoom, lens spec, composite frame counts) frozen at the shutter press, so delayed and offline writers emit the same EXIF as live saves
 - Per-camera DNG calibration overrides for black/white levels, noise profile, and color/calibration/forward matrices
 - Per-lens vendor keys (OEM request/session keys such as Xiaomi's DCG operating mode)
@@ -79,7 +79,7 @@ Settings has General, Photo, Video, Exposure, Burst, Merge, Denoise, Lenses, Deb
 | Exposure | PROGRAM custom AE per lens, ETTR, HDR brackets, two-exposure RAW HDR, face priority |
 | Burst | Offline burst staging, zero shutter lag, burst gyro sidecars |
 | Merge | HDR+, MFSR and LK-R burst merge controls |
-| Denoise | Profiled wavelet (Vulkan), AI RAW denoise (RawNIND Bayer) |
+| Denoise | RAW denoise (Vulkan): luma and chroma, luma only, chroma only |
 | Lenses | Lens discovery and per-lens selection |
 | Debug | HDR debug frames, camera diagnostics, app log |
 | About | Version, licence and open-source notices, update check (GitHub builds) |

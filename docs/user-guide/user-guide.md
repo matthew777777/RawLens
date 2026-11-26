@@ -78,7 +78,7 @@ Open **Settings → Photo** for output format and the shared RAW development loo
 
 Headroom, sky protection and shoulder controls shape how bright areas enter the tone mapping. **Reset official AgX Base** restores the supplied base settings.
 
-Photo look adjustments affect developed files. DNG compression and calibration are separate controls under General; AI RAW denoise is an exception that can write modified RAW data.
+Photo look adjustments affect developed files. DNG compression and calibration are separate controls under General.
 
 ### Device-specific sensor modes
 
@@ -149,11 +149,9 @@ Open **Settings → Denoise**.
 
 **Capture sharpening** restores detail in developed photos. Choose its strength preset here; it does not sharpen the saved sensor DNG.
 
-**Profiled wavelet (Vulkan)** processes camera-linear developed output. Strength controls overall reduction; Detail changes texture preservation; Luma controls luminance smoothing. The default algorithm is RAWR. **RawLens Wiener algorithm** switches to the alternative rule; its Grain control adjusts how much fine grain remains. These controls do not denoise the sensor DNG.
+**RAW denoise** cleans the RAW before demosaicing in JPEG and JPEG XL photos. Strength is automatic, from the noise measured in each photo. **Remove** picks luma and chroma, luma only (fastest, leaves colour noise in) or chroma only (keeps the grain). The Luma and Chroma sliders scale each part, and Texture sets how much fine grain and detail stays. Merged photos and DNGs are not changed.
 
-**AI RAW denoise (RawNIND Bayer)** requires the model files supplied by a compatible build. It writes a denoised DNG and develops from that data. **Save original DNG alongside** also retains the untouched capture. AI strength blends the source and denoised result, from untouched at 0% to full model output at 100%.
-
-LK-R sliding DCT and RAW Video DCT have separate switches. Changing photo wavelet settings does not enable them.
+LK-R sliding DCT and RAW Video DCT have separate switches. Changing photo RAW denoise settings does not enable them.
 
 ## 10. Video recording
 

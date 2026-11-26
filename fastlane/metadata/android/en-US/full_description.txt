@@ -21,7 +21,7 @@ Features:
   32-bit float audio, gyro/accelerometer tracks and optional RGB binning
 - Direct Log video (Rec.709, S-Gamut3.Cine/S-Log3, HLG, ACES) with real-time
   RCD demosaic and user .cube LUTs for monitoring or baking
-- Wavelet and AI (RawNIND) RAW denoise
+- RAW denoise with separate luma and chroma
 - Tap/drag focus and metering targets, face-priority AF/AE
 - Per-camera DNG calibration overrides and per-lens vendor keys
 - Live histogram/waveform, grid, level guide, timer, torch, OIS toggle
@@ -32,9 +32,8 @@ Camera2 RAW capability. RAW support is device- and lens-dependent.
 
 F-Droid build note: this build compiles from source only. The optional
 Halide-accelerated viewfinder rung falls back to another engine and the
-HDR/scope meters use their Kotlin fallbacks; the neural features (AI denoise,
-FlowNet alignment, KernelNet MFSR kernel) run on CPU instead of GPU. Capture,
-DNG/JPEG/JPEG XL output, HDR+, MFSR, wavelet denoise and video are fully
+HDR/scope meters use their Kotlin fallbacks; the neural features (FlowNet alignment, KernelNet MFSR kernel) run on CPU instead of GPU. Capture,
+DNG/JPEG/JPEG XL output, HDR+, MFSR, RAW denoise and video are fully
 available. In-app update checks are disabled; updates come through F-Droid.
 
 Source code and issue tracker: https://github.com/matthew777777/RawLens
