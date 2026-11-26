@@ -22,17 +22,21 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Source-built RAW peaking on all flavors, independent of the optional Halide archives.
+add_library(rawLensFullSizeRaw SHARED vivo_raw/full_size_raw_jni.cpp)
+target_compile_features(rawLensFullSizeRaw PRIVATE cxx_std_20)
+target_compile_options(rawLensFullSizeRaw PRIVATE -O3)
+target_link_libraries(rawLensFullSizeRaw PRIVATE nativewindow android)
+target_link_options(rawLensFullSizeRaw PRIVATE "-Wl,-z,max-page-size=16384")
+
 add_library(rawLensFocusPeaking SHARED focus_peaking_jni.cpp)
 target_compile_options(rawLensFocusPeaking PRIVATE -O3 -fno-fast-math -ffp-contract=off)
 target_link_options(rawLensFocusPeaking PRIVATE "-Wl,-z,max-page-size=16384")
 
 
 # Source-only builds (F-Droid): -DRAWLENS_PREBUILT_NATIVE=OFF ignores the
-# vendored ncnn/Halide archives even when present. ncnnMl is then built
-# from the pinned upstream ncnn sources (CPU-only) with the real JNI
-# bridge, so all three ML models run; the Halide .so files are not built
-# and their Kotlin callers already treat a missing library as unavailable.
-option(RAWLENS_PREBUILT_NATIVE "Link vendored prebuilt ncnn/Halide archives" ON)
+# vendored Halide archives even when present; the Halide .so files are not
+# built and their Kotlin callers already treat a missing library as unavailable.
+option(RAWLENS_PREBUILT_NATIVE "Link vendored prebuilt Halide archives" ON)
 
 # Reference kernel: checksum-verified upstream body, scalar arithmetic on all ABIs.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -226,72 +230,6 @@ if(RAWLENS_ENABLE_JXL AND NOT _rawlens_jxl_src STREQUAL "")
     target_link_libraries(jxlEncoder PRIVATE jxl jxl_threads)
 endif()
 
-# ncnn runtime for the RawNIND denoisers. Prebuilt mode links the
-# ABI-specific ncnn static libraries; source-only mode builds against
-# upstream ncnn from a pinned source archive (CPU-only).
-set(PHOTON_NCNN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ncnn/${ANDROID_ABI}")
-set(PHOTON_NCNN_LIB "${PHOTON_NCNN_DIR}/lib")
-if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a" AND RAWLENS_PREBUILT_NATIVE)
-    set(NCNN_VULKAN_LIBS "")
-    if(EXISTS "${PHOTON_NCNN_LIB}/libSPIRV.a")
-        set(NCNN_VULKAN_LIBS
-            "${PHOTON_NCNN_LIB}/libglslang.a"
-            "${PHOTON_NCNN_LIB}/libMachineIndependent.a"
-            "${PHOTON_NCNN_LIB}/libGenericCodeGen.a"
-            "${PHOTON_NCNN_LIB}/libglslang-default-resource-limits.a"
-            "${PHOTON_NCNN_LIB}/libOSDependent.a"
-            "${PHOTON_NCNN_LIB}/libSPIRV.a")
-    endif()
-    add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/ncnnMl.cpp")
-    target_include_directories(ncnnMl PRIVATE "${PHOTON_NCNN_DIR}/include/ncnn")
-    target_compile_options(ncnnMl PRIVATE -fno-rtti -fno-exceptions)
-    target_link_libraries(ncnnMl PRIVATE "${PHOTON_NCNN_LIB}/libncnn.a" ${NCNN_VULKAN_LIBS} android log)
-    set_target_properties(ncnnMl PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-    target_link_options(ncnnMl PRIVATE "-Wl,-z,max-page-size=16384")
-elseif(RAWLENS_PREBUILT_NATIVE)
-    # Fallback for an ABI without prebuilt archives (unreachable while
-    # app/build.gradle.kts filters to ARM ABIs): keep the historical
-    # lightweight stub so compiling upstream ncnn for it stays pure bloat-free.
-    add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/ncnn_stub.cpp")
-    target_link_libraries(ncnnMl PRIVATE log)
-else()
-    # Source-only build: compile the real JNI
-    # bridge + CPU custom layers against upstream ncnn from the pinned
-    # source archive (same pin + hash as the desktop host build in
-    # tools/sr-vulkan/src/main/cpp-ncnn/CMakeLists.txt). CPU-only: Vulkan
-    # needs glslang, which source builds do not vendor; the bridge
-    # selects CPU automatically (NCNN_VULKAN guards + backend env
-    # overrides), so RawNIND runs.
-    set(NCNN_SHA "c6b351b56fbe32e0381ae00331e3df649b20d7b7")
-    set(NCNN_URL "https://github.com/Tencent/ncnn/archive/${NCNN_SHA}.tar.gz")
-    set(NCNN_SHA256 "a48593360583c333ffb70f7167845a29c491e37248fb6bb6a6f5f7db01b7c241")
-    set(NCNN_VULKAN OFF CACHE BOOL "" FORCE)
-    set(NCNN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(NCNN_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
-    set(NCNN_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-    set(NCNN_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(NCNN_SHARED_LIB OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(ncnn URL ${NCNN_URL} URL_HASH SHA256=${NCNN_SHA256})
-    FetchContent_MakeAvailable(ncnn)
-    if(NCNN_VULKAN)
-        message(FATAL_ERROR "rawlens: source-only build requires NCNN_VULKAN=OFF")
-    endif()
-    add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/ncnnMl.cpp")
-    target_include_directories(ncnnMl PRIVATE
-        "${ncnn_SOURCE_DIR}/src"
-        "${ncnn_BINARY_DIR}/src")
-    target_compile_options(ncnnMl PRIVATE -fno-rtti -fno-exceptions)
-    target_link_libraries(ncnnMl PRIVATE ncnn android log)
-    set_target_properties(ncnnMl PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-    target_link_options(ncnnMl PRIVATE "-Wl,-z,max-page-size=16384")
-    # Wiring assertion: source-only builds must link the real bridge, never
-    # the stub. Fails the build instead of silently shipping dead ML.
-    get_target_property(_ncnnml_srcs ncnnMl SOURCES)
-    if(_ncnnml_srcs MATCHES "ncnn_stub")
-        message(FATAL_ERROR "rawlens: source-only build would use the ncnn stub")
-    endif()
-endif()
-
 # Unified srvulkan compute backend: the SAME sources the desktop build
 # compiles (tools/sr-vulkan/src/main/cpp), referenced by path so the file
 # is literally shared. Serves the app's VkRawSrProcessor through the
@@ -313,30 +251,28 @@ else()
     message(FATAL_ERROR "shared srvulkan sources not found at ${SRVK_DIR} (repo layout changed?)")
 endif()
 
-# Profiled wavelet denoise (Vulkan): 1:1 port of the upstream raw_denoise
-# (itself a port of darktable denoiseprofile). SPIR-V comes from app assets
-# (spirv/wavelet/); see assets UPSTREAM.md for provenance.
 # Backend-independent learned RAW noise model (CPU only, no Vulkan/denoiser link).
 add_library(rawLensNoise SHARED noise/noise_jni.cpp)
 set_target_properties(rawLensNoise PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_link_options(rawLensNoise PRIVATE "-Wl,-z,max-page-size=16384")
 
-set(WAVELET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/wavelet")
-add_library(rawLensWavelet SHARED
-    "${WAVELET_DIR}/upstream/src/DenoisePipeline.cpp"
-    "${WAVELET_DIR}/wavelet_host.cpp"
-    "${WAVELET_DIR}/wavelet_jni.cpp")
-target_include_directories(rawLensWavelet PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/noise"
-    "${WAVELET_DIR}"
-    "${WAVELET_DIR}/upstream/include")
-target_compile_options(rawLensWavelet PRIVATE -Wall -Wextra -Werror=return-type)
-find_library(WAVELET_VULKAN_LIB vulkan REQUIRED)
-find_library(WAVELET_LOG_LIB log REQUIRED)
-find_library(WAVELET_ANDROID_LIB android REQUIRED)
-target_link_libraries(rawLensWavelet PRIVATE ${WAVELET_VULKAN_LIB} ${WAVELET_LOG_LIB} ${WAVELET_ANDROID_LIB})
-set_target_properties(rawLensWavelet PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-target_link_options(rawLensWavelet PRIVATE "-Wl,-z,max-page-size=16384")
+# Single-frame RAW-domain denoiser (Vulkan); SPIR-V in assets spirv/rawdn, built by tools/raw-denoise/vulkan/build.sh.
+find_library(RAWDN_VULKAN_LIB vulkan REQUIRED)
+find_library(RAWDN_LOG_LIB log REQUIRED)
+find_library(RAWDN_ANDROID_LIB android REQUIRED)
+# Same library: the network denoiser (INT8 NNAPI graph from assets models/pmrid.bin, tools/raw-denoise/pmrid/export_nnapi.py).
+add_library(rawLensRawDn SHARED rawdn/rawdn.cpp rawdn/rawdn_jni.cpp pmrid/pmrid_nnapi.cpp pmrid/pmrid_jni.cpp)
+target_compile_options(rawLensRawDn PRIVATE -O2 -Wall -Wextra -Werror=return-type)
+target_link_libraries(rawLensRawDn PRIVATE ${RAWDN_VULKAN_LIB} ${RAWDN_LOG_LIB} ${RAWDN_ANDROID_LIB} neuralnetworks)
+set_target_properties(rawLensRawDn PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_link_options(rawLensRawDn PRIVATE "-Wl,-z,max-page-size=16384")
+
+# Capture sharpening (Vulkan): host around the vendored rawr::capture_sharpening.
+add_library(rawLensSharpen SHARED capture_sharpening/sharpen_host.cpp)
+target_compile_options(rawLensSharpen PRIVATE -Wall -Wextra -Werror=return-type)
+target_link_libraries(rawLensSharpen PRIVATE ${RAWDN_VULKAN_LIB} ${RAWDN_LOG_LIB})
+set_target_properties(rawLensSharpen PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_link_options(rawLensSharpen PRIVATE "-Wl,-z,max-page-size=16384")
 
 # HDR+ burst merge (Vulkan): 1:1 port of the upstream merge_hdrplus recorder
 # (itself a port of Burst Photo / hdr-plus-swift). SPIR-V comes from app
@@ -542,7 +478,7 @@ find_program(GLSLC NAMES glslc
           "${ANDROID_NDK}/shader-tools/windows-x86_64"
     REQUIRED)
 add_subdirectory(capture_sharpening/capture_sharpening)
-target_link_libraries(rawLensWavelet PRIVATE rawr::capture_sharpening)
+target_link_libraries(rawLensSharpen PRIVATE rawr::capture_sharpening)
 
 # Coherent video MHC green prepass: source -> pinned NDK SPIR-V -> native
 # constant. Building from source cannot silently reuse a stale blob.
