@@ -52,10 +52,6 @@ internal fun jpegImageDescription(
     }
     append("- Camera tone balance: shadow lift ${number(settings.shadowLift)}, near-black protection; highlight recovery ${number(settings.highlightRecovery)}, capped 1 EV; ratio-preserving\n")
     append("- Working space: scene-linear ACEScg (AP1, D60)\n")
-    append(if (settings.chromaCleanup.rapidRawActive)
-        "- JPEG preprocessing: RapidRAW 1.7 develop ON; color NR ${number(settings.chromaCleanup.rapidRawColorNoiseReduction)}, " +
-            "sharpening ${number(settings.chromaCleanup.rapidRawSharpening)} (linear sRGB)\n"
-    else "- JPEG preprocessing: RapidRAW OFF\n")
     append("- Output: $gamut, 8-bit SDR base, sRGB transfer\n")
     if (outputWidth != null && outputHeight != null) append("- Dimensions: ${outputWidth}x${outputHeight}\n")
     if (mono != null) append("- B&W mode: ${mono.label}; photosite monochrome, no demosaic\n")

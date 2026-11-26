@@ -18,9 +18,6 @@
 // NativeJpegEncoder (RAWR writeUltraHdrFallback parity).
 #include <jni.h>
 #include <android/bitmap.h>
-// jpeglib.h requires FILE: cstdio must come first.
-#include <cstdio>
-#include <jpeglib.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -28,39 +25,13 @@
 #include <cstring>
 #include <string>
 #include <vector>
-#include <setjmp.h>
 
 #include "color/UltraHdrParams.h"
+#include "encoding/jpeg/ParallelJpeg.h"
 #include "encoding/jpeg/UltraHdrMapFit.h"
 #include "gainmap/UltrahdrMux.h"
 
 namespace {
-struct ErrorManager { jpeg_error_mgr pub; jmp_buf jump; char message[JMSG_LENGTH_MAX]; };
-void onError(j_common_ptr cinfo) {
-    auto* err = reinterpret_cast<ErrorManager*>(cinfo->err);
-    (*cinfo->err->format_message)(cinfo, err->message);
-    longjmp(err->jump, 1);
-}
-
-void writeIcc(j_compress_ptr cinfo, const unsigned char* data, size_t size) {
-    if (!data || size == 0) return;
-    constexpr size_t kHeader = 14;
-    constexpr size_t kMaxMarkerPayload = 65533;
-    constexpr size_t kMaxChunk = kMaxMarkerPayload - kHeader;
-    const int count = static_cast<int>((size + kMaxChunk - 1) / kMaxChunk);
-    size_t offset = 0;
-    for (int index = 1; index <= count; ++index) {
-        const size_t chunk = std::min(kMaxChunk, size - offset);
-        std::vector<JOCTET> marker(kHeader + chunk);
-        std::memcpy(marker.data(), "ICC_PROFILE\0", 12);
-        marker[12] = static_cast<JOCTET>(index);
-        marker[13] = static_cast<JOCTET>(count);
-        std::memcpy(marker.data() + kHeader, data + offset, chunk);
-        jpeg_write_marker(cinfo, JPEG_APP0 + 2, marker.data(), static_cast<unsigned int>(marker.size()));
-        offset += chunk;
-    }
-}
-
 struct LockedBitmap {
     AndroidBitmapInfo info{};
     void* pixels = nullptr;
@@ -77,51 +48,23 @@ LockedBitmap lockRgba(JNIEnv* env, jobject bitmap) {
     return out;
 }
 
-// TurboJPEG memory encode of one RGBA_8888 image. Throws via longjmp on error.
+// Memory encode of one RGBA_8888 image.
 bool encodeRgba(const unsigned char* pixels, int width, int height, size_t stride, int quality,
                 bool force444, const unsigned char* icc, size_t iccSize,
                 std::vector<unsigned char>& out, std::string& error) {
-    jpeg_compress_struct cinfo{};
-    ErrorManager jerr{};
-    cinfo.err = jpeg_std_error(&jerr.pub);
-    jerr.pub.error_exit = onError;
-    if (setjmp(jerr.jump)) {
-        jpeg_destroy_compress(&cinfo);
-        error = jerr.message;
-        return false;
-    }
-    jpeg_create_compress(&cinfo);
-    unsigned char* mem = nullptr;
-    unsigned long memSize = 0;
-    jpeg_mem_dest(&cinfo, &mem, &memSize);
-    cinfo.image_width = static_cast<JDIMENSION>(width);
-    cinfo.image_height = static_cast<JDIMENSION>(height);
-    cinfo.input_components = 4;
-    cinfo.in_color_space = JCS_EXT_RGBA;
-    jpeg_set_defaults(&cinfo);
-    jpeg_set_quality(&cinfo, std::max(1, std::min(100, quality)), TRUE);
-    cinfo.optimize_coding = FALSE;
-    if (quality >= 98) cinfo.dct_method = JDCT_ISLOW;
-    if (force444) {
-        cinfo.comp_info[0].h_samp_factor = 1; cinfo.comp_info[0].v_samp_factor = 1;
-        cinfo.comp_info[1].h_samp_factor = 1; cinfo.comp_info[1].v_samp_factor = 1;
-        cinfo.comp_info[2].h_samp_factor = 1; cinfo.comp_info[2].v_samp_factor = 1;
-    } else {
-        cinfo.comp_info[0].h_samp_factor = 2; cinfo.comp_info[0].v_samp_factor = 1;
-        cinfo.comp_info[1].h_samp_factor = 1; cinfo.comp_info[1].v_samp_factor = 1;
-        cinfo.comp_info[2].h_samp_factor = 1; cinfo.comp_info[2].v_samp_factor = 1;
-    }
-    jpeg_start_compress(&cinfo, TRUE);
-    writeIcc(&cinfo, icc, iccSize);
-    while (cinfo.next_scanline < cinfo.image_height) {
-        JSAMPROW row = const_cast<JSAMPROW>(
-            pixels + static_cast<size_t>(cinfo.next_scanline) * stride);
-        jpeg_write_scanlines(&cinfo, &row, 1);
-    }
-    jpeg_finish_compress(&cinfo);
-    jpeg_destroy_compress(&cinfo);
-    out.assign(mem, mem + memSize);
-    free(mem);
+    rawlens::encoding::jpeg::ParallelJpegInput in;
+    in.rgba = pixels;
+    in.width = width;
+    in.height = height;
+    in.stride = stride;
+    in.quality = quality;
+    in.yuv444 = force444;
+    in.icc = icc;
+    in.iccSize = iccSize;
+    rawlens::encoding::jpeg::ParallelJpegOutput jpeg;
+    if (!rawlens::encoding::jpeg::encodeParallel(in, jpeg, error)) return false;
+    out.reserve(jpeg.size());
+    for (const auto& p : jpeg.pieces) out.insert(out.end(), p.data, p.data + p.size);
     return true;
 }
 
@@ -183,26 +126,24 @@ Java_com_matthew_rawlens_NativeUltraHdrWriter_nativeEncodeUltraHdr(
         }
     }
 
-    // Copy pixels out from under the Bitmap locks: the fit runs on worker
-    // threads and the encodes need stable rows.
-    const size_t baseRowBytes = static_cast<size_t>(base.info.stride);
-    const size_t mapRowBytes = static_cast<size_t>(map.info.stride);
-    std::vector<unsigned char> baseRgba(
-        static_cast<size_t>(base.info.width) * base.info.height * 4);
-    std::vector<unsigned char> mapRgba(
-        static_cast<size_t>(map.info.width) * map.info.height * 4);
-    for (uint32_t y = 0; y < base.info.height; ++y) {
-        std::memcpy(baseRgba.data() + static_cast<size_t>(y) * base.info.width * 4,
-                    static_cast<unsigned char*>(base.pixels) + static_cast<size_t>(y) * baseRowBytes,
-                    static_cast<size_t>(base.info.width) * 4);
-    }
-    for (uint32_t y = 0; y < map.info.height; ++y) {
-        std::memcpy(mapRgba.data() + static_cast<size_t>(y) * map.info.width * 4,
-                    static_cast<unsigned char*>(map.pixels) + static_cast<size_t>(y) * mapRowBytes,
-                    static_cast<size_t>(map.info.width) * 4);
-    }
-    AndroidBitmap_unlockPixels(env, baseBitmap);
-    AndroidBitmap_unlockPixels(env, mapBitmap);
+    // Both bitmaps stay locked until their last read: the fit and the encodes only read, and a 12 MP
+    // base copy is 48 MB. The fit needs tight rows, so only an (unusual) padded bitmap is copied.
+    struct Unlock {
+        JNIEnv* env; jobject base, map;
+        ~Unlock() { AndroidBitmap_unlockPixels(env, base); AndroidBitmap_unlockPixels(env, map); }
+    } unlock{env, baseBitmap, mapBitmap};
+    auto tight = [](const LockedBitmap& b, std::vector<unsigned char>& copy) -> const unsigned char* {
+        const size_t row = static_cast<size_t>(b.info.width) * 4;
+        const auto* src = static_cast<const unsigned char*>(b.pixels);
+        if (b.info.stride == row) return src;
+        copy.resize(row * b.info.height);
+        for (uint32_t y = 0; y < b.info.height; ++y)
+            std::memcpy(copy.data() + y * row, src + static_cast<size_t>(y) * b.info.stride, row);
+        return copy.data();
+    };
+    std::vector<unsigned char> baseCopy, mapCopy;
+    const unsigned char* baseRgba = tight(base, baseCopy);
+    const unsigned char* mapRgba = tight(map, mapCopy);
 
     // Adaptive ceiling + shoulder + chroma knee against the SDR base. On fit
     // failure the wide map + wide metadata still form a valid file.
@@ -210,11 +151,11 @@ Java_com_matthew_rawlens_NativeUltraHdrWriter_nativeEncodeUltraHdr(
     std::vector<unsigned char> fittedMap;
     float fitOut = fittedMax;
     if (rawlens::encoding::jpeg::fitAndRemapMap(
-            mapRgba.data(), map.info.width, map.info.height, uh, fittedMap, fitOut,
-            baseRgba.data(), base.info.width, base.info.height)) {
+            mapRgba, map.info.width, map.info.height, uh, fittedMap, fitOut,
+            baseRgba, base.info.width, base.info.height)) {
         fittedMax = fitOut;
     }
-    const unsigned char* mapForEncode = fittedMap.empty() ? mapRgba.data() : fittedMap.data();
+    const unsigned char* mapForEncode = fittedMap.empty() ? mapRgba : fittedMap.data();
 
     rawlens::gainmap::UltrahdrMuxParams mux = uh.toMuxParams();
     mux.gainMapMaxLog2 = fittedMax;
@@ -226,7 +167,7 @@ Java_com_matthew_rawlens_NativeUltraHdrWriter_nativeEncodeUltraHdr(
 
     std::string error;
     std::vector<unsigned char> baseJpeg, mapJpeg;
-    if (!encodeRgba(baseRgba.data(), static_cast<int>(base.info.width),
+    if (!encodeRgba(baseRgba, static_cast<int>(base.info.width),
                     static_cast<int>(base.info.height),
                     static_cast<size_t>(base.info.width) * 4, baseQuality,
                     baseSubsampling == 444, iccProfile.data(), iccProfile.size(), baseJpeg, error))

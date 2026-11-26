@@ -95,6 +95,8 @@ data class JpegOutputSettings(
     val hlReconstruction: Boolean = true,
     /** B&W photosite mode (after rwmono); OFF keeps the colour develop. */
     val mono: MonoSettings = MonoSettings(),
+    /** Portrait bokeh on the scene-linear develop (JPEG; single frame and merges). */
+    val portrait: PortraitSettings = PortraitSettings(),
     /** Sigmoid / ACES 2.0 / Basic look controls (neutral defaults). */
     val toneLook: ToneLookSettings = ToneLookSettings(),
     val photoLut: PhotoLutLook? = null

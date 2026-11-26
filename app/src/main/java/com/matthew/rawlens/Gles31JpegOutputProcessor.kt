@@ -23,7 +23,6 @@ data class DevelopedJpeg(val bitmap: Bitmap, val settings: JpegOutputSettings, v
 
 /** Converts an unclamped scene-linear ACEScg texture into a color-tagged JPEG Bitmap. */
 class Gles31JpegOutputProcessor(context: Context) {
-    private val cleanup = RapidRawDevelop(context.applicationContext)
     private val shaderSource = context.applicationContext.assets.open(SHADER).bufferedReader().use {
         it.readText().replace("// PHOTO_CUBE", PhotoLutGl.glsl).replace("// SIGMOID_FUNCTIONS", CameraToneBalance.glsl + "\n" + SigmoidDisplayTransform.glsl + "\n" + Aces2DisplayTransform.glsl)
     }
@@ -32,7 +31,6 @@ class Gles31JpegOutputProcessor(context: Context) {
     private val aces2 = Aces2Gl()
     private val photoLut = PhotoLutGl()
     private var program = 0
-    private val cleanupPrograms = IntArray(4)
     private var programThread: Thread? = null
     private var framebuffer = 0
 
@@ -69,17 +67,11 @@ class Gles31JpegOutputProcessor(context: Context) {
         return DevelopedJpeg(base.bitmap, resolved, gainmap)
     }
 
-    fun process(scene: AmazeGpuOutput, settings: JpegOutputSettings = JpegOutputSettings()): DevelopedJpeg =
-        if (settings.chromaCleanup.rapidRawActive) {
-            cleanup.withPrepared(scene, settings.chromaCleanup.rapidRawAmounts) { prepared -> processCleaned(scene, settings, prepared) }
-        } else processCleaned(scene, settings)
-
-    private fun processCleaned(scene: AmazeGpuOutput, settings: JpegOutputSettings,
-                               prepared: RapidRawDevelop.Prepared? = null): DevelopedJpeg {
+    fun process(scene: AmazeGpuOutput, settings: JpegOutputSettings = JpegOutputSettings()): DevelopedJpeg {
         val startedAt = SystemClock.elapsedRealtime()
         require(scene.internalFormat == AmazeTextureFormat.RGBA16F)
         require(scene.colorDomain == AmazeColorDomain.ACESCG) {
-            "JPEG develop needs scene-linear ACEScg, not camera-linear (wavelet tail missing?)"
+            "JPEG develop needs scene-linear ACEScg, not camera-linear (camera-linear tail missing?)"
         }
         val resolved = settings.resolvedForPlatform()
         val encodedTexture = IntArray(1)
@@ -113,10 +105,9 @@ class Gles31JpegOutputProcessor(context: Context) {
             checkGl("encoded texture allocation")
             val allocatedAt = SystemClock.elapsedRealtime()
 
-            val outputProgram = outputProgram(prepared != null, resolved.toneMapper, resolved.ultraHdr)
+            val outputProgram = outputProgram()
             GLES31.glUseProgram(outputProgram)
             photoLut.bind(outputProgram, resolved.photoLut)
-            if (prepared != null) cleanup.bindPrepared(outputProgram, prepared)
             GLES31.glBindImageTexture(
                 0, scene.textureId, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F
             )
@@ -153,12 +144,11 @@ class Gles31JpegOutputProcessor(context: Context) {
             GLES31.glUniform1f(location(outputProgram, "u_grain_amount"), 0f)
             GLES31.glUniform1f(location(outputProgram, "u_grain_size"), 0f)
             GLES31.glUniform1ui(location(outputProgram, "u_grain_seed"), System.nanoTime().toInt())
-            GLES31.glUniform1i(location(outputProgram, "u_write_gainmap"), if (prepared != null && resolved.ultraHdr) 1 else 0)
+            GLES31.glUniform1i(location(outputProgram, "u_write_gainmap"), 0)
             GLES31.glUniform1i(location(outputProgram, "u_gainmap_only"), 0)
             bindUltraHdrParams(outputProgram, resolved)
-            if (prepared != null) cleanup.dispatchSlices(outputProgram, scene.width, scene.height)
-            else GLES31.glDispatchCompute(ceilDiv(scene.width, 8), ceilDiv(scene.height, 8), 1)
-            if (resolved.ultraHdr && prepared == null) {
+            GLES31.glDispatchCompute(ceilDiv(scene.width, 8), ceilDiv(scene.height, 8), 1)
+            if (resolved.ultraHdr) {
                 GLES31.glUniform1i(location(outputProgram, "u_write_gainmap"), 1)
                 GLES31.glUniform1i(location(outputProgram, "u_gainmap_only"), 1)
                 GLES31.glDispatchCompute(
@@ -205,17 +195,13 @@ class Gles31JpegOutputProcessor(context: Context) {
     fun close() {
         aces2.close()
         photoLut.close()
-        cleanup.close()
-        if (program != 0 || cleanupPrograms.any { it != 0 }) {
+        if (program != 0) {
             check(programThread == Thread.currentThread()) {
                 "JPEG output program must be closed by its owning worker thread"
             }
-            for (id in intArrayOf(program, *cleanupPrograms)) if (id != 0) {
-                GLES31.glDeleteProgram(id)
-                MemoryLeakDiagnostics.glProgramReleased()
-            }
+            GLES31.glDeleteProgram(program)
+            MemoryLeakDiagnostics.glProgramReleased()
             program = 0
-            cleanupPrograms.fill(0)
             programThread = null
         }
         if (framebuffer != 0) {
@@ -246,41 +232,38 @@ class Gles31JpegOutputProcessor(context: Context) {
                 "Encoded output framebuffer is incomplete"
             }
             val byteCount = Math.multiplyExact(Math.multiplyExact(width, height), 4)
-            // ART charges allocateDirect against its Java heap. A 50 MP RGBA
-            // readback is ~200 MB while B&W already owns full-frame CFA/mono
-            // arrays. Keep this staging allocation native and release it on
-            // every path, rather than caching an entire photo between saves.
-            val pixels = HdrPlusVulkan.allocBuffer(byteCount.toLong()).order(ByteOrder.nativeOrder())
+            // GLES RGBA readback is accepted directly by this device's ARGB_8888 Bitmap path.
+            // Do not apply a second R/B swap here: it turns the calibrated DNG's warm neutrals
+            // cyan and visibly exchanges blue and orange subjects.
+            val bitmap = Bitmap.createBitmap(
+                width, height, Bitmap.Config.ARGB_8888, false, colorSpace
+            )
             try {
-                pixels.clear()
-                pixels.limit(byteCount)
                 GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
                 val readStartedAt = SystemClock.elapsedRealtime()
-                GLES30.glReadPixels(
-                    0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels
-                )
-                checkGl("encoded output readback")
-                val readCompletedAt = SystemClock.elapsedRealtime()
-                // GLES RGBA readback is accepted directly by this device's ARGB_8888 Bitmap path.
-                // Do not apply a second R/B swap here: it turns the calibrated DNG's warm neutrals
-                // cyan and visibly exchanges blue and orange subjects.
-                pixels.rewind()
-                val bitmap = Bitmap.createBitmap(
-                    width, height, Bitmap.Config.ARGB_8888, false, colorSpace
-                )
-                try {
-                    bitmap.copyPixelsFromBuffer(pixels)
-                } catch (failure: Throwable) {
-                    bitmap.recycle()
-                    throw failure
+                var readMs = 0L
+                fun read(pixels: ByteBuffer) {
+                    GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
+                    checkGl("encoded output readback")
+                    readMs = SystemClock.elapsedRealtime() - readStartedAt
                 }
-                return ReadbackResult(
-                    bitmap,
-                    readCompletedAt - readStartedAt,
-                    SystemClock.elapsedRealtime() - readCompletedAt
-                )
-            } finally {
-                HdrPlusVulkan.freeBuffer(pixels)
+                // Straight into the bitmap: no second full-frame copy (48 MB at 12 MP).
+                if (!NativeJpegEncoder.writePixels(bitmap, ::read)) {
+                    val pixels = HdrPlusVulkan.allocBuffer(byteCount.toLong()).order(ByteOrder.nativeOrder())
+                    try {
+                        pixels.clear()
+                        pixels.limit(byteCount)
+                        read(pixels)
+                        pixels.rewind()
+                        bitmap.copyPixelsFromBuffer(pixels)
+                    } finally {
+                        HdrPlusVulkan.freeBuffer(pixels)
+                    }
+                }
+                return ReadbackResult(bitmap, readMs, SystemClock.elapsedRealtime() - readStartedAt - readMs)
+            } catch (failure: Throwable) {
+                bitmap.recycle()
+                throw failure
             }
         } finally {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -338,26 +321,20 @@ class Gles31JpegOutputProcessor(context: Context) {
         return program
     }
 
-    private fun outputProgram(fusedCleanup: Boolean = false, tone: PhotoToneMapper = PhotoToneMapper.BASIC, gainmap: Boolean = false): Int {
+    private fun outputProgram(): Int {
         val thread = Thread.currentThread()
         val previousThread = programThread
         check(previousThread == null || previousThread == thread) {
             "JPEG output program must stay on AMaZE's owning worker thread"
         }
-        val index = (if(tone == PhotoToneMapper.BASIC) 2 else 0) + (if(gainmap)1 else 0)
-        if (fusedCleanup) {
-            if (cleanupPrograms[index] == 0) cleanupPrograms[index] = compile(cleanup.fusedSource(shaderSource, tone == PhotoToneMapper.BASIC, gainmap))
-        } else {
-            if (program == 0) program = compile("#define RAWLENS_STILL_SDR 1\n$shaderSource")
-        }
+        if (program == 0) program = compile("#define RAWLENS_STILL_SDR 1\n$shaderSource")
         programThread = thread
-        return if (fusedCleanup) cleanupPrograms[index] else program
+        return program
     }
 
     private fun location(program: Int, name: String): Int =
         GLES31.glGetUniformLocation(program, name).also {
-            // Specialized Basic/AgX programs legitimately eliminate the other curve's controls.
-            check(it >= 0 || cleanupPrograms.contains(program)) { "Missing uniform $name" }
+            check(it >= 0) { "Missing uniform $name" }
         }
 
     private fun checkGl(operation: String) {

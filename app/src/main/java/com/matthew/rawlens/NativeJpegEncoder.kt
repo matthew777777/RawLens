@@ -9,6 +9,8 @@ import android.graphics.ColorSpace
 import android.os.ParcelFileDescriptor
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /** Native libjpeg-turbo encoder for SDR output. Ultra HDR remains on Android's JPEG/R writer. */
 object NativeJpegEncoder {
@@ -27,6 +29,16 @@ object NativeJpegEncoder {
         )
         if (error != null) throw IOException(error)
     }
+
+    /** Runs [write] on the bitmap's own pixel memory; false when it is not one tight RGBA block. */
+    internal fun writePixels(bitmap: Bitmap, write: (ByteBuffer) -> Unit): Boolean {
+        val pixels = nativeLockPixels(bitmap) ?: return false
+        try { write(pixels.order(ByteOrder.nativeOrder())) } finally { nativeUnlockPixels(bitmap) }
+        return true
+    }
+
+    private external fun nativeLockPixels(bitmap: Bitmap): ByteBuffer?
+    private external fun nativeUnlockPixels(bitmap: Bitmap)
 
     private external fun nativeEncode(
         bitmap: Bitmap,
