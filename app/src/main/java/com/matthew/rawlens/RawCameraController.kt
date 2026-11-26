@@ -418,6 +418,12 @@ class RawCameraController(
     private val isXiaomi13Ultra = Build.DEVICE.equals("ishtar", ignoreCase = true)
     private var pinnedIshtarRoute = false
     private var physical3aRequestKeys = emptySet<CaptureRequest.Key<*>>()
+    /**
+     * Bound physical lens (Moto 2x via logical 0) whose logical camera accepts OIS as a physical
+     * request key: OIS on the logical request drives the logical's active lens, not the bound one,
+     * so it is also set per physical id. Only OIS: 3A stays logical (unchanged AE/AF behaviour).
+     */
+    private var physicalOisRoute = false
     private var selectedIso: Int? = null
         set(value) { field = value; DigitalGain.requestedIso = value }
     private var selectedExposureNanos: Long? = null
@@ -863,6 +869,10 @@ class RawCameraController(
                 runCatching { vendorKeyCharacteristics?.availablePhysicalCameraRequestKeys.orEmpty().toSet() }
                     .getOrDefault(emptySet())
             } else emptySet()
+            physicalOisRoute = !pinnedIshtarRoute && effectiveRoute.physicalCameraId != null &&
+                effectiveRoute.physicalCameraId != openCameraId &&
+                runCatching { vendorKeyCharacteristics?.availablePhysicalCameraRequestKeys
+                    ?.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE) == true }.getOrDefault(false)
             if (pinnedIshtarRoute) {
                 Log.i(LOG_TAG, "Ishtar pinned route: lens=$id open=$openCameraId sensor=$activePhysicalCameraId " +
                     "physicalRequestKeys=${physical3aRequestKeys.size}")
@@ -1958,7 +1968,10 @@ class RawCameraController(
             // No RAW frame will arrive to trigger this in a still-only RAW session.
             if (rawStillOnlySession) refreshIspDisplay()
             photoStream?.let { Log.i(LOG_TAG, "Full-size photo route ${it.width}x${it.height} separate=${it.separateSession} gate=$vivoGateHeld") }
-            Log.i(LOG_TAG, "Session ready (zsl=$rawZslStreaming vf=$rawViewfinderStreaming)")
+            Log.i(LOG_TAG, "Session ready (zsl=$rawZslStreaming vf=$rawViewfinderStreaming) camera=$selectedCameraId " +
+                "oisModes=${characteristics?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contentToString()} oisWanted=$oisEnabled " +
+                "physical=$activePhysicalCameraId logicalOisModes=${vendorKeyCharacteristics?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contentToString()} " +
+                "physicalOisRoute=$physicalOisRoute oisPhysicalKey=${runCatching { vendorKeyCharacteristics?.availablePhysicalCameraRequestKeys?.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE) }.getOrNull()}")
             logAfCapabilities()
             onState(when {
                 xiaomiRaw50Session -> "READY • 50 MP RAW"
@@ -6506,6 +6519,15 @@ class RawCameraController(
 
     private fun createSensorRequest(device: CameraDevice, template: Int): CaptureRequest.Builder {
         val id = activePhysicalCameraId
+        if (physicalOisRoute && id != null) {
+            return try {
+                device.createCaptureRequest(template, setOf(id))
+            } catch (failure: IllegalArgumentException) {
+                Log.w(LOG_TAG, "HAL refused a physical request template for OIS on $id", failure)
+                physicalOisRoute = false
+                device.createCaptureRequest(template)
+            }
+        }
         if (!pinnedIshtarRoute || id == null || physical3aRequestKeys.isEmpty()) {
             return device.createCaptureRequest(template)
         }
@@ -6692,6 +6714,15 @@ class RawCameraController(
                 if (oisEnabled) CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON
                 else CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF
             )
+            val physicalId = activePhysicalCameraId
+            if (physicalOisRoute && physicalId != null) {
+                // Throws on builders made without the physical id (vendor still paths): those keep logical OIS.
+                runCatching {
+                    builder.setPhysicalCameraKey(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        if (oisEnabled) CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON
+                        else CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF, physicalId)
+                }
+            }
         }
         // An explicit sensor-mode FPS is part of the mode, not just preview pacing.
         // Keep it on still/AF/precapture builders too; template defaults may select
@@ -8576,6 +8607,7 @@ class RawCameraController(
             vendorRawReaderActive = false
             rawReaderMaxImages = 0
             activePhysicalCameraId = null
+            physicalOisRoute = false
             characteristics = null
             vendorKeyCharacteristics = null
             lastVendorSessionReport = null

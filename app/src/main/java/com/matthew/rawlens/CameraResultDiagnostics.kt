@@ -71,7 +71,8 @@ internal class CameraResultDiagnostics(private val route: String, private val pi
         val mode = names.joinToString("; ") { name ->
             "$name requested=${requestKeys.firstOrNull { it.name == name }?.let(::requested) ?: "absent"} " +
                 "returned=${keys.firstOrNull { it.name == name }?.let(::returned) ?: "unavailable"}"
-        }
+        } + "; ois requested=${Camera2Names.oisModeName(request.get(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE))} " +
+            "returned=${Camera2Names.oisModeName(result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE))}"
         if (!modesLogged || mode != lastMode) {
             modesLogged = true; lastMode = mode
             Log.i("RawLensCamera", "SENSOR_MODE route=$route pipeline=$pipeline frame=${result.frameNumber} $mode " +
