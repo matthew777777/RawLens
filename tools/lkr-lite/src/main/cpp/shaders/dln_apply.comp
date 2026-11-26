@@ -125,8 +125,16 @@ void main() {
     acc += (wt * f.x * f.y) * P3(k + pc.W + 1);
   }
   acc *= 1.0 / (nf * nf);
-  vec3 r = mix(c0, acc, w);   // chroma at full w
-  float dy = (wl - w) * dot(acc - c0, vec3(1.0 / 3.0));   // luma moved back to strength wl
-  r += vec3(dy);
+  // Colour relative to luma (2026-11-26): the average's colour as a ratio to its own luma, applied at
+  // this pixel's luma, and the luma step as a gain. Camera-space RGB of a neutral is not equal (R ~ G / 2
+  // before WB), so absolute colour from brighter taps (sky beside a thin dark pole) and an equal R, G, B
+  // luma add both tinted dark poles teal (Samsung hdrplus scaffolding; raw frame neutral).
+  float la = dot(acc, vec3(1.0 / 3.0));
+  vec3 r = c0;
+  if (l > 1e-6 && la > 1e-6) {
+    r = mix(c0 / l, acc / la, w) * mix(l, la, wl);   // colour at full w, luma at strength wl
+  } else {
+    r = mix(c0, acc, w) + vec3((wl - w) * (la - dot(c0, vec3(1.0 / 3.0))));
+  }
   z[i] = r.x; z[HW + i] = r.y; z[2 * HW + i] = r.z;
 }

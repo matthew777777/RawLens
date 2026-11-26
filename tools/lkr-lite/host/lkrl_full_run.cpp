@@ -108,6 +108,7 @@ int main(int argc, char** argv) {
     else if (k == "--holdout") prm.holdout = nx();   // frame index (after --reference / --frames) kept out of the merge
     else if (k == "--smax") prm.smax_x = float(std::atof(argv[++i]));
     else if (k == "--notch") prm.solve.notch = nx() != 0;
+    else if (k == "--hl-rec") prm.solve.highlight_recovery = nx() != 0;   // 0: neutral highlight rule only
     else if (k == "--workers") prm.workers = nx();
     else if (k == "--robust") prm.solve.robust = nx() != 0;
     else if (k == "--ibp") prm.solve.init_backproject = nx();
@@ -260,7 +261,9 @@ int main(int argc, char** argv) {
   }
   // HDR: scale so the clip level is 1 and tell raw converters to brighten by the same factor.
   const float hw = st.hdr_white;
-  for (float& v : rgb) v = std::clamp(v / hw, 0.0f, 1.0f);
+  // Only the top is clipped (white). Negative shadow values stay below the 4096 DNG pedestal,
+  // as on the device path, which passes floats through to LinearRgbDngWriter unclamped.
+  for (float& v : rgb) v = std::isfinite(v) ? std::min(v / hw, 1.0f) : 0.0f;
   srp::DngColorMeta color;
   std::memcpy(color.color_matrix1, m.color_matrix1, sizeof(color.color_matrix1));
   color.has_color_matrix1 = m.color_matrix_present;

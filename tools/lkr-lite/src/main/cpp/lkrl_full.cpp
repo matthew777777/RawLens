@@ -1272,7 +1272,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // so writers scale instead of clamping one channel (a clamped green turns the cloud pink). 99.99th
   // percentile of the values above the white: a lone ringing overshoot does not darken the whole file.
   static const bool hl_rec_env_off = std::getenv("LKRL_HL_REC") && std::getenv("LKRL_HL_REC")[0] == '0';
-  if (prm.solve.highlight_desat && !hl_rec_env_off && !std::getenv("LKRL_HL_OLD")) {
+  if (prm.solve.highlight_desat && prm.solve.highlight_recovery && !hl_rec_env_off && !std::getenv("LKRL_HL_OLD")) {
     std::vector<float> over;
     for (size_t i = 0, n3 = size_t(*out_w) * *out_h * 3; i < n3; ++i)
       if (rgb_data[i] > S.hdr_white) over.push_back(rgb_data[i]);

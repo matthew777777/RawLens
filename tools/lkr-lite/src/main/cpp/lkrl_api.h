@@ -158,6 +158,8 @@ struct SolveParams {
   float shadow_chroma = 0.7f;
   // Blown highlights go white: neutralise once any channel nears clip (FinishLook).
   bool highlight_desat = true;
+  // Highlight recovery (local donor colour, see HighlightRecover). false = only the neutral rule above.
+  bool highlight_recovery = true;
   // Highlight reconstruction (inpaint opposed, darktable / OpposedHighlightsVulkan idea, 2026-11-20): a
   // clipped channel is rebuilt from the UNCLIPPED channels with the colour of the reference's unclipped
   // pixels bordering clipped areas (wb space, G = 1): c = col_c * mean_k(v_k / col_k) over unclipped k.

@@ -79,6 +79,8 @@ thread_local NoiseModelRef g_noise_model;
 thread_local std::vector<float> g_exposure;
 thread_local bool g_npu_denoise = false;
 thread_local bool g_no_prior = false;
+// Local-colour highlight recovery (Settings -> Merge -> LK-R). Default on; debug.lkr.hlrec=0 still forces it off.
+thread_local bool g_highlight_rec = true;
 
 // stats layout (float[16]): tiles, sigma, a, b, ms_noise, ms_coarse, ms_tiles,
 // ms_gpu, ms_prior, ms_total, prior_calls, out_w, out_h, backend (0 none,
@@ -90,6 +92,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   g_last_profile.clear();
   const bool npu_denoise = std::exchange(g_npu_denoise, false);
   const bool no_prior = std::exchange(g_no_prior, false);
+  const bool highlight_rec = std::exchange(g_highlight_rec, true);
   const jsize K = env->GetArrayLength(frames);
   std::vector<lkrl::RawFrame> fr;
   for (jsize k = 0; k < K; ++k) {
@@ -119,6 +122,7 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
   lkrl::FullParams prm = lkrl::AppDefaults();
   prm.solve.npu_denoise = npu_denoise;
   prm.solve.no_prior = no_prior;
+  prm.solve.highlight_recovery = highlight_rec;
   // x2 buffers are large and a third worker gains about 3 % on Mali (measured); debug.lkr.workers still overrides.
   if (s >= 2) {
     prm.workers = std::min(prm.workers, 2);
@@ -395,6 +399,12 @@ extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetNp
     JNIEnv*, jclass, jboolean enabled, jboolean no_prior) {
   g_npu_denoise = enabled == JNI_TRUE;
   g_no_prior = no_prior == JNI_TRUE;
+}
+
+// Highlight recovery for the NEXT merge on the calling thread (see g_highlight_rec).
+extern "C" JNIEXPORT void JNICALL Java_com_matthew_rawlens_LkrBridge_nativeSetHighlightRecovery(
+    JNIEnv*, jclass, jboolean enabled) {
+  g_highlight_rec = enabled == JNI_TRUE;
 }
 
 // HDR bracket exposures (ExposureTime x ISO, any common unit) for the next merge on the calling thread,

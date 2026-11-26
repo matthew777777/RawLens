@@ -353,7 +353,8 @@ bool Solver::solveEnd(PendingPtr* pend, std::vector<float>* x_out, SolveStats* s
   if (!fin_cpu && prm.fallback_chroma <= 0.0f) {
     LiteSolver::FinishArgs fa{{prm.wb[0], prm.wb[1], prm.wb[2]}, prm.clip, prm.grain, prm.equalize_strength,
                               prm.notch, prm.highlight_desat, {prm.hl_ratio[0], prm.hl_ratio[1], prm.hl_ratio[2]},
-                              !(std::getenv("LKRL_HL_REC") && std::getenv("LKRL_HL_REC")[0] == '0')};
+                              prm.highlight_desat && prm.highlight_recovery &&
+                                  !(std::getenv("LKRL_HL_REC") && std::getenv("LKRL_HL_REC")[0] == '0')};
     std::string ferr;
     fin_done = lite_.finish(z.data(), x_out, H, W, fa, T.nscale.empty() ? nullptr : &T.nscale, &ferr);
     if (!fin_done) std::fprintf(stderr, "lkr-lite: gpu finish failed (%s), CPU path\n", ferr.c_str());

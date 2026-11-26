@@ -1976,6 +1976,14 @@ bool LiteSolver::finish(const float* z, std::vector<float>* x, int H, int W, con
   if (fa.grain > 0.0f || fa.notch) run(5);
   if (fa.grain > 0.0f && fa.notch) notch(0);
   run(6);
+  // Highlight recovery (2026-11-27): donor block sums, then the per-pixel rebuild. Same condition as the
+  // shader's rec (desat 1 + hrec), so the CPU HighlightRecover and this path agree.
+  if (fa.desat && fa.hl_rec && !std::getenv("LKRL_HL_OLD")) {
+    FinPush p = f;
+    p.mode = 20;
+    gpu_->dispatch(fin_, st, &p, div_up(div_up(uint32_t(W), 16u), 16u), div_up(div_up(uint32_t(H), 16u), 16u), 1);
+    run(21);
+  }
   if (!gpu_->submit()) return fail("fin submit");
   x->assign(bx.as<float>(), bx.as<float>() + 3 * HW);
   return true;

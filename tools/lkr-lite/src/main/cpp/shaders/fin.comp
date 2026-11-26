@@ -25,6 +25,35 @@ float sg(int X, int Y) { return (((pc.sm == 0 ? X : (pc.sm == 1 ? Y : X + Y)) & 
 shared float tl[20][20];
 shared float tr[20][16];
 shared bool hm[22][22];
+// Highlight recovery donors (lkrl_finish.cpp HighlightRecover): 16 px block sums in P plane 2 (9 floats per
+// block: pair p at [3p]: sum u_a, [3p+1]: sum u_b, [3p+2]: count; u = x * wb). Ratio u_c / u_k at (X, Y):
+// bilinear over the 4 nearest blocks; the global hl ratio where the donors are too few.
+float hl_ratio(int X, int Y, int c, int k) {
+  int nbx = (pc.W + 15) / 16, nby = (pc.H + 15) / 16;
+  int a = min(c, k), b = max(c, k);
+  int p = (a == 0 && b == 1) ? 0 : ((a == 1 && b == 2) ? 1 : 2);
+  int num = (c == a) ? 0 : 1, den = 1 - num;
+  float fx = (float(X) + 0.5) / 16.0 - 0.5, fy = (float(Y) + 0.5) / 16.0 - 0.5;
+  int x0 = int(floor(fx)), y0 = int(floor(fy));
+  float tx = fx - float(x0), ty = fy - float(y0);
+  float N = 0.0, D = 0.0, n = 0.0;
+  int base = 2 * pc.H * pc.W;
+  for (int dy = 0; dy < 2; ++dy)
+    for (int dx = 0; dx < 2; ++dx) {
+      int bx = clamp(x0 + dx, 0, nbx - 1), by = clamp(y0 + dy, 0, nby - 1);
+      float w = (dx != 0 ? tx : 1.0 - tx) * (dy != 0 ? ty : 1.0 - ty);
+      int bi = base + (by * nbx + bx) * 9 + 3 * p;
+      N += w * P[bi + num];
+      D += w * P[bi + den];
+      n += w * P[bi + 2];
+    }
+  vec3 hl = vec3(pc.hr, pc.hg, pc.hb);
+  float global = hl[c] / hl[k];   // shrink towards it by donor weight (no hard switch: lkrl_finish.cpp HlRatio)
+  if (!(D > 1e-12) || !(n > 0.0)) return global;
+  float al = n / (n + 16.0);
+  return al * (N / D) + (1.0 - al) * global;
+}
+
 void main() {
   int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
   int layer = int(gl_WorkGroupID.z), plane = pc.pl + layer;
@@ -55,6 +84,35 @@ void main() {
     // not in place: neighbours read the source as apron
     if (back) P[plane * HW0 + gi] = T[src + gi] - s * sg(X, Y);
     else T[layer * HW0 + gi] = P[src + gi] - s * sg(X, Y);
+    return;
+  }
+  if (pc.mode == 20) {  // highlight donors: one thread per 16 px block (after grain, before the recovery)
+    int nbx = (pc.W + 15) / 16, nby = (pc.H + 15) / 16;
+    if (X >= nbx || Y >= nby) return;
+    int HW2 = pc.H * pc.W;
+    float lo = 0.85 * pc.clip;
+    vec3 wbv = vec3(pc.wbr, pc.wbg, pc.wbb);
+    float s[9];
+    for (int k = 0; k < 9; ++k) s[k] = 0.0;
+    for (int yy = Y * 16; yy < min(pc.H, Y * 16 + 16); ++yy)
+      for (int xx = X * 16; xx < min(pc.W, X * 16 + 16); ++xx) {
+        int ii = yy * pc.W + xx;
+        vec3 v = vec3(x[ii], x[HW2 + ii], x[2 * HW2 + ii]);
+        // brightness-weighted donors (lkrl_finish.cpp HlDonors): 0.5..0.75 clip ramp, squared
+        float t = clamp((max(v.x, max(v.y, v.z)) - 0.5 * pc.clip) / (0.25 * pc.clip), 0.0, 1.0);
+        float w = t * t;
+        if (w <= 0.0) continue;
+        for (int p = 0; p < 3; ++p) {
+          int a = (p == 2) ? 0 : p, b = (p == 0) ? 1 : (p == 1 ? 2 : 2);
+          if (v[a] < lo && v[b] < lo) {
+            s[3 * p] += w * v[a] * wbv[a];
+            s[3 * p + 1] += w * v[b] * wbv[b];
+            s[3 * p + 2] += w;
+          }
+        }
+      }
+    int bi = 2 * HW2 + (Y * nbx + X) * 9;
+    for (int k = 0; k < 9; ++k) P[bi + k] = s[k];
     return;
   }
   if (pc.mode == 1) {   // halo (7x7 dilation of hot, shared tile; same result as the per-pixel scan) + keep x
@@ -110,30 +168,45 @@ void main() {
     if (pc.grain > 0.0) P[i] = q.x * (z[i] - x[i]) + q.y * (z[HW + i] - x[HW + i]) + q.z * (z[2 * HW + i] - x[2 * HW + i]);
   } else if (pc.mode == 13) {  // fused notch write-back
     P[plane * HW + i] = T[tmp + i];
+  } else if (pc.mode == 21) {  // highlight recovery (lkrl_finish.cpp HighlightRecover) + all-clipped neutral rule
+    vec3 v = vec3(x[i], x[HW + i], x[2 * HW + i]);
+    float lo = 0.85 * pc.clip, range = max(pc.clip - lo, 1e-6);
+    if (max(v.x, max(v.y, v.z)) > lo) {
+      vec3 t = clamp((v - lo) / range, 0.0, 1.0);
+      vec3 m = t * t * (3.0 - 2.0 * t);
+      vec3 r = v;
+      vec3 vw = v * wb;
+      float implied = max(vw.x, max(vw.y, vw.z));   // donors clipping too: towards this (lkrl_finish.cpp)
+      for (int c = 0; c < 3; ++c) {
+        int a = (c + 1) % 3, b = (c + 2) % 3;
+        float wa = 1.0 - m[a], wbk = 1.0 - m[b], support = wa + wbk;
+        float est = 0.0;
+        if (support > 1e-6)
+          est = (wa * hl_ratio(X, Y, c, a) * v[a] * wb[a] + wbk * hl_ratio(X, Y, c, b) * v[b] * wb[b]) /
+                (support * wb[c]);
+        float s = min(support, 1.0);
+        float target = s * est + (1.0 - s) * implied / wb[c];
+        r[c] += m[c] * max(target - v[c], 0.0);
+      }
+      float luma = q.x * r.x + q.y * r.y + q.z * r.z;
+      float white = min(m.x, min(m.y, m.z));
+      vec3 u = r * wb;   // all clipped: brightest implied level, not the clip (lkrl_finish.cpp HighlightRecover)
+      float level = max(luma, max(u.x, max(u.y, u.z)));
+      for (int c = 0; c < 3; ++c) r[c] += white * (level / wb[c] - r[c]);
+      x[i] = r.x; x[HW + i] = r.y; x[2 * HW + i] = r.z;
+    }
   } else if (pc.mode == 6) {   // grain add + highlight desaturation
     if (pc.grain > 0.0) {
       float den = pc.has_ns != 0 ? 1.0 + pc.eqs * (ns[i] - 1.0) : 1.0;
       for (int c = 0; c < 3; ++c) x[c * HW + i] += pc.grain * P[i] / den / wb[c];
     }
-    bool rec = pc.desat == 1 && pc.hrec != 0.0;
+    bool rec = pc.desat == 1 && pc.hrec != 0.0;   // recovery runs in modes 20 / 21 instead (local donors)
     vec3 original = vec3(x[i], x[HW + i], x[2 * HW + i]);
-    if (rec && max(original.x, max(original.y, original.z)) > 0.85 * pc.clip) {
-      vec3 col = vec3(pc.hr, pc.hg, pc.hb);
-      vec3 m = smoothstep(vec3(0.85 * pc.clip), vec3(pc.clip), original);
-      vec3 u = original * wb / col;
-      vec3 w = 1.0 - m;
-      vec3 ws = vec3(w.y + w.z, w.z + w.x, w.x + w.y);
-      vec3 su = vec3(w.y * u.y + w.z * u.z, w.z * u.z + w.x * u.x, w.x * u.x + w.y * u.y);
-      vec3 estimate = col * su / max(ws, vec3(1e-6)) / wb;
-      // Fade the correction as the last donors approach clipping.
-      vec3 r = original + m * min(ws, vec3(1.0)) * max(estimate - original, vec3(0.0));
-      x[i] = r.x; x[HW + i] = r.y; x[2 * HW + i] = r.z;
-    }
-    if (pc.desat != 0) {   // blown highlights -> white (lkrl_finish.cpp); desat 2 = old all-channels rule
+    if (pc.desat != 0 && !rec) {   // blown highlights -> white (lkrl_finish.cpp); desat 2 = old all-channels rule
       bool old = pc.desat == 2;
       float lo = (old ? 0.92 : 0.85) * pc.clip, hi = pc.clip;
       vec3 xd = original;
-      float v = (old || rec) ? min(xd.x, min(xd.y, xd.z)) : max(x[i], max(x[HW + i], x[2 * HW + i]));
+      float v = old ? min(xd.x, min(xd.y, xd.z)) : max(x[i], max(x[HW + i], x[2 * HW + i]));
       float m = clamp((v - lo) / max(hi - lo, 1e-6), 0.0, 1.0);
       if (!old) m = m * m * (3.0 - 2.0 * m);
       if (m > 0.0) {

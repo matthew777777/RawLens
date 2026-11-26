@@ -123,19 +123,26 @@ void main() {
   int mc = int(pc.rpow);
   vec3 acc = 4.0 * c0;
   vec2 cs = vec2(0.0);
+  float lsum = 0.0;
   [[dont_unroll]] for (int t = -mc; t <= mc; ++t) {
     int k = alongX ? Y * pc.W + clamp(X + t, 0, pc.W - 1) : clamp(Y + t, 0, pc.H - 1) * pc.W + X;
     vec3 c = t == 0 ? c0 : P3(k);
     float l = 0.25 * c.x + 0.5 * c.y + 0.25 * c.z;
-    cs += vec2(c.x - l, c.z - l);
+    cs += vec2(c.x - l, c.z - l); lsum += l;   // relative chroma = sum / lsum (see below)
     if (t != 0 && abs(t) <= 3) acc += float(4 - abs(t)) * c;
   }
   vec3 nt = acc * (1.0 / 16.0);
   float l0 = 0.25 * c0.x + 0.5 * c0.y + 0.25 * c0.z;
   float ln = 0.25 * nt.x + 0.5 * nt.y + 0.25 * nt.z;
   float lo = mix(l0, ln, wl);
-  vec2 u0 = vec2(c0.x - l0, c0.z - l0), ub = cs / float(2 * mc + 1);
-  vec2 uo = mix(u0, ub, w);
+  // Chroma as a ratio to luma (2026-11-26). Camera-space R - Y of a neutral grey is not 0 (R ~ G / 2 before
+  // WB) and scales with brightness, so the absolute average put the bright sky's large negative R - Y,
+  // B - Y onto a dark pole: teal scaffold poles / couplers (Samsung hdrplus burst; raw frame neutral).
+  // u / Y is the same for any brightness of one colour, so neutral stays neutral. Ratio of sums (not a
+  // mean of ratios): a near-black noisy tap cannot blow it up.
+  vec2 uo;
+  if (l0 > 1e-6 && lo > 1e-6 && lsum > 1e-6) uo = mix(vec2(c0.x - l0, c0.z - l0) / l0, cs / lsum, w) * lo;
+  else uo = vec2(c0.x - l0, c0.z - l0);
   float R = lo + uo.x, B = lo + uo.y;
   z[i] = R; z[HW + i] = (lo - 0.25 * R - 0.25 * B) * 2.0; z[2 * HW + i] = B;
 }
