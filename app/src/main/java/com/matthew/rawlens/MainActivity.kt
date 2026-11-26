@@ -945,7 +945,10 @@ class MainActivity : Activity() {
         lkrQuick.setOnClickListener { toggleSharpMerge(MfsrEngine.LKR) }
         findViewById<QuickControlTileView>(R.id.lkrHdrQuick).apply {
             showsChoice = true
-            setOnClickListener { cycleLkrHdr() }
+            setOnClickListener {
+                if (mfsrSettings.isOn(MfsrEngine.LKR)) cycleLkrHdr()
+                else setStatus("HDR works with LK-R • turn LK-R on")
+            }
         }
         lkrQuick.setOnLongClickListener { tile ->
             tile.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -4655,11 +4658,16 @@ class MainActivity : Activity() {
         lkrQuick.isSelected = mfsrSettings.isOn(MfsrEngine.LKR)
         lkrQuick.setTextColor(getColor(if (lkrQuick.isSelected) R.color.accent_dark else R.color.text_primary))
         findViewById<TextView>(R.id.lkrHdrQuick).apply {
+            // LK-R HDR only runs inside the LK-R merge: with LK-R off (MFSR or no merge)
+            // the tile reads OFF and is never shown active, the saved mode stays.
+            val lkrOn = mfsrSettings.isOn(MfsrEngine.LKR)
             val hdrMode = mfsrSettings.lkrHdr
-            setTextIfChanged("HDR\n${hdrMode.label.uppercase(Locale.ROOT)}")
-            isSelected = hdrMode != LkrHdrMode.OFF
+            setTextIfChanged(if (lkrOn) "HDR\n${hdrMode.label.uppercase(Locale.ROOT)}" else "HDR\nOFF")
+            isSelected = lkrOn && hdrMode != LkrHdrMode.OFF
+            alpha = if (lkrOn) 1f else 0.5f
             visibility = if (isVideoMode) View.GONE else View.VISIBLE
-            contentDescription = "LK-R HDR: ${mfsrSettings.lkrHdr.label}. Tap to change."
+            contentDescription = if (lkrOn) "LK-R HDR: ${hdrMode.label}. Tap to change."
+                else "LK-R HDR: needs LK-R. Turn LK-R on to use HDR."
         }
         updateLkrZoomChip()
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
