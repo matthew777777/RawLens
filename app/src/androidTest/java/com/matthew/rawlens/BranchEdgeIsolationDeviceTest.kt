@@ -30,7 +30,7 @@ class BranchEdgeIsolationDeviceTest {
             for (variant in listOf("forward")) {
             val renderMetadata=if(variant=="color") metadata.copy(forwardMatrix1=null,forwardMatrix2=null) else metadata
             for(mapper in PhotoToneMapper.entries.filter { it==PhotoToneMapper.SIGMOID }) {
-                val clean=JpegOutputSettings(toneMapper=mapper,chromaCleanup=ChromaCleanup(false,0f,rapidRawPreprocessing=variant=="rapidraw"))
+                val clean=JpegOutputSettings(toneMapper=mapper,chromaCleanup=ChromaCleanup(false,0f))
                 val settings=RawDevelopmentSettings(exposureEv=ev,adaptiveExposureStrength=0f)
                 val reference=IntArray(w*h)
                 val camera=FloatArray(3);val aces=FloatArray(3)
@@ -49,7 +49,7 @@ class BranchEdgeIsolationDeviceTest {
                 }
                 for(enabled in listOf(false,true)) {
                     image.rgb.rewind()
-                    val look=clean.copy(chromaCleanup=if(enabled) ChromaCleanup() else ChromaCleanup(false,0f,rapidRawPreprocessing=variant=="rapidraw"))
+                    val look=clean.copy(chromaCleanup=if(enabled) ChromaCleanup() else ChromaCleanup(false,0f))
                     val result=developer.developMfsrJpeg(image.rgb,image.width,image.height,renderMetadata,settings,look)
                     try {
                         if(mapper==PhotoToneMapper.SIGMOID && variant=="forward" && !enabled) File(root,"sigmoid-full.png").outputStream().use { result.bitmap.compress(Bitmap.CompressFormat.PNG,100,it) }

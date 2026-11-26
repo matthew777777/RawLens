@@ -85,7 +85,7 @@ class MergedJpegDevelopInstrumentedTest {
                     val out = develop(
                         field, 8, 8, rcValue = 0f, accepted = 4, metadata = metadata,
                         denoise = RawDevelopmentSettings(
-                            denoise = DenoiseSettings(aiEnabled = denoise, aiStrength = 0.2f)
+                            denoise = DenoiseSettings(rawDenoise = RawDenoiseSettings(enabled = denoise))
                         )
                     )
                     val expected = cpuField(field, 8, 8, rcValue = 0f, 4, metadata,
@@ -112,7 +112,7 @@ class MergedJpegDevelopInstrumentedTest {
             val out = develop(
                 field, 8, 8, rcValue = 2f, accepted = 4, metadata = metadata,
                 denoise = RawDevelopmentSettings(
-                    denoise = DenoiseSettings(aiEnabled = true, aiStrength = 1f)
+                    denoise = DenoiseSettings(rawDenoise = RawDenoiseSettings(enabled = true))
                 ),
                 crop = crop
             )
@@ -148,7 +148,7 @@ class MergedJpegDevelopInstrumentedTest {
         }
     }
 
-    @Test fun aiSettingDoesNotBlurAlreadyMergedRgb() {
+    @Test fun denoiseSettingDoesNotBlurAlreadyMergedRgb() {
         withGl {
             val metadata = metadata()
             // Left half unsupported (reference fallback), right half fully supported.
@@ -157,7 +157,7 @@ class MergedJpegDevelopInstrumentedTest {
             field[(4 * 8 + 6) * 4] = 0.5f
             val rc = FloatArray(4 * 4) { i -> if ((i % 4) < 2) 0f else 4f }
             val settings = RawDevelopmentSettings(
-                denoise = DenoiseSettings(aiEnabled = true, aiStrength = 1f)
+                denoise = DenoiseSettings(rawDenoise = RawDenoiseSettings(enabled = true))
             )
             val out = developRc(field, 8, 8, rc, accepted = 4, metadata, settings)
             val expected = cpuFieldRc(field, 8, 8, rc, 4, metadata, false, 1f, RawCrop(0, 0, 8, 8))
@@ -169,7 +169,7 @@ class MergedJpegDevelopInstrumentedTest {
             val stillHigh = cpuPixel(field, 8, 8, rc, 4, metadata, false, 1f, crop, 6, 4)[0].toFloat()
             val lowMove = abs(out[(4 * 8 + 2) * 4] - stillLow)
             val highMove = abs(out[(4 * 8 + 6) * 4] - stillHigh)
-            assertTrue("AI flag must not add spatial blur to merged RGB", lowMove < 1e-3f)
+            assertTrue("Denoise setting must not add spatial blur to merged RGB", lowMove < 1e-3f)
             assertTrue("full-support pixel must hold", highMove < 1e-3f)
         }
     }
