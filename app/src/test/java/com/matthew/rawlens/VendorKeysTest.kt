@@ -94,6 +94,33 @@ class VendorKeysTest {
         assertFails { VendorKeyProfile(many).validate() }
     }
 
+    @Test fun `values take hex and auto detect their type`() {
+        val client = "99,111,0x6D,46"
+        assertEquals(VendorKeyType.BYTE_ARRAY, VendorKeyType.detect(client, VendorKeyType.BYTE, null))
+        assertArrayEquals(byteArrayOf(99, 111, 109, 46), VendorKeyType.BYTE_ARRAY.parse(client) as ByteArray)
+        assertEquals(255.toByte(), VendorKeyType.BYTE.parse("0xFF"))
+        assertEquals(31, VendorKeyType.INT.parse("0x1f"))
+        assertEquals(VendorKeyType.BYTE_ARRAY, VendorKeyType.detect("1", null, VendorKeyType.BYTE_ARRAY))
+        assertEquals(VendorKeyType.STRING, VendorKeyType.detect("com.android.camera", null, VendorKeyType.BYTE_ARRAY))
+        assertEquals(VendorKeyType.INT_ARRAY, VendorKeyType.detect("1,2", null, null))
+        assertEquals(VendorKeyType.INT, VendorKeyType.detect("1", null, null))
+        assertArrayEquals("co".toByteArray(), VendorKeyApply.bytesOf("co"))
+        assertArrayEquals(byteArrayOf(1), VendorKeyApply.bytesOf(1))
+    }
+
+    @Test fun `same key may exist once per scope`() {
+        val both = VendorKeyProfile(listOf(entry(), entry(scope = VendorKeyScope.REQUEST)))
+        both.validate()
+        assertEquals(both, VendorKeyProfile.fromJson(both.toJson(), strict = true))
+        assertEquals(2, VendorKeyProfile(listOf(entry())).mergedWith(both).entries.size)
+    }
+
+    @Test fun `14 Ultra preset sends remosaic on stills without client name`() {
+        val names = { p: VendorKeyProfile -> p.activeEntries().map { it.name } }
+        assertTrue(XiaomiRawRequestKeys.previewKeys(true).isEmpty())
+        assertEquals(listOf("xiaomi.remosaic.enabled"), names(XiaomiRawRequestKeys.stillKeys(true)))
+    }
+
     @Test fun `load drops single bad rows but keeps valid keys`() {
         val good = entry().toJson().toString()
         val bad = """{"n":"broken","t":"Nope","s":"request","v":"0","e":true}"""

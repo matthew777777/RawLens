@@ -83,6 +83,18 @@ class LensVerdictStore(context: Context) {
         if (next != current) preferences.edit().putStringSet(KEY_NO_HAL_AWB, next).apply()
     }
 
+    /** Route+stream-shape+firmware keys whose HAL ran no AE ([RawCameraController]). */
+    fun noHalAeKeys(): Set<String> =
+        preferences.getStringSet(KEY_NO_HAL_AE, emptySet()).orEmpty().toSet()
+
+    /** Records whether the HAL ran AE for this key; working AE clears an older mark. */
+    fun markHalAe(key: String, working: Boolean) {
+        if (key.isBlank()) return
+        val current = noHalAeKeys()
+        val next = if (working) current - key else capped(current + key)
+        if (next != current) preferences.edit().putStringSet(KEY_NO_HAL_AE, next).apply()
+    }
+
     fun openableIds(): Set<String> =
         preferences.getStringSet(KEY_OPENABLE, emptySet()).orEmpty().toSet()
 
@@ -138,6 +150,7 @@ class LensVerdictStore(context: Context) {
         const val KEY_OPENABLE = "openable_ids"
         const val KEY_DEAD = "dead_ids"
         const val KEY_VERIFIED = "verified_ids"
+        const val KEY_NO_HAL_AE = "no_hal_ae_keys"
         const val KEY_NO_HAL_AWB = "no_hal_awb_ids"
         const val KEY_AF = "af_verdicts"
         const val MAX_IDS = 64

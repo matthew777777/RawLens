@@ -4,12 +4,17 @@ package com.matthew.rawlens
 import android.content.Context
 import android.os.Build
 
-/** Only the exact firmware whose vendor-library hash and sensor modes were verified. */
+/**
+ * Redmi Note 15 Pro 5G (lapis). The UI gate is device + model only: firmware OTAs often leave
+ * the camera stack untouched. Every root path re-checks the vendor-library SHA-256s below before
+ * patching, so a firmware that really changed the camera libraries still fails safely.
+ */
 internal object LapisRootProfile {
     const val PREFS = "rawlens_lapis_root"
     const val ENABLED = "enabled"
     const val FULL_RESOLUTION = "full_resolution"
     const val SENSOR_ZOOM = "sensor_zoom"
+    /** Firmware the modes were first verified on (305 has identical camera libraries). */
     const val FIRMWARE = "OS3.0.303.0.WPPEUXM"
     const val VENDOR_SHA256 = "95eded2eef1767fdb07f74d31a4ef1a9b40668e6d5984d30444e0165a489a7dc"
 
@@ -30,9 +35,9 @@ internal object LapisRootProfile {
         HEXADECA_200("200mp", "200→50 MP RAW")
     }
 
+    @Suppress("UNUSED_PARAMETER")
     fun matches(device: String, model: String, fingerprint: String, display: String): Boolean =
-        device == "lapis" && model == "25080RABDG" &&
-            (fingerprint.contains(FIRMWARE) || display.contains(FIRMWARE))
+        device == "lapis" && model == "25080RABDG"
 
     fun supported(): Boolean = matches(Build.DEVICE, Build.MODEL, Build.FINGERPRINT, Build.DISPLAY)
     fun preferences(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

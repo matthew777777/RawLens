@@ -67,6 +67,28 @@ object VendorKeyAndroid {
         return found.values.sortedBy { it.name }
     }
 
+    /** Native value type of an advertised key; null when unadvertised or reflection is denied. */
+    fun typeOf(characteristics: CameraCharacteristics, name: String): VendorKeyType? {
+        val clean = name.trim()
+        val catalog = catalog(characteristics)
+        val key = if (VendorKeyEntry.isNumericTag(clean)) catalog.byTag[VendorKeyEntry.numericTagValue(clean)]
+            else catalog.byName[clean]
+        return when (key?.nativeType?.let(::boxed)) {
+            Int::class.javaObjectType -> VendorKeyType.INT
+            Long::class.javaObjectType -> VendorKeyType.LONG
+            Float::class.javaObjectType -> VendorKeyType.FLOAT
+            Double::class.javaObjectType -> VendorKeyType.DOUBLE
+            Boolean::class.javaObjectType -> VendorKeyType.BOOLEAN
+            Byte::class.javaObjectType -> VendorKeyType.BYTE
+            IntArray::class.java -> VendorKeyType.INT_ARRAY
+            LongArray::class.java -> VendorKeyType.LONG_ARRAY
+            FloatArray::class.java -> VendorKeyType.FLOAT_ARRAY
+            ByteArray::class.java -> VendorKeyType.BYTE_ARRAY
+            String::class.java -> VendorKeyType.STRING
+            else -> null
+        }
+    }
+
     fun resolveNativeTag(characteristics: CameraCharacteristics, name: String): Int? {
         val clean = name.trim()
         val catalog = catalog(characteristics)

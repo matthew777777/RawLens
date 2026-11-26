@@ -52,10 +52,22 @@ class VendorKeyRoutingTest {
         val good = key("vendor.good")
         val chars = chars(listOf(bad, good))
         val builder = mock(CaptureRequest.Builder::class.java)
-        doThrow(IllegalArgumentException("bad value")).`when`(builder).set(bad, 7)
+        doThrow(IllegalArgumentException("bad value")).`when`(builder)
+            .set(org.mockito.ArgumentMatchers.eq(bad), org.mockito.ArgumentMatchers.any())
         val report = VendorKeyApply.applyRequestKeys(builder, VendorKeyProfile(listOf(entry(bad.name), entry(good.name))), chars, null, {})
         assertEquals(listOf(good.name), report.applied)
         assertEquals(listOf(bad.name), report.skipped)
+    }
+
+    @Test fun `array typed session key takes a scalar entry as one element`() {
+        @Suppress("UNCHECKED_CAST")
+        val key = key("vivo.control.forceSensorMode") as CaptureRequest.Key<Any>
+        val builder = mock(CaptureRequest.Builder::class.java)
+        doThrow(IllegalArgumentException("Argument is not an array")).`when`(builder).set(key, 7 as Any)
+        val probe = VendorKeyApply.probe(builder, chars(listOf(key)), entry(key.name, VendorKeyScope.SESSION), null)
+        assertTrue(probe.supported)
+        val values = mockingDetails(builder).invocations.filter { it.method.name == "set" }.map { it.arguments[1] }
+        assertArrayEquals(intArrayOf(7), values.last() as IntArray)
     }
 
     @Test fun `session probe uses logical destination even on a physical route`() {

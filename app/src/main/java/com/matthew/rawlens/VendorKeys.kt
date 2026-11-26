@@ -40,8 +40,8 @@ enum class VendorKeyType(val label: String) {
         require(text.isNotEmpty()) { "Value must not be blank" }
         require(text.length <= MAX_VALUE_CHARS) { "Value too long" }
         return when (this) {
-            INT -> text.toIntOrNull() ?: throw IllegalArgumentException("Not an Int32: $text")
-            LONG -> text.toLongOrNull() ?: throw IllegalArgumentException("Not an Int64: $text")
+            INT -> integer(text)?.toIntBits() ?: throw IllegalArgumentException("Not an Int32: $text")
+            LONG -> integer(text) ?: throw IllegalArgumentException("Not an Int64: $text")
             FLOAT -> text.toFloatOrNull()?.takeIf(Float::isFinite)
                 ?: throw IllegalArgumentException("Not a finite Float: $text")
             DOUBLE -> text.toDoubleOrNull()?.takeIf(Double::isFinite)
@@ -51,8 +51,8 @@ enum class VendorKeyType(val label: String) {
                 "false" -> false
                 else -> throw IllegalArgumentException("Not a Boolean (true/false): $text")
             }
-            BYTE -> text.toIntOrNull()?.takeIf { it in Byte.MIN_VALUE..Byte.MAX_VALUE }?.toByte()
-                ?: throw IllegalArgumentException("Not a Byte (-128..127): $text")
+            BYTE -> integer(text)?.takeIf { it in -128..255 }?.toByte()
+                ?: throw IllegalArgumentException("Not a Byte (-128..255 or 0x00..0xFF): $text")
             INT_ARRAY -> parseIntArray(text).also { require(it.size in 1..MAX_ARRAY_ELEMENTS) { "Need 1..$MAX_ARRAY_ELEMENTS ints" } }
             LONG_ARRAY -> parseLongArray(text).also { require(it.size in 1..MAX_ARRAY_ELEMENTS) { "Need 1..$MAX_ARRAY_ELEMENTS longs" } }
             FLOAT_ARRAY -> parseFloatArray(text).also { require(it.size in 1..MAX_ARRAY_ELEMENTS) { "Need 1..$MAX_ARRAY_ELEMENTS floats" } }
@@ -68,19 +68,45 @@ enum class VendorKeyType(val label: String) {
         fun fromLabel(label: String?): VendorKeyType? =
             entries.firstOrNull { it.label.equals(label?.trim(), ignoreCase = true) }
 
+        /** Type for a value: the key's native type when it parses, else [chosen], else the text's shape. */
+        fun detect(raw: String, chosen: VendorKeyType?, native: VendorKeyType?): VendorKeyType {
+            fun fits(type: VendorKeyType) = runCatching { type.parse(raw) }.isSuccess
+            if (chosen != null) {
+                // A list typed into a scalar type can only mean its array.
+                val array = when (chosen) {
+                    INT -> INT_ARRAY
+                    LONG -> LONG_ARRAY
+                    FLOAT -> FLOAT_ARRAY
+                    BYTE -> BYTE_ARRAY
+                    else -> null
+                }
+                return if (!fits(chosen) && array != null && fits(array)) array else chosen
+            }
+            // Vendor strings are advertised as byte[]: text stays text for those.
+            return native?.takeIf(::fits) ?: listOf(INT, LONG, FLOAT, BOOLEAN, INT_ARRAY, LONG_ARRAY, FLOAT_ARRAY)
+                .firstOrNull(::fits) ?: STRING
+        }
+
+        /** Decimal or 0x-prefixed hexadecimal. */
+        private fun integer(text: String): Long? =
+            if (text.startsWith("0x", ignoreCase = true)) text.substring(2).toULongOrNull(16)?.toLong()
+            else text.toLongOrNull()
+
+        private fun Long.toIntBits(): Int? = takeIf { it in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong() }?.toInt()
+
         private fun splitCells(text: String): List<String> =
-            text.split(',', ' ', ';').map(String::trim).filter(String::isNotEmpty)
+            text.split(',', ' ', ';', '\n', '\t').map(String::trim).filter(String::isNotEmpty)
 
         private fun parseIntArray(text: String): IntArray {
             val cells = splitCells(text)
             require(cells.isNotEmpty()) { "Empty array" }
-            return IntArray(cells.size) { cells[it].toIntOrNull() ?: throw IllegalArgumentException("Not an int: ${cells[it]}") }
+            return IntArray(cells.size) { integer(cells[it])?.toIntBits() ?: throw IllegalArgumentException("Not an int: ${cells[it]}") }
         }
 
         private fun parseLongArray(text: String): LongArray {
             val cells = splitCells(text)
             require(cells.isNotEmpty()) { "Empty array" }
-            return LongArray(cells.size) { cells[it].toLongOrNull() ?: throw IllegalArgumentException("Not a long: ${cells[it]}") }
+            return LongArray(cells.size) { integer(cells[it]) ?: throw IllegalArgumentException("Not a long: ${cells[it]}") }
         }
 
         private fun parseFloatArray(text: String): FloatArray {
@@ -96,7 +122,7 @@ enum class VendorKeyType(val label: String) {
             val cells = splitCells(text)
             require(cells.isNotEmpty()) { "Empty array" }
             return ByteArray(cells.size) {
-                cells[it].toIntOrNull()?.takeIf { v -> v in -128..255 }?.toByte()
+                integer(cells[it])?.takeIf { v -> v in -128..255 }?.toByte()
                     ?: throw IllegalArgumentException("Not a byte (-128..255): ${cells[it]}")
             }
         }
@@ -138,8 +164,9 @@ data class VendorKeyEntry(
     /** Typed payload for request/session application. */
     fun parsedValue(): Any = type.parse(value)
 
-    /** Canonical identity also deduplicates differently spelled numeric aliases. */
-    fun identity(): String = numericTagValue(name)?.let { "0x" + it.toUInt().toString(16) } ?: name.trim()
+    /** One slot per key and scope; also deduplicates differently spelled numeric aliases. */
+    fun identity(): String =
+        (numericTagValue(name)?.let { "0x" + it.toUInt().toString(16) } ?: name.trim()) + "@" + scope.id
 
     fun toJson(): String = buildString {
         append("{\"n\":\"").append(VendorKeyJson.esc(name.trim())).append('"')
@@ -222,7 +249,7 @@ data class VendorKeyProfile(
 
     /**
      * Preset application: this profile's keys win; [other]'s entries are
-     * appended only where no same-named key exists. A nonzero lens mode wins;
+     * appended only where no same-named key of that scope exists. A nonzero lens mode wins;
      * otherwise adopt the imported mode. Never deletes.
      */
     fun mergedWith(other: VendorKeyProfile): VendorKeyProfile {

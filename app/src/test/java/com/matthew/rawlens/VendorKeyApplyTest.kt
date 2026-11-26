@@ -59,4 +59,12 @@ class VendorKeyApplyTest {
         assertEquals(listOf("vivo.control.forceSensorMode"), profile.sessionEntries().map { it.name })
         assertEquals(listOf("x.oppo.tag"), profile.requestEntries().map { it.name })
     }
+
+    @Test fun `scalars retry as the one element array vendor tags use`() {
+        assertArrayEquals(intArrayOf(17), VendorKeyApply.singleElementArray(17) as IntArray)
+        assertArrayEquals(byteArrayOf(1), VendorKeyApply.singleElementArray(true) as ByteArray)
+        assertArrayEquals(longArrayOf(5L), VendorKeyApply.singleElementArray(5L) as LongArray)
+        assertNull(VendorKeyApply.singleElementArray(intArrayOf(17)))
+        assertNull(VendorKeyApply.singleElementArray("17"))
+    }
 }

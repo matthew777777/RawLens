@@ -48,7 +48,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
 import android.os.Build
@@ -273,14 +272,14 @@ internal fun MainActivity.showVendorKeyEditDialog(
     prefillScope: VendorKeyScope? = null,
     onSaved: () -> Unit
 ) {
-    var type = existing?.type ?: VendorKeyType.INT
-    var scope = existing?.scope ?: prefillScope ?: VendorKeyScope.REQUEST
+    var type: VendorKeyType? = existing?.type // null = detect
+    var scopes = listOf(existing?.scope ?: prefillScope ?: VendorKeyScope.REQUEST)
     val container = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(20), 0, dp(20), 0)
         addView(TextView(this@showVendorKeyEditDialog).apply {
-            text = "Names (section.key) or numeric tags (0x…). Scalars take one " +
-                "number or true/false; arrays take comma-separated values."
+            text = "Names (section.key) or numeric tags (0x…). Numbers are decimal or 0x hex; " +
+                "arrays take comma-separated values. Auto picks the type from the key and value."
             setTextColor(getColor(R.color.text_secondary)); textSize = 12f
         })
     }
@@ -296,15 +295,15 @@ internal fun MainActivity.showVendorKeyEditDialog(
     container.addView(vendorSectionHeader("Type"))
     val typeButton = Button(this).apply { isAllCaps = false }
     fun refreshType() {
-        typeButton.text = type.label
+        typeButton.text = type?.label ?: "Auto"
         styleSettingsButton(typeButton, active = true)
     }
     refreshType()
     typeButton.setOnClickListener {
-        val labels = VendorKeyType.entries.map { it.label }.toTypedArray()
+        val labels = (listOf("Auto") + VendorKeyType.entries.map { it.label }).toTypedArray()
         RawLensDialogBuilder(this).setTitle("Value type")
-            .setSingleChoiceItems(labels, type.ordinal) { choice, which ->
-                type = VendorKeyType.entries[which]
+            .setSingleChoiceItems(labels, type?.let { it.ordinal + 1 } ?: 0) { choice, which ->
+                type = VendorKeyType.entries.getOrNull(which - 1)
                 refreshType()
                 choice.dismiss()
             }
@@ -313,19 +312,21 @@ internal fun MainActivity.showVendorKeyEditDialog(
     container.addView(typeButton)
     container.addView(vendorSectionHeader("Scope"))
     val scopeButton = Button(this).apply { isAllCaps = false }
+    val scopeOptions = listOf(
+        listOf(VendorKeyScope.SESSION) to "Session (before open)",
+        listOf(VendorKeyScope.REQUEST) to "Request (every capture)",
+        listOf(VendorKeyScope.SESSION, VendorKeyScope.REQUEST) to "Session + request"
+    )
     fun refreshScope() {
-        scopeButton.text = if (scope == VendorKeyScope.SESSION) "Session (before open)" else "Request (every capture)"
+        scopeButton.text = scopeOptions.first { it.first == scopes }.second
         styleSettingsButton(scopeButton, active = true)
     }
     refreshScope()
     scopeButton.setOnClickListener {
-        val options = VendorKeyScope.entries.toTypedArray()
-        val labels = options.map {
-            if (it == VendorKeyScope.SESSION) "Session (before open)" else "Request (every capture)"
-        }.toTypedArray()
+        val labels = scopeOptions.map { it.second }.toTypedArray()
         RawLensDialogBuilder(this).setTitle("Scope")
-            .setSingleChoiceItems(labels, scope.ordinal) { choice, which ->
-                scope = options[which]
+            .setSingleChoiceItems(labels, scopeOptions.indexOfFirst { it.first == scopes }) { choice, which ->
+                scopes = scopeOptions[which].first
                 refreshScope()
                 choice.dismiss()
             }
@@ -351,7 +352,7 @@ internal fun MainActivity.showVendorKeyEditDialog(
                         false
                     ) {
                         nameInput.setText(found.name)
-                        scope = found.scopeHint
+                        scopes = listOf(found.scopeHint)
                         refreshScope()
                         suggestionsBox.removeAllViews()
                     }
@@ -365,10 +366,13 @@ internal fun MainActivity.showVendorKeyEditDialog(
     })
     container.addView(vendorSectionHeader("Value"))
     val valueInput = EditText(this).apply {
-        hint = "1, or 64, 64, 64, 64"
+        hint = "1, 0x1F, or 64, 64, 64, 64"
         setText(existing?.value ?: "")
         setSelectAllOnFocus(true)
     }
+    fun valueType() = VendorKeyType.detect(
+        valueInput.text.toString(), type, controller.vendorKeyType(nameInput.text.toString())
+    )
     container.addView(valueInput)
     val enabledBox = SettingsSwitch(this).apply {
         text = "Enabled"
@@ -381,11 +385,13 @@ internal fun MainActivity.showVendorKeyEditDialog(
         setPadding(0, dp(4), 0, 0)
     }
     container.addView(vendorActionButton("Test on this lens") {
-        val candidate = try {
-            VendorKeyEntry(
-                nameInput.text.toString().trim(), type, scope,
-                valueInput.text.toString(), enabledBox.isChecked
-            ).also(VendorKeyEntry::validate)
+        val candidates = try {
+            scopes.map { scope ->
+                VendorKeyEntry(
+                    nameInput.text.toString().trim(), valueType(), scope,
+                    valueInput.text.toString(), enabledBox.isChecked
+                ).also(VendorKeyEntry::validate)
+            }
         } catch (failure: IllegalArgumentException) {
             probeLine.text = "Fix the fields first (${failure.message})"
             probeLine.setTextColor(getColor(R.color.danger))
@@ -393,10 +399,18 @@ internal fun MainActivity.showVendorKeyEditDialog(
         }
         probeLine.text = "Testing…"
         probeLine.setTextColor(getColor(R.color.text_secondary))
-        controller.probeVendorKey(candidate) { result ->
-            runOnUiThread {
-                probeLine.text = (if (result.supported) "Accepted: " else "Not accepted: ") + result.detail
-                probeLine.setTextColor(getColor(if (result.supported) R.color.accent else R.color.danger))
+        val results = mutableListOf<Pair<VendorKeyScope, VendorKeyProbeResult>>()
+        candidates.forEach { candidate ->
+            controller.probeVendorKey(candidate) { result ->
+                runOnUiThread {
+                    results += candidate.scope to result
+                    probeLine.text = results.joinToString("\n") { (scope, probe) ->
+                        (if (candidates.size > 1) "${scope.id}: " else "") +
+                            (if (probe.supported) "Accepted: " else "Not accepted: ") + probe.detail
+                    }
+                    probeLine.setTextColor(getColor(
+                        if (results.all { it.second.supported }) R.color.accent else R.color.danger))
+                }
             }
         }
     })
@@ -414,9 +428,11 @@ internal fun MainActivity.showVendorKeyEditDialog(
             nameInput.error = "Not a camera key — set levels under Sensor levels"
             return@setOnClickListener
         }
-        val candidate = try {
-            VendorKeyEntry(name, type, scope, valueInput.text.toString(), enabledBox.isChecked)
-                .also(VendorKeyEntry::validate)
+        val candidates = try {
+            scopes.map { scope ->
+                VendorKeyEntry(name, valueType(), scope, valueInput.text.toString(), enabledBox.isChecked)
+                    .also(VendorKeyEntry::validate)
+            }
         } catch (failure: IllegalArgumentException) {
             val message = failure.message ?: "Invalid key"
             if ("name" in message.lowercase()) nameInput.error = message
@@ -424,8 +440,8 @@ internal fun MainActivity.showVendorKeyEditDialog(
             return@setOnClickListener
         }
         if (updateVendorKeys(cameraId) { current ->
-            val merged = (current.entries.filter { it.identity() != candidate.identity() &&
-                (existing == null || it.identity() != existing.identity()) } + candidate).sortedBy { it.name }
+            val replaced = (candidates + listOfNotNull(existing)).map { it.identity() }.toSet()
+            val merged = (current.entries.filter { it.identity() !in replaced } + candidates).sortedBy { it.name }
             current.copy(entries = merged)
         }) {
             dialog.dismiss()

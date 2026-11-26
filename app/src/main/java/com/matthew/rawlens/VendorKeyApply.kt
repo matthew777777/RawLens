@@ -57,14 +57,15 @@ object VendorKeyApply {
         device: CameraDevice,
         profile: VendorKeyProfile,
         characteristics: CameraCharacteristics,
-        log: (String) -> Unit
+        log: (String) -> Unit,
+        template: Int = CameraDevice.TEMPLATE_PREVIEW
     ): Pair<CaptureRequest?, VendorKeyApplyReport> {
         val applied = mutableListOf<String>()
         val skipped = mutableListOf<String>()
         val entries = profile.sessionEntries()
         if (entries.isEmpty() && profile.rawPreviewFps == 0) return null to VendorKeyApplyReport(applied, skipped)
         val builder = try {
-            device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            device.createCaptureRequest(template)
         } catch (failure: Exception) {
             log("vendor session: template failed ($failure)")
             return null to VendorKeyApplyReport(emptyList(), entries.map { it.name })
@@ -182,14 +183,59 @@ object VendorKeyApply {
             return false
         }
         if (!setAny(builder, entry.name, entry.type, value, physicalCameraId, characteristics)) {
-            log("vendor $where: skip ${entry.name} (HAL rejected)")
+            log("vendor $where: skip ${entry.name} (builder rejected name or value type)")
             return false
         }
         return true
     }
 
-    /** Typed dispatch shared by the capture path and the probe. Never throws. */
+    /**
+     * Shared by the capture path and the probe. Never throws.
+     *
+     * The framework types advertised vendor tags as arrays (int32 is `int[]`,
+     * byte is `byte[]`), so a scalar the key refuses is set again as one element.
+     */
     private fun setAny(
+        builder: CaptureRequest.Builder,
+        name: String,
+        type: VendorKeyType,
+        value: Any,
+        physicalCameraId: String?,
+        characteristics: CameraCharacteristics
+    ): Boolean {
+        if (setExact(builder, name, type, value, physicalCameraId, characteristics)) return true
+        return listOfNotNull(singleElementArray(value), bytesOf(value)).any { array ->
+            try {
+                @Suppress("UNCHECKED_CAST")
+                setTyped(builder, name, array, array.javaClass as Class<Any>, physicalCameraId, characteristics)
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    /** Byte-tag spelling of text or small integers whose native type could not be read. */
+    internal fun bytesOf(value: Any): ByteArray? {
+        val ints = when (value) {
+            is String -> return value.toByteArray(Charsets.UTF_8)
+            is Int -> intArrayOf(value)
+            is IntArray -> value
+            else -> return null
+        }
+        return if (ints.all { it in -128..255 }) ByteArray(ints.size) { ints[it].toByte() } else null
+    }
+
+    internal fun singleElementArray(value: Any): Any? = when (value) {
+        is Int -> intArrayOf(value)
+        is Long -> longArrayOf(value)
+        is Float -> floatArrayOf(value)
+        is Double -> doubleArrayOf(value)
+        is Byte -> byteArrayOf(value)
+        is Boolean -> byteArrayOf(if (value) 1 else 0)
+        else -> null
+    }
+
+    private fun setExact(
         builder: CaptureRequest.Builder,
         name: String,
         type: VendorKeyType,
