@@ -68,9 +68,10 @@ data class HdrPlusProvenance(
  * 16-bit normalized CFA DNG writer for HDR+ merges. Same tag set as the
  * 32-bit float merged writer ([FloatCfaDngWriter]) and the same uint16
  * packing policy as the other derived-Bayer writers ([MosaicSrDngWriter]):
- * samples are black-subtracted and normalized, so clamp [0, 1], ×65535,
- * round half up ([LinearRgbDngWriter.quantize]) describes the file
- * exactly, with BlackLevel 0 and WhiteLevel 65535. Capture facts live in
+ * samples are black-subtracted and normalized, then stored as
+ * 4096 + x × 61439, rounded half up and clipped to 0..65535
+ * ([LinearRgbDngWriter.quantize]), so BlackLevel 4096 and WhiteLevel 65535
+ * describe the file exactly and shadow noise below black is kept. Capture facts live in
  * the EXIF sub-IFD ([DngExifDirectory], like the upstream DNG EXIF block) plus
  * IFD0 exposure/ISO, with the merge provenance in ImageDescription.
  *
@@ -126,9 +127,10 @@ object HdrPlusDngWriter {
             shorts(50713, 2, 2)
             // BlackLevel count must cover the 2x2 repeat grid (one level per
             // Bayer phase): count 1 is rejected by rawspeed/Darktable
-            // ("BLACKLEVEL entry is too small"). All phases are zero here:
-            // merged samples are black-subtracted and normalized.
-            shorts(50714, 0, 0, 0, 0)
+            // ("BLACKLEVEL entry is too small"). All phases sit at the merge
+            // pedestal so negative shadow noise is kept (see LinearRgbDngWriter).
+            shorts(50714, LinearRgbDngWriter.BLACK_PEDESTAL, LinearRgbDngWriter.BLACK_PEDESTAL,
+                LinearRgbDngWriter.BLACK_PEDESTAL, LinearRgbDngWriter.BLACK_PEDESTAL)
             longs(50717, 65535)
             srationals(50721, matrix)
             rationals(50728, neutral)
@@ -276,7 +278,8 @@ object HdrPlusDngWriter {
             .append("- Dimensions: ${provenance.sourceWidth}x${provenance.sourceHeight}\n")
             .append("- Reference timestamp: $timestamp ns\n")
             .append("- Reference frame: $frameNumber\n")
-            .append("- Quantization: clamp[0,1]*65535 round-half-up\n")
+            .append("- Quantization: ${LinearRgbDngWriter.BLACK_PEDESTAL} + x*${65535 - LinearRgbDngWriter.BLACK_PEDESTAL} " +
+                "round-half-up, clipped to 0..65535 (BlackLevel ${LinearRgbDngWriter.BLACK_PEDESTAL})\n")
         return out.toString()
     }
 

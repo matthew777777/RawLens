@@ -101,6 +101,42 @@ internal object DngLevelRepair {
     }
 
     /**
+     * Levels that fit the payload when samples run past the reported white. Works for any reported
+     * pair, standard or not (64 / 1023, 1024 / 8712, 960 / 1000 ...):
+     *
+     * - Deeper storage (DCG and similar): data reaches 1.5x the reported white or more. The HAL
+     *   reports the base mode's levels while the payload is stored wider, and sensors keep the black
+     *   at the same fraction of the range when they widen the ADC output, so both levels scale by the
+     *   smallest power of two whose white covers the data: 64 / 1023 -> 256 / 4095 (12-bit) or
+     *   1024 / 16383 (14-bit); a non-standard 1000 -> 16000. Whites of the form 2^n - 1 stay there.
+     * - Slight overshoot (under 1.5x): the HAL under-reports the white of the same mode. The black
+     *   stays; the white becomes the next standard ceiling if that is within 1.5x of the report,
+     *   else the sampled peak (the true white is at least that).
+     *
+     * Null (keep the reported levels) when the data stays within the white or the pair is unusable
+     * (the repair path covers that). A 12-bit frame so dark that no sampled code passes 1023 cannot be
+     * told apart from 10-bit data; 14-bit DCG frames always pass (their black alone is above 1023).
+     * No black-floor test: one dead pixel (code 0) in the sample would veto the scale and leave a
+     * 14-bit payload on 10-bit levels, which blows the whole frame out.
+     */
+    fun deeperStorage(black: FloatArray, white: Float, sample: SampledLevels): Pair<FloatArray, Float>? {
+        if (black.size != 4 || !VfLevels.isSane(black, white)) return null
+        val peak = sample.max.toFloat()
+        if (peak <= white) return null
+        if (peak < 1.5f * white) {
+            val ceiling = ceilingWhite(sample.max)
+            return black.copyOf() to (if (ceiling <= 1.5f * white) ceiling else peak)
+        }
+        val reported = white.toLong()
+        val pow2Form = white == reported.toFloat() && ((reported + 1) and reported) == 0L
+        var scale = 2
+        fun scaled(s: Int) = if (pow2Form) ((reported + 1) * s - 1).toFloat() else white * s
+        while (scaled(scale) < peak && scale < 65536) scale *= 2
+        val target = scaled(scale).coerceAtMost(65535f)
+        return FloatArray(4) { black[it] * scale } to target
+    }
+
+    /**
      * Full repair from a frame sample: per-phase black floors plus the
      * ceiling white. The output always satisfies [VfLevels.isSane] (a
      * perfectly uniform frame at exactly a ceiling rung still clears by

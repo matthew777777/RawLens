@@ -19,9 +19,12 @@ class LinearRgbDngWriterTest {
 
     @Test fun quantizationScaleAndClippingAreDocumented() {
         assertEquals(65535.0, LinearRgbDngWriter.QUANTIZATION_SCALE, 0.0)
-        assertEquals(0, LinearRgbDngWriter.quantize(0f))
+        assertEquals(4096, LinearRgbDngWriter.BLACK_PEDESTAL)
+        assertEquals(4096, LinearRgbDngWriter.quantize(0f))
         assertEquals(65535, LinearRgbDngWriter.quantize(1f))
-        assertEquals(32768, LinearRgbDngWriter.quantize(0.5f))
+        assertEquals(34816, LinearRgbDngWriter.quantize(0.5f))
+        // Shadow noise below zero stays below the pedestal instead of clipping to 0.
+        assertEquals(2867, LinearRgbDngWriter.quantize(-0.02f))
         assertEquals(0, LinearRgbDngWriter.quantize(-0.25f))
         assertEquals(65535, LinearRgbDngWriter.quantize(1.5f))
     }
@@ -132,7 +135,7 @@ class LinearRgbDngWriterTest {
             "- Rejected frames: 1\n", "- Reference timestamp: 123456789 ns\n",
             "- Output scale: 1x\n", "\nSource:\n", "- Camera: 0\n",
             "- Derivation: DerivedFromRawBurst\n", "- Lens shading applied: true\n",
-            "- Effective frames: 1.0\n", "- Quantization: clamp[0,1]*65535 round-half-up\n"
+            "- Effective frames: 1.0\n", "- Quantization: 4096 + x*61439 round-half-up, clipped to 0..65535 (BlackLevel 4096)\n"
         )) assertTrue("missing $key", block.contains(key))
     }
 
@@ -169,7 +172,7 @@ class LinearRgbDngWriterTest {
         // whites, which crashes channel-normalizing readers.
         assertEquals(listOf(65535, 65535, 65535), parsed.longs(50717))
         assertEquals(listOf(1, 1), parsed.shorts(50713)) // 1x1 RGB tile: three black levels
-        assertEquals(listOf(0.0, 0.0, 0.0), parsed.rationals(50714)) // BlackLevel
+        assertEquals(listOf(4096.0, 4096.0, 4096.0), parsed.rationals(50714)) // BlackLevel pedestal
         for (cfaTag in listOf(33421, 33422)) assertFalse("CFA tag $cfaTag", parsed.has(cfaTag))
     }
 

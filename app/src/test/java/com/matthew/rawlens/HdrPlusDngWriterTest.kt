@@ -82,8 +82,8 @@ class HdrPlusDngWriterTest {
         assertTrue(tags.containsKey(271))
         assertTrue(tags.containsKey(272))
         fun sample(index: Int) = buffer.getShort(stripOffset + index * 2).toInt() and 0xffff
-        assertEquals(0, sample(0))
-        assertEquals(32768, sample(14)) // 0.5 * 65535 rounds half up
+        assertEquals(4096, sample(0)) // BlackLevel pedestal: 0 maps to 4096
+        assertEquals(34816, sample(14)) // 4096 + 0.5 * 61439 rounds half up
         assertEquals(65535, sample(15)) // clamped, not wrapped
     }
 

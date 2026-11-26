@@ -98,12 +98,15 @@ data class MergeProvenance(
  * Geometry, compression, photometric, strip, and sample-format tags come from
  * TinyDNG itself and must never be passed as custom fields.
  *
- * Quantization policy (documented, parser-tested): each sample is clamped to
- * [0, 1], multiplied by [QUANTIZATION_SCALE], and rounded half up to an
- * unsigned 16-bit code. merged values above 1.0 (unclipped highlight energy)
- * saturate at white; WhiteLevel 65535 on all three channels and BlackLevel 0
- * therefore describe the file exactly. Merged data is already black-subtracted,
- * so BlackLevel 0 is truthful, not a default.
+ * Quantization policy (documented, parser-tested): sample 0 is stored at
+ * [BLACK_PEDESTAL] (4096), sample 1 at white (65535), linear in between, and
+ * the result is rounded half up to an unsigned 16-bit code. BlackLevel 4096
+ * and WhiteLevel 65535 on all three channels describe that mapping exactly.
+ * Negative samples (shadow noise that dips below zero) stay below the pedestal
+ * instead of clipping to 0, so shadow averages are not lifted; values below
+ * -[BLACK_PEDESTAL] / ([QUANTIZATION_SCALE] - [BLACK_PEDESTAL]) still clip, and
+ * values above 1.0 (unclipped highlight energy) saturate at white. The cost is
+ * 6.25 % of the code range (0.1 bit). The host tool (srp_dng) uses the same pedestal.
  *
  * Metadata policy: only reference-frame facts are copied (capture, exposure,
  * ISO, camera identity, white point, calibration, colour transforms,
@@ -125,6 +128,8 @@ object LinearRgbDngWriter {
     // PhotonCamera-parity linear merge version. Future SR hook: bump on SR return.
     const val ALGORITHM_VERSION = "RawLens-LinearMerge/4N-scale1-neutral-highlights"
     const val QUANTIZATION_SCALE = 65535.0
+    /** DNG BlackLevel written for every merged linear file: sample 0 maps to this code. */
+    const val BLACK_PEDESTAL = 4096
     const val DERIVATION = "DerivedFromRawBurst"
     /**
      * Default readback band height for [writeStriped]: 256 rows cost ~12MB
@@ -260,7 +265,7 @@ object LinearRgbDngWriter {
             ascii(50708, cameraName)
             ascii(50936, "RawLens Camera2 calibration")
             shorts(50713, 1, 1)
-            rationals(50714, doubleArrayOf(0.0, 0.0, 0.0))
+            rationals(50714, doubleArrayOf(BLACK_PEDESTAL.toDouble(), BLACK_PEDESTAL.toDouble(), BLACK_PEDESTAL.toDouble()))
             // One WhiteLevel per sample channel: the DNG spec fixes this
             // tag's count to SamplesPerPixel. A single value leaves
             // LibRaw-based readers with zero per-channel whites, which
@@ -348,12 +353,15 @@ object LinearRgbDngWriter {
     }
 
     /**
-     * Documented quantization: clamp to [0, 1], scale, round half up.
-     * Visible for parser tests; the writer boundary is its only caller.
+     * Documented quantization: code = BLACK_PEDESTAL + sample x (65535 - BLACK_PEDESTAL),
+     * rounded half up, clipped to [0, 65535]. Negative samples keep their place
+     * below the pedestal. Visible for parser tests; the writer boundary is its only caller
+     * (and [HdrPlusDngWriter], which must share this mapping).
      */
     fun quantize(sample: Float): Int {
         require(sample.isFinite()) { "Linear RGB DNG cannot contain NaN or infinity" }
-        return (sample.coerceIn(0f, 1f).toDouble() * QUANTIZATION_SCALE).roundToInt()
+        val span = QUANTIZATION_SCALE - BLACK_PEDESTAL
+        return (BLACK_PEDESTAL + sample.toDouble() * span).roundToInt()
             .coerceIn(0, 65535)
     }
 
@@ -381,7 +389,7 @@ object LinearRgbDngWriter {
             "- Camera: ${provenance.sourceCameraId}\n" +
             "- Reference timestamp: $timestamp ns\n" +
             "- Derivation: $DERIVATION\n" +
-            "- Quantization: clamp[0,1]*65535 round-half-up\n"
+            "- Quantization: $BLACK_PEDESTAL + x*${65535 - BLACK_PEDESTAL} round-half-up, clipped to 0..65535 (BlackLevel $BLACK_PEDESTAL)\n"
     }
 
     /**

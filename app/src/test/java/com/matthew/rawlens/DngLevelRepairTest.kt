@@ -114,4 +114,60 @@ class DngLevelRepairTest {
         assertTrue(DngLevelRepair.needsRepair(floatArrayOf(64f, 64f, 64f), 1023f))
         assertTrue(DngLevelRepair.needsRepair(floatArrayOf(64f, Float.NaN, 64f, 64f), 1023f))
     }
+
+    private fun sample(max: Int, min: Int = 1000) = SampledLevels(IntArray(4) { min }, max)
+
+    @Test fun `deeper storage scales 10-bit levels to a 14-bit DCG payload`() {
+        val (black, white) = DngLevelRepair.deeperStorage(floatArrayOf(64f, 64f, 64f, 64f), 1023f, sample(9000))!!
+        assertEquals(16383f, white)
+        black.forEach { assertEquals(1024f, it) }
+    }
+
+    @Test fun `deeper storage scales 10-bit levels to a 12-bit payload`() {
+        val (black, white) = DngLevelRepair.deeperStorage(floatArrayOf(64f, 65f, 63f, 64f), 1023f, sample(3000, 250))!!
+        assertEquals(4095f, white)
+        assertEquals(listOf(256f, 260f, 252f, 256f), black.toList())
+    }
+
+    @Test fun `deeper storage scales 12-bit levels to a 14-bit payload`() {
+        val (black, white) = DngLevelRepair.deeperStorage(floatArrayOf(256f, 256f, 256f, 256f), 4095f, sample(12000))!!
+        assertEquals(16383f, white)
+        black.forEach { assertEquals(1024f, it) }
+    }
+
+    @Test fun `deeper storage keeps levels when the data fits or the pair is unusable`() {
+        assertNull(DngLevelRepair.deeperStorage(floatArrayOf(64f, 64f, 64f, 64f), 1023f, sample(1023, 60)))
+        assertNull(DngLevelRepair.deeperStorage(floatArrayOf(1024f, 1024f, 1024f, 1024f), 16383f, sample(16000)))
+        assertNull(DngLevelRepair.deeperStorage(floatArrayOf(1024f, 1024f, 1024f, 1024f), 8712f, sample(8712)))
+        assertNull(DngLevelRepair.deeperStorage(floatArrayOf(64f, 64f, 64f), 1023f, sample(9000)))
+        assertNull(DngLevelRepair.deeperStorage(floatArrayOf(2000f, 64f, 64f, 64f), 1023f, sample(9000)))
+    }
+
+    @Test fun `non-standard levels scale by a power of two for a deeper payload`() {
+        val (black, white) = DngLevelRepair.deeperStorage(floatArrayOf(60f, 60f, 62f, 60f), 1000f, sample(15000, 900))!!
+        assertEquals(16000f, white)
+        assertEquals(listOf(960f, 960f, 992f, 960f), black.toList())
+    }
+
+    @Test fun `slight overshoot raises only the white`() {
+        val (black, white) = DngLevelRepair.deeperStorage(floatArrayOf(64f, 64f, 64f, 64f), 1000f, sample(1023, 60))!!
+        assertEquals(1023f, white)
+        black.forEach { assertEquals(64f, it) }
+        // vivo-style 8712 with a peak past it: no standard ceiling within 1.5x -> the sampled peak.
+        val (black2, white2) = DngLevelRepair.deeperStorage(floatArrayOf(1024f, 1024f, 1024f, 1024f), 8712f, sample(9000))!!
+        assertEquals(9000f, white2)
+        black2.forEach { assertEquals(1024f, it) }
+    }
+
+    @Test fun `16-bit payload on 14-bit levels`() {
+        val (black, white) = DngLevelRepair.deeperStorage(floatArrayOf(1024f, 1024f, 1024f, 1024f), 16383f, sample(60000, 4000))!!
+        assertEquals(65535f, white)
+        black.forEach { assertEquals(4096f, it) }
+    }
+
+    @Test fun `a dead pixel does not veto the deeper levels`() {
+        val levels = DngLevelRepair.deeperStorage(floatArrayOf(64f, 64f, 64f, 64f), 1023f,
+            SampledLevels(intArrayOf(0, 1010, 1012, 1009), 15000))
+        assertEquals(16383f, levels!!.second)
+    }
 }

@@ -52,7 +52,7 @@ struct DngField {
 // e.g. Make/Model passthrough). `color` overrides the default identity
 // profile (may be null for defaults).
 // On failure returns != kOk and, when `error` is non-null, a message.
-constexpr uint32_t kDngBlack = 2048;
+constexpr uint32_t kDngBlack = 4096;
 DngStatus DngWriteLinearRgb16(const char* path, uint32_t width,
                               uint32_t height, const float* rgb,
                               const DngField* fields, size_t field_count,
