@@ -1,0 +1,4 @@
+<resources>
+    <dimen name="shutter_ring_size">80dp</dimen>
+    <dimen name="mode_dial_size">76dp</dimen>
+</resources>

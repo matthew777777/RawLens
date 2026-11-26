@@ -15,7 +15,7 @@ class CaptureSharpeningDeviceTest {
     @Test fun nativeBridgeMatchesRawrForEveryPresetAndPattern() {
         val inst = InstrumentationRegistry.getInstrumentation()
         val context = inst.targetContext
-        val stage = WaveletDenoiser(context)
+        val stage = CaptureSharpener()
         try {
             for ((index, level) in CaptureSharpeningLevel.entries.withIndex()) {
                 val name = "preset-${level.iterations}-cfa-$index"
@@ -23,7 +23,7 @@ class CaptureSharpeningDeviceTest {
                 val input = asset("input")
                 val pixels = ByteBuffer.allocateDirect(input.size).order(ByteOrder.nativeOrder()).apply { put(input); rewind() }
                 val expected = ByteBuffer.wrap(asset("expected")).order(ByteOrder.nativeOrder())
-                stage.captureSharpen(pixels, 193, 187, floatArrayOf(1.9f, 1f, 1.45f),
+                stage.process(pixels, 193, 187, floatArrayOf(1.9f, 1f, 1.45f),
                     BayerPattern.entries[index], CaptureSharpeningSettings(true, level))
                 val actualBytes = ByteArray(input.size)
                 pixels.duplicate().apply { rewind(); get(actualBytes) }
@@ -47,7 +47,7 @@ class CaptureSharpeningDeviceTest {
                 Log.i("CaptureSharpeningParity", "$name max=$maxError mean=${sumError/(193*187*3)} changed=$changed")
                 // Disable/re-enable cannot mutate the persisted strength, and off is a byte-exact bypass.
                 val before = actualBytes.copyOf()
-                stage.captureSharpen(pixels, 193, 187, floatArrayOf(1.9f, 1f, 1.45f),
+                stage.process(pixels, 193, 187, floatArrayOf(1.9f, 1f, 1.45f),
                     BayerPattern.entries[index], CaptureSharpeningSettings(false, level))
                 pixels.duplicate().apply { rewind(); get(actualBytes) }
                 assertArrayEquals(before, actualBytes)

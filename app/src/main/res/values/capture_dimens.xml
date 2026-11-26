@@ -1,0 +1,5 @@
+<resources>
+    <dimen name="shutter_ring_size">72dp</dimen>
+    <!-- Face = size - 12dp: between the gallery thumb and the shutter ring. -->
+    <dimen name="mode_dial_size">70dp</dimen>
+</resources>
