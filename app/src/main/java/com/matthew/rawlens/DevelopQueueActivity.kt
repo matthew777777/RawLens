@@ -32,6 +32,10 @@ class DevelopQueueActivity : Activity() {
     private lateinit var exposure: SettingsSlider
     private lateinit var kit: SettingsKit
     private var onSettings=false
+    // Sub-page ("Advanced tone & color" etc.) opened from Export settings.
+    private lateinit var subHost: LinearLayout
+    private lateinit var scroller: ScrollView
+    private var subTitle: String?=null
     private var last: List<DevelopQueueItem>?=null
     private val previews=android.util.LruCache<String,Bitmap>(200)
     private val previewExecutor=Executors.newSingleThreadExecutor()
@@ -60,7 +64,7 @@ class DevelopQueueActivity : Activity() {
         DevelopQueueLook.ensureSeeded(this)
         val root=column().apply { setPadding(dp(16),dp(8),dp(16),dp(12));setBackgroundColor(getColor(R.color.surface)) }
         val header=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
-        header.addView(icon("‹","Back") { if(onSettings) showQueue() else finish() },LinearLayout.LayoutParams(dp(48),dp(48)))
+        header.addView(icon("‹","Back") { goBack { finish() } },LinearLayout.LayoutParams(dp(48),dp(48)))
         heading=text("Develop queue",23f,R.color.text_primary).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL);isAccessibilityHeading=true }
         header.addView(heading,LinearLayout.LayoutParams(0,-2,1f).apply { marginStart=dp(4) })
         importer=button("+ Import") { pickFiles() }.apply { setTextColor(getColor(R.color.accent)) }
@@ -68,10 +72,15 @@ class DevelopQueueActivity : Activity() {
         header.addView(icon("⋮","Queue actions") { showQueueActions(header.getChildAt(header.childCount-1)) },LinearLayout.LayoutParams(dp(40),dp(48)))
         root.addView(header)
         val content=column()
-        root.addView(ScrollView(this).apply { isFillViewport=true;isVerticalScrollBarEnabled=false;addView(content) },LinearLayout.LayoutParams(-1,0,1f))
+        scroller=ScrollView(this).apply { isFillViewport=true;isVerticalScrollBarEnabled=false;addView(content) }
+        root.addView(scroller,LinearLayout.LayoutParams(-1,0,1f))
         mainPage=column();content.addView(mainPage)
         settingsPage=SettingsCardColumn(this).apply { visibility=View.GONE };content.addView(settingsPage)
+        subHost=column().apply { visibility=View.GONE };content.addView(subHost)
         kit=SettingsKit(this,settingsPage) { b,active -> RawLensUi.styleButton(b,active) }
+        // Without these the collapsed "Advanced tone & color" link has nowhere to open.
+        kit.openSubPageTitle={ subTitle }
+        kit.openSubPage={ title,body -> openSubPage(title,body) }
         settingsLink=column().apply { background=panel() }
         mainPage.addView(settingsLink,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(12) })
         val destination=text("JPEG  ·  DCIM/RawLens/Developed",12f).apply { setPadding(dp(4),dp(12),dp(4),dp(20)) }
@@ -95,8 +104,29 @@ class DevelopQueueActivity : Activity() {
         override fun showPhotoLutSettings() = Unit
         override fun reshow() { saveExposure();buildSettings();updateSettingsLink() }
     }
+    private fun openSubPage(title: String,body: View) {
+        val refresh=subTitle==title
+        (body.parent as? ViewGroup)?.removeView(body)
+        subHost.removeAllViews();subHost.addView(body,LinearLayout.LayoutParams(-1,-2))
+        subTitle=title;settingsPage.visibility=View.GONE;subHost.visibility=View.VISIBLE
+        heading.text=title
+        if(!refresh) scroller.scrollTo(0,0)
+    }
+    private fun closeSubPage() {
+        if(subTitle==null) return
+        subHost.removeAllViews();subHost.visibility=View.GONE;subTitle=null
+        if(onSettings) { settingsPage.visibility=View.VISIBLE;heading.text="Export settings" }
+    }
+    private fun goBack(otherwise: ()->Unit) {
+        when {
+            subTitle!=null -> closeSubPage()
+            onSettings -> showQueue()
+            else -> otherwise()
+        }
+    }
     private fun buildSettings() {
         settingsPage.removeAllViews()
+        kit.subPages.clear()
         settingsPage.addView(kit.sectionTitle("Camera look"))
         settingsPage.addView(kit.settingsButton("Copy from camera settings").apply {
             setOnClickListener {
@@ -135,7 +165,7 @@ class DevelopQueueActivity : Activity() {
         })
     }
     private fun showQueue() {
-        saveExposure();onSettings=false;mainPage.visibility=View.VISIBLE;settingsPage.visibility=View.GONE
+        closeSubPage();saveExposure();onSettings=false;mainPage.visibility=View.VISIBLE;settingsPage.visibility=View.GONE
         heading.text="Develop queue";importer.visibility=View.VISIBLE;updateSettingsLink();refreshQueue()
     }
     private fun handlePrimaryAction() {
@@ -288,7 +318,7 @@ class DevelopQueueActivity : Activity() {
         } }
     }
     private fun toast(message: String) { Toast.makeText(this,message,Toast.LENGTH_LONG).show() }
-    @Deprecated("Deprecated in Java") override fun onBackPressed() { if(onSettings) showQueue() else finishAfterTransition() }
+    @Deprecated("Deprecated in Java") override fun onBackPressed() { goBack { finishAfterTransition() } }
     override fun onResume() { super.onResume();handler.post(refresh);ImmersiveMode.apply(window) }
     override fun onPause() { handler.removeCallbacks(refresh);saveExposure();super.onPause() }
     override fun onDestroy() {
