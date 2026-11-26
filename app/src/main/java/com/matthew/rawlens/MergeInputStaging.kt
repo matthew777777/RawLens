@@ -85,8 +85,11 @@ internal object MergeInputStaging {
         try {
             for (view in views) {
                 val src = view.buffer!!.duplicate().also { it.rewind() }
-                copies += LkrBridge.nativeStage(src, view.width, view.height, view.rowStride / 2, 16)
-                    ?: throw IllegalStateException("native staging returned null")
+                // NewDirectByteBuffer is BIG_ENDIAN; RAW16 is little-endian like the camera plane.
+                // Without this every getShort reader (levels, MFSR, HDR+ unpack) sees swapped bytes.
+                copies += (LkrBridge.nativeStage(src, view.width, view.height, view.rowStride / 2, 16)
+                    ?: throw IllegalStateException("native staging returned null"))
+                    .order(java.nio.ByteOrder.LITTLE_ENDIAN)
             }
         } catch (failure: Throwable) {
             copies.forEach(SrpBridge::nativeFreeDirect)

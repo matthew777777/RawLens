@@ -45,6 +45,8 @@ internal object DngLevelRepair {
         buffer: ByteBuffer, rowStride: Int, pixelStride: Int, width: Int, height: Int
     ): SampledLevels? {
         if (pixelStride <= 0 || rowStride < 0 || width <= 0 || height <= 0) return null
+        // RAW16 is little-endian; staged copies (NewDirectByteBuffer) default to BIG_ENDIAN.
+        val buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN)
         // Absolute gets are limit-bounded; every sample stays at or below
         // the last readable u16 even when stride claims exceed the store.
         val lastReadable = buffer.limit() - 2
