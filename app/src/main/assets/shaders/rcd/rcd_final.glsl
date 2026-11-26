@@ -16,11 +16,19 @@ uniform highp vec2 u_white_window;
 // its neutral target scale with it so recovered highlights are not flattened to white. 1 otherwise.
 uniform highp float u_white_scale;
 
+// Direct-RAW RCD: the Vulkan RCD gets unshaded codes, so the HAL lens-shading map is
+// applied here per output pixel (the map is smooth: equal to shading the CFA before the
+// demosaic as AMaZE's raw/preprocess does). 0 when the CFA was already shaded on the CPU.
+uniform int u_rgb_lens;
+
 highp vec3 cc_white() { return max(u_camera_white_normalized, vec3(1e-4)); }
+#import luma
 // Balanced RGB for the chroma cleanup (texture cache serves the 3x3 / 5x5 taps).
 highp vec3 fetch_bal(ivec2 off) {
     ivec2 q = clamp(ivec2(gl_GlobalInvocationID.xy) + off, ivec2(0), u_outsize - 1);
-    return max(texelFetch(u_rgb, q, 0).rgb, vec3(0.0)) / cc_white();
+    highp vec3 rgb = max(texelFetch(u_rgb, q, 0).rgb, vec3(0.0));
+    if (u_rgb_lens != 0) rgb *= luma_lens_gain(q);
+    return rgb / cc_white();
 }
 #import cleanup
 
@@ -33,6 +41,7 @@ void main() {
     vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x * ws), vec3(u_white_window.y * ws), cameraRgb);
     float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
     if (u_camera_linear == 0) cameraRgb = mix(cameraRgb, u_camera_white_normalized * ws, whiteBlend);
+    if (u_camera_linear == 0) cameraRgb += denoised_luma(o);
     vec3 acescg = u_camera_to_acescg * cameraRgb;
     vec3 outRgb = (u_camera_linear != 0) ? cameraRgb : acescg;
     imageStore(img_out, o, vec4(outRgb, 1.0));

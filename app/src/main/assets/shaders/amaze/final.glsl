@@ -28,54 +28,26 @@ uniform int u_camera_linear;
 // to true camera RGB). Also used to detect sensor-domain clipping.
 uniform highp vec3 u_demosaic_unbalance;
 
-// 2 for AMaZE's half-grid hpos reads + 2 for the cleanup footprint (5x5).
-const int HALO = 4;
-const int TW = LW + 2 * HALO;
-const int TH = LH + 2 * HALO;
-const int TN = TW * TH;
-
-// staging origin: the workgroup's output block (interior coords) + u_inner
-// - HALO, so every staged texel is addressed in padded-window coordinates
-ivec2 T0() { return ivec2(gl_WorkGroupID.xy * uvec2(LW, LH)) + u_inner - HALO; }
-int SIDX(ivec2 q) { ivec2 l = q - T0(); return l.y * TW + l.x; }
-int SIDX_H(ivec2 q) { ivec2 l = ivec2(q.x & ~1, q.y) - T0(); return l.y * TW + l.x; }
-
-shared vec4 s_chroma[TN];
-shared float s_hvwt[TN];
-float hv(ivec2 q) { return s_hvwt[SIDX_H(q)]; }
-float D0(ivec2 q) { return s_chroma[SIDX_H(q)].r; }
-float D1(ivec2 q) { return s_chroma[SIDX_H(q)].g; }
-
-void load_tile() {
-    ivec2 t0 = T0();
-    for (int i = int(gl_LocalInvocationIndex); i < TN; i += LW * LH) {
-        ivec2 q = clamp(t0 + ivec2(i % TW, i / TW), ivec2(0), u_size - 1);
-        s_chroma[i] = texelFetch(u_chroma, q, 0);
-        s_hvwt[i] = texelFetch(u_hvwt, q, 0).r;
-    }
-    memoryBarrierShared();
-    barrier();
-}
+// R/B-only planes are stored at half width: column x >> 1 (the C++ half grid).
+float hv(ivec2 q) { return texelFetch(u_hvwt, ivec2(q.x >> 1, q.y), 0).r; }
+vec2 D01(ivec2 q) { return texelFetch(u_chroma, ivec2(q.x & ~1, q.y), 0).rg; }
 
 // AMaZE pass-15 RGB at window texel p (negatives clipped like RawTherapee).
 highp vec3 amaze_rgb(ivec2 p) {
-    float g = s_chroma[SIDX(p)].b;
-    float r, b;
+    float g = texelFetch(u_chroma, p, 0).b;
+    vec2 d;   // G - R, G - B
     if (isG(p.y, p.x)) {
         float wu = hv(p + ivec2(0, -1));
         float wd = hv(p + ivec2(0, 1));
         float wl = hv(p + ivec2(-1, 0));
         float wr = hv(p + ivec2(1, 0));
         float temp = 1.0 / (wu + 2.0 - wr - wl + wd);
-        r = g - (wu * D0(p + ivec2(0, -1)) + (1.0 - wr) * D0(p + ivec2(1, 0))
-                 + (1.0 - wl) * D0(p + ivec2(-1, 0)) + wd * D0(p + ivec2(0, 1))) * temp;
-        b = g - (wu * D1(p + ivec2(0, -1)) + (1.0 - wr) * D1(p + ivec2(1, 0))
-                 + (1.0 - wl) * D1(p + ivec2(-1, 0)) + wd * D1(p + ivec2(0, 1))) * temp;
+        d = (wu * D01(p + ivec2(0, -1)) + (1.0 - wr) * D01(p + ivec2(1, 0))
+             + (1.0 - wl) * D01(p + ivec2(-1, 0)) + wd * D01(p + ivec2(0, 1))) * temp;
     } else {
-        r = g - D0(p);
-        b = g - D1(p);
+        d = D01(p);
     }
-    return max(vec3(r, g, b), vec3(0.0));
+    return max(vec3(g - d.x, g, g - d.y), vec3(0.0));
 }
 
 // Balanced RGB of the workgroup block + CR ring, for the chroma cleanup.
@@ -84,21 +56,22 @@ const int CW = LW + 2 * CR;
 const int CN = CW * (LH + 2 * CR);
 shared highp vec3 s_rgb[CN];
 highp vec3 cc_white() { return max(u_camera_white_normalized, vec3(1e-4)); }
-void stage_rgb() {
-    ivec2 c0 = ivec2(gl_WorkGroupID.xy * uvec2(LW, LH)) + u_inner - CR;
-    highp vec3 inv = 1.0 / cc_white();
-    for (int i = int(gl_LocalInvocationIndex); i < CN; i += LW * LH)
-        s_rgb[i] = amaze_rgb(c0 + ivec2(i % CW, i / CW)) * inv;
-}
 highp vec3 fetch_bal(ivec2 off) {
     ivec2 l = ivec2(gl_LocalInvocationID.xy) + CR + off;
     return s_rgb[l.y * CW + l.x];
 }
 #import cleanup
+void stage_rgb() {
+    if (u_fc_median == 0 && u_defringe <= 0.0) return;   // the cleanup is off: nothing reads s_rgb
+    ivec2 c0 = ivec2(gl_WorkGroupID.xy * uvec2(LW, LH)) + u_inner - CR;
+    highp vec3 inv = 1.0 / cc_white();
+    for (int i = int(gl_LocalInvocationIndex); i < CN; i += LW * LH)
+        s_rgb[i] = amaze_rgb(c0 + ivec2(i % CW, i / CW)) * inv;
+}
+#import luma
 
 layout(binding = 0, rgba16f) writeonly uniform highp image2D img_out;
 void main() {
-    load_tile();
     stage_rgb();
     memoryBarrierShared();
     barrier();
@@ -107,7 +80,9 @@ void main() {
     ivec2 p = o + u_inner;
     // RawTherapee clips negative AMaZE reconstruction excursions here. Otherwise a
     // camera matrix can turn one channel's edge undershoot into a complementary fringe.
-    highp vec3 cameraRgb = chroma_cleanup(fetch_bal(ivec2(0))) * cc_white();
+    highp vec3 cameraRgb = amaze_rgb(p) * (1.0 / cc_white());
+    if (u_fc_median != 0 || u_defringe > 0.0) cameraRgb = chroma_cleanup(fetch_bal(ivec2(0)));
+    cameraRgb *= cc_white();
 
     // Sensor-domain white-point protection. As any demosaiced channel approaches RAW clipping,
     // progressively remove chroma by converging on the camera's measured neutral white. This is
@@ -124,6 +99,7 @@ void main() {
         imageStore(img_out, o + u_outoff, vec4(cameraRgb * u_demosaic_unbalance, 1.0));
         return;
     }
+    cameraRgb += denoised_luma(o + u_outoff) / u_demosaic_unbalance;
     highp vec3 acescg = u_camera_to_acescg * cameraRgb;
     imageStore(img_out, o + u_outoff, vec4(acescg, 1.0));
 }

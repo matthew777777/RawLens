@@ -12,7 +12,9 @@ import org.junit.Test
 
 class AmazePipelineContractTest {
     @Test fun fiftyMpFusedJpegFitsWithoutIncreasingGpuBudget() {
-        val budget = 768L * 1024 * 1024
+        val budget = 640L * 1024 * 1024
+        // The unfused path fits the default budget too since the tile scratch was halved.
+        assertTrue(AmazePipelineContract.evaluate(limits(), 8160, 6120, 768L * 1024 * 1024) is AmazeCapability.Supported)
         assertTrue(AmazePipelineContract.evaluate(limits(), 8160, 6120, budget) is AmazeCapability.Unsupported)
         assertTrue(AmazePipelineContract.evaluate(limits(), 8160, 6120, budget,
             fusedOutput = true, gainmap = true) is AmazeCapability.Supported)
@@ -25,27 +27,26 @@ class AmazePipelineContractTest {
     fun chromaStencilKeepsRawTherapeeP1InNortheastQuadrant() {
         val shader = File("src/main/assets/shaders/amaze/chroma.glsl").readText()
         assertTrue(shader.contains(
-            "wtne * (1.325 * DC(s + ivec2(1, -1)) - 0.175 * DC(s + ivec2(3, -3))"
+            "wtne * (1.325 * dp1m1 - 0.175 * dp3m3"
         ))
         assertTrue(shader.contains(
-            "wtsw * (1.325 * DC(s + ivec2(-1, 1)) - 0.175 * DC(s + ivec2(-3, 3))"
+            "wtsw * (1.325 * dm1p1 - 0.175 * dm3p3"
         ))
         assertTrue(shader.contains(
-            "abs(DC(s + ivec2(1, 1)) - DC(s + ivec2(-3, 3)))"
+            "float dm3p3 = DC(s + ivec2(-3, 3), cb);"
         ))
     }
 
     @Test
     fun rbVarianceUsesTheCorrectCenterForBothBayerRowPhases() {
         val shader = File("src/main/assets/shaders/amaze/rbpm.glsl").readText()
-        assertTrue(shader.contains("float c1 = Cf(q + ivec2(1, 0));"))
-        assertTrue(shader.contains("float c0 = Cf(q);"))
-        assertTrue(shader.contains(
-            "sq1p = sq(c0 - Cf(q + ivec2(-1, 1))) + sq(c0 - Cf(q + ivec2(1, -1)));"
-        ))
-        assertTrue(shader.contains(
-            "sq1m = sq(c0 - Cf(q + ivec2(-1, -1))) + sq(c0 - Cf(q + ivec2(1, 1)));"
-        ))
+        // Every variance term is centred on a green site: odd offset parity from the R/B site,
+        // identical for both row phases.
+        val terms = Regex("""sq\(g([mp])(\d)([mp])(\d) - """).findAll(shader).toList()
+        assertEquals(48, terms.size)
+        assertTrue(terms.all { (it.groupValues[2].toInt() + it.groupValues[4].toInt()) % 2 == 1 })
+        assertTrue(shader.contains("(sq(gp1p0 - gp0p1) + sq(gp1p0 - gp2m1))"))
+        assertTrue(shader.contains("(sq(gp1p0 - gp0m1) + sq(gp1p0 - gp2p1))"))
     }
 
     @Test
@@ -103,7 +104,7 @@ class AmazePipelineContractTest {
             AmazePipelineContract.uniformsFor("amaze/hvwt.glsl"))
         assertTrue(AmazeUniform.CFA_PHASE in
             AmazePipelineContract.uniformsFor("amaze/final.glsl"))
-        assertTrue(AmazePipelineContract.passes.all { AmazeUniform.SIZE in it.uniforms })
+        assertTrue(AmazePipelineContract.passes.dropLast(1).all { AmazeUniform.SIZE in it.uniforms })
     }
 
     @Test
@@ -132,7 +133,7 @@ class AmazePipelineContractTest {
     fun memoryBudgetIncludesFixedScratchAndFullFrameTextures() {
         // RawTherapee's AMaZE intermediates are float. RawLens therefore uses RGBA32F vector
         // scratch rather than PhotonCamera's lower-precision RGBA16F adaptation.
-        val scratch = 1120L * 1120L * (6L * 4L + 10L * 16L)
+        val scratch = 1120L * 1120L * (4L + 4L * 16L + 3L * 2L + 2L * 8L)
         val fullFrame = 8000L * 6000L * 12L
         assertEquals(scratch + fullFrame, AmazePipelineContract.estimatedGpuBytes(8000, 6000))
     }

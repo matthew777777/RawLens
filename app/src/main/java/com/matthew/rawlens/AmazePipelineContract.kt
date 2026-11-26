@@ -44,8 +44,8 @@ object AmazePipelineContract {
     const val BORDER = 32
     const val TILE = 1024
     const val WINDOW = TILE + 2 * BORDER + 2 * PAD
-    const val SCALAR_SCRATCH_TEXTURES = 6
-    const val VECTOR_SCRATCH_TEXTURES = 10
+    /** Live scratch per window pixel: cfa, 4 full vec4 slots, 3 half-width scalars, 2 half-width vec4. */
+    const val SCRATCH_BYTES_PER_PIXEL = 4 + 4 * 16 + 3 * 4 / 2 + 2 * 16 / 2
 
     val passes = listOf(
         AmazePass("amaze/pad.glsl", listOf("input"), listOf("cfa"), uniforms(AmazeUniform.SIZE)),
@@ -54,11 +54,11 @@ object AmazePipelineContract {
             uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE, AmazeUniform.CLIP_POINT)
         ),
         AmazePass(
-            "amaze/bound.glsl", listOf("cdA", "grad"), listOf("cd2"),
+            "amaze/bound.glsl", listOf("cdA", "cdB", "cfa"), listOf("cd2"),
             uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE, AmazeUniform.CLIP_POINT)
         ),
         AmazePass(
-            "amaze/hvwt.glsl", listOf("cd2", "cdB", "grad"), listOf("hvwt", "nyqTest"),
+            "amaze/hvwt.glsl", listOf("cd2", "grad"), listOf("hvwt", "nyqTest"),
             uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
@@ -66,27 +66,27 @@ object AmazePipelineContract {
             uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
-            "amaze/area.glsl", listOf("grad", "nyq2", "hvwt"), listOf("hvwt2"),
+            "amaze/area.glsl", listOf("cfa", "nyq2", "hvwt"), listOf("hvwt2"),
             uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
-            "amaze/green.glsl", listOf("grad", "hvwt2", "cd2", "nyq2"),
+            "amaze/green.glsl", listOf("cfa", "hvwt2", "cd2", "nyq2"),
             listOf("greenD", "hvwt3"), uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
-            "amaze/nyqref.glsl", listOf("grad", "greenD", "cd2", "nyq2"),
+            "amaze/nyqref.glsl", listOf("cfa", "greenD", "cd2", "nyq2"),
             listOf("greenD2"), uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
-            "amaze/rbpm.glsl", listOf("grad"), listOf("rbpm"),
+            "amaze/rbpm.glsl", listOf("cfa"), listOf("rbpm"),
             uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE, AmazeUniform.CLIP_POINT)
         ),
         AmazePass(
-            "amaze/pmrbint.glsl", listOf("grad", "rbpm"), listOf("pmrbint"),
+            "amaze/pmrbint.glsl", listOf("cfa", "rbpm"), listOf("pmrbint"),
             uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
-            "amaze/gcorr.glsl", listOf("pmrbint", "greenD2", "hvwt3", "grad"),
+            "amaze/gcorr.glsl", listOf("pmrbint", "greenD2", "hvwt3", "grad", "cfa"),
             listOf("greenD3"),
             uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE, AmazeUniform.CLIP_POINT)
         ),
@@ -96,7 +96,7 @@ object AmazePipelineContract {
         ),
         AmazePass(
             "amaze/final.glsl", listOf("dgrb01", "hvwt3"), listOf("output"),
-            uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
+            uniforms(AmazeUniform.CFA_PHASE)
         )
     )
 
@@ -115,10 +115,7 @@ object AmazePipelineContract {
     fun estimatedGpuBytes(width: Int, height: Int, fusedOutput: Boolean = false, gainmap: Boolean = false): Long {
         require(width > 0 && height > 0)
         val windowPixels = WINDOW.toLong() * WINDOW
-        val scratch = windowPixels * (
-            SCALAR_SCRATCH_TEXTURES * AmazeTextureFormat.R32F.bytesPerPixel +
-                VECTOR_SCRATCH_TEXTURES * AmazeTextureFormat.RGBA32F.bytesPerPixel
-            )
+        val scratch = windowPixels * SCRATCH_BYTES_PER_PIXEL
         val fullFrame = width.toLong() * height * (
             AmazeTextureFormat.R32F.bytesPerPixel +
                 (if (fusedOutput) AmazeTextureFormat.RGBA8 else AmazeTextureFormat.RGBA16F).bytesPerPixel

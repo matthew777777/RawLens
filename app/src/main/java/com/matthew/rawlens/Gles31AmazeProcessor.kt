@@ -84,12 +84,13 @@ class Gles31AmazeProcessor(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
         ),
         cameraLinear: Boolean = false,
+        luma: RawLumaResidual? = null,
         consume: (AmazeGpuOutput) -> T
     ): T {
         AmazePipelineContract.validateInput(input)
         return processInput(
             CpuAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized,
-            fusedOutputSettings, whiteWindow, cameraLinear, consume
+            fusedOutputSettings, whiteWindow, cameraLinear, luma, consume
         )
     }
 
@@ -104,6 +105,7 @@ class Gles31AmazeProcessor(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
         ),
         cameraLinear: Boolean = false,
+        luma: RawLumaResidual? = null,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(input.width >= 4 && input.height >= 4 && input.width % 2 == 0 && input.height % 2 == 0) {
@@ -111,7 +113,7 @@ class Gles31AmazeProcessor(
         }
         return processInput(
             DirectRawAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized,
-            fusedOutputSettings, whiteWindow, cameraLinear, consume
+            fusedOutputSettings, whiteWindow, cameraLinear, luma, consume
         )
     }
 
@@ -142,6 +144,7 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
         cameraLinear: Boolean = false,
+        luma: RawLumaResidual? = null,
         whiteWindow: FloatArray = floatArrayOf(0.70f, 0.99f),
         consume: (AmazeGpuOutput) -> T
     ): T {
@@ -178,7 +181,11 @@ class Gles31AmazeProcessor(
             cameraToAcescgColumnMajor = cameraToAcescgColumnMajor,
             cameraWhiteNormalized = cameraWhiteNormalized,
             cameraLinear = cameraLinear,
+            luma = luma,
             whiteWindow = whiteWindow,
+            // Raw codes reach RCD unshaded: the tail applies the lens map (WYSIWYG with
+            // the viewfinder and the exposure meter, which both shade).
+            rgbLens = input.lensShading?.let { RgbLensShading(it, input.sensorCropLeft, input.sensorCropTop) },
             consume = consume
         )
     }
@@ -192,6 +199,7 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
         cameraLinear: Boolean = false,
+        luma: RawLumaResidual? = null,
         whiteWindow: FloatArray = floatArrayOf(0.70f, 0.99f),
         consume: (AmazeGpuOutput) -> T
     ): T {
@@ -217,6 +225,7 @@ class Gles31AmazeProcessor(
             cameraToAcescgColumnMajor = cameraToAcescgColumnMajor,
             cameraWhiteNormalized = cameraWhiteNormalized,
             cameraLinear = cameraLinear,
+            luma = luma,
             whiteWindow = whiteWindow,
             consume = consume
         )
@@ -236,8 +245,10 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
         cameraLinear: Boolean,
+        luma: RawLumaResidual?,
         whiteWindow: FloatArray,
         floatCfa: FloatArray? = null,
+        rgbLens: RgbLensShading? = null,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(cameraToAcescgColumnMajor.size == 9 && cameraToAcescgColumnMajor.all(Float::isFinite)) {
@@ -288,7 +299,7 @@ class Gles31AmazeProcessor(
                 }
                 return rcdTail(
                     rgb, width, height, cameraToAcescgColumnMajor, cameraWhiteNormalized,
-                    cameraLinear, whiteWindow, consume
+                    cameraLinear, luma, whiteWindow, rgbLens, consume
                 )
             } finally {
                 // rgb/scratch are reused across photos (rcdOutputsFor).
@@ -371,7 +382,9 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
         cameraLinear: Boolean,
+        luma: RawLumaResidual?,
         whiteWindow: FloatArray,
+        rgbLens: RgbLensShading? = null,
         consume: (AmazeGpuOutput) -> T
     ): T {
         val session = processingSession()
@@ -424,6 +437,7 @@ class Gles31AmazeProcessor(
                             }, if (cameraLinear) 1 else 0
                         )
                         bindChromaCleanup(program)
+                        withLuma(session, program, width, height, luma, rgbLens) {
                         GLES31.glBindImageTexture(
                             0, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
                         )
@@ -433,6 +447,7 @@ class Gles31AmazeProcessor(
                         GLES31.glMemoryBarrier(
                             GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
                         )
+                        }
                         checkGl("RCD tail dispatch")
                         consume(
                             AmazeGpuOutput(
@@ -542,6 +557,7 @@ class Gles31AmazeProcessor(
                         }, if (cameraLinear) 1 else 0
                     )
                     bindChromaCleanup(program)
+                    withLuma(session, program, width, height, null) {
                     GLES31.glBindImageTexture(
                         0, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
                     )
@@ -551,6 +567,7 @@ class Gles31AmazeProcessor(
                     GLES31.glMemoryBarrier(
                         GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
                     )
+                    }
                     checkGl("Sharp tail dispatch")
                     consume(
                         AmazeGpuOutput(
@@ -570,8 +587,8 @@ class Gles31AmazeProcessor(
     /**
      * Reads an RGBA16F output texture back to a direct RGBA16F ByteBuffer
      * (W*H*8 bytes, texture row order: image top row first, matching the
-     * demosaic output layout, so re-upload round-trips exactly). Wavelet
-     * stage input. With nativeOwned=true the caller must free the returned buffer
+     * demosaic output layout, so re-upload round-trips exactly). Capture
+     * sharpening input. With nativeOwned=true the caller must free the returned buffer
      * with HdrPlusVulkan.freeBuffer after use. Must run
      * on this session's worker while its EGL context is current (i.e. from
      * a [process]/[processRaw]/[processRcdRaw]/[processRcdCfa] consume
@@ -637,7 +654,7 @@ class Gles31AmazeProcessor(
     /**
      * Uploads a camera-linear RGBA16F buffer and converts it to scene-linear
      * ACEScg with [cameraToAcescgColumnMajor] (the same folded matrix the
-     * demosaic finals use). Wavelet tail: hands an ACEScg [AmazeGpuOutput]
+     * demosaic finals use), adding the RAW denoiser's [luma] grain. Hands an ACEScg [AmazeGpuOutput]
      * texture to [consume], released afterwards. Same worker/context
      * confinement as [readbackHalfFloat].
      */
@@ -646,6 +663,7 @@ class Gles31AmazeProcessor(
         width: Int,
         height: Int,
         cameraToAcescgColumnMajor: FloatArray,
+        luma: RawLumaResidual? = null,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(cameraToAcescgColumnMajor.size == 9) { "Camera-to-ACEScg matrix needs 9 values" }
@@ -657,7 +675,7 @@ class Gles31AmazeProcessor(
         val output = session.textures.acquire(width, height, GLES30.GL_RGBA16F)
         try {
             input.uploadRgba16f(camera)
-            dispatchToAcescg(session, input.id, output, width, height, cameraToAcescgColumnMajor)
+            dispatchToAcescg(session, input.id, output, width, height, cameraToAcescgColumnMajor, luma)
             return consume(
                 AmazeGpuOutput(output.id, width, height, AmazeTextureFormat.RGBA16F)
             )
@@ -678,42 +696,9 @@ class Gles31AmazeProcessor(
         val context = EGL14.eglGetCurrentContext()
         try {
             processingSession().egl.makeCurrent()
-            return transformCameraLinear(camera, width, height, matrix, consume)
+            return transformCameraLinear(camera, width, height, matrix, null, consume)
         } finally {
             check(EGL14.eglMakeCurrent(display, draw, read, context)) { "Could not restore merged EGL context" }
-        }
-    }
-
-    /**
-     * Converts a camera-linear RGBA16F texture already on the GPU to
-     * scene-linear ACEScg (same matrix as [transformCameraLinear], no
-     * readback/upload). Wavelet readback-failure path. Same worker/context
-     * confinement as [readbackHalfFloat].
-     */
-    fun <T> transformCameraTexture(
-        camera: AmazeGpuOutput,
-        cameraToAcescgColumnMajor: FloatArray,
-        consume: (AmazeGpuOutput) -> T
-    ): T {
-        require(camera.internalFormat == AmazeTextureFormat.RGBA16F) {
-            "Camera-linear transform needs an RGBA16F texture"
-        }
-        require(cameraToAcescgColumnMajor.size == 9) { "Camera-to-ACEScg matrix needs 9 values" }
-        val session = processingSession()
-        check(processingThread === Thread.currentThread()) {
-            "Camera-linear transform must stay on the AMaZE worker thread"
-        }
-        val output = session.textures.acquire(camera.width, camera.height, GLES30.GL_RGBA16F)
-        try {
-            dispatchToAcescg(
-                session, camera.textureId, output, camera.width, camera.height,
-                cameraToAcescgColumnMajor
-            )
-            return consume(
-                AmazeGpuOutput(output.id, camera.width, camera.height, AmazeTextureFormat.RGBA16F)
-            )
-        } finally {
-            session.textures.release(output)
         }
     }
 
@@ -740,7 +725,8 @@ class Gles31AmazeProcessor(
         output: GlTexture,
         width: Int,
         height: Int,
-        cameraToAcescgColumnMajor: FloatArray
+        cameraToAcescgColumnMajor: FloatArray,
+        luma: RawLumaResidual?
     ) {
         val program = session.programs.get("amaze/to_acescg.glsl")
         GLES31.glUseProgram(program)
@@ -756,21 +742,70 @@ class Gles31AmazeProcessor(
                 check(it >= 0) { "to_acescg uniform 'u_camera_to_acescg' is missing" }
             }, 1, false, matrix
         )
-        GLES31.glBindImageTexture(
-            0, inputTextureId, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F
-        )
-        GLES31.glBindImageTexture(
-            1, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
-        )
-        GLES31.glDispatchCompute(
-            (width + AmazePipelineContract.LOCAL_SIZE_X - 1) / AmazePipelineContract.LOCAL_SIZE_X,
-            (height + AmazePipelineContract.LOCAL_SIZE_Y - 1) / AmazePipelineContract.LOCAL_SIZE_Y,
-            1
-        )
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
-        )
-        checkGl("camera-linear to ACEScg")
+        withLuma(session, program, width, height, luma) {
+            GLES31.glBindImageTexture(
+                0, inputTextureId, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F
+            )
+            GLES31.glBindImageTexture(
+                1, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
+            )
+            GLES31.glDispatchCompute(
+                (width + AmazePipelineContract.LOCAL_SIZE_X - 1) / AmazePipelineContract.LOCAL_SIZE_X,
+                (height + AmazePipelineContract.LOCAL_SIZE_Y - 1) / AmazePipelineContract.LOCAL_SIZE_Y,
+                1
+            )
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
+            )
+            checkGl("camera-linear to ACEScg")
+        }
+    }
+
+    /** Binds shaders/amaze/luma.glsl of [program] (texture units 2 and 3) around [dispatch]. */
+    private inline fun withLuma(
+        session: ProcessingSession, program: Int, width: Int, height: Int, luma: RawLumaResidual?,
+        rgbLens: RgbLensShading? = null, dispatch: () -> Unit
+    ) {
+        val uniforms = LumaUniforms(luma, rgbLens)
+        // Texture creation binds to the active unit: never the caller's unit 0.
+        GLES31.glActiveTexture(GLES31.GL_TEXTURE2)
+        val residual = session.textures.acquire(if (luma != null) width else 1, if (luma != null) height else 1, GLES30.GL_R16F)
+        val gains = session.textures.acquire(uniforms.lens?.columns ?: 1, uniforms.lens?.rows ?: 1, GLES30.GL_RGBA32F)
+        try {
+            if (luma != null) residual.uploadR16f(luma.values, luma.stride, luma.cropLeft, luma.cropTop)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, residual.id)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE3)
+            gains.uploadRgba32f(uniforms.gains, session.uploads)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
+            GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "u_luma"), 2)
+            GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "u_lens"), 3)
+            uniforms.bind(program)
+            dispatch()
+        } finally {
+            session.textures.release(gains)
+            session.textures.release(residual)
+        }
+    }
+
+    /** Scalar uniforms of shaders/amaze/luma.glsl. */
+    private class LumaUniforms(private val luma: RawLumaResidual?, private val rgbLens: RgbLensShading? = null) {
+        private val rgbModel = rgbLens?.model?.takeUnless { it.alreadyApplied }
+        // A shaded RCD RGB and its luma residual share one map (as AMaZE shades both).
+        val lens = rgbModel ?: luma?.lensShading?.takeUnless { it.alreadyApplied }
+        val gains: FloatArray get() = lens?.gains ?: floatArrayOf(1f, 1f, 1f, 1f)
+        fun bind(program: Int) {
+            fun at(name: String) = GLES31.glGetUniformLocation(program, name)
+            GLES31.glUniform1i(at("u_apply_luma"), if (luma != null) 1 else 0)
+            GLES31.glUniform1i(at("u_apply_lens"), if (lens != null) 1 else 0)
+            GLES31.glUniform1i(at("u_rgb_lens"), if (rgbModel != null) 1 else 0)
+            val wb = luma?.wb ?: floatArrayOf(1f, 1f, 1f)
+            GLES31.glUniform3f(at("u_inv_wb"), 1f / wb[0], 1f / wb[1], 1f / wb[2])
+            GLES31.glUniform2i(at("u_sensor_origin"),
+                if (rgbModel != null) rgbLens!!.sensorLeft else luma?.sensorCropLeft ?: 0,
+                if (rgbModel != null) rgbLens!!.sensorTop else luma?.sensorCropTop ?: 0)
+            val active = lens?.activeArray ?: IntRectSnapshot(0, 0, 1, 1)
+            GLES31.glUniform4i(at("u_active"), active.left, active.top, active.right, active.bottom)
+        }
     }
 
     /** Idempotent Vulkan RCD bring-up (viewfinder usually already owns the device). */
@@ -805,6 +840,7 @@ class Gles31AmazeProcessor(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
         ),
         cameraLinear: Boolean = false,
+        luma: RawLumaResidual? = null,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(clipPoint.isFinite() && clipPoint > 0f) { "AMaZE clip point must be finite and positive" }
@@ -837,7 +873,8 @@ class Gles31AmazeProcessor(
                 require(quadBytes <= maxGpuBytes) { "Quad-Bayer needs $quadBytes GPU bytes, above budget $maxGpuBytes" }
             }
             val capability = AmazePipelineContract.evaluate(
-                queryLimits(), input.width, input.height, maxGpuBytes,
+                queryLimits(), input.width, input.height,
+                maxGpuBytes - if (luma != null) input.width.toLong() * input.height * 2L else 0L,
                 fusedOutput = fusedOutputSettings != null, gainmap = fusedOutputSettings?.ultraHdr == true
             )
             if (capability is AmazeCapability.Unsupported) {
@@ -854,6 +891,7 @@ class Gles31AmazeProcessor(
                 fusedOutputSettings?.resolvedForPlatform(),
                 whiteWindow,
                 cameraLinear,
+                luma.takeUnless { cameraLinear },
                 session.programs,
                 session.textures,
                 session.uploads,
@@ -965,6 +1003,7 @@ class Gles31AmazeProcessor(
         private val fusedSettings: JpegOutputSettings?,
         private val whiteWindow: FloatArray,
         private val cameraLinear: Boolean,
+        private val luma: RawLumaResidual?,
         private val programs: ProgramCache,
         private val texturePool: TexturePool,
         private val uploadBuffers: UploadBuffers,
@@ -1011,6 +1050,11 @@ class Gles31AmazeProcessor(
                 is DirectRawAmazeInput -> preprocessRaw(input.raw, it)
             }
         }
+        private val lumaUniforms = LumaUniforms(luma)
+        private val lumaTexture = texture(if (luma != null) input.width else 1, if (luma != null) input.height else 1,
+            GLES30.GL_R16F).also { t -> luma?.let { t.uploadR16f(it.values, it.stride, it.cropLeft, it.cropTop) } }
+        private val lumaLens = texture(lumaUniforms.lens?.columns ?: 1, lumaUniforms.lens?.rows ?: 1, GLES30.GL_RGBA32F)
+            .also { it.uploadRgba32f(lumaUniforms.gains, uploadBuffers) }
         private val rawOutput = if (fusedSettings == null) {
             texture(input.width, input.height, GLES30.GL_RGBA16F)
         } else null
@@ -1022,22 +1066,29 @@ class Gles31AmazeProcessor(
         } else null
         val fusedOutput: Boolean get() = encodedOutput != null
         val output: GlTexture get() = encodedOutput ?: requireNotNull(rawOutput)
+        // Scratch by lifetime, not by name: a slot is rewritten once its last reader ran. R/B-only
+        // planes live at half width (the C++ half grid).
         private val cfa by lazy { scalar() }
         private val grad by lazy { vector() }
-        private val cdA by lazy { vector() }
-        private val cdB by lazy { vector() }
-        private val cd2 by lazy { vector() }
-        private val hvwt by lazy { scalar() }
-        private val nyqTest by lazy { scalar() }
-        private val nyq2 by lazy { scalar() }
-        private val hvwt2 by lazy { scalar() }
-        private val hvwt3 by lazy { scalar() }
-        private val greenD by lazy { vector() }
-        private val greenD2 by lazy { vector() }
-        private val rbpm by lazy { vector() }
-        private val pmrbint by lazy { vector() }
-        private val greenD3 by lazy { vector() }
-        private val dgrb01 by lazy { vector() }
+        private val slotB by lazy { vector() }
+        private val slotC by lazy { vector() }
+        private val slotD by lazy { vector() }
+        private val half0 by lazy { halfScalar() }
+        private val half1 by lazy { halfScalar() }
+        private val nyq2 by lazy { halfScalar() }
+        private val rbpm by lazy { halfVector() }
+        private val pmrbint by lazy { halfVector() }
+        private val cdA get() = slotB       // gradcd -> bound
+        private val cdB get() = slotC       // gradcd -> bound
+        private val cd2 get() = slotD       // bound -> nyqref
+        private val greenD get() = slotB    // green -> nyqref
+        private val greenD2 get() = slotC   // nyqref -> gcorr
+        private val greenD3 get() = slotB   // gcorr -> chroma
+        private val dgrb01 get() = slotC    // chroma -> final
+        private val hvwt get() = half0      // hvwt -> area
+        private val nyqTest get() = half1   // hvwt -> nyq2
+        private val hvwt2 get() = half1     // area -> green
+        private val hvwt3 get() = half0     // green -> final
         private fun preprocessRaw(raw: GpuRawAmazeInput, destination: GlTexture) {
             val codes = texture(raw.width, raw.height, GLES30.GL_R16UI)
             codes.uploadRaw16(raw.buffer, raw.layout, raw.crop)
@@ -1124,14 +1175,11 @@ class Gles31AmazeProcessor(
          * order): texture allocation binds the new texture to the active sampler unit, so it must
          * never interleave with passes that have samplers bound. Deferred sampler binding in
          * [BoundProgram] already makes mid-pass allocation harmless; this additionally keeps the
-         * ~230 MB commit out of the dispatch stream. Pool hits make it free on warm frames, and the
+         * ~110 MB commit out of the dispatch stream. Pool hits make it free on warm frames, and the
          * Quad-Bayer graph never calls it, so it still allocates no AMaZE scratch.
          */
         private fun prepareTileScratch() {
-            arrayOf(
-                cfa, grad, cdA, cdB, cd2, hvwt, nyqTest, nyq2, hvwt2, hvwt3,
-                greenD, greenD2, rbpm, pmrbint, greenD3, dgrb01
-            )
+            arrayOf(cfa, grad, slotB, slotC, slotD, half0, half1, nyq2, rbpm, pmrbint)
         }
 
         private fun runTile(originX: Int, originY: Int, source: GlTexture) {
@@ -1157,44 +1205,45 @@ class Gles31AmazeProcessor(
                 image(2, cdB, GLES30.GL_RGBA32F)
                 dispatch(window, window)
             }
+            val half = window / 2
             pass("amaze/bound.glsl") {
-                sampler("u_cda", cdA); sampler("u_grad", grad)
+                sampler("u_cda", cdA); sampler("u_cfa", cfa); sampler("u_cdb", cdB)
                 image(0, cd2, GLES30.GL_RGBA32F); dispatch(window, window)
             }
             pass("amaze/hvwt.glsl") {
-                sampler("u_cd2", cd2); sampler("u_cdb", cdB); sampler("u_grad", grad)
+                sampler("u_cd2", cd2); sampler("u_grad", grad)
                 image(0, hvwt, GLES30.GL_R32F); image(1, nyqTest, GLES30.GL_R32F)
-                dispatch(window, window)
+                dispatch(half, window)
             }
             pass("amaze/nyq2.glsl") {
                 sampler("u_nyqtest", nyqTest); image(0, nyq2, GLES30.GL_R32F)
-                dispatch(window, window)
+                dispatch(half, window)
             }
             pass("amaze/area.glsl") {
-                sampler("u_grad", grad); sampler("u_nyq2", nyq2); sampler("u_hvwt", hvwt)
-                image(0, hvwt2, GLES30.GL_R32F); dispatch(window, window)
+                sampler("u_cfa", cfa); sampler("u_nyq2", nyq2); sampler("u_hvwt", hvwt)
+                image(0, hvwt2, GLES30.GL_R32F); dispatch(half, window)
             }
             pass("amaze/green.glsl") {
-                sampler("u_grad", grad); sampler("u_hvwt", hvwt2); sampler("u_cd2", cd2)
+                sampler("u_cfa", cfa); sampler("u_hvwt", hvwt2); sampler("u_cd2", cd2)
                 sampler("u_nyq2", nyq2); image(0, greenD, GLES30.GL_RGBA32F)
                 image(1, hvwt3, GLES30.GL_R32F); dispatch(window, window)
             }
             pass("amaze/nyqref.glsl") {
-                sampler("u_grad", grad); sampler("u_gd", greenD); sampler("u_cd2", cd2)
+                sampler("u_cfa", cfa); sampler("u_gd", greenD); sampler("u_cd2", cd2)
                 sampler("u_nyq2", nyq2); image(0, greenD2, GLES30.GL_RGBA32F)
                 dispatch(window, window)
             }
             pass("amaze/rbpm.glsl") {
-                sampler("u_grad", grad); image(0, rbpm, GLES30.GL_RGBA32F)
-                dispatch(window, window)
+                sampler("u_cfa", cfa); image(0, rbpm, GLES30.GL_RGBA32F)
+                dispatch(half, window)
             }
             pass("amaze/pmrbint.glsl") {
-                sampler("u_grad", grad); sampler("u_rbpm", rbpm)
-                image(0, pmrbint, GLES30.GL_RGBA32F); dispatch(window, window)
+                sampler("u_cfa", cfa); sampler("u_rbpm", rbpm)
+                image(0, pmrbint, GLES30.GL_RGBA32F); dispatch(half, window)
             }
             pass("amaze/gcorr.glsl") {
-                sampler("u_pmrbint", pmrbint); sampler("u_gd2", greenD2)
-                sampler("u_hvwt", hvwt3); sampler("u_grad", grad)
+                sampler("u_pmrbint", pmrbint); sampler("u_gd2", greenD2); sampler("u_hvwt", hvwt3)
+                sampler("u_grad", grad); sampler("u_cfa", cfa)
                 image(0, greenD3, GLES30.GL_RGBA32F); dispatch(window, window)
             }
             pass("amaze/chroma.glsl") {
@@ -1203,7 +1252,6 @@ class Gles31AmazeProcessor(
             }
             val finalAsset = if (fusedSettings == null) "amaze/final.glsl" else "amaze/final_display.glsl"
             val finalProgram = BoundProgram(programs.get(finalAsset)).apply {
-                ivec2("u_size", window, window)
                 ivec4("u_fc", cfaUniform)
                 mat3("u_camera_to_acescg", demosaicCameraToAcescg)
                 vec3("u_camera_white_normalized", demosaicCameraWhiteNormalized)
@@ -1225,6 +1273,8 @@ class Gles31AmazeProcessor(
                 ivec2("u_outsize", tileWidth, tileHeight)
                 ivec2("u_outoff", originX, originY)
                 sampler("u_chroma", dgrb01); sampler("u_hvwt", hvwt3)
+                sampler("u_luma", lumaTexture); sampler("u_lens", lumaLens)
+                lumaUniforms.bind(id)
             }
             if (fusedSettings == null) {
                 finalProgram.image(0, requireNotNull(rawOutput), GLES30.GL_RGBA16F)
@@ -1295,6 +1345,8 @@ class Gles31AmazeProcessor(
 
         private fun scalar() = texture(window, window, GLES30.GL_R32F)
         private fun vector() = texture(window, window, GLES30.GL_RGBA32F)
+        private fun halfScalar() = texture(window / 2, window, GLES30.GL_R32F)
+        private fun halfVector() = texture(window / 2, window, GLES30.GL_RGBA32F)
         private fun texture(width: Int, height: Int, format: Int): GlTexture =
             texturePool.acquire(width, height, format).also(textures::add)
 
@@ -1388,6 +1440,7 @@ class Gles31AmazeProcessor(
         fun bindAces2(id: Int, mode: Int, look: FloatArray) = aces2.bind(id, mode, look)
         private val programs = LinkedHashMap<String, Int>()
         private val common by lazy { read("shaders/utils/import_amaze.glsl") }
+        private val lumaCommon by lazy { read("shaders/amaze/luma.glsl") }
         private val cleanupCommon by lazy { read("shaders/amaze/cleanup.glsl") }
         private val agxOutputCommon by lazy {
             val source = read("shaders/display/agx_srgb8.glsl").replace("// PHOTO_CUBE", PhotoLutGl.glsl)
@@ -1403,6 +1456,7 @@ class Gles31AmazeProcessor(
                 .replace("#import quad", if ("quad/" in asset) read("shaders/quad/common.glsl") else "")
                 .replace("#import agx_output", agxOutputCommon)
                 .replace("#import cleanup", cleanupCommon)
+                .replace("#import luma", lumaCommon)
             val source = if (body.startsWith("#version")) body else "#version 310 es\n$body"
             compile(if (slicedDispatch) GpuScheduling.shaderSource(source) else source, asset)
         }.also(GLES31::glUseProgram)
@@ -1458,6 +1512,7 @@ class Gles31AmazeProcessor(
             GLES30.GL_RGBA16F -> 8L
             GLES30.GL_RGBA32F -> 16L
             GLES30.GL_R16UI -> 2L
+            GLES30.GL_R16F -> 2L
             GLES30.GL_RGBA8 -> 4L
             else -> error("Unsupported pooled texture format 0x${internalFormat.toString(16)}")
         }
@@ -1501,6 +1556,25 @@ class Gles31AmazeProcessor(
                 GLES31.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
             }
             checkGl("RGBA16F upload")
+        }
+
+        /** Crop of a half-float plane with [stride] values per row. */
+        fun uploadR16f(source: ByteBuffer, stride: Int, left: Int, top: Int) {
+            require(internalFormat == GLES30.GL_R16F && left >= 0 && top >= 0 && left + width <= stride)
+            val input = source.duplicate().order(ByteOrder.nativeOrder())
+            input.position((top * stride + left) * 2)
+            require(input.remaining() >= ((height - 1) * stride + width) * 2) { "Luma residual is truncated" }
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, id)
+            GLES31.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
+            GLES31.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, stride)
+            try {
+                GLES31.glTexSubImage2D(GLES31.GL_TEXTURE_2D, 0, 0, 0, width, height,
+                    GLES30.GL_RED, GLES30.GL_HALF_FLOAT, input)
+            } finally {
+                GLES31.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
+                GLES31.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+            }
+            checkGl("luma residual upload")
         }
 
         fun uploadRgba32f(values: FloatArray, uploads: UploadBuffers) {
@@ -1571,7 +1645,8 @@ class Gles31AmazeProcessor(
         }
 
         fun release(texture: GlTexture) {
-            val fixedTileScratch = texture.width == AmazePipelineContract.WINDOW &&
+            val fixedTileScratch = (texture.width == AmazePipelineContract.WINDOW ||
+                texture.width == AmazePipelineContract.WINDOW / 2) &&
                 texture.height == AmazePipelineContract.WINDOW &&
                 (texture.internalFormat == GLES30.GL_R32F ||
                     texture.internalFormat == GLES30.GL_RGBA32F)
@@ -1714,3 +1789,5 @@ internal object AmazeProfiler {
         .joinToString("; ") { "${it.key} ${"%.0f".format(it.value)}ms x${counts[it.key]}" }
 }
 
+/** Lens-shading map applied to direct-RAW RCD output, with the crop's sensor origin. */
+internal class RgbLensShading(val model: LensShadingModel, val sensorLeft: Int, val sensorTop: Int)
