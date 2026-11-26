@@ -33,9 +33,12 @@ class PMRID(nn.Module):
         s.e4 = nn.Sequential(Enc(c3, c4, 2), Enc(c4, c4, 1), Enc(c4, c4, 1))
         s.d3 = Dec(c4, c3, c3); s.d2 = Dec(c3, c2, c2); s.d1 = Dec(c2, c1, c1); s.d0 = Dec(c1, c0, c0)
         s.out = nn.Conv2d(c0, 4, 3, 1, 1)
+        s.gain = 4.0
         nn.init.zeros_(s.out.weight); nn.init.zeros_(s.out.bias)
     def forward(s, u, sig):
         x0 = s.inc(torch.cat([u, sig], 1))
         x1 = s.e1(x0); x2 = s.e2(x1); x3 = s.e3(x2); x4 = s.e4(x3)
         y = s.d3(x4, x3); y = s.d2(y, x2); y = s.d1(y, x1); y = s.d0(y, x0)
-        return u + s.out(y)
+        # v3: residual in noise-sigma units: the correction is bounded by the noise at every ISO, and one fixed
+        # output range serves all ISOs (INT8). The NPU graph is out(y); scale + add stay in float.
+        return u + s.gain * sig * s.out(y)

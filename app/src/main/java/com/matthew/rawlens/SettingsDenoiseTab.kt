@@ -45,7 +45,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.File
 import java.util.Locale
 import android.os.Build
@@ -62,25 +61,139 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         sidecarSettingsStatus = null
         content.removeAllViews()
         var settings = denoiseSettings()
-        val aiSubordinate = ArrayList<View>()
 
-        content.addView(sectionTitle("JPEG cleanup"))
-        content.addView(p.kit.sectionDesc("RapidRAW reduces color noise and gently enhances detail in JPEG photos, including merged photos."))
+        content.addView(sectionTitle("RAW denoise"))
+        content.addView(p.kit.sectionDesc("Cleans noise from the RAW before demosaicing in JPEG and JXL photos. Strength is automatic, from the noise measured in each photo. Merged photos and DNGs are not changed."))
+        val denoiseViews = ArrayList<View>()
+        val textureViews = ArrayList<View>()
+        val classicViews = ArrayList<View>()   // shown for the classic engine
+        val networkViews = ArrayList<View>()   // shown for the network engine
+        val engineRow = p.kit.settingsButton("")
+        val modeRow = p.kit.settingsButton("")
+        val sliderRefresh = ArrayList<() -> Unit>()
+        // Luma and chroma are independent; texture only acts on denoised luma.
+        fun refreshRaw() {
+            val raw = settings.rawDenoise
+            val network = raw.engine == RawDenoiseSettings.Engine.NETWORK   // CLASSIC and CLASSIC_V1 share the controls
+            engineRow.text = "Denoiser: " + raw.engine.label
+            modeRow.text = "Remove: " + if (raw.luma <= 0f && raw.chroma <= 0f) "Nothing" else raw.mode.label
+            listOf(engineRow, modeRow).forEach { it.alpha = if (raw.enabled) 1f else 0.45f }
+            denoiseViews.forEach { it.isEnabled = settings.rawDenoise.enabled }
+            textureViews.forEach { it.isEnabled = settings.rawDenoise.enabled && settings.rawDenoise.luma > 0f }
+            classicViews.forEach { it.visibility = if (network) View.GONE else View.VISIBLE }
+            networkViews.forEach { it.visibility = if (network) View.VISIBLE else View.GONE }
+        }
         content.addView(SettingsSwitch(this).apply {
-            text = "RapidRAW cleanup"
-            isChecked = jpegOutputSettings().chromaCleanup.rapidRawPreprocessing
-            setOnCheckedChangeListener { button, enabled ->
-                val current = jpegOutputSettings()
-                if (enabled == current.chromaCleanup.rapidRawPreprocessing) return@setOnCheckedChangeListener
-                val next = current.copy(chromaCleanup = current.chromaCleanup.copy(rapidRawPreprocessing = enabled))
-                if (controller.setJpegOutputSettings(next)) {
-                    lensPreferences().edit().putBoolean(ChromaCleanup.KEY_RAPIDRAW, enabled).apply()
-                } else {
-                    setStatus("SETTINGS AFTER SAVES")
-                    button.isChecked = current.chromaCleanup.rapidRawPreprocessing
+            text = "Enable RAW denoise"
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = settings.rawDenoise.enabled
+            setOnCheckedChangeListener { button, value ->
+                val proposed = settings.copy(rawDenoise = settings.rawDenoise.copy(enabled = value))
+                if (persistDenoiseSettings(proposed)) {
+                    settings = proposed
+                    refreshRaw()
+                    if (value) controllerIfReady?.prewarmRawDenoise()
+                    if (value && proposed.rawDenoise.engine == RawDenoiseSettings.Engine.NETWORK) NetworkDenoiser.prewarm(context)
+                } else if (button.isChecked != settings.rawDenoise.enabled) {
+                    button.isChecked = settings.rawDenoise.enabled
                 }
             }
         })
+        engineRow.setOnClickListener {
+            val engines = RawDenoiseSettings.Engine.entries
+            p.kit.pick("Denoiser", engines.map { it.label }, settings.rawDenoise.engine.ordinal) { which ->
+                val proposed = settings.copy(rawDenoise = settings.rawDenoise.copy(engine = engines[which]))
+                if (persistDenoiseSettings(proposed)) {
+                    settings = proposed
+                    if (engines[which] == RawDenoiseSettings.Engine.NETWORK) NetworkDenoiser.prewarm(this)
+                    refreshRaw()
+                }
+            }
+        }
+        content.addView(engineRow)
+        denoiseViews += engineRow
+        modeRow.setOnClickListener {
+            val raw = settings.rawDenoise
+            val modes = RawDenoiseSettings.Mode.entries
+            // Both sliders off: nothing is marked, so every mode can be picked.
+            val current = if (raw.luma <= 0f && raw.chroma <= 0f) -1 else raw.mode.ordinal
+            p.kit.pick("Remove", modes.map { it.label }, current) { which ->
+                val proposed = settings.copy(rawDenoise = settings.rawDenoise.withMode(modes[which]))
+                if (persistDenoiseSettings(proposed)) {
+                    settings = proposed
+                    sliderRefresh.forEach { it() }
+                    refreshRaw()
+                }
+            }
+        }
+        content.addView(modeRow)
+        denoiseViews += modeRow
+        classicViews += modeRow
+        fun slider(
+            views: MutableList<View>, maxPct: Int, text: (Int) -> String,
+            get: (RawDenoiseSettings) -> Float, set: (RawDenoiseSettings, Float) -> RawDenoiseSettings
+        ) {
+            fun stored() = (get(settings.rawDenoise) * 100 + 0.5f).toInt()
+            var pct = stored()
+            val label = TextView(this).apply {
+                this.text = text(pct)
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(dp(12), dp(8), dp(12), 0)
+            }
+            val bar = SettingsSlider(this).apply {
+                max = maxPct / 5
+                progress = pct / 5
+                setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                    override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
+                        pct = progress * 5
+                        label.text = text(pct)
+                    }
+                    override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                    override fun onStopTrackingTouch(seekBar: SettingsSlider) {
+                        val proposed = settings.copy(rawDenoise = set(settings.rawDenoise, pct / 100f))
+                        if (persistDenoiseSettings(proposed)) {
+                            settings = proposed
+                        } else {
+                            pct = stored()
+                            seekBar.progress = pct / 5
+                            label.text = text(pct)
+                        }
+                        refreshRaw()
+                    }
+                })
+            }
+            sliderRefresh += {
+                pct = stored()
+                bar.progress = pct / 5
+                label.text = text(pct)
+            }
+            content.addView(label)
+            content.addView(bar)
+            views += label
+            views += bar
+        }
+        fun strength(name: String, pct: Int) = "$name: " + when (pct) { 0 -> "Off"; 100 -> "Auto"; else -> "$pct% of auto" }
+        fun description(body: String) = TextView(this).apply {
+            tag = "settings-description"
+            text = body
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 12f
+            setPadding(dp(12), dp(4), dp(12), dp(8))
+        }
+        val classicStart = content.childCount
+        slider(denoiseViews, 100, { strength("Luma denoise", it) }, { it.luma }, { r, v -> r.copy(luma = v) })
+        slider(denoiseViews, 100, { strength("Chroma denoise", it) }, { it.chroma }, { r, v -> r.copy(chroma = v) })
+        slider(textureViews, (RawDenoiseSettings.MAX_TEXTURE * 100).toInt(),
+            { "Texture: " + if (it == 100) "Auto" else "$it% of auto" }, { it.texture }, { r, v -> r.copy(texture = v) })
+        content.addView(description("Luma and chroma are independent: Luma only is fastest and leaves color noise in; Chroma only removes color noise and keeps all the grain. Texture sets how much fine grain and detail stays when luma is denoised. Classic v1 keeps all the grain at every scale, as the first version did; Classic thins the coarse grain in night shots."))
+        for (i in classicStart until content.childCount) classicViews += content.getChildAt(i)
+        val networkStart = content.childCount
+        slider(denoiseViews, 100, { "Network strength: " + if (it == 100) "Full" else if (it == 0) "Off" else "$it%" },
+            { it.networkStrength }, { r, v -> r.copy(networkStrength = v) })
+        content.addView(description("The network was trained on this phone's RAW photos and removes luma and color noise together, on the NPU. Lower strength blends the original back in. Phones without a supported NPU use the classic denoiser."))
+        for (i in networkStart until content.childCount) networkViews += content.getChildAt(i)
+        refreshRaw()
 
         content.addView(sectionTitle("Capture sharpening"))
         content.addView(p.kit.sectionDesc("Restores detail softened by the lens or demosaicing in developed photos."))
@@ -109,182 +222,6 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         content.addView(sharpToggle)
         content.addView(sharpChoices)
         refreshSharp()
-
-        content.addView(sectionTitle("Wavelet denoise"))
-        content.addView(p.kit.sectionDesc("Vulkan wavelets reduce luminance and color noise in JPEG photos after demosaicing. The DNG retains its original RAW data."))
-        val waveSubordinate = ArrayList<View>()
-        val waveMaster = SettingsSwitch(this).apply {
-            text = "Enable wavelet denoise"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = settings.wavelet.enabled
-            setOnCheckedChangeListener { button, value ->
-                val proposed = settings.copy(wavelet = settings.wavelet.copy(enabled = value))
-                if (persistDenoiseSettings(proposed)) {
-                    settings = proposed
-                    waveSubordinate.forEach { it.isEnabled = settings.wavelet.enabled }
-                    if (settings.wavelet.enabled) controllerIfReady?.prewarmWavelet()
-                } else if (button.isChecked != settings.wavelet.enabled) {
-                    button.isChecked = settings.wavelet.enabled
-                }
-            }
-        }
-        content.addView(waveMaster)
-        fun addWaveSlider(
-            title: String,
-            maximum: Int,
-            initial: Int,
-            format: (Int) -> String,
-            update: (WaveletSettings, Int) -> WaveletSettings
-        ) {
-            var selected = initial.coerceIn(0, maximum)
-            val label = TextView(this).apply {
-                text = "$title: ${format(selected)}"
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
-                setPadding(dp(12), dp(8), dp(12), 0)
-            }
-            content.addView(label)
-            val bar = SettingsSlider(this).apply {
-                max = maximum
-                progress = selected
-                setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
-                    override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
-                        selected = progress
-                        label.text = "$title: ${format(selected)}"
-                    }
-                    override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
-                    override fun onStopTrackingTouch(seekBar: SettingsSlider) {
-                        val proposed = settings.copy(wavelet = update(settings.wavelet, selected))
-                        if (persistDenoiseSettings(proposed)) {
-                            settings = proposed
-                            setStatus("WAVELET ${title.uppercase(Locale.US)} • ${format(selected)}")
-                        } else {
-                            selected = initial.coerceIn(0, maximum)
-                            seekBar.progress = selected
-                        }
-                    }
-                })
-            }
-            content.addView(bar)
-            waveSubordinate += label
-            waveSubordinate += bar
-        }
-        val waveAlgorithm = SettingsSwitch(this).apply {
-            text = "Use RawLens Wiener"
-            isChecked = settings.wavelet.algorithm == WaveletAlgorithm.RAWLENS
-            setOnCheckedChangeListener { button, enabled ->
-                val algorithm = if (enabled) WaveletAlgorithm.RAWLENS else WaveletAlgorithm.RAWR
-                val proposed = settings.copy(wavelet = settings.wavelet.copy(algorithm = algorithm))
-                if (persistDenoiseSettings(proposed)) {
-                    settings = proposed
-                    setStatus("WAVELET ALGORITHM • ${if (enabled) "RawLens Wiener" else "RAWR"}")
-                } else {
-                    button.isChecked = settings.wavelet.algorithm == WaveletAlgorithm.RAWLENS
-                }
-            }
-        }
-        content.addView(waveAlgorithm)
-        waveSubordinate += waveAlgorithm
-        addWaveSlider("Strength", 80, (settings.wavelet.strength * 10 + 0.5f).toInt(),
-            { "%.1f".format(Locale.US, it / 10f) }) { s, v -> s.copy(strength = v / 10f) }
-        addWaveSlider("Detail", 36, (settings.wavelet.detail * 20 + 0.5f).toInt(),
-            { "%.2f".format(Locale.US, it / 20f) }) { s, v -> s.copy(detail = v / 20f) }
-        addWaveSlider("Luma", 20, (settings.wavelet.luma * 20 + 0.5f).toInt(),
-            { "%.2f".format(Locale.US, it / 20f) }) { s, v -> s.copy(luma = v / 20f) }
-        addWaveSlider("Grain", 20, (settings.wavelet.grain * 20 + 0.5f).toInt(),
-            { "%.2f".format(Locale.US, it / 20f) }) { s, v -> s.copy(grain = v / 20f) }
-        addWaveSlider("Scales", 6, settings.wavelet.maxScale - 1,
-            { val scales = it + 1; if (scales == 1) "1 scale" else "$scales scales" }
-        ) { s, v -> s.copy(maxScale = v + 1) }
-        content.addView(TextView(this).apply {
-            tag = "settings-description"
-            text = "RawLens Wiener removes chroma blotches while keeping colour edges, and turns luma noise into fine, even grain; Grain sets how much of that fine grain stays (RawLens only). RAWR (default) uses the RAWR wavelet shrinkage rule with our learned noise model. Defaults: strength 0.5, detail 1.00, luma 0.25, grain 0.00, 7 scales; chroma is fixed at 0.75. Strength supports 0–8; Detail supports 0–1.80 and controls shadow texture preservation independently of Luma. Both modes learn noise per camera and raw mode, using measurements from each photo and the sensor profile as fallbacks. RawLens also denoises luma more gently when noise is barely visible (base ISO)."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 12f
-            setPadding(dp(12), dp(4), dp(12), dp(4))
-        })
-        waveSubordinate.forEach { it.isEnabled = settings.wavelet.enabled }
-
-
-        content.addView(sectionTitle("AI RAW denoise"))
-        content.addView(p.kit.sectionDesc("RawNIND Bayer writes a denoised DNG and develops the JPEG from it. Enable Keep original DNG to save the untouched sensor file as well."))
-
-        val aiStatus = TextView(this).apply {
-            text = aiModelStatus()
-            setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-            setPadding(dp(12), dp(10), dp(12), 0)
-        }
-        val aiMaster = SettingsSwitch(this).apply {
-            text = "Enable AI RAW denoise"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = settings.aiEnabled
-            setOnCheckedChangeListener { button, value ->
-                val proposed = settings.copy(aiEnabled = value)
-                if (persistDenoiseSettings(proposed)) {
-                    settings = proposed
-                    if (value) preloadRawNindIfEnabled()
-                    aiStatus.text = aiModelStatus()
-                    aiSubordinate.forEach { it.isEnabled = settings.aiEnabled }
-                } else if (button.isChecked != settings.aiEnabled) {
-                    button.isChecked = settings.aiEnabled
-                }
-            }
-        }
-        val keepOriginal = SettingsSwitch(this).apply {
-            text = "Keep original DNG"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = settings.saveOriginalDng
-            setOnCheckedChangeListener { button, value ->
-                val proposed = settings.copy(saveOriginalDng = value)
-                if (persistDenoiseSettings(proposed)) {
-                    settings = proposed
-                } else if (button.isChecked != settings.saveOriginalDng) {
-                    button.isChecked = settings.saveOriginalDng
-                }
-            }
-        }
-        content.addView(aiMaster); content.addView(aiStatus); content.addView(keepOriginal)
-        aiSubordinate += keepOriginal
-        var aiStrengthPct = (settings.aiStrength * 100 + 0.5f).toInt().coerceIn(0, 100)
-        val aiStrengthLabel = TextView(this).apply {
-            text = "AI strength: $aiStrengthPct%"
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 14f
-            setPadding(dp(12), dp(8), dp(12), 0)
-        }
-        content.addView(aiStrengthLabel)
-        val aiStrengthBar = SettingsSlider(this).apply {
-            max = 100
-            progress = aiStrengthPct
-            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
-                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
-                    aiStrengthPct = progress
-                    aiStrengthLabel.text = "AI strength: $aiStrengthPct%"
-                }
-                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
-                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
-                    val proposed = settings.copy(aiStrength = aiStrengthPct / 100f)
-                    if (persistDenoiseSettings(proposed)) {
-                        settings = proposed
-                        setStatus("AI STRENGTH • $aiStrengthPct%")
-                    } else {
-                        aiStrengthPct = (settings.aiStrength * 100 + 0.5f).toInt()
-                        seekBar.progress = aiStrengthPct
-                    }
-                }
-            })
-        }
-        content.addView(aiStrengthBar)
-        content.addView(TextView(this).apply {
-            tag = "settings-description"
-            text = "0% = untouched source, 100% = full AI output (darktable neural-restore semantics; moving the slider never re-runs the model)."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 12f
-            setPadding(dp(12), dp(4), dp(12), dp(8))
-        })
-        aiSubordinate += aiStrengthLabel
-        aiSubordinate += aiStrengthBar
-        aiSubordinate.forEach { it.isEnabled = settings.aiEnabled }
 
         markActive(denoiseTab)
         polish()

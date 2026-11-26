@@ -1,0 +1,24 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// 2x2-cell residual luma -> one value per 4x4 tile, (1 3 3 1) / 8 separable: fine noise must not alias into the part
+// that rawdn_unpack leaves out of the grain. One thread = one tile.
+#include "rawdn_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) buffer R { uvec2 rs[]; };
+layout(push_constant) uniform P { int qw, qh; } pc;
+#define C(DY, DX) rs[b + quadIndex(q.y + DY, q.x + DX, pc.qw, pc.qh, 0)]
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (q.x >= pc.qw || q.y >= pc.qh) return;
+  int n = pc.qw * pc.qh, b = 4 * n;
+  uvec2 m = C(0, 0), l = C(0, -1), r = C(0, 1), u = C(-1, 0), d = C(1, 0);
+  // Row sums: own cells x 3, the outer cell of each neighbour x 1. x = upper, y = lower cell row.
+  vec2 w0 = unpackHalf2x16(m.x), w1 = unpackHalf2x16(m.y);
+  float r1 = 3.0 * (w0.x + w0.y) + unpackHalf2x16(l.x).y + unpackHalf2x16(r.x).x;
+  float r2 = 3.0 * (w1.x + w1.y) + unpackHalf2x16(l.y).y + unpackHalf2x16(r.y).x;
+  vec2 wu = unpackHalf2x16(u.y), wd = unpackHalf2x16(d.x);
+  float r0 = 3.0 * (wu.x + wu.y) + unpackHalf2x16(C(-1, -1).y).y + unpackHalf2x16(C(-1, 1).y).x;
+  float r3 = 3.0 * (wd.x + wd.y) + unpackHalf2x16(C(1, -1).x).y + unpackHalf2x16(C(1, 1).x).x;
+  rs[5 * n + q.y * pc.qw + q.x] = uvec2(floatBitsToUint((r0 + 3.0 * (r1 + r2) + r3) * (1.0 / 64.0)), 0u);
+}

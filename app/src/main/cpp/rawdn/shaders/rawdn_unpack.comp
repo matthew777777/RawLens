@@ -1,0 +1,56 @@
+#version 450
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Fine luma of the removed noise: coarseCut x its smooth tile mean (quadratic B-spline of rawdn_coarse, sigma ~2.7 px) is
+// left out, so blotches stay removed. (bilinear demosaic of the residual, mean RGB), x grain, fp16. Added to all channels (divided by
+// the WB gain) AFTER the demosaic: added before it, 1 px grain would alias into false colour. One thread = 4x4 px.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer R { uvec2 rs[]; };
+layout(std430, binding = 1) writeonly buffer L { uvec2 lum[]; };
+layout(push_constant) uniform P {
+  int qw, qh, cw, ch;
+  int diagGreen, pad0, pad1, pad2;
+  float a, b, scale, grain;
+  vec4 black;
+  vec4 gain;
+  float white;
+  float outWhite;   // output full scale (uint16)
+  float coarseCut;
+} pc;
+
+
+mediump vec4 up(uvec2 u) { return 1024.0 * vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); }
+void row(int o, int t, int dl, int dr, out mediump vec4 c, out mediump vec4 h) {   // h = left + right neighbours
+  c = up(rs[o * 4 + t]);
+  mediump float l = dl != 0 ? 1024.0 * unpackHalf2x16(rs[(o - 1) * 4 + t].y).y : c.y, r = dr != 0 ? 1024.0 * unpackHalf2x16(rs[(o + 1) * 4 + t].x).x : c.z;
+  h = vec4(l, c.xyz) + vec4(c.yzw, r);
+}
+void put(int y, int x4, mediump vec4 c, mediump vec4 h, mediump vec4 v, mediump vec4 d, mediump vec4 green, vec4 coarse) {
+  if (y >= 2 * pc.ch || 4 * x4 >= 2 * pc.cw) return;
+  // Green site: 1/3 own + 1/6 cross. Red / blue site: 1/3 own + 1/12 of all eight neighbours.
+  mediump vec4 q = c * 0.33333 + (h + v) * mix(vec4(0.083333), vec4(0.166667), green) + d * mix(vec4(0.083333), vec4(0.0), green);
+  vec4 l = (vec4(q) * (1.0 / 1024.0) - coarse) * pc.grain;
+  lum[y * (pc.cw / 2) + x4] = uvec2(packHalf2x16(l.xy), packHalf2x16(l.zw));
+}
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (q.x >= pc.qw || q.y >= pc.qh) return;
+  int o = q.y * pc.qw + q.x, dl = q.x > 0 ? 1 : 0, dr = q.x < pc.qw - 1 ? 1 : 0;
+  mediump vec4 c0, c1, c2, c3, cm, cp, h0, h1, h2, h3, hm, hp;
+  row(o, 0, dl, dr, c0, h0); row(o, 1, dl, dr, c1, h1); row(o, 2, dl, dr, c2, h2); row(o, 3, dl, dr, c3, h3);
+  if (q.y > 0) row(o - pc.qw, 3, dl, dr, cm, hm); else { cm = c1; hm = h1; }
+  if (q.y < pc.qh - 1) row(o + pc.qw, 0, dl, dr, cp, hp); else { cp = c2; hp = h2; }
+  mediump vec4 ge = pc.diagGreen != 0 ? vec4(1, 0, 1, 0) : vec4(0, 1, 0, 1), go = 1.0 - ge;
+  // Coarse part: 3x3 tile means, quadratic B-spline weights at the 4 pixel centres (t = 1/8 .. 7/8).
+  const vec4 wa = vec4(0.3828125, 0.1953125, 0.0703125, 0.0078125), wb = vec4(0.609375, 0.734375, 0.734375, 0.609375);
+  int tb = 5 * pc.qw * pc.qh + o, up_ = q.y > 0 ? -pc.qw : 0, dn_ = q.y < pc.qh - 1 ? pc.qw : 0;
+#define TM(I) (pc.coarseCut > 0.0 ? uintBitsToFloat(rs[tb + (I)].x) : 0.0)
+  vec4 wc = wa.wzyx;
+  vec4 t0 = TM(up_ - dl) * wa + TM(up_) * wb + TM(up_ + dr) * wc;
+  vec4 t1 = TM(-dl) * wa + TM(0) * wb + TM(dr) * wc;
+  vec4 t2 = TM(dn_ - dl) * wa + TM(dn_) * wb + TM(dn_ + dr) * wc;
+  t0 *= pc.coarseCut; t1 *= pc.coarseCut; t2 *= pc.coarseCut;
+  put(4 * q.y,     q.x, c0, h0, cm + c1, hm + h1, ge, t0 * wa.x + t1 * wb.x + t2 * wc.x);
+  put(4 * q.y + 1, q.x, c1, h1, c0 + c2, h0 + h2, go, t0 * wa.y + t1 * wb.y + t2 * wc.y);
+  put(4 * q.y + 2, q.x, c2, h2, c1 + c3, h1 + h3, ge, t0 * wa.z + t1 * wb.z + t2 * wc.z);
+  put(4 * q.y + 3, q.x, c3, h3, c2 + cp, h2 + hp, go, t0 * wa.w + t1 * wb.w + t2 * wc.w);
+}

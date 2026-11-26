@@ -43,24 +43,6 @@ object RawNoiseModel {
     /** Historical directory name retained so existing trained models remain available. */
     internal fun noiseDir(context: Context): File = File(context.applicationContext.filesDir, "wavelet-noise")
 
-    /** Explicit HAL-profile conversion for callers that still need a fallback; not a measurement. */
-    fun noiseAB(
-        noiseProfile: DoubleArray?, pattern: BayerPattern, black: Float, white: Float
-    ): Pair<Float, Float>? {
-        if (noiseProfile == null || noiseProfile.size < 8 ||
-            !(white > black) || !(black >= 0f)) return null
-        val g0 = if (pattern == BayerPattern.GRBG || pattern == BayerPattern.GBRG) 0 else 1
-        val g1 = if (g0 == 0) 3 else 2
-        val slope = (noiseProfile[g0 * 2] + noiseProfile[g1 * 2]).toFloat() * 0.5f
-        val offset = (noiseProfile[g0 * 2 + 1] + noiseProfile[g1 * 2 + 1]).toFloat() * 0.5f
-        if (!slope.isFinite() || !offset.isFinite() || !(slope >= 0f)) return null
-        val range = white - black
-        val a = if (range > 0f) slope / range else 0f
-        val b = if (range > 0f) (slope * black + offset) / (range * range) else 0f
-        return a to b
-    }
-
-
     @Volatile private var loaded = false
     @Synchronized private fun ensureLoaded(): Boolean {
         if (loaded) return true

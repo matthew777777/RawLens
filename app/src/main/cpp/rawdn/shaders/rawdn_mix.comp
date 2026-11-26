@@ -1,0 +1,18 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Partial colour strength: final colour planes (1, 2) = mix(noisy, estimate). Strength 0 copies the noisy plane
+// without reading the estimate (it was never computed).
+#include "rawdn_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer Z { uvec2 z[]; };
+layout(std430, binding = 1) buffer E { uvec2 e[]; };
+layout(push_constant) uniform P { int qw, qh; float strength; } pc;
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (q.x >= pc.qw || q.y >= pc.qh) return;
+  int o = (int(gl_GlobalInvocationID.z) + 1) * pc.qw * pc.qh + q.y * pc.qw + q.x;
+  uvec2 v = z[o];
+  if (pc.strength > 0.0) v = pkq(mix(unq(v), unq(e[o]), pc.strength));
+  e[o] = v;
+}

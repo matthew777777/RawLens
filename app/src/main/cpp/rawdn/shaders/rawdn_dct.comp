@@ -1,0 +1,167 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Sliding 8x8 orthonormal DCT, stride 4, all planes of a level (gid.z = plane).
+// STAGE 0: hard-threshold pilot (z -> o). STAGE 1: Wiener gains of the pilot (-> g, 8 bit). STAGE 2: gains x z -> o.
+// 1 and 2 are separate passes so that two 8x8 blocks are never live together (Mali register limit).
+// Uniform weights and 4-fold coverage everywhere: the estimate is the plain mean of 4 blocks, so there is no
+// weight buffer. The blocks of one phase tile the plane, so phase 0 overwrites (no clear) and 1-3 accumulate.
+// fp16 (mediump): the block is centred on its own corner mean first. 1 thread = 1 block, 4x2 uvec4 loads.
+#include "rawdn_common.glsl"
+layout(local_size_x = 4, local_size_y = 4) in;
+layout(constant_id = 0) const int STAGE = 0;
+layout(std430, binding = 0) readonly buffer Z { uvec4 z[]; };
+layout(std430, binding = 1) readonly buffer PL { uvec4 pil[]; };
+layout(std430, binding = 2) buffer OUTB { uvec4 o[]; };
+layout(std430, binding = 3) buffer GA { uvec4 g[]; };
+layout(push_constant) uniform P {
+  int qw, qh, plane0, phase;
+  vec4 var;     // noise variance per plane
+  vec4 hf, lf;  // Wiener strength at the highest / lowest frequency, per plane
+  float lam2, range;
+} pc;
+
+const float C4 = 0.35355339, C1 = 0.98078528, C2 = 0.92387953, C3 = 0.83146961,
+            C5 = 0.55557023, C6 = 0.38268343, C7 = 0.19509032;
+
+void fdct(inout mediump vec4 v0, inout mediump vec4 v1, inout mediump vec4 v2, inout mediump vec4 v3,
+          inout mediump vec4 v4, inout mediump vec4 v5, inout mediump vec4 v6, inout mediump vec4 v7) {
+  mediump vec4 s07 = v0 + v7, d07 = v0 - v7, s16 = v1 + v6, d16 = v1 - v6;
+  mediump vec4 s25 = v2 + v5, d25 = v2 - v5, s34 = v3 + v4, d34 = v3 - v4;
+  mediump vec4 a = s07 + s34, b = s16 + s25, c = s16 - s25, d = s07 - s34;
+  v0 = C4 * (a + b);
+  v4 = C4 * (a - b);
+  v2 = 0.5 * (C2 * d + C6 * c);
+  v6 = 0.5 * (C6 * d - C2 * c);
+  v1 = 0.5 * (C1 * d07 + C3 * d16 + C5 * d25 + C7 * d34);
+  v3 = 0.5 * (C3 * d07 - C7 * d16 - C1 * d25 - C5 * d34);
+  v5 = 0.5 * (C5 * d07 - C1 * d16 + C7 * d25 + C3 * d34);
+  v7 = 0.5 * (C7 * d07 - C5 * d16 + C3 * d25 - C1 * d34);
+}
+
+void idct(inout mediump vec4 v0, inout mediump vec4 v1, inout mediump vec4 v2, inout mediump vec4 v3,
+          inout mediump vec4 v4, inout mediump vec4 v5, inout mediump vec4 v6, inout mediump vec4 v7) {
+  mediump vec4 o0 = 0.5 * (C1 * v1 + C3 * v3 + C5 * v5 + C7 * v7);
+  mediump vec4 o1 = 0.5 * (C3 * v1 - C7 * v3 - C1 * v5 - C5 * v7);
+  mediump vec4 o2 = 0.5 * (C5 * v1 - C1 * v3 + C7 * v5 + C3 * v7);
+  mediump vec4 o3 = 0.5 * (C7 * v1 - C5 * v3 + C3 * v5 - C1 * v7);
+  mediump vec4 p = C4 * (v0 + v4), q = C4 * (v0 - v4);
+  mediump vec4 r = 0.5 * (C2 * v2 + C6 * v6), s = 0.5 * (C6 * v2 - C2 * v6);
+  mediump vec4 e0 = p + r, e3 = p - r, e1 = q + s, e2 = q - s;
+  v0 = e0 + o0; v7 = e0 - o0;
+  v1 = e1 + o1; v6 = e1 - o1;
+  v2 = e2 + o2; v5 = e2 - o2;
+  v3 = e3 + o3; v4 = e3 - o3;
+}
+
+// a0/a1: rows 0-3 / 4-7 of columns 0-3; b0/b1: columns 4-7.
+// After: p0[k] = (horizontal freq k, vertical 0-3), p1: horizontal 4+k,
+// q0/q1: vertical 4-7.
+void fwd(mediump mat4 a0, mediump mat4 a1, mediump mat4 b0, mediump mat4 b1, out mediump mat4 p0, out mediump mat4 q0, out mediump mat4 p1, out mediump mat4 q1) {
+  fdct(a0[0], a0[1], a0[2], a0[3], a1[0], a1[1], a1[2], a1[3]);
+  fdct(b0[0], b0[1], b0[2], b0[3], b1[0], b1[1], b1[2], b1[3]);
+  p0 = transpose(a0); q0 = transpose(a1); p1 = transpose(b0); q1 = transpose(b1);
+  fdct(p0[0], p0[1], p0[2], p0[3], p1[0], p1[1], p1[2], p1[3]);
+  fdct(q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3]);
+}
+
+
+// A uvec4 is two quads side by side; pair offsets are in uvec4. Beyond an edge the border quad repeats (as quads do).
+#define LOADBLK(BUF, A0, A1, B0, B1, MEAN)                                                                     \
+  { uvec4 c_ = BUF[base + (clamp(by + 1, 0, pc.qh - 1)) * hw + (bx >= 0 ? px0 : px1)];                          \
+    vec4 m_ = unq(bx >= 0 ? c_.zw : c_.xy); MEAN = 0.25 * dot(m_, vec4(1.0)) * pc.range; float mean = MEAN;     \
+    LOADROW(BUF, 0, A0, 0, B0) LOADROW(BUF, 1, A0, 2, B0) LOADROW(BUF, 2, A1, 0, B1) LOADROW(BUF, 3, A1, 2, B1) }
+#define LOADROW(BUF, J, A, K, B)                                                                               \
+  { int r = base + clamp(by + J, 0, pc.qh - 1) * hw;                                                            \
+    uvec4 l_ = BUF[r + px0], h_ = BUF[r + px1]; if (bx < 0) l_ = l_.xyxy; if (bx + 2 >= pc.qw) h_ = h_.zwzw;    \
+    mediump vec4 q0 = unq(l_.xy) * pc.range - mean, q1 = unq(l_.zw) * pc.range - mean, q2 = unq(h_.xy) * pc.range - mean, q3 = unq(h_.zw) * pc.range - mean; \
+    A[K] = vec4(q0.xy, q1.xy); A[K + 1] = vec4(q0.zw, q1.zw);                                                  \
+    B[K] = vec4(q2.xy, q3.xy); B[K + 1] = vec4(q2.zw, q3.zw); }
+
+void main() {
+  int by = int(gl_GlobalInvocationID.y) * 4 + (pc.phase >> 1) * 2 - 2;
+  int bx = int(gl_GlobalInvocationID.x) * 4 + (pc.phase & 1) * 2 - 2;
+  if (by >= pc.qh || bx >= pc.qw) return;
+  int hw = pc.qw / 2;
+  int pl = int(gl_GlobalInvocationID.z) + pc.plane0, base = pl * hw * pc.qh;
+  int px0 = bx < 0 ? 0 : bx / 2, px1 = bx < 0 ? 0 : min(bx / 2 + 1, hw - 1);
+  vec4 sel = vec4(equal(ivec4(pl), ivec4(0, 1, 2, 3)));   // no dynamic vector indexing (Mali: stack)
+  mediump float hf = dot(pc.hf, sel), dl = dot(pc.lf, sel) - hf, var = dot(pc.var, sel);
+  mediump mat4 a0, a1, b0, b1, p0, q0, p1, q1;
+  float mean;
+  int gi = 4 * (pl * ((pc.qw + 2) / 4 + 1) * ((pc.qh + 2) / 4 + 1) + int(gl_GlobalInvocationID.y) * ((pc.qw + 2) / 4 + 1) + int(gl_GlobalInvocationID.x));
+  if (STAGE == 1) {
+    LOADBLK(pil, a0, a1, b0, b1, mean)
+    fwd(a0, a1, b0, b1, p0, q0, p1, q1);
+    mediump float is = inversesqrt(var);
+#define GN(O, E, K, W) { mediump vec4 t = E[K] * is; t = min(t * t, vec4(16000.0)); O = packUnorm4x8(t / (t + hf + dl * W)); }
+    uvec4 w;
+    GN(w.x, p0, 0, vec4(1.000000, 0.852371, 0.712819, 0.581844))
+    GN(w.y, p0, 1, vec4(0.852371, 0.793560, 0.681106, 0.561437))
+    GN(w.z, p0, 2, vec4(0.712819, 0.681106, 0.603682, 0.506950))
+    GN(w.w, p0, 3, vec4(0.581844, 0.561437, 0.506950, 0.431959))
+    g[gi + 0] = w;
+    GN(w.x, p1, 0, vec4(0.460048, 0.445723, 0.405941, 0.348183))
+    GN(w.y, p1, 1, vec4(0.348183, 0.337681, 0.307943, 0.263475))
+    GN(w.z, p1, 2, vec4(0.247225, 0.239397, 0.217012, 0.183033))
+    GN(w.w, p1, 3, vec4(0.158513, 0.152721, 0.136107, 0.110801))
+    g[gi + 1] = w;
+    GN(w.x, q0, 0, vec4(0.460048, 0.348183, 0.247225, 0.158513))
+    GN(w.y, q0, 1, vec4(0.445723, 0.337681, 0.239397, 0.152721))
+    GN(w.z, q0, 2, vec4(0.405941, 0.307943, 0.217012, 0.136107))
+    GN(w.w, q0, 3, vec4(0.348183, 0.263475, 0.183033, 0.110801))
+    g[gi + 2] = w;
+    GN(w.x, q1, 0, vec4(0.280566, 0.209897, 0.141521, 0.079952))
+    GN(w.y, q1, 1, vec4(0.209897, 0.152721, 0.096954, 0.047432))
+    GN(w.z, q1, 2, vec4(0.141521, 0.096954, 0.053995, 0.018001))
+    GN(w.w, q1, 3, vec4(0.079952, 0.047432, 0.018001, 0.000000))
+    g[gi + 3] = w;
+    return;
+  }
+  LOADBLK(z, a0, a1, b0, b1, mean)
+  fwd(a0, a1, b0, b1, p0, q0, p1, q1);
+  mediump float dc = p0[0].x;
+  if (STAGE == 0) {
+    mediump float t = sqrt(pc.lam2 * var);
+#define HT(M, K, W) M[K] *= step(t * sqrt(min(hf + dl * W, vec4(1.0))), abs(M[K]));
+    HT(p0, 0, vec4(1.000000, 0.852371, 0.712819, 0.581844)) HT(p0, 1, vec4(0.852371, 0.793560, 0.681106, 0.561437)) HT(p0, 2, vec4(0.712819, 0.681106, 0.603682, 0.506950)) HT(p0, 3, vec4(0.581844, 0.561437, 0.506950, 0.431959))
+    HT(p1, 0, vec4(0.460048, 0.445723, 0.405941, 0.348183)) HT(p1, 1, vec4(0.348183, 0.337681, 0.307943, 0.263475)) HT(p1, 2, vec4(0.247225, 0.239397, 0.217012, 0.183033)) HT(p1, 3, vec4(0.158513, 0.152721, 0.136107, 0.110801))
+    HT(q0, 0, vec4(0.460048, 0.348183, 0.247225, 0.158513)) HT(q0, 1, vec4(0.445723, 0.337681, 0.239397, 0.152721)) HT(q0, 2, vec4(0.405941, 0.307943, 0.217012, 0.136107)) HT(q0, 3, vec4(0.348183, 0.263475, 0.183033, 0.110801))
+    HT(q1, 0, vec4(0.280566, 0.209897, 0.141521, 0.079952)) HT(q1, 1, vec4(0.209897, 0.152721, 0.096954, 0.047432)) HT(q1, 2, vec4(0.141521, 0.096954, 0.053995, 0.018001)) HT(q1, 3, vec4(0.079952, 0.047432, 0.018001, 0.000000))
+  } else {
+    uvec4 w;
+    w = g[gi + 0];
+    p0[0] *= unpackUnorm4x8(w.x);
+    p0[1] *= unpackUnorm4x8(w.y);
+    p0[2] *= unpackUnorm4x8(w.z);
+    p0[3] *= unpackUnorm4x8(w.w);
+    w = g[gi + 1];
+    p1[0] *= unpackUnorm4x8(w.x);
+    p1[1] *= unpackUnorm4x8(w.y);
+    p1[2] *= unpackUnorm4x8(w.z);
+    p1[3] *= unpackUnorm4x8(w.w);
+    w = g[gi + 2];
+    q0[0] *= unpackUnorm4x8(w.x);
+    q0[1] *= unpackUnorm4x8(w.y);
+    q0[2] *= unpackUnorm4x8(w.z);
+    q0[3] *= unpackUnorm4x8(w.w);
+    w = g[gi + 3];
+    q1[0] *= unpackUnorm4x8(w.x);
+    q1[1] *= unpackUnorm4x8(w.y);
+    q1[2] *= unpackUnorm4x8(w.z);
+    q1[3] *= unpackUnorm4x8(w.w);
+  }
+  p0[0].x = dc;
+  idct(p0[0], p0[1], p0[2], p0[3], p1[0], p1[1], p1[2], p1[3]);
+  idct(q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3]);
+  a0 = transpose(p0); a1 = transpose(q0); b0 = transpose(p1); b1 = transpose(q1);
+  idct(a0[0], a0[1], a0[2], a0[3], a1[0], a1[1], a1[2], a1[3]);
+  idct(b0[0], b0[1], b0[2], b0[3], b1[0], b1[1], b1[2], b1[3]);
+  float k = 0.25 / pc.range, km = 0.25 * mean / pc.range;
+#define STORE(X, V, U) if (bx + X >= 0 && bx + X < pc.qw) { int i = r + (bx + X) / 2; vec4 v = vec4(V) * k + km, u = vec4(U) * k + km; \
+    if (pc.phase != 0) { uvec4 p = o[i]; v += unq(p.xy); u += unq(p.zw); } o[i] = uvec4(pkq(v), pkq(u)); }
+#define STOREROW(J, A, K, B) if (by + J >= 0 && by + J < pc.qh) { int r = base + (by + J) * hw;                 \
+    STORE(0, vec4(A[K].xy, A[K + 1].xy), vec4(A[K].zw, A[K + 1].zw))                                           \
+    STORE(2, vec4(B[K].xy, B[K + 1].xy), vec4(B[K].zw, B[K + 1].zw)) }
+  STOREROW(0, a0, 0, b0) STOREROW(1, a0, 2, b0) STOREROW(2, a1, 0, b1) STOREROW(3, a1, 2, b1)
+}
