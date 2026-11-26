@@ -1,0 +1,65 @@
+#version 450
+// RawLens mobile variant of hdrp_tile_diff (same floats): each lane fetches its
+// reference row and comparison row through the texture unit instead of reading
+// a shared-memory copy staged with storage-image loads. Lane (row dy, vertical
+// displacement oy) slides along the row with the same register window and the
+// same pairwise accumulation order; row sums are added in row order as before.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) uniform highp sampler2D refLevel;
+layout(set = 0, binding = 1) uniform highp sampler2D compLevel;
+layout(std430, set = 0, binding = 2) readonly buffer Prev { ivec2 v[]; } prev;
+layout(std430, set = 0, binding = 3) writeonly buffer Diff { float v[]; } diffs;
+layout(push_constant) uniform P {
+    ivec2 levelSize;
+    ivec2 tiles;
+    int downscale;
+    int tileSize;
+    int useSsd;
+} p;
+
+const float FLOAT16_MIN_VAL = -65504.0;
+const int MAX_TILE = 32;
+shared float sRow[25 * MAX_TILE];  // [displacement][row]
+
+float cost(float d) { return p.useSsd != 0 ? d * d : d; }
+
+void main() {
+    ivec2 g = ivec2(gl_WorkGroupID.xy);
+    if (g.x >= p.tiles.x || g.y >= p.tiles.y) return;
+    int lane = int(gl_LocalInvocationID.x);
+    int t = p.tileSize;
+    ivec2 t0 = g * (t / 2);
+    ivec2 c0 = t0 + p.downscale * prev.v[g.y * p.tiles.x + g.x] - 2;
+    if (lane < 5 * t) {
+        int dy = lane % t, oy = lane / t;
+        ivec2 rp = t0 + ivec2(0, dy);
+        ivec2 cp = c0 + ivec2(0, dy + oy);
+        bool rowOut = cp.y < 0 || cp.y >= p.levelSize.y;
+        // Out-of-frame samples carry upstream's finite high loss.
+#define COMP(OFS) ((rowOut || cp.x + (OFS) < 0 || cp.x + (OFS) >= p.levelSize.x) ? 2.0 * FLOAT16_MIN_VAL \
+                 : texelFetch(compLevel, ivec2(cp.x + (OFS), cp.y), 0).x)
+        float acc[5] = float[5](0.0, 0.0, 0.0, 0.0, 0.0);
+        float w0 = COMP(0), w1 = COMP(1), w2 = COMP(2), w3 = COMP(3);
+        for (int dx = 0; dx < t; dx += 2) {
+            float w4 = COMP(dx + 4), w5 = COMP(dx + 5);
+            float r0 = texelFetch(refLevel, rp + ivec2(dx, 0), 0).x;
+            float r1 = texelFetch(refLevel, rp + ivec2(dx + 1, 0), 0).x;
+            acc[0] += cost(abs(r0 - w0)) + cost(abs(r1 - w1));
+            acc[1] += cost(abs(r0 - w1)) + cost(abs(r1 - w2));
+            acc[2] += cost(abs(r0 - w2)) + cost(abs(r1 - w3));
+            acc[3] += cost(abs(r0 - w3)) + cost(abs(r1 - w4));
+            acc[4] += cost(abs(r0 - w4)) + cost(abs(r1 - w5));
+            w0 = w2;
+            w1 = w3;
+            w2 = w4;
+            w3 = w5;
+        }
+        for (int ox = 0; ox < 5; ++ox) sRow[(oy * 5 + ox) * MAX_TILE + dy] = acc[ox];
+    }
+    barrier();
+    if (lane < 25) {
+        float total = 0.0;
+        for (int dy = 0; dy < t; ++dy) total += sRow[lane * MAX_TILE + dy];
+        diffs.v[(g.y * p.tiles.x + g.x) * 25 + lane] = total;
+    }
+}

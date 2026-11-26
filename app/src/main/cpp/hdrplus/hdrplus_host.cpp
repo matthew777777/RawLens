@@ -17,6 +17,7 @@ namespace {
 
 constexpr VkDescriptorType kImg = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 constexpr VkDescriptorType kBuf = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+constexpr VkDescriptorType kTex = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 
 // Binding tables transcribed from the vendored GLSL (see host probing in
 // development: every table entry cross-checked against both the shader's
@@ -50,6 +51,13 @@ const BindingInfo kBackwardDft[] = {{0, kImg}, {1, kImg}};
 const BindingInfo kBorder[] = {{0, kImg}, {1, kImg}};
 const BindingInfo kFreqAccumulate[] = {{0, kImg}, {1, kImg}};
 const BindingInfo kShiftTable[] = {{0, kBuf}};
+const BindingInfo kBlur16[] = {{0, kTex}, {1, kImg}};
+const BindingInfo kMerge2[] = {
+    {0, kTex}, {1, kTex}, {2, kImg}, {3, kTex}, {4, kTex}, {5, kTex}, {6, kBuf}};
+const BindingInfo kWarpRgbaRaw[] = {{0, kTex}, {1, kImg}, {2, kBuf}};
+const BindingInfo kForwardDft2[] = {{0, kTex}, {1, kImg}};
+const BindingInfo kMismatch2[] = {{0, kTex}, {1, kTex}, {2, kTex}, {3, kImg}};
+const BindingInfo kTexAlign[] = {{0, kTex}, {1, kTex}, {2, kBuf}, {3, kBuf}};
 
 #define LAYOUT(name) \
     { k##name, static_cast<std::uint32_t>(sizeof(k##name) / sizeof(k##name[0])) }
@@ -60,7 +68,8 @@ const char* kAssetNames[kShaderCount] = {
     "hdrp_column_sum", "hdrp_mean", "hdrp_merge_weight", "hdrp_accumulate", "hdrp_finalize",
     "hdrq_to_rgba", "hdrq_warp_rgba", "hdrq_rms", "hdrq_mismatch", "hdrq_region_mean",
     "hdrq_mismatch_norm", "hdrq_forward_dft", "hdrq_merge", "hdrq_deconvolute", "hdrq_backward_dft",
-    "hdrq_border", "hdrq_accumulate", "hdrq_shift_table",
+    "hdrq_border", "hdrq_accumulate", "hdrq_shift_table", "hdrp_blur16",
+    "hdrp_correct_upsampling2", "hdrp_tile_diff2", "hdrq_merge2", "hdrq_warp_rgba_raw", "hdrq_warp_rgba2", "hdrq_region_mean2", "hdrq_forward_dft2", "hdrq_mismatch2",
 };
 
 const ProgramLayout kLayouts[kShaderCount] = {
@@ -69,7 +78,8 @@ const ProgramLayout kLayouts[kShaderCount] = {
     LAYOUT(ColumnSum), LAYOUT(Mean), LAYOUT(MergeWeight), LAYOUT(Accumulate), LAYOUT(Finalize),
     LAYOUT(ToRgba), LAYOUT(WarpRgba), LAYOUT(Rms), LAYOUT(Mismatch), LAYOUT(RegionMean),
     LAYOUT(MismatchNorm), LAYOUT(ForwardDft), LAYOUT(Merge), LAYOUT(Deconvolute), LAYOUT(BackwardDft),
-    LAYOUT(Border), LAYOUT(FreqAccumulate), LAYOUT(ShiftTable),
+    LAYOUT(Border), LAYOUT(FreqAccumulate), LAYOUT(ShiftTable), LAYOUT(Blur16),
+    LAYOUT(TexAlign), LAYOUT(TexAlign), LAYOUT(Merge2), LAYOUT(WarpRgbaRaw), LAYOUT(WarpRgbaRaw), LAYOUT(RegionMean), LAYOUT(ForwardDft2), LAYOUT(Mismatch2),
 };
 
 bool find_memory_type(VkPhysicalDevice physical, std::uint32_t bits, VkMemoryPropertyFlags want,
@@ -101,7 +111,8 @@ GpuImage* RunArena::image(VkFormat format, std::uint32_t w, std::uint32_t h, std
     ci.arrayLayers = 1;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     GpuImage img;
     img.format = format;
@@ -263,12 +274,13 @@ void RunArena::reset() noexcept {
 bool RunDescriptors::init(std::string& err) {
     // One set per dispatch; the frequency path records ~4.5k dispatches for
     // a 30-frame burst, so size generously (pool entries are just caps).
-    VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 65536},
-                                     {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32768}};
+    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 65536},
+                                     {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32768},
+                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384}};
     VkDescriptorPoolCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     ci.maxSets = 16384;
-    ci.poolSizeCount = 2;
+    ci.poolSizeCount = 3;
     ci.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(device_, &ci, nullptr, &pool_) != VK_SUCCESS) {
         err = "hdrplus: descriptor pool creation failed";
@@ -302,6 +314,12 @@ VkDescriptorSet RunDescriptors::snapshot(const Program& program, const ImageBind
         w.dstBinding = images[i].binding;
         w.descriptorCount = 1;
         w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        if (program.bindings != nullptr) {
+            for (std::uint32_t b = 0; b < program.bindings->binding_count; ++b) {
+                if (program.bindings->bindings[b].binding == images[i].binding)
+                    w.descriptorType = program.bindings->bindings[b].type;
+            }
+        }
         w.pImageInfo = &image_infos[i];
         writes.push_back(w);
     }
@@ -403,7 +421,7 @@ void hdrplus_save_pipeline_cache(HdrPlusContext* ctx) {
 
 extern "C" {
 
-int hdrplus_shader_count(void) { return 28; }
+int hdrplus_shader_count(void) { return static_cast<int>(rawlens::hdrplus::kShaderCount); }
 
 const char* hdrplus_shader_name(int i) {
     if (i < 0 || i >= 28) return nullptr;
@@ -526,6 +544,21 @@ int hdrplus_load_shaders(HdrPlusContext* ctx, void* assetMgr, char* errmsg, size
         return -1;
     }
 #endif
+    if (ctx->sampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo sci{};
+        sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter = VK_FILTER_NEAREST;
+        sci.minFilter = VK_FILTER_NEAREST;
+        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.maxLod = 0.0f;
+        if (vkCreateSampler(ctx->device, &sci, nullptr, &ctx->sampler) != VK_SUCCESS) {
+            set_err(errmsg, errmsg_len, "hdrplus: sampler creation failed");
+            return -1;
+        }
+    }
     for (std::uint32_t i = 0; i < rawlens::hdrplus::kShaderCount; ++i) {
         const char* name = rawlens::hdrplus::shader_asset_name(static_cast<rawlens::hdrplus::Shader>(i));
         std::string path = std::string("spirv/hdrplus/") + name + ".spv";
@@ -582,9 +615,12 @@ int hdrplus_load_shaders(HdrPlusContext* ctx, void* assetMgr, char* errmsg, size
             binding.descriptorType = layout_info.bindings[b].type;
             binding.descriptorCount = 1;
             binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            if (binding.descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                binding.pImmutableSamplers = &ctx->sampler;
             bindings.push_back(binding);
         }
         rawlens::hdrplus::Program program;
+        program.bindings = &layout_info;
         VkDescriptorSetLayoutCreateInfo dci{};
         dci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         dci.bindingCount = static_cast<std::uint32_t>(bindings.size());
@@ -652,6 +688,7 @@ void hdrplus_destroy(HdrPlusContext* ctx) {
             if (program.layout) vkDestroyPipelineLayout(ctx->device, program.layout, nullptr);
             if (program.dsl) vkDestroyDescriptorSetLayout(ctx->device, program.dsl, nullptr);
         }
+        if (ctx->sampler) vkDestroySampler(ctx->device, ctx->sampler, nullptr);
         if (ctx->pool) vkDestroyCommandPool(ctx->device, ctx->pool, nullptr);
         vkDestroyDevice(ctx->device, nullptr);
     }

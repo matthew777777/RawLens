@@ -205,3 +205,33 @@ equal to `f41e6c2`, are listed in `spirv/hdrplus/UPSTREAM.md`):
   frame); the earlier "no shader stage" note stands for the temporal
   (per-frame) half, superseded here for the spatial half the host
   provably cannot express.
+
+## RawLens mobile variants (2026-11-26, bit-exact)
+
+Mobile-GPU rewrites that produce the **same float bits** as the ported
+shaders (md5 of the Fast and HQ float outputs identical to the pre-change
+build on the 12.5 MP 8-frame test burst, Mali-G615). The originals stay in
+the asset folder and are still used wherever a variant's preconditions fail.
+Every variant keeps each sum's order and every per-element expression; it
+changes only where data comes from (sampled images / texture unit, shared
+staging) and how threads split the work.
+
+| variant | replaces | when | why |
+|---|---|---|---|
+| `hdrp_blur16` | `hdrp_blur` k16 stride 2 | even region | textureGather Bayer quads, shared x→y |
+| `hdrp_correct_upsampling2` | `hdrp_correct_upsampling` | tile ≤32, 64 % tile = 0 | texelFetch, lane-split partials in k order |
+| `hdrp_tile_diff2` | `hdrp_tile_diff` | same | texelFetch row windows |
+| `hdrq_merge2` | `hdrq_merge` | always | sampled spectra; shift table as RGBA32F texture (`hdrq_shift_tex`) |
+| `hdrq_warp_rgba2` | `hdrq_warp_rgba` | aligning pass | gathers, per-pixel fallback on odd cells |
+| `hdrq_warp_rgba_raw` | prepare + `hdrq_warp_rgba` | non-aligning HQ pass, no hot pixels, even crop/tile | reads R16 raw and applies the prepare mapping inline (removes 21 re-prepares) |
+| `hdrq_region_mean2` | `hdrq_region_mean` | always (falls back inside if a column > 2048 px) | other lanes stage chunks in shared memory; lane 0 sums in upstream order |
+| `hdrq_forward_dft2`, `hdrq_mismatch2` | originals | always | sampled inputs |
+
+Host: companion frames stream double-buffered (two slots + two staging
+buffers, ≤64 MB frames) so the CPU copy overlaps GPU work; submit
+boundaries only change scheduling, not results.
+
+Mali-G615 (Redmi), 4080×3060, 8 frames, GPU time: Fast 3.15 s → ~1.25 s,
+HQ 6.1 s → ~3.7–3.9 s; native heap unchanged (~259 MB). Analysis reports:
+`build/shader-analysis/hdrp-before`, `hdrp-after` (A750, A740, G615,
+G720: 112/112 and 148/148 compile, no A740 compiler assertions).

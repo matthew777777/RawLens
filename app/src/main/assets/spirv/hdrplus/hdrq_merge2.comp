@@ -1,0 +1,130 @@
+#version 450
+// RawLens mobile variant of hdrq_merge (same floats): spectra, rms and mismatch
+// are read as sampled images; the shift table is an RGBA32F texture holding two
+// (cos, sin) pairs per texel (row = shift), and the per-bin cross terms are
+// staged as (A_k, B_k, A_k+1, B_k+1), so each step of the 49 shift sums costs
+// one texture fetch and one 128-bit shared read for two bins instead of three
+// loads per bin. Each shift's sum still adds the bins in k order with the same
+// per-bin expression; everything after the shift choice is unchanged.
+//
+// Port of hdr-plus-swift merge_frequency_domain (uniform exposure): per tile,
+// pick the best of 7x7 sub-pixel Fourier shifts of the aligned tile, then
+// merge each frequency bin with a Wiener-shrinkage weight (Hasinoff 2016,
+// Liba 2019 motion norm, Delbracio 2015 magnitude norm). One 8x8 workgroup
+// per tile, then every lane merges its own bin.
+// Shift search: upstream minimizes sum_k |ref_k - e^{i theta}·al_k|^2 over
+// channels. Rotation preserves |al_k|, so this equals a shift-independent
+// constant minus 2 * sum_k (cos·A_k + sin·B_k) with per-bin cross terms
+// A_k = sum_ch(refRe·alRe + refIm·alIm), B_k = sum_ch(refIm·alRe - refRe·alIm):
+// the same argmin from 2 floats per bin instead of 16 (shared-memory bound on
+// mobile GPUs); first maximum wins like upstream's first minimum.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform highp sampler2D refFt;
+layout(set = 0, binding = 1) uniform highp sampler2D alignedFt;
+layout(set = 0, binding = 2, rgba32f) uniform image2D outFt;
+layout(set = 0, binding = 3) uniform highp sampler2D rms;
+layout(set = 0, binding = 4) uniform highp sampler2D mismatch;
+// (cos, sin) pairs for bins 2j, 2j+1 of shift s at texel (j, s) (copy of hdrq_shift_table).
+layout(set = 0, binding = 5) uniform highp sampler2D shiftTex;
+// RawLens extension (step-4 strength maps, marked patch): optional per-block
+// Wiener-norm triples (binding 6, one robustnessNorm/readNoise/maxMotionNorm
+// triple per 32px block, N companions concatenated). mapOffset >= 0 selects
+// this companion's slice and the tile's block triple wins; negative keeps the
+// upstream computation (map ignored).
+layout(std430, set = 0, binding = 6) readonly buffer StrengthMap { float r[]; } smap;
+layout(push_constant) uniform P {
+    ivec2 tiles;
+    float robustnessNorm;
+    float readNoise;
+    float maxMotionNorm;
+    int mapOffset;
+    ivec2 mapOrigin;  // unpadded frame origin in padded-raw px (padLeft - cropX, ...)
+    ivec2 mapCells;   // unpadded map dims (mw, mh)
+} p;
+
+shared vec4 sRefRe[64], sRefIm[64], sAlRe[64], sAlIm[64];  // index dn*8 + dm
+shared float sDiff[49];
+shared vec4 sAB[32];  // (A_2j, B_2j, A_2j+1, B_2j+1)
+shared int sBest;
+
+void main() {
+    ivec2 t = ivec2(gl_WorkGroupID.xy);
+    if (any(greaterThanEqual(t, p.tiles))) return;
+    int dm = int(gl_LocalInvocationID.x), dn = int(gl_LocalInvocationID.y);
+    int lane = dn * 8 + dm;
+    const int ts = 8;
+    ivec2 t0 = t * ts;
+    ivec2 o = ivec2(2 * (t0.x + dm), t0.y + dn);
+    sRefRe[lane] = texelFetch(refFt, o, 0);
+    sRefIm[lane] = texelFetch(refFt, o + ivec2(1, 0), 0);
+    sAlRe[lane] = texelFetch(alignedFt, o, 0);
+    sAlIm[lane] = texelFetch(alignedFt, o + ivec2(1, 0), 0);
+    {
+        vec4 a = sRefRe[lane] * sAlRe[lane] + sRefIm[lane] * sAlIm[lane];
+        vec4 b = sRefIm[lane] * sAlRe[lane] - sRefRe[lane] * sAlIm[lane];
+        vec2 ab = vec2(a.x + a.y + a.z + a.w, b.x + b.y + b.z + b.w);
+        if ((lane & 1) == 0) sAB[lane >> 1].xy = ab; else sAB[lane >> 1].zw = ab;
+    }
+    barrier();
+    if (lane < 49) {
+        float total = 0.0;
+        for (int j = 0; j < 32; ++j) {
+            vec4 ab = sAB[j];
+            vec4 cs = texelFetch(shiftTex, ivec2(j, lane), 0);
+            total += cs.x * ab.x + cs.y * ab.y;
+            total += cs.z * ab.z + cs.w * ab.w;
+        }
+        sDiff[lane] = total;
+    }
+    barrier();
+    if (lane == 0) {
+        float best = -1e30;
+        int bi = 0;
+        for (int i = 0; i < 49; ++i)
+            if (sDiff[i] > best) {
+                best = sDiff[i];
+                bi = i;
+            }
+        sBest = bi;
+    }
+    barrier();
+    float robustnessNorm = p.robustnessNorm;
+    float readNoise = p.readNoise;
+    float maxMotionNorm = p.maxMotionNorm;
+    if (p.mapOffset >= 0) {
+        // Tile t covers padded-raw [t*16, t*16+16); the map covers the
+        // unpadded frame in 32px blocks (clamped: border tiles reuse edge
+        // blocks; the map is blur-smooth so this stays invisible).
+        int mw = p.mapCells.x, mh = p.mapCells.y;
+        int bx = clamp((t.x * 16 - p.mapOrigin.x) / 32, 0, mw - 1);
+        int by = clamp((t.y * 16 - p.mapOrigin.y) / 32, 0, mh - 1);
+        int triple = p.mapOffset + 3 * (by * mw + bx);
+        robustnessNorm = smap.r[triple];
+        readNoise = smap.r[triple + 1];
+        maxMotionNorm = smap.r[triple + 2];
+    }
+    vec4 noiseNorm = (texelFetch(rms, t, 0) + readNoise) * float(ts * ts) * robustnessNorm;
+    float mm = texelFetch(mismatch, t, 0).x;
+    float mismatchWeight = clamp(1.0 - 10.0 * (mm - 0.2), 0.0, 1.0);
+    float motionNorm = clamp(maxMotionNorm - (mm - 0.02) * (maxMotionNorm - 1.0) / 0.15, 1.0, maxMotionNorm);
+    vec4 cs4 = texelFetch(shiftTex, ivec2(lane >> 1, sBest), 0);
+    vec2 cs = (lane & 1) == 0 ? cs4.xy : cs4.zw;
+    float c = cs.x, s = cs.y;
+    vec4 refRe = sRefRe[lane], refIm = sRefIm[lane];
+    vec4 alRe = c * sAlRe[lane] - s * sAlIm[lane];
+    vec4 alIm = s * sAlRe[lane] + c * sAlIm[lane];
+    float magnitudeNorm = 1.0;
+    if (dm + dn > 0 && mm < 0.3) {
+        vec4 refMag = sqrt(refRe * refRe + refIm * refIm);
+        vec4 alMag = sqrt(alRe * alRe + alIm * alIm);
+        float ratio = (alMag.x + alMag.y + alMag.z + alMag.w) / (refMag.x + refMag.y + refMag.z + refMag.w);
+        magnitudeNorm = mismatchWeight * clamp(ratio * ratio * ratio * ratio, 0.5, 3.0);
+    }
+    vec4 w4 = (refRe - alRe) * (refRe - alRe) + (refIm - alIm) * (refIm - alIm);
+    w4 = w4 / (w4 + magnitudeNorm * motionNorm * noiseNorm);  // highlights norm = 1 (uniform exposure)
+    float lo = min(w4.x, min(w4.y, min(w4.z, w4.w))), hi = max(w4.x, max(w4.y, max(w4.z, w4.w)));
+    // Mean of the two central channel weights (upstream's robust variant of Liba's max).
+    float weight = clamp(0.5 * (w4.x + w4.y + w4.z + w4.w - lo - hi), 0.0, 1.0);
+    imageStore(outFt, o, imageLoad(outFt, o) + (1.0 - weight) * alRe + weight * refRe);
+    imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + (1.0 - weight) * alIm + weight * refIm);
+}

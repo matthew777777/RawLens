@@ -1,0 +1,93 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : enable
+// RawLens mobile variant of hdrp_blur for the merge blur only (kernel 16,
+// Bayer stride 2): bit-identical to hdrp_blur.comp, which ports hdr-plus-swift
+// blur_mosaic_texture (truncated binomial, per-colour taps, border renormalization).
+//
+// Each thread owns 2x2 Bayer quads. With stride 2, tap `di` of the four colour
+// outputs of a quad reads the four texels of one 2x2 block, so one textureGather
+// (texture unit, idle elsewhere in this pass) feeds four outputs; the x results
+// are staged per quad as a vec4, and the y pass reads one vec4 per tap from shared
+// memory. Region width/height are even, so a quad's columns (and rows) are in or
+// out of the region together: the same tap skips, taps order, weights, division
+// and half quantization as the scalar shader, hence the same floats.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0) uniform highp sampler2D src;   // nearest, clamp to edge
+layout(set = 0, binding = 1, r32f) writeonly uniform highp image2D dst;
+layout(push_constant) uniform P {
+    ivec2 size;       // region extent (even)
+    ivec2 srcOffset;
+    ivec2 dstOffset;
+    int kernelSize;   // 16
+    int stride;       // 2
+    int direction;    // unused
+    int quantizeHalf; // emulate upstream r16Float storage
+} p;
+
+const float BW16[9] = float[9](601080390., 565722720., 471435600., 347373600., 225792840., 129024480., 64512240.,
+                               28048800., 10518300.);
+const int QX = 16;            // quads per tile row (one per thread column)
+const int QY = 32;            // quads per tile column (two per thread row)
+const int HALO = 8;           // quad rows above/below read by the y pass
+const int ROWS = QY + 2 * HALO;  // 48
+shared vec4 sX[ROWS * QX];
+
+vec4 quantize(vec4 v) {
+    if (p.quantizeHalf == 0) return v;
+    return vec4(unpackHalf2x16(packHalf2x16(v.xy)), unpackHalf2x16(packHalf2x16(v.zw)));
+}
+
+void main() {
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    ivec2 baseQ = ivec2(gl_WorkGroupID.xy) * ivec2(QX, QY);
+    int w = p.size.x;
+    int h = p.size.y;
+    vec2 inv = 1.0 / vec2(textureSize(src, 0));
+    int lin = l.y * 16 + l.x;
+
+    // 1. x pass for the 48 quad rows the y pass reads. Components are ordered
+    //    (x0,y0), (x0+1,y0), (x0,y0+1), (x0+1,y0+1).
+    for (int k = lin; k < ROWS * QX; k += 256) {
+        int r = k / QX;
+        int c = k % QX;
+        int y0 = 2 * (baseQ.y - HALO + r);
+        int x0 = 2 * (baseQ.x + c);
+        if (y0 < 0 || y0 >= h || x0 >= w) continue;
+        vec4 total = vec4(0.0);
+        float weight = 0.0;
+        [[unroll]] for (int di = -8; di <= 8; ++di) {
+            int i = x0 + 2 * di;
+            if (i < 0 || i >= w) continue;
+            float wt = BW16[abs(di)];
+            // gather: x=(i,y+1) y=(i+1,y+1) z=(i+1,y) w=(i,y)
+            vec4 g = textureGather(src, (vec2(p.srcOffset + ivec2(i, y0)) + 1.0) * inv, 0);
+            total += wt * g.wzxy;
+            weight += wt;
+        }
+        sX[r * QX + c] = quantize(total / weight);
+    }
+    barrier();
+
+    // 2. y pass, two quads per thread.
+    [[unroll]] for (int k = 0; k < 2; ++k) {
+        int qy = l.y + 16 * k;
+        int y0 = 2 * (baseQ.y + qy);
+        int x0 = 2 * (baseQ.x + l.x);
+        if (x0 >= w || y0 >= h) continue;
+        vec4 total = vec4(0.0);
+        float weight = 0.0;
+        [[unroll]] for (int di = -8; di <= 8; ++di) {
+            int i = y0 + 2 * di;
+            if (i < 0 || i >= h) continue;
+            float wt = BW16[abs(di)];
+            total += wt * sX[(qy + HALO + di) * QX + l.x];
+            weight += wt;
+        }
+        vec4 o = quantize(total / weight);
+        ivec2 d = p.dstOffset + ivec2(x0, y0);
+        imageStore(dst, d, vec4(o.x));
+        imageStore(dst, d + ivec2(1, 0), vec4(o.y));
+        imageStore(dst, d + ivec2(0, 1), vec4(o.z));
+        imageStore(dst, d + ivec2(1, 1), vec4(o.w));
+    }
+}

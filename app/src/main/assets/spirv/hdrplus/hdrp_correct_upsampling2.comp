@@ -1,0 +1,69 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : enable
+// RawLens mobile variant of hdrp_correct_upsampling (same floats): the level
+// samples are read through the texture unit (sampled images) instead of being
+// staged into shared memory with storage-image loads. Each lane still owns the
+// pixels i = lane + 64k of the tile and adds their costs in k order, and the
+// 64 partials of each candidate are reduced in the same fixed order, so every
+// candidate cost, and the chosen alignment, is the same float/int as before.
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) uniform highp sampler2D refLevel;
+layout(set = 0, binding = 1) uniform highp sampler2D compLevel;
+layout(std430, set = 0, binding = 2) readonly buffer Prev { ivec2 v[]; } prev;
+layout(std430, set = 0, binding = 3) writeonly buffer Corrected { ivec2 v[]; } corrected;
+layout(push_constant) uniform P {
+    ivec2 levelSize;
+    ivec2 tiles;
+    int downscale;  // 0 at the coarsest level
+    int tileSize;
+    int useSsd;
+} p;
+
+shared float sPartial[3][64];
+shared float sSum[3];
+
+void main() {
+    ivec2 g = ivec2(gl_WorkGroupID.xy);
+    if (g.x >= p.tiles.x || g.y >= p.tiles.y) return;
+    int lane = int(gl_LocalInvocationID.x);
+    int t = p.tileSize;
+    int n = t * t;
+    ivec2 t0 = g * (t / 2);
+    ivec3 xs = clamp(ivec3(g.x, g.x + ((g.x % 2 == 0) ? -1 : 1), g.x), 0, p.tiles.x - 1);
+    ivec3 ys = clamp(ivec3(g.y, g.y, g.y + ((g.y % 2 == 0) ? -1 : 1)), 0, p.tiles.y - 1);
+    ivec2 cand[3];
+    for (int c = 0; c < 3; ++c) cand[c] = prev.v[ys[c] * p.tiles.x + xs[c]];
+    // 64 is a multiple of t (8, 16, 32): lane owns column lane % t, rows lane / t + k * 64 / t.
+    ivec2 pix = ivec2(lane % t, lane / t);
+    int step = 64 / t;
+    int count = n / 64;
+    ivec2 o0 = t0 + p.downscale * cand[0], o1 = t0 + p.downscale * cand[1], o2 = t0 + p.downscale * cand[2];
+    float part0 = 0.0, part1 = 0.0, part2 = 0.0;
+    const float INF = uintBitsToFloat(0x7f800000u);
+    for (int k = 0; k < count; ++k, pix.y += step) {
+        float r = texelFetch(refLevel, t0 + pix, 0).x;
+        // Upstream's half overflow: any out-of-frame sample costs +inf.
+        ivec2 s0 = o0 + pix, s1 = o1 + pix, s2 = o2 + pix;
+        float v0 = (any(lessThan(s0, ivec2(0))) || any(greaterThanEqual(s0, p.levelSize))) ? INF : texelFetch(compLevel, s0, 0).x;
+        float v1 = (any(lessThan(s1, ivec2(0))) || any(greaterThanEqual(s1, p.levelSize))) ? INF : texelFetch(compLevel, s1, 0).x;
+        float v2 = (any(lessThan(s2, ivec2(0))) || any(greaterThanEqual(s2, p.levelSize))) ? INF : texelFetch(compLevel, s2, 0).x;
+        float d0 = abs(r - v0), d1 = abs(r - v1), d2 = abs(r - v2);
+        part0 += p.useSsd != 0 ? d0 * d0 : d0;
+        part1 += p.useSsd != 0 ? d1 * d1 : d1;
+        part2 += p.useSsd != 0 ? d2 * d2 : d2;
+    }
+    sPartial[0][lane] = part0;
+    sPartial[1][lane] = part1;
+    sPartial[2][lane] = part2;
+    barrier();
+    if (lane < 3) {
+        float sum = 0.0;
+        for (int i = 0; i < 64; ++i) sum += sPartial[lane][i];
+        sSum[lane] = sum;
+    }
+    barrier();
+    if (lane != 0) return;
+    float sDiff[3] = float[3](sSum[0], sSum[1], sSum[2]);
+    ivec2 best = (sDiff[0] < sDiff[1] && sDiff[0] < sDiff[2]) ? cand[0] : (sDiff[1] < sDiff[2] ? cand[1] : cand[2]);
+    corrected.v[g.y * p.tiles.x + g.x] = best;
+}

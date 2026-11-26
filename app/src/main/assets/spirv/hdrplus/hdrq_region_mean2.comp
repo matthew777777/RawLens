@@ -1,0 +1,90 @@
+#version 450
+// RawLens mobile variant of hdrq_region_mean (same float): upstream's
+// texture_mean association needs one sequential sum (x-major, four 2x2-phase
+// accumulators, phases added in order). The original runs that sum from one
+// thread straight out of memory (latency-bound, ~10 ms per call at 12 MP). Here
+// lanes 1..255 stream column chunks into a double-buffered shared array while
+// lane 0 adds the previous chunk from shared memory in exactly the same order.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D src;
+layout(std430, set = 0, binding = 1) writeonly buffer Mean { float v[]; } mean;
+layout(push_constant) uniform P {
+    ivec2 origin;
+    ivec2 size;
+} p;
+
+const int CAP = 2048;  // floats per chunk buffer
+shared float buf[2][CAP];
+
+void loadChunk(int k, int cols, uint lane) {
+    int x0 = k * cols;
+    int cw = min(cols, p.size.x - x0);
+    int n = cw * p.size.y;
+    for (int i = int(lane) - 1; i < n; i += 255)
+        buf[k & 1][i] = imageLoad(src, p.origin + ivec2(x0 + i / p.size.y, i % p.size.y)).x;
+}
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    int sy = p.size.y;
+    int cols = max(1, CAP / max(sy, 1));
+    // A column taller than a chunk buffer cannot be staged: sum from memory (lane 0).
+    if (sy > CAP) {
+        if (lane != 0u) return;
+        float phase[4] = float[4](0.0, 0.0, 0.0, 0.0);
+        for (int x = 0; x < p.size.x; ++x)
+            for (int y = 0; y < sy; ++y)
+                phase[(x & 1) + ((y & 1) << 1)] += imageLoad(src, p.origin + ivec2(x, y)).x;
+        mean.v[0] = (phase[0] + phase[1] + phase[2] + phase[3]) / float(p.size.x * p.size.y);
+        return;
+    }
+    int chunks = (p.size.x + cols - 1) / cols;
+    if (lane != 0u) loadChunk(0, cols, lane);
+    barrier();
+    // Four register accumulators (a dynamically indexed array lives in memory):
+    // phase 0 (x even, y even), 1 (x odd, y even), 2 (x even, y odd), 3 (x odd, y odd).
+    float p0 = 0.0, p1 = 0.0, p2 = 0.0, p3 = 0.0;
+    for (int k = 0; k < chunks; ++k) {
+        if (lane == 0u) {
+            int x0 = k * cols;
+            int cw = min(cols, p.size.x - x0);
+            int c = 0;
+            while (c < cw) {
+                int x = x0 + c;
+                int b = c * sy;
+                if ((x & 1) == 0 && c + 1 < cw) {
+                    // Columns x (phases 0/2) and x+1 (phases 1/3) are independent chains.
+                    int b1 = b + sy;
+                    int y = 0;
+                    for (; y + 1 < sy; y += 2) {
+                        p0 += buf[k & 1][b + y];
+                        p2 += buf[k & 1][b + y + 1];
+                        p1 += buf[k & 1][b1 + y];
+                        p3 += buf[k & 1][b1 + y + 1];
+                    }
+                    if (y < sy) {
+                        p0 += buf[k & 1][b + y];
+                        p1 += buf[k & 1][b1 + y];
+                    }
+                    c += 2;
+                    continue;
+                }
+                float e = 0.0, o = 0.0;
+                if ((x & 1) == 0) { e = p0; o = p2; } else { e = p1; o = p3; }
+                int y = 0;
+                for (; y + 1 < sy; y += 2) {
+                    e += buf[k & 1][b + y];
+                    o += buf[k & 1][b + y + 1];
+                }
+                if (y < sy) e += buf[k & 1][b + y];
+                if ((x & 1) == 0) { p0 = e; p2 = o; } else { p1 = e; p3 = o; }
+                c += 1;
+            }
+        } else if (k + 1 < chunks) {
+            loadChunk(k + 1, cols, lane);
+        }
+        barrier();
+    }
+    if (lane == 0u)
+        mean.v[0] = (p0 + p1 + p2 + p3) / float(p.size.x * p.size.y);
+}

@@ -53,6 +53,16 @@ enum class Shader : std::uint32_t {
     HdrqBorder,
     HdrqAccumulate,
     HdrqShiftTable,
+    // RawLens mobile variants (sampled-image reads, same floats).
+    HdrpBlur16,
+    HdrpCorrectUpsampling2,
+    HdrpTileDiff2,
+    HdrqMerge2,
+    HdrqWarpRgbaRaw,
+    HdrqWarpRgba2,
+    HdrqRegionMean2,
+    HdrqForwardDft2,
+    HdrqMismatch2,
     Count
 };
 
@@ -65,7 +75,7 @@ const char* shader_asset_name(Shader s);
 // the GLSL `layout(set = 0, binding = N)` lines and the upstream record() calls).
 struct BindingInfo {
     std::uint32_t binding;
-    VkDescriptorType type;  // STORAGE_IMAGE or STORAGE_BUFFER only
+    VkDescriptorType type;  // STORAGE_IMAGE, STORAGE_BUFFER or COMBINED_IMAGE_SAMPLER (nearest/clamp)
 };
 struct ProgramLayout {
     const BindingInfo* bindings;
@@ -92,6 +102,7 @@ struct Program {
     VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
+    const ProgramLayout* bindings = nullptr;  // descriptor type per binding (snapshot)
 };
 
 struct ImageBinding {
@@ -192,6 +203,7 @@ struct HdrPlusContext {
     std::uint32_t prof_cap = 0;
     std::vector<std::uint32_t> prof_shaders;
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;  // nearest, clamp to edge, unnormalized off
     std::string pipeline_cache_path;  // empty = in-memory cache only
 };
 
