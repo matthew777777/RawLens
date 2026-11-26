@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Guide image (robustness.comp op 0) and its clamped 3x3 means (op 1) in one
+// pass, straight from the raw image. width/height = guide grid.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D raw_;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly highp image2D out_;
+vec3 guide(ivec2 g) {
+  ivec2 j = 2 * g;
+  float r = texelFetch(raw_, j, 0).x, g1 = texelFetch(raw_, j + ivec2(1, 0), 0).x;
+  float g2 = texelFetch(raw_, j + ivec2(0, 1), 0).x, b = texelFetch(raw_, j + ivec2(1, 1), 0).x;
+  return vec3(sqrt(max(r, 0.0)), sqrt(max(0.5 * (g1 + g2), 0.0)), sqrt(max(b, 0.0)));
+}
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy), sz = ivec2(p.width, p.height);
+  if (any(greaterThanEqual(q, sz))) return;
+  vec3 m = vec3(0.0);
+  for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+    m += guide(clamp(q + ivec2(dx, dy), ivec2(0), sz - 1));
+  imageStore(out_, q, vec4(m / 9.0, 0.0));
+}

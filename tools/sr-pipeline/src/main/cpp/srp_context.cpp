@@ -9,8 +9,10 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <vector>
 #ifdef __ANDROID__
+#include <android/log.h>
 #include <sys/system_properties.h>
 #endif
 
@@ -68,6 +70,14 @@ struct Context {
   VkCommandPool dispatch_cmd_pool = VK_NULL_HANDLE;
   VkDescriptorPool dispatch_desc_pool = VK_NULL_HANDLE;
   VkFence dispatch_fence = VK_NULL_HANDLE;
+  struct Batch {
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkDescriptorPool desc = VK_NULL_HANDLE;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    bool pending = false;
+  } batches[kBatchSlots];
+  int batch_open = -1;
   std::mutex mutex;
   VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
   std::map<uint64_t, VkShaderModule> modules;
@@ -99,8 +109,19 @@ struct Context {
     VkBuffer buf = VK_NULL_HANDLE;
     VkDeviceMemory mem = VK_NULL_HANDLE;
     size_t nfloats = 0;
+    bool pooled = true;
   };
   std::map<int64_t, ResidentBuf> resident;
+  // Image residents (SrpCreateImage), negative handles; layout GENERAL.
+  struct ResidentImg {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+  };
+  std::map<int64_t, ResidentImg> images;
+  VkSampler sampler = VK_NULL_HANDLE;   // nearest, clamp to edge
+  // Stage scratch kept for the context lifetime (SrpScratch), by slot.
+  std::map<uint32_t, ResidentBuf> scratch;
   int64_t resident_next = 1;
 };
 
@@ -215,6 +236,15 @@ Status Create(Context** out_ctx) {
   props2.pNext = &subgroup;
   vkGetPhysicalDeviceProperties2(chosen, &props2);
 
+#ifdef __ANDROID__
+  {
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(chosen, &mp);
+    for (uint32_t i = 0; i < mp.memoryTypeCount; ++i)
+      __android_log_print(ANDROID_LOG_DEBUG, "srp-native", "memory type %u flags 0x%x heap %u", i,
+                          mp.memoryTypes[i].propertyFlags, mp.memoryTypes[i].heapIndex);
+  }
+#endif
   auto* ctx = new Context();
   ctx->instance = instance;
   ctx->physical = chosen;
@@ -269,14 +299,15 @@ Status SrpDispatchBegin(Context* ctx, VkDescriptorSetLayout set_layout,
   if (ctx->dispatch_desc_pool == VK_NULL_HANDLE) {
     // One live set at a time (serial discipline); sized for the widest
     // entry (kMaxStorageBuffers storage buffers).
-    VkDescriptorPoolSize pool_size{};
-    pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    pool_size.descriptorCount = kMaxStorageBuffers;
+    const VkDescriptorPoolSize pool_sizes[3] = {
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxStorageBuffers},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxStorageBuffers},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxStorageBuffers}};
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool_info.maxSets = 1;
-    pool_info.poolSizeCount = 1;
-    pool_info.pPoolSizes = &pool_size;
+    pool_info.poolSizeCount = 3;
+    pool_info.pPoolSizes = pool_sizes;
     if (vkCreateDescriptorPool(device, &pool_info, nullptr,
                                &ctx->dispatch_desc_pool) != VK_SUCCESS) {
       return Status::kDispatchFailed;
@@ -315,6 +346,151 @@ Status SrpDispatchBegin(Context* ctx, VkDescriptorSetLayout set_layout,
 }
 
 namespace {
+bool CreatePooled(Context* ctx, size_t nfloats, VkBuffer* out_buf, VkDeviceMemory* out_mem);
+}
+
+bool SrpFindHostMemory(VkPhysicalDevice physical, uint32_t type_bits, uint32_t* out_index) {
+  VkPhysicalDeviceMemoryProperties props{};
+  vkGetPhysicalDeviceMemoryProperties(physical, &props);
+  const VkMemoryPropertyFlags base =
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  // Cached first: host reads of write-combined memory run at a fraction of
+  // the copy speed (every download and readback).
+  static const bool prefer_cached = [] {
+#ifdef __ANDROID__
+    char v[8] = {};
+    if (__system_property_get("debug.srp.cached", v) > 0) return v[0] != '0';
+#endif
+    return true;
+  }();
+  for (int pass = prefer_cached ? 0 : 1; pass < 2; ++pass) {
+    const VkMemoryPropertyFlags want =
+        pass == 0 ? (base | VK_MEMORY_PROPERTY_HOST_CACHED_BIT) : base;
+    for (uint32_t i = 0; i < props.memoryTypeCount; ++i) {
+      if ((type_bits & (1u << i)) != 0 &&
+          (props.memoryTypes[i].propertyFlags & want) == want) {
+        *out_index = i;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+Status SrpBatchWait(Context* ctx, uint32_t slot) {
+  if (ctx == nullptr || slot >= kBatchSlots) return Status::kInitFailed;
+  Context::Batch& b = ctx->batches[slot];
+  if (!b.pending) return Status::kOk;
+  VkResult wait = VK_TIMEOUT;
+  for (int i = 0; i < 300 && wait == VK_TIMEOUT; ++i) {
+    wait = vkWaitForFences(ctx->device, 1, &b.fence, VK_TRUE, kFenceTimeoutNs);
+  }
+  if (wait != VK_SUCCESS) return Status::kDispatchFailed;
+  b.pending = false;
+  return Status::kOk;
+}
+
+Status SrpBatchBegin(Context* ctx, uint32_t slot) {
+  if (ctx == nullptr || slot >= kBatchSlots || ctx->batch_open >= 0) return Status::kInitFailed;
+  const Status waited = SrpBatchWait(ctx, slot);
+  if (waited != Status::kOk) return waited;
+  Context::Batch& b = ctx->batches[slot];
+  VkDevice device = ctx->device;
+  constexpr uint32_t kSets = 64;
+  if (b.pool == VK_NULL_HANDLE) {
+    VkCommandPoolCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    ci.queueFamilyIndex = ctx->compute_family;
+    const VkDescriptorPoolSize sizes[3] = {
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSets * kMaxStorageBuffers},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * kMaxStorageBuffers},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * kMaxStorageBuffers}};
+    VkDescriptorPoolCreateInfo di{};
+    di.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    di.maxSets = kSets;
+    di.poolSizeCount = 3;
+    di.pPoolSizes = sizes;
+    VkFenceCreateInfo fi{};
+    fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    if (vkCreateCommandPool(device, &ci, nullptr, &b.pool) != VK_SUCCESS ||
+        vkCreateDescriptorPool(device, &di, nullptr, &b.desc) != VK_SUCCESS ||
+        vkCreateFence(device, &fi, nullptr, &b.fence) != VK_SUCCESS) {
+      return Status::kDispatchFailed;
+    }
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool = b.pool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    if (vkAllocateCommandBuffers(device, &ai, &b.cmd) != VK_SUCCESS) return Status::kDispatchFailed;
+  }
+  VkCommandBufferBeginInfo begin{};
+  begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  if (vkResetCommandPool(device, b.pool, 0) != VK_SUCCESS ||
+      vkResetDescriptorPool(device, b.desc, 0) != VK_SUCCESS ||
+      vkResetFences(device, 1, &b.fence) != VK_SUCCESS ||
+      vkBeginCommandBuffer(b.cmd, &begin) != VK_SUCCESS) {
+    return Status::kDispatchFailed;
+  }
+  ctx->batch_open = static_cast<int>(slot);
+  return Status::kOk;
+}
+
+Status SrpBatchSubmit(Context* ctx) {
+  if (ctx == nullptr || ctx->batch_open < 0) return Status::kInitFailed;
+  Context::Batch& b = ctx->batches[ctx->batch_open];
+  ctx->batch_open = -1;
+  VkMemoryBarrier host{};
+  host.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+  host.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+  vkCmdPipelineBarrier(b.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
+                       1, &host, 0, nullptr, 0, nullptr);
+  if (vkEndCommandBuffer(b.cmd) != VK_SUCCESS) return Status::kDispatchFailed;
+  VkQueue queue = VK_NULL_HANDLE;
+  vkGetDeviceQueue(ctx->device, ctx->compute_family, 0, &queue);
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &b.cmd;
+  if (vkQueueSubmit(queue, 1, &submit, b.fence) != VK_SUCCESS) return Status::kDispatchFailed;
+  b.pending = true;
+  return Status::kOk;
+}
+
+VkCommandBuffer SrpBatchCommand(Context* ctx) {
+  return ctx == nullptr || ctx->batch_open < 0 ? VK_NULL_HANDLE : ctx->batches[ctx->batch_open].cmd;
+}
+
+Status SrpBatchSet(Context* ctx, VkDescriptorSetLayout layout, VkDescriptorSet* set) {
+  if (ctx == nullptr || ctx->batch_open < 0) return Status::kInitFailed;
+  VkDescriptorSetAllocateInfo ai{};
+  ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  ai.descriptorPool = ctx->batches[ctx->batch_open].desc;
+  ai.descriptorSetCount = 1;
+  ai.pSetLayouts = &layout;
+  return vkAllocateDescriptorSets(ctx->device, &ai, set) == VK_SUCCESS ? Status::kOk
+                                                                      : Status::kDispatchFailed;
+}
+
+VkBuffer SrpScratch(Context* ctx, uint32_t slot, size_t nfloats) {
+  if (ctx == nullptr || nfloats == 0) return VK_NULL_HANDLE;
+  auto it = ctx->scratch.find(slot);
+  if (it != ctx->scratch.end()) {
+    if (it->second.nfloats == nfloats) return it->second.buf;
+    vkDestroyBuffer(ctx->device, it->second.buf, nullptr);
+    vkFreeMemory(ctx->device, it->second.mem, nullptr);
+    ctx->scratch.erase(it);
+  }
+  Context::ResidentBuf b;
+  if (!CreatePooled(ctx, nfloats, &b.buf, &b.mem)) return VK_NULL_HANDLE;
+  b.nfloats = nfloats;
+  ctx->scratch[slot] = b;
+  return b.buf;
+}
+
+namespace {
 
 // Shared buffer+memory creation (HOST_VISIBLE|COHERENT staging pattern,
 // same requirements the per-call allocator used).
@@ -333,24 +509,7 @@ bool CreatePooled(Context* ctx, size_t nfloats, VkBuffer* out_buf,
   vkGetBufferMemoryRequirements(ctx->device, buf, &req);
   VkPhysicalDevice physical = NativePhysicalDevice(ctx);
   uint32_t index = 0;
-  // FindMemoryType lives in srp_pipeline.cpp; repeat the same scan here
-  // to keep the pool self-contained (host-visible + coherent).
-  VkPhysicalDeviceMemoryProperties props{};
-  vkGetPhysicalDeviceMemoryProperties(physical, &props);
-  bool found = false;
-  for (uint32_t i = 0; i < props.memoryTypeCount; ++i) {
-    if ((req.memoryTypeBits & (1u << i)) != 0 &&
-        (props.memoryTypes[i].propertyFlags &
-         (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-            (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-      index = i;
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
+  if (!SrpFindHostMemory(physical, req.memoryTypeBits, &index)) {
     vkDestroyBuffer(ctx->device, buf, nullptr);
     return false;
   }
@@ -512,8 +671,189 @@ int64_t SrpCreateResident(Context* ctx, size_t nfloats) {
   vkUnmapMemory(ctx->device, mem);
   std::lock_guard<std::mutex> lock(ctx->mutex);
   const int64_t handle = ctx->resident_next++;
-  ctx->resident[handle] = Context::ResidentBuf{buf, mem, nfloats};
+  ctx->resident[handle] = Context::ResidentBuf{buf, mem, nfloats, true};
   return handle;
+}
+
+// Device-local float image (1, 2 or 4 channels, 32-bit each), GENERAL layout,
+// sampled (nearest) and storage. Returns a negative handle, 0 on failure.
+int64_t SrpCreateImage(Context* ctx, uint32_t w, uint32_t h, uint32_t channels) {
+  if (ctx == nullptr || ctx->device == VK_NULL_HANDLE || w == 0 || h == 0) return 0;
+  VkDevice device = ctx->device;
+  Context::ResidentImg r;
+  VkImageCreateInfo ii{};
+  ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  ii.imageType = VK_IMAGE_TYPE_2D;
+  ii.format = channels == 1 ? VK_FORMAT_R32_SFLOAT
+      : channels == 2 ? VK_FORMAT_R32G32_SFLOAT : VK_FORMAT_R32G32B32A32_SFLOAT;
+  ii.extent = {w, h, 1};
+  ii.mipLevels = ii.arrayLayers = 1;
+  ii.samples = VK_SAMPLE_COUNT_1_BIT;
+  ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+  if (vkCreateImage(device, &ii, nullptr, &r.image) != VK_SUCCESS) return 0;
+  VkMemoryRequirements req{};
+  vkGetImageMemoryRequirements(device, r.image, &req);
+  VkPhysicalDeviceMemoryProperties props{};
+  vkGetPhysicalDeviceMemoryProperties(ctx->physical, &props);
+  uint32_t index = UINT32_MAX;
+  for (uint32_t i = 0; i < props.memoryTypeCount && index == UINT32_MAX; ++i) {
+    if ((req.memoryTypeBits & (1u << i)) != 0 &&
+        (props.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0) index = i;
+  }
+  VkMemoryAllocateInfo ai{};
+  ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  ai.allocationSize = req.size;
+  ai.memoryTypeIndex = index;
+  VkImageViewCreateInfo vi{};
+  vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  vi.image = r.image;
+  vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  vi.format = ii.format;
+  vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  bool ok = index != UINT32_MAX && vkAllocateMemory(device, &ai, nullptr, &r.mem) == VK_SUCCESS &&
+      vkBindImageMemory(device, r.image, r.mem, 0) == VK_SUCCESS &&
+      vkCreateImageView(device, &vi, nullptr, &r.view) == VK_SUCCESS;
+  if (ok && ctx->sampler == VK_NULL_HANDLE) {
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ok = vkCreateSampler(device, &si, nullptr, &ctx->sampler) == VK_SUCCESS;
+  }
+  if (ok) {
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pi.queueFamilyIndex = ctx->compute_family;
+    ok = vkCreateCommandPool(device, &pi, nullptr, &pool) == VK_SUCCESS;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo ca{};
+    ca.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ca.commandPool = pool;
+    ca.commandBufferCount = 1;
+    ok = ok && vkAllocateCommandBuffers(device, &ca, &cmd) == VK_SUCCESS;
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    if (ok && vkBeginCommandBuffer(cmd, &bi) == VK_SUCCESS) {
+      VkImageMemoryBarrier b{};
+      b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+      b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      b.image = r.image;
+      b.subresourceRange = vi.subresourceRange;
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           0, 0, nullptr, 0, nullptr, 1, &b);
+      VkSubmitInfo submit{};
+      submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+      submit.commandBufferCount = 1;
+      submit.pCommandBuffers = &cmd;
+      VkQueue queue = VK_NULL_HANDLE;
+      vkGetDeviceQueue(device, ctx->compute_family, 0, &queue);
+      ok = vkEndCommandBuffer(cmd) == VK_SUCCESS &&
+          vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS && vkQueueWaitIdle(queue) == VK_SUCCESS;
+    } else {
+      ok = false;
+    }
+    if (pool != VK_NULL_HANDLE) vkDestroyCommandPool(device, pool, nullptr);
+  }
+  if (!ok) {
+    if (r.view != VK_NULL_HANDLE) vkDestroyImageView(device, r.view, nullptr);
+    vkDestroyImage(device, r.image, nullptr);
+    if (r.mem != VK_NULL_HANDLE) vkFreeMemory(device, r.mem, nullptr);
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(ctx->mutex);
+  const int64_t handle = -ctx->resident_next++;
+  ctx->images[handle] = r;
+  return handle;
+}
+
+VkImageView SrpImageView(Context* ctx, int64_t handle) {
+  std::lock_guard<std::mutex> lock(ctx->mutex);
+  const auto it = ctx->images.find(handle);
+  return it == ctx->images.end() ? VK_NULL_HANDLE : it->second.view;
+}
+
+VkSampler SrpSampler(Context* ctx) { return ctx->sampler; }
+
+void SrpFreeImage(Context* ctx, int64_t handle) {
+  if (ctx == nullptr) return;
+  Context::ResidentImg r;
+  {
+    std::lock_guard<std::mutex> lock(ctx->mutex);
+    const auto it = ctx->images.find(handle);
+    if (it == ctx->images.end()) return;
+    r = it->second;
+    ctx->images.erase(it);
+  }
+  vkDestroyImageView(ctx->device, r.view, nullptr);
+  vkDestroyImage(ctx->device, r.image, nullptr);
+  vkFreeMemory(ctx->device, r.mem, nullptr);
+}
+
+// Resident for large host readbacks: HOST_CACHED memory when the device has it
+// (needs no coherence: every download invalidates). Uninitialised contents.
+int64_t SrpCreateHostResident(Context* ctx, size_t nfloats) {
+  if (ctx == nullptr || ctx->device == VK_NULL_HANDLE || nfloats == 0) return 0;
+  VkBufferCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  info.size = static_cast<VkDeviceSize>(nfloats) * 4;
+  info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  VkBuffer buf = VK_NULL_HANDLE;
+  if (vkCreateBuffer(ctx->device, &info, nullptr, &buf) != VK_SUCCESS) return 0;
+  VkMemoryRequirements req{};
+  vkGetBufferMemoryRequirements(ctx->device, buf, &req);
+  VkPhysicalDeviceMemoryProperties props{};
+  vkGetPhysicalDeviceMemoryProperties(ctx->physical, &props);
+  const VkMemoryPropertyFlags want =
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+  uint32_t index = UINT32_MAX;
+  for (uint32_t i = 0; i < props.memoryTypeCount && index == UINT32_MAX; ++i)
+    if ((req.memoryTypeBits & (1u << i)) != 0 && (props.memoryTypes[i].propertyFlags & want) == want)
+      index = i;
+  if (index == UINT32_MAX && !SrpFindHostMemory(ctx->physical, req.memoryTypeBits, &index)) {
+    vkDestroyBuffer(ctx->device, buf, nullptr);
+    return 0;
+  }
+  VkMemoryAllocateInfo ai{};
+  ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  ai.allocationSize = req.size;
+  ai.memoryTypeIndex = index;
+  VkDeviceMemory mem = VK_NULL_HANDLE;
+  if (vkAllocateMemory(ctx->device, &ai, nullptr, &mem) != VK_SUCCESS ||
+      vkBindBufferMemory(ctx->device, buf, mem, 0) != VK_SUCCESS) {
+    if (mem != VK_NULL_HANDLE) vkFreeMemory(ctx->device, mem, nullptr);
+    vkDestroyBuffer(ctx->device, buf, nullptr);
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(ctx->mutex);
+  const int64_t handle = ctx->resident_next++;
+  ctx->resident[handle] = Context::ResidentBuf{buf, mem, nfloats, false};
+  return handle;
+}
+
+// Host view of a resident (invalidated): valid until SrpUnmapResident.
+const float* SrpMapResident(Context* ctx, int64_t handle, size_t nfloats) {
+  if (ctx == nullptr) return nullptr;
+  std::lock_guard<std::mutex> lock(ctx->mutex);
+  auto it = ctx->resident.find(handle);
+  if (it == ctx->resident.end() || it->second.nfloats < nfloats) return nullptr;
+  void* p = nullptr;
+  if (vkMapMemory(ctx->device, it->second.mem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) return nullptr;
+  VkMappedMemoryRange range{};
+  range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+  range.memory = it->second.mem;
+  range.size = VK_WHOLE_SIZE;
+  vkInvalidateMappedMemoryRanges(ctx->device, 1, &range);
+  return static_cast<const float*>(p);
+}
+
+void SrpUnmapResident(Context* ctx, int64_t handle) {
+  if (ctx == nullptr) return;
+  std::lock_guard<std::mutex> lock(ctx->mutex);
+  auto it = ctx->resident.find(handle);
+  if (it != ctx->resident.end()) vkUnmapMemory(ctx->device, it->second.mem);
 }
 
 Status SrpFreeResident(Context* ctx, int64_t handle) {
@@ -521,14 +861,21 @@ Status SrpFreeResident(Context* ctx, int64_t handle) {
   VkBuffer buf = VK_NULL_HANDLE;
   VkDeviceMemory mem = VK_NULL_HANDLE;
   size_t nfloats = 0;
+  bool pooled = true;
   {
     std::lock_guard<std::mutex> lock(ctx->mutex);
     auto it = ctx->resident.find(handle);
     if (it == ctx->resident.end()) return Status::kInitFailed;
+    pooled = it->second.pooled;
     buf = it->second.buf;
     mem = it->second.mem;
     nfloats = it->second.nfloats;
     ctx->resident.erase(it);
+  }
+  if (!pooled) {
+    vkDestroyBuffer(ctx->device, buf, nullptr);
+    vkFreeMemory(ctx->device, mem, nullptr);
+    return Status::kOk;
   }
   // Outside the lock: SrpReleaseBuffer takes it itself.
   SrpReleaseBuffer(ctx, buf, mem, nfloats);
@@ -560,9 +907,17 @@ Status SrpDownloadResident(Context* ctx, int64_t handle, float* out,
   range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
   range.memory = mem;
   range.offset = 0;
-  range.size = static_cast<VkDeviceSize>(count) * 4;
+  range.size = VK_WHOLE_SIZE;  // any nonCoherentAtomSize
   vkInvalidateMappedMemoryRanges(ctx->device, 1, &range);
-  std::memcpy(out, mapped, count * 4);
+  const size_t parts = count > (1u << 20) ? 4 : 1;
+  std::vector<std::thread> pool;
+  auto copy = [&](size_t i) {
+    const size_t b = count * i / parts, e = count * (i + 1) / parts;
+    std::memcpy(out + b, static_cast<const float*>(mapped) + b, (e - b) * 4);
+  };
+  for (size_t i = 1; i < parts; ++i) pool.emplace_back(copy, i);
+  copy(0);
+  for (auto& t : pool) t.join();
   vkUnmapMemory(ctx->device, mem);
   return Status::kOk;
 }
@@ -592,7 +947,7 @@ Status SrpUploadResident(Context* ctx, int64_t handle, const float* in,
   range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
   range.memory = mem;
   range.offset = 0;
-  range.size = static_cast<VkDeviceSize>(count) * 4;
+  range.size = VK_WHOLE_SIZE;  // any nonCoherentAtomSize
   vkFlushMappedMemoryRanges(ctx->device, 1, &range);
   vkUnmapMemory(ctx->device, mem);
   return Status::kOk;
@@ -614,6 +969,19 @@ Status SrpResidentBuffer(Context* ctx, int64_t handle, size_t min_floats,
 
 void Destroy(Context* ctx) {
   if (ctx == nullptr) return;
+  for (uint32_t i = 0; i < kBatchSlots; ++i) {
+    SrpBatchWait(ctx, i);
+    const Context::Batch& b = ctx->batches[i];
+    if (b.fence != VK_NULL_HANDLE) vkDestroyFence(ctx->device, b.fence, nullptr);
+    if (b.desc != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx->device, b.desc, nullptr);
+    if (b.pool != VK_NULL_HANDLE) vkDestroyCommandPool(ctx->device, b.pool, nullptr);
+  }
+  for (const auto& kv : ctx->images) {
+    vkDestroyImageView(ctx->device, kv.second.view, nullptr);
+    vkDestroyImage(ctx->device, kv.second.image, nullptr);
+    vkFreeMemory(ctx->device, kv.second.mem, nullptr);
+  }
+  if (ctx->sampler != VK_NULL_HANDLE) vkDestroySampler(ctx->device, ctx->sampler, nullptr);
   // Forgotten residents free with the context (same as pooled buffers).
   for (const auto& kv : ctx->resident) {
     if (kv.second.buf != VK_NULL_HANDLE) {
@@ -624,6 +992,11 @@ void Destroy(Context* ctx) {
     }
   }
   ctx->resident.clear();
+  for (const auto& kv : ctx->scratch) {
+    vkDestroyBuffer(ctx->device, kv.second.buf, nullptr);
+    vkFreeMemory(ctx->device, kv.second.mem, nullptr);
+  }
+  ctx->scratch.clear();
   if (const char* prof = std::getenv("SRP_PROFILE")) {
     if (prof[0] != '\0' && prof[0] != '0') {
       std::fprintf(stderr,
@@ -713,7 +1086,7 @@ VkShaderModule SrpInternModule(Context* ctx, const uint8_t* bytes,
 }
 
 Status SrpPipelineFor(Context* ctx, VkShaderModule module, uint32_t nbuffers,
-                      size_t push_size, SrpPipeTriple* out) {
+                      size_t push_size, SrpPipeTriple* out, uint32_t kinds) {
   if (out == nullptr) return Status::kInitFailed;
   *out = SrpPipeTriple{};
   if (ctx == nullptr || ctx->device == VK_NULL_HANDLE ||
@@ -723,7 +1096,7 @@ Status SrpPipelineFor(Context* ctx, VkShaderModule module, uint32_t nbuffers,
   }
   VkShaderModule mod = module;
   std::lock_guard<std::mutex> lock(ctx->mutex);
-  PipeKey key{mod, nbuffers, static_cast<uint32_t>(push_size)};
+  PipeKey key{mod, nbuffers, static_cast<uint32_t>(push_size) | kinds << 8};
   const auto hit = ctx->pipes.find(key);
   if (hit != ctx->pipes.end()) {
     out->set_layout = hit->second.set_layout;
@@ -735,7 +1108,7 @@ Status SrpPipelineFor(Context* ctx, VkShaderModule module, uint32_t nbuffers,
   VkDescriptorSetLayoutBinding bindings[kMaxStorageBuffers] = {};
   for (uint32_t i = 0; i < nbuffers; ++i) {
     bindings[i].binding = i;
-    bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[i].descriptorType = SrpBindType(kinds, i);
     bindings[i].descriptorCount = 1;
     bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   }

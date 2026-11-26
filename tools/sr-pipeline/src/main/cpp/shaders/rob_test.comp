@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// robustness.comp ops 2-4 in one pass: warp the frame means by the B-spline
+// flow, noise-corrected distance to the reference, thresholded robustness, and
+// the visibility-weighted ghost strength (op 10's input).
+// width/height = guide grid, tileSize = tile half.
+// pad: [0] lutN [1] t bits [2] S.3 on [3] s1 bits [4] noise correction
+//      [5] [6] tiles x, y [7] ghost mask on [8] [9] visibility a, b bits
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D means_;
+layout(set = 0, binding = 1) uniform highp sampler2D ref_;
+layout(set = 0, binding = 2) uniform highp sampler2D field_;
+layout(set = 0, binding = 3) readonly buffer Lut { float lut[]; };
+layout(set = 0, binding = 4) uniform highp sampler2D hf_;
+layout(set = 0, binding = 5, r32f) uniform writeonly highp image2D r_;
+layout(set = 0, binding = 6, r32f) uniform writeonly highp image2D ghost_;
+
+float dogson_q(float x) {
+  float ax = abs(x);
+  if (ax <= 0.5) return -2.0 * ax * ax + 1.0;
+  else if (ax <= 1.5) return ax * ax - 2.5 * ax + 1.5;
+  else return 0.0;
+}
+vec4 flowWeights(float t) {
+  float u = 1.0 - t;
+  return vec4(u*u*u, 4.0-6.0*t*t+3.0*t*t*t, 1.0+3.0*t+3.0*t*t-3.0*t*t*t, t*t*t) / 6.0;
+}
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy), sz = ivec2(p.width, p.height);
+  if (any(greaterThanEqual(q, sz))) return;
+  ivec2 tiles = ivec2(p.pad[5], p.pad[6]);
+  float s1 = uintBitsToFloat(p.pad[3]);
+  // One B-spline window for the flow and the motion strength.
+  vec2 g = (vec2(q) + 0.5) / float(p.tileSize) - 0.5;
+  ivec2 base = ivec2(floor(g));
+  vec4 wx = flowWeights(fract(g.x)), wy = flowWeights(fract(g.y));
+  vec2 flow = vec2(0);
+  float Sv = 0.0, motionFraction = 0.0;
+  for (int yy = 0; yy < 4; ++yy) {
+    float vy = yy == 0 ? wy.x : yy == 1 ? wy.y : yy == 2 ? wy.z : wy.w;
+    for (int xx = 0; xx < 4; ++xx) {
+      vec3 f = texelFetch(field_, clamp(base + ivec2(xx, yy) - 1, ivec2(0), tiles - 1), 0).xyz;
+      float weight = (xx == 0 ? wx.x : xx == 1 ? wx.y : xx == 2 ? wx.z : wx.w) * vy;
+      flow += weight * f.xy;
+      Sv += weight * f.z;
+      motionFraction += weight * (f.z == s1 ? 1.0 : 0.0);
+    }
+  }
+  float ymov = float(q.y) + flow.y * 0.5, xmov = float(q.x) + flow.x * 0.5;
+  bool inside = ymov >= 0.0 && ymov < float(sz.y) && xmov >= 0.0 && xmov < float(sz.x);
+  float Rv = 0.0, d = 0.0;
+  vec4 ref = texelFetch(ref_, q, 0);
+  if (inside) {
+    int cy = int(roundEven(ymov)), cx = int(roundEven(xmov));
+    vec3 acc = vec3(0.0);
+    float wacc = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+      int yy = clamp(cy + dy, 0, sz.y - 1);
+      float vy = dogson_q(float(yy) - ymov);
+      for (int dx = -1; dx <= 1; dx++) {
+        int xx = clamp(cx + dx, 0, sz.x - 1);
+        float weight = vy * dogson_q(float(xx) - xmov);
+        acc += texelFetch(means_, ivec2(xx, yy), 0).xyz * weight;
+        wacc += weight;
+      }
+    }
+    vec3 e = ref.xyz - acc / wacc;
+    d = e.x * e.x + e.y * e.y + e.z * e.z;
+    float s = ref.w;
+    if (p.pad[4] != 0u) {
+      uint lutN = p.pad[0];
+      uint idn = uint(int(roundEven(float(lutN - 1u) * clamp((ref.x + ref.y + ref.z) / 3.0, 0.0, 1.0))));
+      float dnoise = lut[lutN + idn];
+      s = max(s, lut[idn]);
+      if (d > 0.0) { float shrink = d / (d + dnoise); d *= shrink * shrink; }
+    }
+    Rv = Sv * exp(-d / s) - uintBitsToFloat(p.pad[1]);
+    Rv = isnan(Rv) ? 0.0 : clamp(Rv, 0.0, 1.0);
+    if (p.pad[2] != 0u && texelFetch(hf_, q, 0).x > 0.5) Rv *= clamp(1.0 - motionFraction, 0.0, 1.0);
+  }
+  imageStore(r_, q, vec4(Rv));
+  if (p.pad[7] != 0u) {
+    float v = 0.0;
+    if (texelFetch(field_, q / int(p.tileSize), 0).z == s1) {
+      float ga = uintBitsToFloat(p.pad[8]), gb = uintBitsToFloat(p.pad[9]);
+      v = clamp(1.0 - Rv, 0.0, 1.0);
+      if (v > 0.0 && (ga > 0.0 || gb > 0.0)) {
+        float L = clamp((ref.x + ref.y + ref.z) / 3.0, 0.0, 1.0);
+        float dd = isnan(d) ? 0.0 : max(d, 0.0);
+        v *= dd / (dd + ga * L + gb + 1e-20);
+      }
+    }
+    imageStore(ghost_, q, vec4(v));
+  }
+}

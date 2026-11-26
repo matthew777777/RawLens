@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// pyr_down.comp on images (same terms, same order): mode 1 vertical, 2
+// horizontal "valid" gaussian, stride f. width/height = output size.
+// pad: [6] f [7] taps K (odd) [8 + m] = bits of k[R + m].
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D in_;
+layout(set = 0, binding = 1, r32f) uniform writeonly highp image2D out_;
+float tap(uint i, uint R) {
+  return uintBitsToFloat(p.pad[8u + (i >= R ? i - R : R - i)]);
+}
+void main() {
+  uvec2 q = gl_GlobalInvocationID.xy;
+  if (any(greaterThanEqual(q, uvec2(p.width, p.height)))) return;
+  const uint f = p.pad[6], K = p.pad[7], R = K / 2u;
+  const ivec2 step = p.mode == 1u ? ivec2(0, 1) : ivec2(1, 0);
+  const ivec2 base = ivec2(q) * (p.mode == 1u ? ivec2(1, f) : ivec2(f, 1));
+  float acc = 0.0;
+  for (uint i = 0u; i < K; i++) acc += tap(i, R) * texelFetch(in_, base + int(i) * step, 0).x;
+  imageStore(out_, ivec2(q), vec4(acc));
+}

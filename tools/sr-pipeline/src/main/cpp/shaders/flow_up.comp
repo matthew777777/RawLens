@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Resample.upscaleLvl (bilinear, edge-extended) from the coarser flow, or zero
+// (mode 1). width/height = tiles out, pad: [0] [1] tiles in, [2] repeat;
+// alpha = flow factor.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) readonly buffer A { vec2 a_[]; };
+layout(set = 0, binding = 1) writeonly buffer B { vec2 b_[]; };
+void main() {
+  uvec2 q = gl_GlobalInvocationID.xy;
+  if (q.x >= p.width || q.y >= p.height) return;
+  uint id = q.y * p.width + q.x;
+  if (p.mode == 1u) { b_[id] = vec2(0.0); return; }
+  ivec2 n = ivec2(p.pad[0], p.pad[1]);
+  int rep = int(p.pad[2]);
+  vec2 d = vec2(min(ivec2(q), n * rep - 1));   // shortfall tiles repeat the last upscaled one
+  vec2 f = rep == 1 ? d : (d + 0.5) / float(rep) - 0.5;
+  ivec2 j = ivec2(floor(f));
+  vec2 w = f - floor(f);
+  ivec2 lo = clamp(j, ivec2(0), n - 1), hi = clamp(j + 1, ivec2(0), n - 1);
+  if (rep == 1) { b_[id] = a_[lo.y * n.x + lo.x] * p.alpha; return; }
+  vec2 top = a_[lo.y * n.x + lo.x] * (1.0 - w.x) + a_[lo.y * n.x + hi.x] * w.x;
+  vec2 bot = a_[hi.y * n.x + lo.x] * (1.0 - w.x) + a_[hi.y * n.x + hi.x] * w.x;
+  b_[id] = (top * (1.0 - w.y) + bot * w.y) * p.alpha;
+}

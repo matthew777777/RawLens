@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// L1 block matching for one level, radius <= 1, with 2x2 texture gathers: 9
+// shifts x 4 tile quarters. Tiles whose runner-up lies within float rounding, or
+// that read outside the image (zeros), are left to align_l1_tie.comp.
+// width/height = level, tileSize, pad: [1] radius [2] tiles per row.
+layout(local_size_x = 36) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D ref_;
+layout(set = 0, binding = 1) uniform highp sampler2D mov_;
+layout(set = 0, binding = 2) buffer Flow { vec2 flow[]; };
+layout(set = 0, binding = 3) writeonly buffer Tie { uint tie_[]; };
+
+shared float part[36];
+const float TIE = 3e-6;   // relative to the winning sum
+void main() {
+  const uint lid = gl_LocalInvocationID.x, R = p.pad[1], side = 2u * R + 1u, n = side * side, half_ = p.tileSize / 2u;
+  const ivec2 size = ivec2(p.width, p.height);
+  const vec2 inv = 1.0 / vec2(size);
+  const uint s = lid % 9u, quarter = lid / 9u;
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    const ivec2 o = ivec2(t % p.pad[2], t / p.pad[2]) * int(p.tileSize);
+    const ivec2 f = ivec2(roundEven(flow[t]));
+    if (s < n) {
+      const ivec2 shift = f + ivec2(s % side, s / side) - int(R);
+      const ivec2 base = o + ivec2(quarter & 1u, quarter >> 1u) * int(half_) + 1;
+      float acc = 0.0;
+      for (uint y = 0u; y < half_; y += 2u) for (uint x = 0u; x < half_; x += 2u) {
+        const ivec2 q = base + ivec2(x, y);
+        acc += dot(abs(textureGather(ref_, vec2(q) * inv) - textureGather(mov_, vec2(q + shift) * inv)), vec4(1.0));
+      }
+      part[lid] = acc;
+    }
+    barrier();
+    if (lid == 0u) {
+      float best = 3.402823466e+38, second = best;
+      uint bs = 0u;
+      for (uint c = 0u; c < n; c++) {
+        float e = (part[c] + part[c + 9u]) + (part[c + 18u] + part[c + 27u]);
+        if (e < best) { second = best; best = e; bs = c; }
+        else second = min(second, e);
+      }
+      const ivec2 lo = o + f - int(R), hi = o + f + int(p.tileSize) + int(R);
+      bool inside = lo.x >= 0 && lo.y >= 0 && hi.x <= size.x && hi.y <= size.y;
+      bool tie = !inside || !(second - best > TIE * best);
+      tie_[t] = tie ? 1u : 0u;
+      if (!tie) flow[t] = vec2(f + ivec2(bs % side, bs / side) - int(R));
+    }
+    barrier();
+  }
+}

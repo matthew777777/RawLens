@@ -796,6 +796,7 @@ internal object MfsrMerge {
                     twoBandDct = asset("twoband_dct"),
                     twoBandTensor = asset("twoband_tensor"),
                     robFeather = asset("rob_feather"),
+                    mobile = VulkanPipeline.MobileSpirvs.load(::asset),
                 ),
                 output = nativeOut,
                 greenFit = greenFit,

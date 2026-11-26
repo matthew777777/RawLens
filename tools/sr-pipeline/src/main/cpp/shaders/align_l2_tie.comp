@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Tiles align_l2_img.comp could not separate: corr_l2_fused.comp's exact sums,
+// same order, on images.
+// width/height = level, tileSize, pad: [1] tiles per row [2] radius (<= 4).
+layout(local_size_x = 256) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D ref_;
+layout(set = 0, binding = 1) uniform highp sampler2D mov_;
+layout(set = 0, binding = 2) buffer Flow { vec2 flow[]; };
+layout(set = 0, binding = 3) readonly buffer Tie { uint tie_[]; };
+shared float energy[81];
+shared float patch_[40 * 40];   // S <= 32 + 2*4
+shared float reft[32 * 32];
+shared float rowsq[40 * 9];     // [S][C]
+shared float cpart[81 * 16];    // [C*C][NB]
+
+void main() {
+  const uint lid = gl_LocalInvocationID.x, r = p.pad[2], C = 2u * r + 1u, CC = C * C, T = p.tileSize;
+  const uint S = T + 2u * r, NB = min(T, 16u), RB = T / NB;   // row blocks, rows per block
+  const ivec2 last = ivec2(p.width, p.height) - 1;
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    if (tie_[t] == 0u) continue;
+    const ivec2 o = ivec2(t % p.pad[1], t / p.pad[1]) * int(T);
+    const ivec2 at = o + ivec2(roundEven(flow[t]));
+    for (uint k = lid; k < S * S; k += 256u)
+      patch_[k] = texelFetch(mov_, clamp(at + ivec2(k % S, k / S) - int(r), ivec2(0), last), 0).x;
+    for (uint k = lid; k < T * T; k += 256u) reft[k] = texelFetch(ref_, o + ivec2(k % T, k / T), 0).x;
+    barrier();
+    for (uint k = lid; k < S * C + CC * NB; k += 256u) {
+      float s = 0.0;
+      if (k < S * C) {
+        const uint y = k / C, x = k % C;
+        for (uint jx = 0u; jx < T; jx++) { const float q = patch_[y * S + x + jx]; s += q * q; }
+        rowsq[k] = s;
+      } else {
+        const uint i = k - S * C, b = i / CC, c = i % CC;
+        for (uint u = b * RB; u < (b + 1u) * RB; u++) {
+          const uint rr = u * T, pr = (u + c / C) * S + c % C;
+          for (uint v = 0u; v < T; v++) s += reft[rr + v] * patch_[pr + v];
+        }
+        cpart[c * NB + b] = s;
+      }
+    }
+    barrier();
+    if (lid < CC) {
+      float box = 0.0, corr = 0.0;
+      for (uint iy = 0u; iy < T; iy++) box += rowsq[(lid / C + iy) * C + lid % C];
+      for (uint b = 0u; b < NB; b++) corr += cpart[lid * NB + b];
+      energy[lid] = box - 2.0 * corr;
+    }
+    barrier();
+    if (lid == 0u) {
+      float best = 3.402823466e+38;
+      uint bs = 0u;
+      for (uint c = 0u; c < CC; c++) if (energy[c] < best) { best = energy[c]; bs = c; }
+      flow[t] += vec2(int(bs % C) - int(r), int(bs / C) - int(r));
+    }
+    barrier();
+  }
+}

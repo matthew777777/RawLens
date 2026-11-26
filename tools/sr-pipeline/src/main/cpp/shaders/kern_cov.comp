@@ -1,0 +1,132 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// kernels.comp with grad.comp op 0 fused in: GAT grey image -> covariance image
+// (xx, xy, yy). width/height = grey grid, 2 = shaping scalars.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D grey_;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly highp image2D out_;
+layout(set = 0, binding = 2) readonly buffer KParams {
+  float k_detail; float k_denoise; float D_th; float D_tr;
+  float k_stretch; float k_shrink; uint selectionLaw; uint isIso;
+  float k_min;  // C26 minimum kernel std (0 = paper-exact); KernelParams.kMin
+  // Optional weak-edge noise energy and absolute flat sigma, in that order.
+  float experimental[];
+};
+
+// get_real_polyroots_2: |r1| >= |r2| ordering, delta clamped at 0.
+void polyroots2(float a, float b, float c, out vec2 roots) {
+  float delta = max(b * b - 4.0 * a * c, 0.0);
+  float r1 = (-b + sqrt(delta)) / (2.0 * a);
+  float r2 = (-b - sqrt(delta)) / (2.0 * a);
+  roots = (abs(r1) >= abs(r2)) ? vec2(r1, r2) : vec2(r2, r1);
+}
+
+// grad.comp op 0 at (x, y), from the grey image.
+vec2 gradAt(int x, int y) {
+  float g00 = texelFetch(grey_, ivec2(x, y), 0).x;
+  float g01 = texelFetch(grey_, ivec2(x + 1, y), 0).x;
+  float g10 = texelFetch(grey_, ivec2(x, y + 1), 0).x;
+  float g11 = texelFetch(grey_, ivec2(x + 1, y + 1), 0).x;
+  float t0r0 = -0.5 * g00 + 0.5 * g01;
+  float t1r0 = 0.5 * g00 + 0.5 * g01;
+  float t0r1 = -0.5 * g10 + 0.5 * g11;
+  float t1r1 = 0.5 * g10 + 0.5 * g11;
+  return vec2(0.5 * t0r0 + 0.5 * t0r1, -0.5 * t1r0 + 0.5 * t1r1);
+}
+
+void main() {
+  uint ix = gl_GlobalInvocationID.x, iy = gl_GlobalInvocationID.y;
+  if (ix >= p.width || iy >= p.height) return;
+  uint gradW = p.width - 1u;
+  uint gradH = p.height - 1u;
+
+  if (isIso != 0u) {
+    imageStore(out_, ivec2(ix, iy), vec4(k_detail, 0.0, k_detail, 0.0));
+    return;
+  }
+
+  // 2x2 structure tensor over the gradient window (CPU accumulation order).
+  float t00 = 0.0, t01 = 0.0, t11 = 0.0;
+  for (uint dy = 0u; dy < 2u; dy++) {
+    for (uint dx = 0u; dx < 2u; dx++) {
+      int x = int(ix) - 1 + int(dx);
+      int y = int(iy) - 1 + int(dy);
+      if (y >= 0 && y < int(gradH) && x >= 0 && x < int(gradW)) {
+        vec2 g = gradAt(x, y);
+        t00 += g.x * g.x;
+        t01 += g.x * g.y;
+        t11 += g.y * g.y;
+      }
+    }
+  }
+
+  // get_eigen_val_2x2 + get_eigen_vect_2x2 (symmetric 2x2, CPU branches).
+  vec2 l;
+  polyroots2(1.0, -(t00 + t11), t00 * t11 - t01 * t01, l);
+  vec2 e1, e2;
+  if (t01 == 0.0 && t00 == t11) {
+    e1 = vec2(1.0, 0.0);
+    e2 = vec2(0.0, 1.0);
+  } else {
+    float e1x = t00 + t01 - l.y;
+    float e1y = t01 + t11 - l.y;
+    if (e1x == 0.0) {
+      e1 = vec2(0.0, 1.0);
+      e2 = vec2(1.0, 0.0);
+    } else if (e1y == 0.0) {
+      e1 = vec2(1.0, 0.0);
+      e2 = vec2(0.0, 1.0);
+    } else {
+      float nrm = sqrt(e1x * e1x + e1y * e1y);
+      e1x /= nrm;
+      e1y /= nrm;
+      float sgn = (e1x >= 0.0) ? 1.0 : -1.0; // copysign(1, e1x)
+      e1 = vec2(e1x, e1y);
+      e2 = vec2(-e1y * sgn, abs(e1x));
+    }
+  }
+
+  // compute_k (CPU: l1 may be ~0; max() guards the sqrt, identical on
+  // valid PSD inputs where the CPU never sees a negative).
+  float A = 1.0 + sqrt(max(l.x - l.y, 0.0) / max(l.x + l.y, 1e-30));
+  float energy = max(l.x, 0.0);
+  float noise = experimental.length() > 0 ? experimental[0] : 0.0;
+  float confidence = noise > 0.0 ? energy / (energy + noise) : 1.0;
+  float D = clamp(1.0 - sqrt(energy * confidence) / D_tr + D_th, 0.0, 1.0);
+  float k1s, k2s;
+  if (selectionLaw == 0u) { // hard_threshold (NaN falls to else, as on CPU)
+    if (A > 1.95) {
+      k1s = 1.0 / k_shrink;
+      k2s = k_stretch;
+    } else {
+      k1s = 1.0;
+      k2s = 1.0;
+    }
+  } else { // linear
+    k1s = (2.0 - A) + (A - 1.0) / k_shrink;
+    k2s = (2.0 - A) + (A - 1.0) * k_stretch;
+  }
+  if (noise > 0.0) k1s = 1.0 + (k1s - 1.0) * confidence;
+  float k1 = k_detail * ((1.0 - D) * k1s + D * k_denoise);
+  float k2 = k_detail * ((1.0 - D) * k2s + D * k_denoise);
+  if (experimental.length() > 1 && experimental[1] > 0.0) {
+    float flat_contribution = D * experimental[1];
+    float detail = (1.0 - D) * k_detail;
+    k1 = detail * k1s + flat_contribution;
+    k2 = detail * k2s + flat_contribution;
+  }
+  k1 = max(k1, k_min);
+  k2 = max(k2, k_min);
+  float k1sq = k1 * k1;
+  float k2sq = k2 * k2;
+  imageStore(out_, ivec2(ix, iy), vec4(k1sq * e1.x * e1.x + k2sq * e2.x * e2.x,
+                k1sq * e1.x * e1.y + k2sq * e2.x * e2.y,
+                k1sq * e1.y * e1.y + k2sq * e2.y * e2.y, 0.0));
+}

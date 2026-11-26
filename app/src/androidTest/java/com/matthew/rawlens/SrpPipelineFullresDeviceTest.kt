@@ -43,6 +43,10 @@ import org.junit.runner.RunWith
 class SrpPipelineFullresDeviceTest {
     private fun assetBytes(name: String): ByteArray {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        // -e rawlensSrpSpvDir <dir>: shader A/B without reinstalling.
+        InstrumentationRegistry.getArguments().getString("rawlensSrpSpvDir")?.let { dir ->
+            File(dir, "$name.spv").takeIf { it.isFile }?.let { return it.readBytes() }
+        }
         return context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
     }
 
@@ -61,6 +65,9 @@ class SrpPipelineFullresDeviceTest {
         // Phase heap + stage clock: the live-set curve is load-bearing
         // under the 512 MB ceiling (set before first VulkanPipeline use).
         System.setProperty("srpipeline.profile", "true")
+        // -e rawlensSrpDump DIR: per-frame flows and robustness maps of either path.
+        System.setProperty("srpipeline.rDump", args.getString("rawlensSrpDump") ?: "")
+        System.setProperty("srpipeline.sync", args.getString("rawlensSrpSync") ?: "false")
         // Burst dir + frame count are runner args so proofs are not tied
         // to one staging dir (`-e rawlensSrpDir /data/local/tmp/...`,
         // `-e rawlensSrpCount N`); the LUT is the single `*.npz` in the
@@ -82,9 +89,11 @@ class SrpPipelineFullresDeviceTest {
         Log.i("SrpFullresDevice", "frame count $count (cycled over ${frames.size})")
         val lutFiles = listing.filter { it.lowercase().endsWith(".npz") }
             .map { File(burstDir, it) }.filter { it.isFile }
+        // The pushed LUT is only read without `-e rawlensSrpLut gen`.
+        val genLut = args.getString("rawlensSrpLut") == "gen"
         assumeTrue("push exactly one noise LUT (*.npz) next to the burst first",
-            lutFiles.size == 1)
-        val lutFile = lutFiles[0]
+            genLut || lutFiles.size == 1)
+        val lutFile = lutFiles.firstOrNull()
         val outDir = context.getExternalFilesDir(null)
             ?: context.filesDir
 
@@ -121,9 +130,9 @@ class SrpPipelineFullresDeviceTest {
                 NoiseLutGen.cached(java.io.File(context.cacheDir, "noise_lut"), alpha, beta).also {
                     Log.i("SrpFullresDevice", "noise LUT gen ${android.os.SystemClock.elapsedRealtime() - t0} ms")
                 }
-            } else NoiseLut.load(lutFile.absolutePath, alpha, beta)
+            } else NoiseLut.load(lutFile!!.absolutePath, alpha, beta)
             val srpScale = args.getString("rawlensSrpScale")?.toFloatOrNull() ?: 1f
-            val snr = BurstConfig.estimateSnr(refBox!!, alpha, beta)
+            val snr = args.getString("rawlensSrpSnr")?.toDoubleOrNull() ?: BurstConfig.estimateSnr(refBox!!, alpha, beta)
             val fin = BurstConfig.finalize(snr)
             // -e rawlensSrpAlignV2 true: alignment v2 (binomial pyramid, candidate hand-off, flow median).
             val alignV2 = args.getString("rawlensSrpAlignV2") == "true"
@@ -132,7 +141,25 @@ class SrpPipelineFullresDeviceTest {
                 else BurstConfig.AlignLevels(listOf(1, 2, 4, 4), fin.tileSizes, List(4) { if (it == 0) 1 else 4 })
             val factors = levels.factors
             BurstConfig.sanitize(1f, fin.tileSize, factors, levels.tileSizes, h, w)
-            val config = PipelineConfig(
+            // -e rawlensSrpApp true: the exact app recipe (MfsrMerge.runEngine defaults, kMin etc.
+            // from SrTuning), so timings and the output hash stand for the shutter path.
+            val app = args.getString("rawlensSrpApp") == "true"
+            val tuning = com.rawlens.srpipeline.stages.SrTuning.APP_DEFAULT
+            val config = if (app) PipelineConfig(
+                scale = srpScale, bayer = true, factors = listOf(1, 2, 4, 4), tileSizes = fin.tileSizes,
+                greyMethod = "FIR7",
+                kernelParams = tuning.kernelParams(fin),
+                kernelPreprocessing = "gat",
+                kernelAlpha = FloatArray(4) { alpha[it].toFloat() },
+                kernelBeta = FloatArray(4) { beta[it].toFloat() },
+                robustnessParams = tuning.robustnessParams(haveNoiseLut = true, s3 = true),
+                robustnessEnabled = true,
+                sigmaSqCurve = curves.sigmaSq, dSqCurve = curves.dSq,
+                memoryTight = true, colourDiff = floatArrayOf(1.9f, 1.7f),
+                chromaScale = tuning.chromaScale(srpScale), icaIterations = tuning.icaIterations,
+                continuousMotion = true, detailReconstruction = true, noiseEvening = true,
+                lateralCa = true, ghostGrow = true, blurGamma = 1f, blackPedestal = true,
+            ) else PipelineConfig(
                 // -e rawlensSrpScale 2: 2x super-resolution output (default 1).
                 scale = srpScale, bayer = true, factors = factors, tileSizes = levels.tileSizes,
                 searchRadii = levels.searchRadii, alignV2 = alignV2,
@@ -166,15 +193,19 @@ class SrpPipelineFullresDeviceTest {
                 refBox = null
                 r
             }
+            val greenFit = if (app && srpScale == 1f) com.rawlens.srpipeline.stages.GreenNormalTile.createResident(
+                handle, assetBytes("green_residual"), assetBytes("green_normal_resident"),
+                w, h, config.tileSizes.first(), count) else null
+            val tMerge = System.nanoTime()
             val rgb = VulkanPipeline.run(
                 refThunk, compImgs, config, handle,
                 AlignGpu.Spirvs(
                     align = assetBytes("align"), corr = assetBytes("corr"),
                     fft = fft, ica = assetBytes("ica"), corrDirect = assetBytes("corr_direct"), icaWg = assetBytes("ica_wg"),
                     // -e rawlensSrpAlignWg true: workgroup-per-tile L1 search.
-                    alignWg = if (args.getString("rawlensSrpAlignWg") == "true") assetBytes("align_wg") else null,
-                    argminWg = if (args.getString("rawlensSrpArgminWg") == "true") assetBytes("corr_argmin_wg") else null,
-                    l2Fused = if (args.getString("rawlensSrpL2Fused") == "true") assetBytes("corr_l2_fused") else null,
+                    alignWg = if (app || args.getString("rawlensSrpAlignWg") == "true") assetBytes("align_wg") else null,
+                    argminWg = if (app || args.getString("rawlensSrpArgminWg") == "true") assetBytes("corr_argmin_wg") else null,
+                    l2Fused = if (app || args.getString("rawlensSrpL2Fused") == "true") assetBytes("corr_l2_fused") else null,
                     flowPick = if (alignV2) assetBytes("flow_pick") else null),
                 VulkanPipeline.Spirvs(
                     gat = assetBytes("gat"), grad = assetBytes("grad"),
@@ -183,15 +214,27 @@ class SrpPipelineFullresDeviceTest {
                     mergeSplat = assetBytes("merge_splat"),
                     fft = fft, corr = assetBytes("corr"), greyFft = assetBytes("grey_fft"), greyFir = assetBytes("grey_fir"),
                     // -e rawlensSrpResident true: resident grey + GPU moving pyramid.
-                    pyrDown = if (args.getString("rawlensSrpResident") == "true") assetBytes("pyr_down") else null,
+                    pyrDown = if (app || args.getString("rawlensSrpResident") == "true") assetBytes("pyr_down") else null,
                     mergeTwoBand = if (twoBand) assetBytes("merge_twoband") else null,
                     twoBandResolve = if (twoBand) assetBytes("twoband_resolve") else null,
                     twoBandDct = if (twoBand) assetBytes("twoband_dct") else null,
                     twoBandTensor = if (twoBand) assetBytes("twoband_tensor") else null,
-                    robFeather = if (twoBand) assetBytes("rob_feather") else null),
+                    robFeather = if (twoBand) assetBytes("rob_feather") else null,
+                    noiseAcc = if (app) assetBytes("noise_acc") else null,
+                    noiseEven = if (app) assetBytes("noise_even") else null,
+                    caWarp = if (app) assetBytes("ca_warp") else null,
+                    // -e rawlensSrpMobile false: staged path for A/B; rawlensSrpSync true: fenced stage timings.
+                    mobile = if (app && args.getString("rawlensSrpMobile") != "false")
+                        VulkanPipeline.MobileSpirvs.load(::assetBytes) else null),
                 // Native output like MfsrMerge: a 2x frame (600 MB) cannot be a heap direct buffer.
                 output = SrpBridge.nativeFloats((w * srpScale).toInt() * (h * srpScale).toInt() * 3),
+                greenFit = greenFit,
             )
+            greenFit?.close()
+            // Wall of VulkanPipeline.run and a hash of the raw float output (bit-exact A/B gate).
+            val mergeS = (System.nanoTime() - tMerge) / 1e9
+            val crc = java.util.zip.CRC32().also { c -> rgb.rewind(); c.update(rgb); rgb.rewind() }.value
+            Log.i("SrpFullresDevice", "merge wall %.2fs crc=%08x bytes=%d".format(mergeS, crc, rgb.capacity()))
             val outH = (h * srpScale).toInt()
             val outW = (w * srpScale).toInt()
             VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), outH * outW * 3)

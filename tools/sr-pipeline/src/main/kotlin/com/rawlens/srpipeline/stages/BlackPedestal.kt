@@ -35,7 +35,7 @@ object BlackPedestal {
         if (nb < MIN_BLOCKS * 4) return Estimate(0f, 0.0, 0.0, 0.0, 0.0, 0, false)
         val rank = DoubleArray(nb)
         val meas = Array(3) { DoubleArray(nb) }
-        for (by in 0 until bh) for (bx in 0 until bw) {
+        java.util.stream.IntStream.range(0, bh).parallel().forEach { by -> for (bx in 0 until bw) {
             var rk = 0.0; var mr = 0.0; var mg = 0.0; var mb = 0.0
             for (q in 0 until 16) {
                 val y = by * 8 + (q / 4) * 2; val x = bx * 8 + (q % 4) * 2
@@ -45,9 +45,10 @@ object BlackPedestal {
             }
             val i = by * bw + bx
             rank[i] = rk; meas[0][i] = mr / 8; meas[1][i] = mg / 8; meas[2][i] = mb / 8
-        }
+        } }
         val k = max(MIN_BLOCKS, (nb * DARK_FRACTION).toInt())
-        val order = rank.indices.sortedBy { rank[it] }.take(k)
+        val cut = rank.copyOf().also { it.sort() }[k - 1]
+        val order = rank.indices.filter { rank[it] <= cut }.sortedBy { rank[it] }.take(k)
         val m = DoubleArray(3) { c -> order.sumOf { meas[c][it] } / k }
         // Standard error of each channel mean: per-pixel variance a x + b over
         // the measured pixels (8 per block; G is a pair average -> half).

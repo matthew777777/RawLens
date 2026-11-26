@@ -1,0 +1,127 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// green_residual.comp ops 4 and 5 (resident 1x green fit) on images:
+// 0 = colour differences, 1 = motion field (flow.xy), 2 = robustness, 3 = fit.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(push_constant) uniform Params {
+    int op, tw, th, tx, ty, bw, bx, by, sw, sh, sx, sy;
+    int width, height, scale, tile, fw, fh;
+    float alpha, beta, quantum;
+    int rw, rx, ry;
+    float offQuantum;
+    int bh;
+} p;
+layout(set = 0, binding = 0) uniform highp sampler2D cd_;
+layout(set = 0, binding = 1) uniform highp sampler2D field_;
+layout(set = 0, binding = 2) uniform highp sampler2D rob_;
+layout(set=0,binding=3) buffer Fit { int fit[]; };
+vec4 basis(float t) {
+    float u = 1.0 - t;
+    return vec4(u*u*u, 4.0-6.0*t*t+3.0*t*t*t, 1.0+3.0*t+3.0*t*t-3.0*t*t*t, t*t*t) / 6.0;
+}
+vec2 shiftAt(vec2 q) {
+    vec2 g = q / float(p.tile) - 0.5;
+    ivec2 start = ivec2(floor(g)) - 1;
+    vec4 wx = basis(fract(g.x)), wy = basis(fract(g.y));
+    vec2 f = vec2(0);
+    for (int j=0; j<4; ++j) for (int i=0; i<4; ++i) {
+        ivec2 xy = clamp(start + ivec2(i,j), ivec2(0), ivec2(p.fw-1,p.fh-1));
+        f += wx[i] * wy[j] * texelFetch(field_,xy,0).xy;
+    }
+    return f;
+}
+// Reuse one flow evaluation across an output Bayer cell. Each invocation
+// owns all four normal-equation rows. Frames are dispatched sequentially.
+float checkGreen(float value) {
+    return isnan(value) || isinf(value) ? 1.0 : value;
+}
+float loadGreen(ivec2 site) {
+    if (((site.x+site.y)&1)==0 || any(lessThan(site,ivec2(2))) ||
+        any(greaterThanEqual(site,ivec2(p.width-2,p.height-2)))) return 1.0;
+    return checkGreen(texelFetch(cd_,site,0).x);
+}
+void gatherRow(int id,vec4 values,vec4 basisWeights,float confidence) {
+    vec4 weights = confidence*mix(vec4(0),basisWeights,lessThan(values,vec4(0.98)));
+    float rhs = dot(weights,max(values-0.5,-1.0));
+    float diagonal = dot(weights,basisWeights);
+    vec4 adjacent = vec4(
+        dot(weights.yw,basisWeights.xz),
+        dot(weights.zw,basisWeights.xy),
+        weights.w*basisWeights.x,
+        weights.z*basisWeights.y);
+    ivec2 increment = ivec2(round(vec2(rhs,diagonal)*p.quantum));
+    int addr = 2*id;
+    int word = fit[addr];
+    ivec2 old = ivec2(bitfieldExtract(word,0,16),bitfieldExtract(word,16,16));
+    uvec2 sum = uvec2(clamp(old+increment,ivec2(-32768),ivec2(32767))) & 65535u;
+    fit[addr] = int(sum.x | (sum.y<<16u));
+
+    // Axial weights are at most 1/4 per frame and diagonal weights
+    // at most 1/16. The burst-specific scale fits the 9/9/7/7 bit fields.
+    uvec4 off = uvec4(round(adjacent*p.offQuantum));
+    uint encoded = off.x | (off.y<<9u) | (off.z<<18u) | (off.w<<25u);
+    fit[addr+1] = int(uint(fit[addr+1])+encoded);
+}
+void gatherNormal(ivec2 guide) {
+    int id = guide.y*p.rw+guide.x;
+    ivec2 xy = 2*guide;
+    float r = clamp(texelFetch(rob_,guide,0).x,0.0,1.0);
+    int trust = 2*p.width*p.height+id;
+    fit[trust] = min(fit[trust],int(round(1024.0*r)));
+    float confidence = r*r*smoothstep(0.65,0.98,r);
+    if (!(confidence > 0.0)) return;
+    vec2 shift = shiftAt(vec2(xy)+1.0);
+    if (any(greaterThan(abs(shift),vec2(64)))) return;
+    ivec2 base = xy+ivec2(floor(shift));
+    vec2 f = fract(shift);
+    int pixel = xy.y*p.width+xy.x;
+    vec2 u = 1.0-f;
+    vec4 weights = vec4(u.x*u.y,f.x*u.y,u.x*f.y,f.x*f.y);
+    vec3 top = vec3(1.0), mid = vec3(1.0), bottom = vec3(1.0);
+    if (all(greaterThanEqual(base,ivec2(2))) &&
+        all(lessThan(base,ivec2(p.width-4,p.height-4)))) {
+        if (((base.x+base.y)&1)==0) {
+            top.y = checkGreen(texelFetch(cd_,base+ivec2(1,0),0).x);
+            mid.x = checkGreen(texelFetch(cd_,base+ivec2(0,1),0).x);
+            mid.z = checkGreen(texelFetch(cd_,base+ivec2(2,1),0).x);
+            bottom.y = checkGreen(texelFetch(cd_,base+ivec2(1,2),0).x);
+        } else {
+            top.x = checkGreen(texelFetch(cd_,base+ivec2(0,0),0).x);
+            top.z = checkGreen(texelFetch(cd_,base+ivec2(2,0),0).x);
+            mid.y = checkGreen(texelFetch(cd_,base+ivec2(1,1),0).x);
+            bottom.x = checkGreen(texelFetch(cd_,base+ivec2(0,2),0).x);
+            bottom.z = checkGreen(texelFetch(cd_,base+ivec2(2,2),0).x);
+        }
+    } else {
+        top = vec3(loadGreen(base),loadGreen(base+ivec2(1,0)),loadGreen(base+ivec2(2,0)));
+        mid = vec3(loadGreen(base+ivec2(0,1)),loadGreen(base+ivec2(1,1)),loadGreen(base+ivec2(2,1)));
+        bottom = vec3(loadGreen(base+ivec2(0,2)),loadGreen(base+ivec2(1,2)),loadGreen(base+ivec2(2,2)));
+    }
+    gatherRow(pixel,vec4(top.xy,mid.xy),weights,confidence);
+    gatherRow(pixel+1,vec4(top.yz,mid.yz),weights,confidence);
+    gatherRow(pixel+p.width,vec4(mid.xy,bottom.xy),weights,confidence);
+    gatherRow(pixel+p.width+1,vec4(mid.yz,bottom.yz),weights,confidence);
+}
+void initializeNormal(ivec2 xy) {
+    int id = xy.y*p.width+xy.x;
+    int word = 0;
+    if (((xy.x+xy.y)&1)!=0 && all(greaterThanEqual(xy,ivec2(2))) &&
+        all(lessThan(xy,ivec2(p.width-2,p.height-2)))) {
+        float value = texelFetch(cd_,xy,0).x;
+        if (!isnan(value) && !isinf(value) && value < 0.98) {
+            int rhs = int(round(clamp((value-0.5)*p.quantum,-32768.0,32767.0)));
+            word = (rhs & 65535) | (int(p.quantum)<<16);
+        }
+    }
+    fit[2*id] = word;
+    fit[2*id+1] = 0;
+    if (((xy.x|xy.y)&1)==0) {
+        fit[2*p.width*p.height+(xy.y/2)*p.rw+xy.x/2] = 1024;
+    }
+}
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy), size = ivec2(p.width,p.height);
+    if (p.op == 5) size /= 2;
+    if (any(greaterThanEqual(q,size))) return;
+    if (p.op == 4) initializeNormal(q); else gatherNormal(q);
+}

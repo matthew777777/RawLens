@@ -1,0 +1,191 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+// merge_splat.comp specialised for the app recipe (Bayer, colour differences,
+// Wronski per-frame kernels, continuous motion, wide faded R/B gather, detail
+// green): same formulas and summation order, without the mode branches. No
+// dynamic vector indexing; each green path is inlined once; the fade window is
+// evaluated per axis. Inputs are images: the texture unit does the gathers
+// (Mali LS 43 -> 4 cycles). Anything else keeps merge_splat.comp.
+// Push as merge_splat: pad[1] tiles per row, pad[2] [3] output size, tileSize,
+// mode 1 = first frame (reference, r = 1 everywhere): write the accumulators,
+// scale, alpha = R/B kernel width factor, beta = green frame weight.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D comp_;
+layout(set = 0, binding = 1) uniform highp sampler2D field_;
+layout(set = 0, binding = 2) uniform highp sampler2D cov_;
+layout(set = 0, binding = 3) uniform highp sampler2D rob_;
+layout(set = 0, binding = 6) uniform highp sampler2D green_;
+layout(set = 0, binding = 4)  buffer Num { float num_[]; };
+layout(set = 0, binding = 5)  buffer Den { float den_[]; };
+
+vec4 flowWeights(float t) {
+  float u = 1.0-t;
+  return vec4(u*u*u, 4.0-6.0*t*t+3.0*t*t*t, 1.0+3.0*t+3.0*t*t-3.0*t*t*t, t*t*t) / 6.0;
+}
+// Keys cubic (a = -1.5) at offsets -1..2 minus t.
+vec4 greenCubic(float t) {
+  const float a = -1.5;
+  vec2 n = vec2(t, 1.0 - t), f = vec2(1.0 + t, 2.0 - t);
+  n = ((a+2.0)*n-(a+3.0))*n*n+1.0;
+  f = ((a*f-5.0*a)*f+8.0*a)*f-4.0*a;
+  return vec4(f.x, n.x, n.y, f.y);
+}
+float sensorGreen(int j, int i) {
+  int jp = j & 1, ip = i & 1;
+  j = clamp(j, jp, int(p.width)-2+jp); i = clamp(i, ip, int(p.height)-2+ip);
+  return texelFetch(comp_, ivec2(j, i), 0).x;
+}
+float dirGreen(float l, float r, float u, float d) {
+  float dh = abs(l-r), dv = abs(u-d);
+  float wh = 1.0/(1e-8+dh*dh), wv = 1.0/(1e-8+dv*dv);
+  return (wh*(l+r)+wv*(u+d))/(2.0*(wh+wv));
+}
+float anyGreen(int j, int i) {
+  return ((j+i)&1)==1 ? sensorGreen(j,i)
+      : dirGreen(sensorGreen(j-1,i),sensorGreen(j+1,i),sensorGreen(j,i-1),sensorGreen(j,i+1));
+}
+float interpolateGreen(vec2 position) {
+  ivec2 near = ivec2(floor(position));
+  near.x -= (near.x + near.y) & 1;
+  float dx = abs(sensorGreen(near.x - 1, near.y) - sensorGreen(near.x + 1, near.y));
+  float dy = abs(sensorGreen(near.x, near.y - 1) - sensorGreen(near.x, near.y + 1));
+  float strong = max(dx, dy);
+  float axial = 1.0 - min(dx, dy) / max(strong, 1e-8);
+  float guard = smoothstep(0.01, 0.05, strong) * smoothstep(0.35, 0.65, axial);
+  float measured = 0.0, value = 0.0;
+  vec2 sensor = position - 0.5;
+  // Away from the frame edge no site needs the parity clamp.
+  bool inside = all(greaterThan(near, ivec2(8))) && all(lessThan(near, ivec2(p.width, p.height) - 8));
+  if (guard < 1.0) {
+    vec2 q = 0.5 * vec2(sensor.x + sensor.y - 1.0, sensor.x - sensor.y - 1.0);
+    ivec2 base = ivec2(floor(q));
+    vec2 t = fract(q);
+    vec4 wx = greenCubic(t.x), wy = greenCubic(t.y);
+    float lo = 3.402823e38, hi = -3.402823e38;
+    for (int y = 0; y < 4; ++y) {
+      float vy = y == 0 ? wy.x : y == 1 ? wy.y : y == 2 ? wy.z : wy.w;
+      for (int x = 0; x < 4; ++x) {
+        ivec2 site = base + ivec2(x, y) - 1;
+        ivec2 at = ivec2(site.x + site.y + 1, site.x - site.y);
+        float c = inside ? texelFetch(comp_, at, 0).x : sensorGreen(at.x, at.y);
+        measured += (x == 0 ? wx.x : x == 1 ? wx.y : x == 2 ? wx.z : wx.w) * vy * c;
+        lo = min(lo, c); hi = max(hi, c);
+      }
+    }
+    measured = clamp(measured, lo, hi);
+    if (guard == 0.0) return measured;
+  }
+  ivec2 base = ivec2(floor(sensor));
+  vec2 t = fract(sensor);
+  vec4 wx = greenCubic(t.x), wy = greenCubic(t.y);
+  float lo = 3.402823e38, hi = -3.402823e38;
+  for (int y = 0; y < 4; ++y) {
+    float vy = y == 0 ? wy.x : y == 1 ? wy.y : y == 2 ? wy.z : wy.w;
+    for (int x = 0; x < 4; ++x) {
+      ivec2 at = base + ivec2(x, y) - 1;
+      float c = inside ? texelFetch(green_, at, 0).x : anyGreen(at.x, at.y);
+      value += (x == 0 ? wx.x : x == 1 ? wx.y : x == 2 ? wx.z : wx.w) * vy * c;
+      lo = min(lo, c); hi = max(hi, c);
+    }
+  }
+  value = clamp(value, lo, hi);
+  return guard < 1.0 ? mix(measured, value, guard) : value;
+}
+float fade(float x) { return 1.0 - smoothstep(2.5, 3.5, abs(x)); }
+
+void splat(uvec2 hr) {
+  uint id = hr.y * p.pad[2] + hr.x;
+  uint lrW = p.width, lrH = p.height, nTilesX = p.pad[1];
+  float lr_x = (float(hr.x) + 0.5) / p.scale;
+  float lr_y = (float(hr.y) + 0.5) / p.scale;
+  uint gw = lrW / 2u, gh = lrH / 2u;
+  float local_r;
+  {
+    vec2 q = clamp(vec2(lr_x,lr_y)*0.5-0.5, vec2(0), vec2(gw-1u, gh-1u));
+    uvec2 lo = uvec2(q), hi = min(lo+1u, uvec2(gw-1u, gh-1u));
+    vec2 f = fract(q);
+    local_r = mix(mix(texelFetch(rob_, ivec2(lo.x, lo.y), 0).x,texelFetch(rob_, ivec2(hi.x, lo.y), 0).x,f.x),
+                  mix(texelFetch(rob_, ivec2(lo.x, hi.y), 0).x,texelFetch(rob_, ivec2(hi.x, hi.y), 0).x,f.x),f.y);
+  }
+  if (local_r <= 0.0) return;   // a rejected sample adds exactly 0
+  vec2 F = vec2(0);
+  {
+    vec2 g = vec2(lr_x, lr_y) / float(p.tileSize) - 0.5;
+    ivec2 base = ivec2(floor(g));
+    vec4 wx = flowWeights(fract(g.x)), wy = flowWeights(fract(g.y));
+    int ny = int((lrH + p.tileSize - 1u) / p.tileSize);
+    for (int y = 0; y < 4; ++y) {
+      int row = clamp(base.y+y-1, 0, ny-1);
+      float vy = y == 0 ? wy.x : y == 1 ? wy.y : y == 2 ? wy.z : wy.w;
+      for (int x = 0; x < 4; ++x) {
+        float vx = x == 0 ? wx.x : x == 1 ? wx.y : x == 2 ? wx.z : wx.w;
+        F += vx*vy*texelFetch(field_, ivec2(clamp(base.x+x-1, 0, int(nTilesX)-1), row), 0).xy;
+      }
+    }
+  }
+  float mov_x = lr_x + F.x, mov_y = lr_y + F.y;
+  if (!(mov_x >= 0.0 && mov_x < float(lrW) && mov_y >= 0.0 && mov_y < float(lrH))) return;
+
+  float ixx, ixy, iyy, det;
+  {
+    float kj = mov_x / 2.0 - 0.5, ki = mov_y / 2.0 - 0.5;
+    float fx = kj - float(int(kj)), fy = ki - float(int(ki));
+    uint x0 = uint(max(int(kj), 0)), y0 = uint(max(int(ki), 0));
+    uint x1 = min(x0 + 1u, gw - 1u), y1 = min(y0 + 1u, gh - 1u);
+    vec3 c = mix(mix(texelFetch(cov_, ivec2(x0, y0), 0).xyz, texelFetch(cov_, ivec2(x1, y0), 0).xyz, fx),
+                 mix(texelFetch(cov_, ivec2(x0, y1), 0).xyz, texelFetch(cov_, ivec2(x1, y1), 0).xyz, fx), fy);
+    det = c.x * c.z - c.y * c.y;
+    float inv = 1.0 / det;
+    ixx = inv * c.z; ixy = -inv * c.y; iyy = inv * c.x;
+  }
+  int center_j = int(mov_x), center_i = int(mov_y);
+  float mov_j = mov_x - 0.5, mov_i = mov_y - 0.5;
+  float cs = p.alpha > 0.0 ? p.alpha : 1.0;
+  float chromaInv = 1.0 / (cs * cs);
+  float valR = 0.0, valB = 0.0, accR = 0.0, accB = 0.0;
+  for (int di = -3; di <= 3; di++) {
+    int i2 = center_i + di;
+    if (i2 < 0 || i2 >= int(lrH)) continue;
+    float dy = float(i2) - mov_i;
+    float wy = fade(dy);
+    float val = 0.0, acc = 0.0;
+    bool blue = (i2 & 1) == 1;
+    float v = blue ? valB : valR, a = blue ? accB : accR;
+    [[dont_unroll]] for (int dj = -3 + ((center_j - 3 + i2) & 1); dj <= 3; dj += 2) {
+      int j = center_j + dj;
+      if (j < 0 || j >= int(lrW)) continue;
+      float c = texelFetch(comp_, ivec2(j, i2), 0).x;
+      float dx = float(j) - mov_j;
+      float z = max(ixx * dx * dx + 2.0 * ixy * dx * dy + iyy * dy * dy, 0.0);
+      z *= chromaInv;
+      float w = exp(-0.5 * z) * (fade(dx) * wy);
+      v += w * local_r * c;
+      a += w * local_r;
+    }
+    if (blue) { valB = v; accB = a; } else { valR = v; accR = a; }
+  }
+  float valG = 0.0, accG = 0.0;
+  if (p.beta > 0.0) {
+    accG = 3.14159265359*sqrt(max(det,0.0))*local_r*p.beta;
+    valG = accG * interpolateGreen(vec2(mov_x, mov_y));
+  }
+  if (p.mode == 1u) {   // first frame: initialise
+    num_[id*3u] = valR; num_[id*3u+1u] = valG; num_[id*3u+2u] = valB;
+    den_[id*3u] = accR; den_[id*3u+1u] = accG; den_[id*3u+2u] = accB;
+    return;
+  }
+  num_[id*3u] += valR; num_[id*3u+1u] += valG; num_[id*3u+2u] += valB;
+  den_[id*3u] += accR; den_[id*3u+1u] += accG; den_[id*3u+2u] += accB;
+}
+void main() {
+  if (gl_GlobalInvocationID.x >= p.pad[2] || gl_GlobalInvocationID.y >= p.pad[3]) return;
+  splat(gl_GlobalInvocationID.xy);
+}

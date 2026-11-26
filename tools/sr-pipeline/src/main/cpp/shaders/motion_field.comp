@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Flow tiles + motion strength (robustness.comp op 6) -> image (flow.xy, S).
+// width/height = tiles, pad[0..2] = Mt, s1, s2 bits.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) readonly buffer F { vec2 f_[]; };
+layout(set = 0, binding = 1, rgba32f) uniform writeonly highp image2D out_;
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy), sz = ivec2(p.width, p.height);
+  if (any(greaterThanEqual(q, sz))) return;
+  float Mt = uintBitsToFloat(p.pad[0]);
+  vec2 lo = vec2(1.0 / 0.0), hi = vec2(-1.0 / 0.0);
+  for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+    ivec2 n = q + ivec2(dx, dy);
+    if (n.x >= 0 && n.x < sz.x && n.y >= 0 && n.y < sz.y) {
+      vec2 f = f_[n.y * sz.x + n.x];
+      hi = max(hi, f);
+      lo = min(lo, f);
+    }
+  }
+  vec2 d = hi - lo;
+  float s = (d.x * d.x + d.y * d.y > Mt * Mt) ? uintBitsToFloat(p.pad[1]) : uintBitsToFloat(p.pad[2]);
+  imageStore(out_, q, vec4(f_[q.y * sz.x + q.x], s, 0.0));
+}

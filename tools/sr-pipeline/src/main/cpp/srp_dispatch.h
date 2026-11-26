@@ -20,6 +20,8 @@ namespace srp {
 Status SrpDispatchGroups(Context* ctx, VkBuffer* buffers, uint32_t nbuffers,
                          const void* push, size_t push_size,
                          uint32_t local_size, uint32_t groups,
-                         VkShaderModule shader_module);
+                         VkShaderModule shader_module,
+                         const VkImageView* views = nullptr, uint32_t kinds = 0,
+                         uint32_t groups_y = 1);
 
 }  // namespace srp

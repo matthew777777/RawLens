@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Diagnostics: one-channel image -> float buffer, times alpha.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D in_;
+layout(set = 0, binding = 1) writeonly buffer B { float b_[]; };
+void main() {
+  uvec2 q = gl_GlobalInvocationID.xy;
+  if (q.x < p.width && q.y < p.height) b_[q.y * p.width + q.x] = texelFetch(in_, ivec2(q), 0).x * p.alpha;
+}

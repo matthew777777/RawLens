@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// gat.comp ops 0 + 1 fused (GAT per CFA site, then 2x2 mean): raw image ->
+// half-res GAT grey with no full-res intermediate. 2 = alpha/beta [R,G1,B,G2].
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D raw_;
+layout(set = 0, binding = 1, r32f) uniform writeonly highp image2D out_;
+layout(set = 0, binding = 2) readonly buffer AlphaBeta { vec4 alpha4; vec4 beta4; };
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (any(greaterThanEqual(q, ivec2(p.width, p.height) / 2))) return;
+  // Site order R, G1, G2, B -> EXIF planes 0, 1, 3, 2.
+  vec4 a = alpha4.xywz, b = beta4.xywz;
+  ivec2 j = 2 * q;
+  vec4 v = vec4(texelFetch(raw_, j, 0).x, texelFetch(raw_, j + ivec2(1, 0), 0).x,
+                texelFetch(raw_, j + ivec2(0, 1), 0).x, texelFetch(raw_, j + ivec2(1, 1), 0).x);
+  v = (2.0 / a) * sqrt(max(a * v + 3.0 / 8.0 * a * a + b, 0.0));
+  imageStore(out_, q, vec4((v.x + v.y + v.z + v.w) / 4.0));
+}

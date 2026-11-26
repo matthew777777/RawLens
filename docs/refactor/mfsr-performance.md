@@ -90,3 +90,54 @@ The phone was shared with an LK-R Lite job during part of this session:
 runs taken while it ran are discarded.
 Extra GPU memory for residency: grey + scratch + levels + band, ~140 MB at
 12.5 MP. 64-px tiles (SNR <= 14 dB) keep the split L2 path (shared memory).
+
+## Mobile path (MobileMerge), 2026-11-25/26 — Mali-G615, 8 x 12.5 MP, 1x
+Branch `mfsr/mobile-fast`. `stages/MobileMerge.kt` runs the app recipe
+(Bayer, colour differences, FIR7, Wronski kernels, continuous motion, detail
+reconstruction, S.3, ghost grow, noise evening, lateral CA, blur weights,
+black pedestal, green fit) whenever `MobileMerge.supports` holds; anything
+else, or `-Dsrpipeline.mobile=false`, uses the staged path.
+
+| | cold merge wall | output vs staged |
+|---|---|---|
+| staged path (before) | 14.1-17.0 s | - |
+| mobile, night burst (tile 32) | **3.9-4.4 s** | 85.5 dB; only R/B at point lights (lateral CA fit kR .000050 -> .000041, < 0.03 px) |
+| mobile, same burst forced to tile 64 | 4.0 s | 71.7 dB; a few dark flat tiles pick a different whole-px shift (cascade from last-bit ICA rounding), not visible |
+| mobile 2x (8160x6120) | 10.2 s (staged 24.2 s) | 101 dB |
+| app MfsrMerge, bright burst (tile 16), N=3 | 2.3 s (staged 8.0 s) | 96.5 dB, 1 px > 1 % |
+
+Peak memory (device test, PSS): 1711 -> 1303 MB. App test, N=3: +1640 -> +1183 MB.
+The staged path ran out of Java heap in MergeMemoryDeviceTest at N >= 4 (old
+sobel init in AlignGpu.initGpuFrom); the mobile path runs N = 8.
+
+What paid, in order:
+1. One command buffer per frame, async submit, two upload slots, decode of
+   the next frame on a worker into mapped memory (PhotonCamera c6e71a2).
+2. **Sampled images instead of storage buffers.** Mali-G615 is bound by
+   load/store instructions; texel fetches and gathers use the idle texture
+   unit. Merge malioc LS 53 -> 9 cycles per pixel, robustness 175 -> 7.
+3. Alignment fully on the GPU (pyramid, L2, L1, ICA, flow upscale) with no
+   readback per level. L2/L1 run a fast test (one thread per shift, 2x2
+   gathers). A tile whose runner-up is within float rounding goes to an exact
+   pass with the staged shader's summation order (`align_l2_tie`,
+   `align_l2_tie64`, `align_l1_tie`), so picks match the staged path.
+   L2 847 -> 270 ms, L1 540 -> 170 ms. A plain sum of squared differences
+   (no tie pass) drifted to 75 dB and moved the CA fit.
+4. ICA: same tree as radix-4 steps plus 2 gathers for the sobel neighbours (-20 %).
+5. CPU, bit-exact: motion regularisation vectorised (330 -> 190 ms), CA fit
+   points-outer/scales-inner with dynamic scheduling (700 -> 170 ms),
+   parallel download memcpy.
+6. Alignment of frame k+1 queued before frame k's merge, so the GPU keeps
+   working while the CPU regularises the flow. End passes batched.
+
+Rejected: radix-16 ICA tree (private array spills, 2x slower); unrolled
+grey_fir (rounding changed, no gain); 81- vs 256-thread L2 with the exact sums
+in the same shader (20 KB shared limits occupancy to one workgroup per core).
+
+Gates: `VulkanMobileMergeParityTest` (desktop, MoltenVK; staged vs mobile at
+ISO100/dim, 1x/2x, tiles 16/32/64: 77-134 dB, known-truth score identical),
+`VulkanMobileGateTest` unchanged, module tests pass. Malioc + AOC before/after
+reports (A750, G615, G720): main tree `build/shader-analysis/mfsr-sr-{before,after}`
+and the table in `mfsr-sr-table.md`; 102/102 and 177/177 compile. AOC A750:
+merge_app 10 registers, 100 % occupancy. No Adreno device run; A740 not run.
+Open: pipeline cache persistence across processes; Adreno timing.

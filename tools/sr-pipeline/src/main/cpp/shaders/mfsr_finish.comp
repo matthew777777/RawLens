@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// ColourDiff.reconstruct + BlackPedestal.apply + NaN-to-black, in place.
+// alpha/beta = wbR/wbB, robustness = pedestal. 0 = rgb (3 floats per pixel).
+layout(local_size_x = 256) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) buffer Rgb { float v_[]; };
+void main() {
+  float ped = p.robustness, s = 1.0 / (1.0 - ped);
+  for (uint i = gl_GlobalInvocationID.x; i < p.pixelCount; i += gl_NumWorkGroups.x * 256u) {
+    vec3 c = vec3(v_[3u * i], v_[3u * i + 1u], v_[3u * i + 2u]);
+    c = vec3((c.y + c.x) / p.alpha, c.y, (c.y + c.z) / p.beta);
+    if (ped > 0.0) c = (c - ped) * s;
+    if (any(isnan(c))) c = vec3(0.0);
+    v_[3u * i] = c.x; v_[3u * i + 1u] = c.y; v_[3u * i + 2u] = c.z;
+  }
+}

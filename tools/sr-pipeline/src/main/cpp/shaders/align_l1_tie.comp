@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Tiles align_l1_img.comp could not separate: align_wg.comp on images for
+// radius <= 1, same per-thread partials and the
+// same tree order, all shifts reduced together (9x fewer barriers).
+// width/height = level, tileSize, pad: [1] radius [2] tiles per row.
+layout(local_size_x = 256) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D ref_;
+layout(set = 0, binding = 1) uniform highp sampler2D mov_;
+layout(set = 0, binding = 2) buffer Flow { vec2 flow[]; };
+layout(set = 0, binding = 3) readonly buffer Tie { uint tie_[]; };
+shared float part[9 * 256];
+void main() {
+  const uint lid = gl_LocalInvocationID.x, R = p.pad[1], side = 2u * R + 1u, n = side * side, ts = p.tileSize;
+  const int W = int(p.width), H = int(p.height);
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    if (tie_[t] == 0u) continue;
+    const ivec2 o = ivec2(t % p.pad[2], t / p.pad[2]) * int(ts);
+    const ivec2 f = ivec2(roundEven(flow[t]));
+    float acc[9];
+    for (uint s = 0u; s < n; ++s) acc[s] = 0.0;
+    for (uint i = lid; i < ts * ts; i += 256u) {
+      const ivec2 q = o + ivec2(i % ts, i / ts);
+      const float ref = texelFetch(ref_, q, 0).x;
+      for (uint s = 0u; s < n; ++s) {
+        const ivec2 m = q + f + ivec2(s % side, s / side) - int(R);
+        const float v = (m.y >= 0 && m.y < H && m.x >= 0 && m.x < W) ? texelFetch(mov_, m, 0).x : 0.0;
+        acc[s] += abs(ref - v);
+      }
+    }
+    for (uint s = 0u; s < n; ++s) part[s * 256u + lid] = acc[s];
+    barrier();
+    for (uint k = 128u; k > 0u; k >>= 1u) {
+      if (lid < k) for (uint s = 0u; s < n; ++s) part[s * 256u + lid] += part[s * 256u + lid + k];
+      barrier();
+    }
+    if (lid == 0u) {
+      float best = 1.0 / 0.0;
+      uint bs = 0u;
+      for (uint s = 0u; s < n; ++s) if (part[s * 256u] < best) { best = part[s * 256u]; bs = s; }
+      flow[t] = vec2(f + ivec2(bs % side, bs / side) - int(R));
+    }
+    barrier();
+  }
+}

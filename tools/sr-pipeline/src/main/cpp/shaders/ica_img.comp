@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// ica_wg.comp on images: bilinear moving reads are one gather, gradients come
+// from the reference image (sobel, zero outside), so no gradient planes.
+// 8 px tiles keep ica.comp's own rules (clamped reads, clipped tree terms,
+// unclipped step). Same sums in the same order. pad: [1] tiles per row [2] clip bits [3] iterations.
+layout(local_size_x = 256) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D ref_;
+layout(set = 0, binding = 1) uniform highp sampler2D mov_;
+layout(set = 0, binding = 2) readonly buffer Hess { vec4 hess[]; };
+layout(set = 0, binding = 3) buffer Flow { vec2 flow[]; };
+shared vec2 red[256];
+shared vec2 cur;
+float movAt(int x, int y, int W, int H) {
+  return (y >= 0 && y < H && x >= 0 && x < W) ? texelFetch(mov_, ivec2(x, y), 0).x : 0.0;
+}
+void main() {
+  const uint lid = gl_LocalInvocationIndex, T = p.tileSize;
+  const int W = int(p.width), H = int(p.height);
+  const vec2 inv = 1.0 / vec2(W, H);
+  const bool small = T == 8u;
+  const float clip_radius = uintBitsToFloat(p.pad[2]);
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    const ivec2 o = ivec2(t % p.pad[1], t / p.pad[1]) * int(T);
+    float A00 = hess[t].x, A01 = hess[t].y, A10 = hess[t].y, A11 = hess[t].z;
+    float det = A00 * A11 - A01 * A10;
+    bool solvable = abs(det) >= 1e-10;          // uniform across the group
+    float det_inv = solvable ? 1.0 / det : 0.0;
+    if (lid == 0u) cur = flow[t];
+    barrier();
+    for (uint it = 0u; solvable && it < p.pad[3]; it++) {
+      vec2 a = cur;
+      vec2 b = vec2(0.0);
+      for (uint q = lid; q < T * T; q += 256u) {
+        ivec2 x = o + ivec2(q % T, q / T);
+        vec2 f = vec2(x) + a;
+        ivec2 f0 = ivec2(floor(f));
+        vec2 fr = f - vec2(f0);
+        float m00, m01, m10, m11;
+        if (f0.x >= 0 && f0.y >= 0 && f0.x < W - 1 && f0.y < H - 1) {
+          vec4 g = textureGather(mov_, vec2(f0 + 1) * inv);
+          m00 = g.w; m01 = g.z; m10 = g.x; m11 = g.y;
+        } else if (small) {
+          ivec2 last = ivec2(W, H) - 1, lo = clamp(f0, ivec2(0), last), hi = min(lo + 1, last);
+          m00 = texelFetch(mov_, lo, 0).x; m01 = texelFetch(mov_, ivec2(hi.x, lo.y), 0).x;
+          m10 = texelFetch(mov_, ivec2(lo.x, hi.y), 0).x; m11 = texelFetch(mov_, hi, 0).x;
+        } else {
+          m00 = movAt(f0.x, f0.y, W, H); m01 = movAt(f0.x + 1, f0.y, W, H);
+          m10 = movAt(f0.x, f0.y + 1, W, H); m11 = movAt(f0.x + 1, f0.y + 1, W, H);
+        }
+        // Two gathers hold the reference pixel and its four neighbours.
+        vec4 lo = textureGather(ref_, vec2(x) * inv), hi = textureGather(ref_, vec2(x + 1) * inv);
+        float rc = hi.w;
+        float top = m00 + (m01 - m00) * fr.x;
+        float bot = m10 + (m11 - m10) * fr.x;
+        float gradt = (top + (bot - top) * fr.y) - rc;
+        float xm = x.x > 0 ? lo.x : 0.0, ym = x.y > 0 ? lo.z : 0.0;
+        float xp = x.x < W - 1 ? hi.z : 0.0, yp = x.y < H - 1 ? hi.x : 0.0;
+        float gx = -xm + xp, gy = -ym + yp;
+        b += vec2(-gx * gradt, -gy * gradt);
+      }
+      red[lid] = b;
+      barrier();
+      // Binary tree (partner distance 128 .. 1) as radix-4 steps: same additions, half the barriers.
+      for (uint n = 64u; n > 0u; n >>= 2u) {
+        if (lid < n) {
+          vec2 v0 = red[lid], v1 = red[lid + n], v2 = red[lid + 2u * n], v3 = red[lid + 3u * n];
+          if (small) { v2 = clamp(v2, -clip_radius, clip_radius); v3 = clamp(v3, -clip_radius, clip_radius); }
+          v0 += v2; v1 += v3;
+          red[lid] = v0 + (small ? clamp(v1, -clip_radius, clip_radius) : v1);
+        }
+        barrier();
+      }
+      if (lid == 0u) {
+        vec2 B = red[0];
+        vec2 d = vec2(det_inv * (A11 * B.x - A01 * B.y), det_inv * (-A10 * B.x + A00 * B.y));
+        cur = a + (small ? d : clamp(d, -clip_radius, clip_radius));
+      }
+      barrier();
+    }
+    if (lid == 0u) flow[t] = cur;
+    barrier();
+  }
+}

@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// L2 block matching for one level. One thread per shift sums squared
+// differences over 2x2 texture gathers (equals corr_l2_fused.comp's box - 2 corr
+// up to the constant reference term) and the first minimum is added to the flow.
+// A tile whose runner-up lies within the rounding of those sums is left to
+// align_l2_tie.comp, so both paths pick the same shift. Split in two because the
+// exact sums' shared memory would limit this pass to one workgroup per core.
+// 64 px tiles go to align_l2_tie64.comp instead.
+// width/height = level, tileSize, pad: [1] tiles per row [2] radius (<= 4).
+layout(local_size_x = 81) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D ref_;
+layout(set = 0, binding = 1) uniform highp sampler2D mov_;
+layout(set = 0, binding = 2) buffer Flow { vec2 flow[]; };
+layout(set = 0, binding = 3) writeonly buffer Tie { uint tie_[]; };
+shared float energy[81];
+shared float refSq;
+// Runner-up margin, relative to the box energy, that leaves the pick to the
+// exact sums: several times the float error of 2 x 32 + 32 additions.
+const float TIE = 3e-6;
+const float TIE64 = 1e-4;   // 64 px tiles: plain sequential sums of 4096 terms
+void main() {
+  const uint lid = gl_LocalInvocationID.x, r = p.pad[2], C = 2u * r + 1u, CC = C * C, T = p.tileSize;
+  const vec2 inv = 1.0 / vec2(p.width, p.height);
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    const ivec2 o = ivec2(t % p.pad[1], t / p.pad[1]) * int(T);
+    const ivec2 at = o + ivec2(roundEven(flow[t]));
+    if (lid < CC) {
+      const ivec2 m = at + ivec2(lid % C, lid / C) - int(r);
+      float s = 0.0, sq = 0.0;
+      for (uint y = 0u; y < T; y += 2u) for (uint x = 0u; x < T; x += 2u) {
+        const ivec2 d = ivec2(x, y) + 1;
+        vec4 q = textureGather(ref_, vec2(o + d) * inv);
+        vec4 e = textureGather(mov_, vec2(m + d) * inv) - q;
+        s += dot(e, e);
+        sq += dot(q, q);
+      }
+      energy[lid] = s;
+      if (lid == 0u) refSq = sq;
+    }
+    barrier();
+    if (lid == 0u) {
+      float best = 3.402823466e+38, second = best;
+      uint bs = 0u;
+      for (uint c = 0u; c < CC; c++) {
+        if (energy[c] < best) { second = best; best = energy[c]; bs = c; }
+        else second = min(second, energy[c]);
+      }
+      bool tie = !(second - best > (T > 32u ? TIE64 : TIE) * (refSq + best));
+      tie_[t] = tie ? 1u : 0u;
+      if (!tie) flow[t] += vec2(int(bs % C) - int(r), int(bs / C) - int(r));
+    }
+    barrier();
+  }
+}

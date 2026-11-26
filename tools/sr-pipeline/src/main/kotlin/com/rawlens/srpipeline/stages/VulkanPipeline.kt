@@ -59,6 +59,22 @@ object VulkanPipeline {
      */
     const val GHOST_VISIBILITY = 100f
 
+    /** Diagnostics: per-frame flow before/after regularisation and robustness maps (`SRP_R_DUMP` or `-Dsrpipeline.rDump`). */
+    internal val dumpDir: String? get() = (System.getenv("SRP_R_DUMP") ?: System.getProperty("srpipeline.rDump"))?.takeIf { it.isNotEmpty() }
+
+
+    /** Modules of the [MobileMerge] path. */
+    class MobileSpirvs(private val modules: Map<String, ByteArray>) {
+        operator fun get(name: String): ByteArray = requireNotNull(modules[name]) { "mobile module $name missing" }
+        companion object {
+            private val NAMES = listOf("raw_image", "colour_diff", "kern_pre", "kern_cov", "ref_stats", "ref_hf", "motion_field",
+                "rob_means", "rob_test", "rob_window", "noise_acc_img", "grey_fir_img", "green_gather",
+                "merge_app", "merge_app_ref", "mfsr_finish", "mfsr_divide", "img_dump",
+                "pyr_img", "hess_img", "flow_up", "align_l2_img", "align_l2_tie", "align_l2_tie64", "align_l1_img", "align_l1_tie", "ica_img")
+            /** From SPIR-V by shader name. */
+            fun load(asset: (String) -> ByteArray) = MobileSpirvs(NAMES.associateWith(asset))
+        }
+    }
 
     /** Stage modules beyond the align loop's own [AlignGpu.Spirvs]. */
     data class Spirvs(
@@ -99,6 +115,8 @@ object VulkanPipeline {
         val twoBandTensor: ByteArray? = null,
         /** rob_feather.comp: feathered robustness (TwoBandReconstruction.Params.featherRadius). */
         val robFeather: ByteArray? = null,
+        /** Asynchronous mobile path ([MobileMerge]) when the recipe supports it. */
+        val mobile: MobileSpirvs? = null,
     )
 
 
@@ -276,6 +294,19 @@ object VulkanPipeline {
         heapLog("ref-decoded")
         val h = refBox!!.size
         val w = refBox[0].size
+        if (frameObserver == null && flowTransform == null && (greenFit == null || greenFit.onDevice) &&
+            MobileMerge.supports(config, spirvs)) {
+            val floats = (h * config.scale).toInt() * (w * config.scale).toInt() * 3
+            val out = output?.also {
+                require(it.capacity() >= floats * 4) { "VulkanPipeline: output buffer too small" }
+                it.clear()
+            } ?: SrpBridge.directFloats(floats)
+            val frame = refBox!!
+            refBox = null
+            return MobileMerge(handle, config, spirvs, spirvs.mobile!!, greenFit, w, h, comparisons.size + 1).use {
+                it.run(frame, comparisons, scratch.floats(w * h), out)
+            }
+        }
         // Mobile grey (FIR7/11/15): half-band taps shared with Grey.firLowpass.
         val firRadius = when (config.greyMethod) { "FIR", "FIR7" -> 7; "FIR11" -> 11; "FIR15" -> 15; else -> 0 }
         val firTaps = if (firRadius == 0) FloatArray(0) else Grey.halfBandTaps(firRadius).let { t ->
@@ -818,6 +849,11 @@ object VulkanPipeline {
                     else greyOfInto(frame, frameBuf, kernPre, loopRows)
                 timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs, pyramidReuse) }
             }
+            dumpDir?.let { dir ->
+                val idx = java.io.File(dir).list()?.count { it.startsWith("pre_") } ?: 0
+                java.io.File(dir, "pre_%02d.f32".format(idx)).writeBytes(java.nio.ByteBuffer.allocate(estimatedFlow.size * estimatedFlow[0].size * 8)
+                    .order(java.nio.ByteOrder.LITTLE_ENDIAN).also { b -> for (r in estimatedFlow) for (v in r) { b.putFloat(v[0]); b.putFloat(v[1]) } }.array())
+            }
             motionField?.let { field ->
                 timed("motionRegularize") { field.regularize(estimatedFlow, config.robustnessParams.mt) }
             }
@@ -868,7 +904,7 @@ object VulkanPipeline {
             }
             // Debug: SRP_R_DUMP=<dir> writes each frame's robustness map
             // (guide grid, float32) and prints its mean / rejected share.
-            System.getenv("SRP_R_DUMP")?.takeIf { it.isNotEmpty() }?.let { dir ->
+            dumpDir?.takeIf { it.isNotEmpty() }?.let { dir ->
                 val fb = rBuf.duplicate().order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
                 val n = rSize0
                 val r = FloatArray(n).also { fb.position(0); fb.get(it) }

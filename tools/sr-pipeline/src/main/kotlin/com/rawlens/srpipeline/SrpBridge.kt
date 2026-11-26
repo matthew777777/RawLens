@@ -167,7 +167,7 @@ object SrpBridge {
      * Generic resident dispatch: binds `res[i]` (validated for >= `minFloats[i]`
      * floats) at bindings 0..n-1, pushes the 32-word HmsrPush block `push`
      * (bit patterns; floats via [java.lang.Float.floatToRawIntBits]) and runs
-     * `groups` groups of `localSize`. Returns the `srp::Status` ordinal.
+     * `groups` groups of `localSize` (low 16 bits x, high 16 bits y, 0 = 1). Returns the `srp::Status` ordinal.
      */
     @JvmStatic
     external fun nativeDispatchRes(
@@ -182,6 +182,32 @@ object SrpBridge {
         val groups = minOf(65535L, (items + localSize - 1) / localSize).toInt()
         return nativeDispatchRes(handle, spirv, res, minFloats, push, localSize, groups)
     }
+
+    /** Float image (1, 2 or 4 channels) read by the texture unit: a negative handle for [dispatch2d], 0 on failure. */
+    @JvmStatic external fun nativeCreateImage(handle: Long, w: Int, h: Int, channels: Int): Long
+    @JvmStatic external fun nativeFreeImage(handle: Long, image: Long)
+
+    /** Minimum-size entries of [nativeDispatchRes] that bind an image: sampled or storage. */
+    const val SAMPLED = -1L
+    const val STORAGE = -2L
+
+    /** [nativeDispatchRes] over a w x h grid with 16x16 workgroups. */
+    fun dispatch2d(handle: Long, spirv: ByteArray, res: LongArray, minFloats: LongArray, push: IntArray, w: Int, h: Int): Int =
+        nativeDispatchRes(handle, spirv, res, minFloats, push, 256, ((w + 15) / 16) or (((h + 15) / 16) shl 16))
+
+    /** [kR, kB, nccR, nccB, points] of [stages.LateralCa] on a resident colour-difference image. */
+    @JvmStatic external fun nativeLateralCaFit(handle: Long, res: Long, w: Int, h: Int, scale: Float): FloatArray?
+    /** [stages.MotionField] regularisation on an interleaved flow, in place. */
+    @JvmStatic external fun nativeMotionRegularize(flow: FloatArray, weight: FloatArray, w: Int, h: Int, threshold: Float)
+    /** Record every following dispatch into batch `slot` (0..3) until [nativeBatchSubmit]; see srp_context.h. */
+    @JvmStatic external fun nativeBatchBegin(handle: Long, slot: Int): Int
+    @JvmStatic external fun nativeBatchSubmit(handle: Long): Int
+    @JvmStatic external fun nativeBatchWait(handle: Long, slot: Int): Int
+    /** Resident in host-cached memory (fast readback), uninitialised. */
+    @JvmStatic external fun nativeCreateHostResident(handle: Long, count: Long): Long
+    /** Host view of a resident until [nativeUnmapResident]; the caller keeps GPU and host access apart. */
+    @JvmStatic external fun nativeMapResident(handle: Long, res: Long, count: Long): ByteBuffer?
+    @JvmStatic external fun nativeUnmapResident(handle: Long, res: Long)
 
     /**
      * Downloads `count` floats from a resident buffer into `outBuffer`.

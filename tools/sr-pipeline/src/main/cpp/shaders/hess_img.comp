@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// ica.comp op 0 (per-tile Hessian) from the reference level image; gradients as
+// sobel (zero outside the image). pad[1] = tiles per row.
+layout(local_size_x = 256) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D ref_;
+layout(set = 0, binding = 1) writeonly buffer Hess { vec4 hess[]; };
+float at(int x, int y) {
+  return x >= 0 && y >= 0 && x < int(p.width) && y < int(p.height) ? texelFetch(ref_, ivec2(x, y), 0).x : 0.0;
+}
+void main() {
+  for (uint t = gl_GlobalInvocationID.x; t < p.tileCount; t += gl_NumWorkGroups.x * 256u) {
+    int ox = int((t % p.pad[1]) * p.tileSize), oy = int((t / p.pad[1]) * p.tileSize);
+    float h00 = 0.0, h01 = 0.0, h11 = 0.0;
+    for (int i = 0; i < int(p.tileSize); i++) for (int j = 0; j < int(p.tileSize); j++) {
+      int x = ox + j, y = oy + i;
+      float gx = -at(x - 1, y) + at(x + 1, y), gy = -at(x, y - 1) + at(x, y + 1);
+      h00 += gx * gx;
+      h01 += gx * gy;
+      h11 += gy * gy;
+    }
+    hess[t] = vec4(h00, h01, h11, 0.0);
+  }
+}

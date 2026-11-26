@@ -31,19 +31,6 @@ bool InternSpirv(JNIEnv* env, srp::Context* ctx, jbyteArray spirv,
                  VkShaderModule* out_module);
 
 // Finds a memory type with the requested property flags.
-bool FindMemoryType(VkPhysicalDevice physical, uint32_t type_bits,
-                    VkMemoryPropertyFlags flags, uint32_t* out_index) {
-  VkPhysicalDeviceMemoryProperties props{};
-  vkGetPhysicalDeviceMemoryProperties(physical, &props);
-  for (uint32_t i = 0; i < props.memoryTypeCount; ++i) {
-    if ((type_bits & (1u << i)) != 0u &&
-        (props.memoryTypes[i].propertyFlags & flags) == flags) {
-      *out_index = i;
-      return true;
-    }
-  }
-  return false;
-}
 
 // Host-visible staging buffer, filled from `src` (may be null for
 // zero-initialized output buffers).
@@ -61,10 +48,7 @@ bool MakeStagingBuffer(VkDevice device, VkPhysicalDevice physical, VkDeviceSize 
   VkMemoryRequirements req{};
   vkGetBufferMemoryRequirements(device, buffer, &req);
   uint32_t index = 0;
-  if (!FindMemoryType(physical, req.memoryTypeBits,
-                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                      &index)) {
+  if (!srp::SrpFindHostMemory(physical, req.memoryTypeBits, &index)) {
     vkDestroyBuffer(device, buffer, nullptr);
     return false;
   }
@@ -3306,7 +3290,7 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeDi
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   srp::Context* ctx = CorrContext(handle, &device, &physical);
   if (ctx == nullptr || spirv == nullptr || res == nullptr || min_floats == nullptr ||
-      push == nullptr || local_size <= 0 || groups <= 0 || groups > 65535) {
+      push == nullptr || local_size <= 0 || groups <= 0) {
     return static_cast<jint>(srp::Status::kInitFailed);
   }
   const jsize n = env->GetArrayLength(res);
@@ -3318,7 +3302,15 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeDi
   env->GetLongArrayRegion(res, 0, n, handles.data());
   env->GetLongArrayRegion(min_floats, 0, n, mins.data());
   std::vector<VkBuffer> bufs(static_cast<size_t>(n), VK_NULL_HANDLE);
+  // Negative handles are images: minimum -1 binds sampled, -2 storage.
+  std::vector<VkImageView> views(static_cast<size_t>(n), VK_NULL_HANDLE);
+  uint32_t kinds = 0;
   for (jsize i = 0; i < n; ++i) {
+    if (handles[i] < 0 && (mins[i] == -1 || mins[i] == -2)) {
+      views[static_cast<size_t>(i)] = srp::SrpImageView(ctx, handles[i]);
+      kinds |= static_cast<uint32_t>(-mins[i]) << (2 * i);
+      continue;
+    }
     if (mins[i] < 0 || srp::SrpResidentBuffer(ctx, handles[i], static_cast<size_t>(mins[i]),
                                               &bufs[static_cast<size_t>(i)]) != srp::Status::kOk) {
       return static_cast<jint>(srp::Status::kInitFailed);
@@ -3334,5 +3326,6 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeDi
   VkShaderModule module = srp::SrpInternModule(ctx, bytes.data(), bytes.size());
   if (module == VK_NULL_HANDLE) return static_cast<jint>(srp::Status::kDispatchFailed);
   return static_cast<jint>(srp::SrpDispatchGroups(ctx, bufs.data(), static_cast<uint32_t>(n),
-      words, sizeof(words), static_cast<uint32_t>(local_size), static_cast<uint32_t>(groups), module));
+      words, sizeof(words), static_cast<uint32_t>(local_size), static_cast<uint32_t>(groups) & 0xffffu, module,
+      views.data(), kinds, std::max(1u, static_cast<uint32_t>(groups) >> 16)));
 }

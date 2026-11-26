@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Separable 1-D windows of the robustness map (ghost mask and 5x5 minimum):
+// same results as robustness.comp ops 10 and 5. Large maxima run as two short
+// passes (window 7, then taps at most 7 apart), which is exact because max is
+// order-free and the clamped windows overlap. width/height = guide grid.
+// pad: [0] axis [1] 0 mean / 1 max / 2 min / 3 constant [2] taps [3] half span
+//      [4] ramp the input into a blob seed [5] cap the result by 1 - cap
+// alpha: factor on the result (blurry-frame weight).
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D in_;
+layout(set = 0, binding = 1, r32f) uniform writeonly highp image2D out_;
+layout(set = 0, binding = 2) uniform highp sampler2D cap_;
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy), sz = ivec2(p.width, p.height);
+  if (any(greaterThanEqual(q, sz))) return;
+  uint kind = p.pad[1];
+  int taps = int(p.pad[2]), span = int(p.pad[3]);
+  bool ramp = p.pad[4] != 0u;
+  ivec2 axis = p.pad[0] == 0u ? ivec2(1, 0) : ivec2(0, 1);
+  float m = kind == 2u ? 1.0 / 0.0 : kind == 3u ? 1.0 : 0.0;
+  const bool dense = taps == 2 * span + 1, inside = all(greaterThanEqual(q, ivec2(span))) && all(lessThan(q, sz - span));
+  for (int k = 0; k < taps; ++k) {
+    int o = dense ? k - span : (2 * span * k) / (taps - 1) - span;
+    ivec2 at = q + o * axis;
+    float v = texelFetch(in_, inside ? at : clamp(at, ivec2(0), sz - 1), 0).x;
+    if (ramp) v = clamp(2.0 * v - 0.5, 0.0, 1.0);
+    m = kind == 0u ? m + v : kind == 1u ? max(m, v) : min(m, v);
+  }
+  if (kind == 0u) m /= float(taps);
+  if (p.pad[5] != 0u) m = min(m, 1.0 - texelFetch(cap_, q, 0).x);
+  imageStore(out_, q, vec4(m * p.alpha));
+}

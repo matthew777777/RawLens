@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// align_l2_tie.comp for 64 px tiles: the split L2 path's sums (corr.comp op 0
+// extract, corr_direct.comp, corr_argmin_wg.comp energies), same sequential
+// row-major order, read from the images. One thread per shift.
+layout(local_size_x = 81) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D ref_;
+layout(set = 0, binding = 1) uniform highp sampler2D mov_;
+layout(set = 0, binding = 2) buffer Flow { vec2 flow[]; };
+layout(set = 0, binding = 3) readonly buffer Tie { uint tie_[]; };
+shared float energy[81];
+void main() {
+  const uint lid = gl_LocalInvocationID.x, r = p.pad[2], C = 2u * r + 1u, CC = C * C, T = p.tileSize;
+  const ivec2 last = ivec2(p.width, p.height) - 1;
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    if (tie_[t] == 0u) continue;
+    const ivec2 o = ivec2(t % p.pad[1], t / p.pad[1]) * int(T);
+    const ivec2 at = o + ivec2(roundEven(flow[t])) - int(r);
+    if (lid < CC) {
+      const ivec2 m = at + ivec2(lid % C, lid / C);
+      float box = 0.0, corr = 0.0;
+      for (uint iy = 0u; iy < T; iy++) for (uint jx = 0u; jx < T; jx++) {
+        const float v = texelFetch(mov_, clamp(m + ivec2(jx, iy), ivec2(0), last), 0).x;
+        box += v * v;
+      }
+      for (uint u = 0u; u < T; u++) for (uint v = 0u; v < T; v++)
+        corr += texelFetch(ref_, o + ivec2(v, u), 0).x * texelFetch(mov_, clamp(m + ivec2(v, u), ivec2(0), last), 0).x;
+      energy[lid] = box - 2.0 * corr;
+    }
+    barrier();
+    if (lid == 0u) {
+      float best = 3.402823466e+38;
+      uint bs = 0u;
+      for (uint c = 0u; c < CC; c++) if (energy[c] < best) { best = energy[c]; bs = c; }
+      flow[t] += vec2(int(bs % C) - int(r), int(bs / C) - int(r));
+    }
+    barrier();
+  }
+}

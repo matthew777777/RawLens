@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// ColourDiff.packInto on the GPU (same operations in the same order): green
+// sites copied, R/B sites become wb*C - directional green. Edge reads clamp.
+// Also writes the full directional green plane merge_app.comp interpolates
+// (its neighbour clamp keeps the Bayer parity).
+// width/height = frame, alpha/beta = wbR/wbB.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D raw_;
+layout(set = 0, binding = 1, r32f) uniform writeonly highp image2D out_;
+layout(set = 0, binding = 2, r32f) uniform writeonly highp image2D green_;
+float at(ivec2 q, int dx, int dy) {
+  return texelFetch(raw_, clamp(q + ivec2(dx, dy), ivec2(0), ivec2(p.width, p.height) - 1), 0).x;
+}
+float dirGreen(float l, float r, float u, float d) {
+  float dh = abs(l-r), dv = abs(u-d);
+  float wh = 1.0/(1e-8+dh*dh), wv = 1.0/(1e-8+dv*dv);
+  return (wh*(l+r)+wv*(u+d))/(2.0*(wh+wv));
+}
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (any(greaterThanEqual(q, ivec2(p.width, p.height)))) return;
+  float c = texelFetch(raw_, q, 0).x;
+  float full = c;
+  if (((q.x + q.y) & 1) == 0) {
+    float l = at(q, -1, 0), r = at(q, 1, 0), u = at(q, 0, -1), d = at(q, 0, 1);
+    int W = int(p.width), H = int(p.height);
+    full = dirGreen(q.x == 0 ? r : l, q.x == W - 1 ? l : r, q.y == 0 ? d : u, q.y == H - 1 ? u : d);
+    float lapH = 2.0 * c - at(q, -2, 0) - at(q, 2, 0);
+    float lapV = 2.0 * c - at(q, 0, -2) - at(q, 0, 2);
+    float gh = (l + r) / 2.0 + lapH / 4.0;
+    float gv = (u + d) / 2.0 + lapV / 4.0;
+    float dh = abs(l - r) + abs(lapH);
+    float dv = abs(u - d) + abs(lapV);
+    float g = dh < dv ? gh : (dv < dh ? gv : (gh + gv) / 2.0);
+    c = ((q.y & 1) == 0 ? p.alpha : p.beta) * c - g;
+  }
+  imageStore(out_, q, vec4(c));
+  imageStore(green_, q, vec4(full));
+}

@@ -101,6 +101,9 @@ class MergeMemoryDeviceTest {
         val doDump = args.getString("mergeDump") != "false"
         val context = InstrumentationRegistry.getInstrumentation().targetContext
 
+        // `-e mergeMobile false` runs the staged MFSR path.
+        System.setProperty("srpipeline.mobile", args.getString("mergeMobile") ?: "true")
+
         val handle = CrawReader.open(take.absolutePath)
         val nativeBufs = ArrayList<ByteBuffer>()
         try {

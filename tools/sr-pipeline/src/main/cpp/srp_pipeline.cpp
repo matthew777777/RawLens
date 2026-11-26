@@ -70,7 +70,8 @@ constexpr uint64_t kFenceTimeoutNs = 1000000000ULL;  // 1 s
 Status SrpDispatchGroups(Context* ctx, VkBuffer* buffers, uint32_t nbuffers,
                          const void* push, size_t push_size,
                          uint32_t local_size, uint32_t groups,
-                         VkShaderModule shader_module) {
+                         VkShaderModule shader_module, const VkImageView* views,
+                         uint32_t kinds, uint32_t groups_y) {
   if (ctx == nullptr || buffers == nullptr || nbuffers == 0 ||
       nbuffers > kMaxStorageBuffers || push == nullptr || push_size == 0 ||
       push_size > 128 || local_size == 0 || groups == 0 ||
@@ -78,7 +79,8 @@ Status SrpDispatchGroups(Context* ctx, VkBuffer* buffers, uint32_t nbuffers,
     return Status::kInitFailed;
   }
   for (uint32_t i = 0; i < nbuffers; ++i) {
-    if (buffers[i] == VK_NULL_HANDLE) return Status::kInitFailed;
+    if (((kinds >> (2 * i)) & 3u) == 0 ? buffers[i] == VK_NULL_HANDLE
+                                       : views == nullptr || views[i] == VK_NULL_HANDLE) return Status::kInitFailed;
   }
   // Workgroup shape comes from the shader; only the group count matters.
   (void)local_size;
@@ -93,7 +95,7 @@ Status SrpDispatchGroups(Context* ctx, VkBuffer* buffers, uint32_t nbuffers,
   // Context — must not be destroyed here.
   SrpPipeTriple triple{};
   if (SrpPipelineFor(ctx, shader_module, nbuffers,
-                     push_size, &triple) != Status::kOk ||
+                     push_size, &triple, kinds) != Status::kOk ||
       triple.pipeline == VK_NULL_HANDLE ||
       triple.pipe_layout == VK_NULL_HANDLE ||
       triple.set_layout == VK_NULL_HANDLE) {
@@ -103,6 +105,47 @@ Status SrpDispatchGroups(Context* ctx, VkBuffer* buffers, uint32_t nbuffers,
   VkPipelineLayout pipeline_layout = triple.pipe_layout;
   VkPipeline pipeline = triple.pipeline;
 
+  auto write_set = [&](VkDescriptorSet dst) {
+    VkDescriptorBufferInfo infos[kMaxStorageBuffers] = {};
+    VkDescriptorImageInfo images[kMaxStorageBuffers] = {};
+    VkWriteDescriptorSet w[kMaxStorageBuffers] = {};
+    for (uint32_t i = 0; i < nbuffers; ++i) {
+      w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      w[i].dstSet = dst;
+      w[i].dstBinding = i;
+      w[i].descriptorCount = 1;
+      w[i].descriptorType = SrpBindType(kinds, i);
+      if (w[i].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+        infos[i].buffer = buffers[i];
+        infos[i].range = VK_WHOLE_SIZE;
+        w[i].pBufferInfo = &infos[i];
+      } else {
+        images[i].sampler = SrpSampler(ctx);
+        images[i].imageView = views[i];
+        images[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        w[i].pImageInfo = &images[i];
+      }
+    }
+    vkUpdateDescriptorSets(device, nbuffers, w, 0, nullptr);
+  };
+  const VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+  if (VkCommandBuffer rec = SrpBatchCommand(ctx); rec != VK_NULL_HANDLE) {
+    VkDescriptorSet rset = VK_NULL_HANDLE;
+    if (SrpBatchSet(ctx, set_layout, &rset) != Status::kOk) return Status::kDispatchFailed;
+    write_set(rset);
+    vkCmdPipelineBarrier(rec, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+    vkCmdBindPipeline(rec, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    vkCmdBindDescriptorSets(rec, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &rset, 0, nullptr);
+    vkCmdPushConstants(rec, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                       static_cast<uint32_t>(push_size), push);
+    vkCmdDispatch(rec, groups, groups_y, 1);
+    SrpCountDispatch(ctx);
+    return Status::kOk;
+  }
+
   // Persistent per-dispatch objects (reset pools + fence): no
   // per-dispatch create/destroy. Same submit points, same order, same
   // fence waits — scheduling-only change, values bit-identical.
@@ -111,30 +154,21 @@ Status SrpDispatchGroups(Context* ctx, VkBuffer* buffers, uint32_t nbuffers,
   VkFence fence = VK_NULL_HANDLE;
   Status status = Status::kDispatchFailed;
   if (SrpDispatchBegin(ctx, set_layout, &cmd, &set, &fence) == Status::kOk) {
-    VkDescriptorBufferInfo buffer_infos[kMaxStorageBuffers] = {};
-    VkWriteDescriptorSet writes[kMaxStorageBuffers] = {};
-    for (uint32_t i = 0; i < nbuffers; ++i) {
-      buffer_infos[i].buffer = buffers[i];
-      buffer_infos[i].range = VK_WHOLE_SIZE;
-      writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-      writes[i].dstSet = set;
-      writes[i].dstBinding = i;
-      writes[i].descriptorCount = 1;
-      writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-      writes[i].pBufferInfo = &buffer_infos[i];
-    }
-    vkUpdateDescriptorSets(device, nbuffers, writes, 0, nullptr);
+    write_set(set);
 
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (vkBeginCommandBuffer(cmd, &begin) == VK_SUCCESS) {
+      // A pending batch may still be writing this dispatch's inputs.
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           0, 1, &barrier, 0, nullptr, 0, nullptr);
       vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
       vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1,
                               &set, 0, nullptr);
       vkCmdPushConstants(cmd, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                          static_cast<uint32_t>(push_size), push);
-      vkCmdDispatch(cmd, groups, 1, 1);
+      vkCmdDispatch(cmd, groups, groups_y, 1);
       if (vkEndCommandBuffer(cmd) == VK_SUCCESS) {
         VkSubmitInfo submit{};
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -524,20 +558,6 @@ Status SrpGatGpu(Context* ctx, uint32_t width, uint32_t height,
 
 namespace {
 
-bool FindMemoryType(VkPhysicalDevice physical, uint32_t type_bits,
-                    VkMemoryPropertyFlags flags, uint32_t* out_index) {
-  if (physical == VK_NULL_HANDLE || out_index == nullptr) return false;
-  VkPhysicalDeviceMemoryProperties props{};
-  vkGetPhysicalDeviceMemoryProperties(physical, &props);
-  for (uint32_t i = 0; i < props.memoryTypeCount; ++i) {
-    if ((type_bits & (1u << i)) != 0u &&
-        (props.memoryTypes[i].propertyFlags & flags) == flags) {
-      *out_index = i;
-      return true;
-    }
-  }
-  return false;
-}
 
 // Host-visible transient arena for the demosaic chain (mirrors the
 // FftChain/srp_fft.cpp pattern; file-local, freed before return).
@@ -571,10 +591,7 @@ struct DemoArena {
     VkMemoryRequirements req{};
     vkGetBufferMemoryRequirements(device, buf, &req);
     uint32_t index = 0;
-    if (!FindMemoryType(physical, req.memoryTypeBits,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        &index)) {
+    if (!srp::SrpFindHostMemory(physical, req.memoryTypeBits, &index)) {
       vkDestroyBuffer(device, buf, nullptr);
       ok = false;
       return VK_NULL_HANDLE;
@@ -945,16 +962,9 @@ Status SrpRobustInitGpu(Context* ctx, uint32_t width, uint32_t height,
   if (n64 == 0 || n64 > 0x0FFFFFFFULL) return Status::kInitFailed;
   const uint32_t n = static_cast<uint32_t>(n64);
 
-  DemoArena arena;
-  arena.ctx = ctx;
-  arena.device = NativeDevice(ctx);
-  if (arena.device == VK_NULL_HANDLE) return Status::kNoDevice;
-  VkBuffer guide = arena.alloc(3 * n, nullptr);
-  VkBuffer dummy = arena.alloc(1, nullptr);
-  if (!arena.ok) {
-    arena.freeAll();
-    return Status::kDispatchFailed;
-  }
+  VkBuffer guide = SrpScratch(ctx, 0, 3 * n);
+  VkBuffer dummy = SrpScratch(ctx, 7, 1);
+  if (guide == VK_NULL_HANDLE || dummy == VK_NULL_HANDLE) return Status::kDispatchFailed;
 
   uint32_t ex[15] = {};
   Status status;
@@ -964,7 +974,6 @@ Status SrpRobustInitGpu(Context* ctx, uint32_t width, uint32_t height,
   status = RobDispatch(ctx, ex, gw, gh, n, ref_buffer, dummy, dummy, guide,
                        dummy, dummy, dummy, shader_module);
   if (status != Status::kOk) {
-    arena.freeAll();
     return status;
   }
   // op 1 stats: A=guide -> D=means, E=vars.
@@ -974,7 +983,6 @@ Status SrpRobustInitGpu(Context* ctx, uint32_t width, uint32_t height,
   status = RobDispatch(ctx, ex, gw, gh, 3 * n, guide, dummy, dummy,
                        means_buffer, vars_buffer, dummy, dummy,
                        shader_module);
-  arena.freeAll();
   return status;
 }
 
@@ -1003,22 +1011,17 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
   const uint32_t tile_half = tile_size / 2;
   const uint32_t continuous_flow = (noise_correction >> 1u) & 1u;
 
-  DemoArena arena;
-  arena.ctx = ctx;
-  arena.device = NativeDevice(ctx);
-  if (arena.device == VK_NULL_HANDLE) return Status::kNoDevice;
-  VkBuffer guide = arena.alloc(3 * n, nullptr);
-  VkBuffer cmeans = arena.alloc(3 * n, nullptr);
-  VkBuffer cvars = arena.alloc(3 * n, nullptr);
-  VkBuffer warped = arena.alloc(3 * n, nullptr);
-  VkBuffer d = arena.alloc(n, nullptr);
-  VkBuffer sg = arena.alloc(n, nullptr);
-  VkBuffer r = arena.alloc(n, nullptr);
-  VkBuffer dummy = arena.alloc(1, nullptr);
-  if (!arena.ok) {
-    arena.freeAll();
-    return Status::kDispatchFailed;
-  }
+  VkBuffer guide = SrpScratch(ctx, 0, 3 * n);
+  VkBuffer cmeans = SrpScratch(ctx, 1, 3 * n);
+  VkBuffer cvars = SrpScratch(ctx, 2, 3 * n);
+  VkBuffer warped = SrpScratch(ctx, 3, 3 * n);
+  VkBuffer d = SrpScratch(ctx, 4, n);
+  VkBuffer sg = SrpScratch(ctx, 5, n);
+  VkBuffer r = SrpScratch(ctx, 6, n);
+  VkBuffer dummy = SrpScratch(ctx, 7, 1);
+  if (guide == VK_NULL_HANDLE || cmeans == VK_NULL_HANDLE || cvars == VK_NULL_HANDLE ||
+      warped == VK_NULL_HANDLE || d == VK_NULL_HANDLE || sg == VK_NULL_HANDLE || r == VK_NULL_HANDLE ||
+      dummy == VK_NULL_HANDLE) return Status::kDispatchFailed;
 
   uint32_t ex[15] = {};
   Status status = Status::kOk;
@@ -1112,7 +1115,6 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
     status = RobDispatch(ctx, ex, gw, gh, n, r, ghost_grow ? d : dummy, dummy, out_buffer,
                          dummy, dummy, dummy, shader_module);
   }
-  arena.freeAll();
   return status;
 }
 

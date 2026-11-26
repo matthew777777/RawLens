@@ -75,7 +75,7 @@ struct SrpPipeTriple {
 // triple for (`module`, `nbuffers`, `push_size`). Returns kOk with *out
 // filled, else a failure status with *out null.
 Status SrpPipelineFor(Context* ctx, VkShaderModule module, uint32_t nbuffers,
-                      size_t push_size, SrpPipeTriple* out);
+                      size_t push_size, SrpPipeTriple* out, uint32_t kinds = 0);
 
 // Returns the Context-owned module for these SPIR-V bytes (interned by
 // content hash; created on first use, destroyed with the Context).

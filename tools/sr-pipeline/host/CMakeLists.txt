@@ -102,6 +102,33 @@ srp_spv(twoband_resolve)
 srp_spv(twoband_dct)
 srp_spv(twoband_tensor)
 srp_spv(rob_feather)
+srp_spv(raw_image)
+srp_spv(colour_diff)
+srp_spv(kern_pre)
+srp_spv(kern_cov)
+srp_spv(ref_stats)
+srp_spv(ref_hf)
+srp_spv(motion_field)
+srp_spv(rob_means)
+srp_spv(rob_test)
+srp_spv(rob_window)
+srp_spv(noise_acc_img)
+srp_spv(grey_fir_img)
+srp_spv(green_gather)
+srp_spv(merge_app)
+srp_spv(merge_app_ref)
+srp_spv(mfsr_finish)
+srp_spv(mfsr_divide)
+srp_spv(img_dump)
+srp_spv(pyr_img)
+srp_spv(hess_img)
+srp_spv(flow_up)
+srp_spv(align_l2_img)
+srp_spv(align_l2_tie)
+srp_spv(align_l2_tie64)
+srp_spv(align_l1_img)
+srp_spv(align_l1_tie)
+srp_spv(ica_img)
 
 add_executable(srp_proof_dispatch proof_dispatch.cpp)
 target_link_libraries(srp_proof_dispatch PRIVATE srp_core)
@@ -173,6 +200,7 @@ add_library(srpipeline_jni SHARED
     ${SRP_ROOT}/srp_pipeline.cpp
     ${SRP_ROOT}/srp_fft.cpp
     ${SRP_ROOT}/srp_dng.cpp
+    ${SRP_ROOT}/srp_host.cpp
     ${SRP_ROOT}/srp_jni.cpp)
 target_include_directories(srpipeline_jni PRIVATE
     ${SRP_ROOT} ${SRP_TINYDNG_DIR} ${SRP_VK_INCLUDE}

@@ -18,19 +18,6 @@
 namespace srp {
 namespace {
 
-bool FindMemoryType(VkPhysicalDevice physical, uint32_t type_bits,
-                    VkMemoryPropertyFlags flags, uint32_t* out_index) {
-  VkPhysicalDeviceMemoryProperties props{};
-  vkGetPhysicalDeviceMemoryProperties(physical, &props);
-  for (uint32_t i = 0; i < props.memoryTypeCount; ++i) {
-    if ((type_bits & (1u << i)) != 0u &&
-        (props.memoryTypes[i].propertyFlags & flags) == flags) {
-      *out_index = i;
-      return true;
-    }
-  }
-  return false;
-}
 
 uint32_t FloatBits(float f) {
   uint32_t u = 0;
@@ -100,10 +87,7 @@ FftChain::FftChain(Context* ctx, VkShaderModule mod)
   VkMemoryRequirements req{};
   vkGetBufferMemoryRequirements(device_, buf, &req);
   uint32_t index = 0;
-  if (!FindMemoryType(physical, req.memoryTypeBits,
-                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                      &index)) {
+  if (!srp::SrpFindHostMemory(physical, req.memoryTypeBits, &index)) {
     vkDestroyBuffer(device_, buf, nullptr);
     device_ = VK_NULL_HANDLE;
     return;

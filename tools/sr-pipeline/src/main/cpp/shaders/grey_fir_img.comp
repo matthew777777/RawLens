@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// grey_fir.comp on images (same terms, same order, circular border).
+// mode 0: horizontal, raw image -> tmp image. mode 1: vertical, tmp image ->
+// pyramid level 0 image, written with the aligner's circular padding
+// (tileCount x level = padded width x height), so no separate copy pass.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D in_;
+layout(set = 0, binding = 1, r32f) uniform writeonly highp image2D out_;
+float at(ivec2 q) { return texelFetch(in_, q, 0).x; }
+void main() {
+  const int w = int(p.width), h = int(p.height), R = int(p.pad[0]);
+  ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+  ivec2 size = p.mode == 0u ? ivec2(w, h) : ivec2(p.tileCount, p.level);
+  if (any(greaterThanEqual(g, size))) return;
+  ivec2 q = ivec2(g.x < w ? g.x : g.x - w, g.y < h ? g.y : g.y - h);
+  float s = uintBitsToFloat(p.pad[1]) * at(q);
+  if (p.mode == 0u) {
+    for (int k = 1, j = 0; k <= R; k += 2, ++j) {
+      const int xl = q.x < k ? q.x - k + w : q.x - k, xr = q.x + k < w ? q.x + k : q.x + k - w;
+      s += uintBitsToFloat(p.pad[2 + j]) * (at(ivec2(xl, q.y)) + at(ivec2(xr, q.y)));
+    }
+    imageStore(out_, q, vec4(s));
+  } else {
+    for (int k = 1, j = 0; k <= R; k += 2, ++j) {
+      const int yu = q.y < k ? q.y - k + h : q.y - k, yd = q.y + k < h ? q.y + k : q.y + k - h;
+      s += uintBitsToFloat(p.pad[2 + j]) * (at(ivec2(q.x, yu)) + at(ivec2(q.x, yd)));
+    }
+    imageStore(out_, g, vec4(s));
+  }
+}

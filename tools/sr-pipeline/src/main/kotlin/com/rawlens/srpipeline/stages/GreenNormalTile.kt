@@ -90,6 +90,18 @@ class GreenNormalTile internal constructor(
         recordNanos += System.nanoTime() - start
     }
 
+    internal val onDevice get() = residentSolve != null
+
+    /** Records one frame from images (green_gather.comp); may run inside a batch. */
+    internal fun recordImages(gather: ByteArray, cd: Long, field: Long, rob: Long) {
+        check(residentSolve != null && ++frames <= frameCount)
+        val first = frames == 1
+        push[0] = if (first) 4 else 5
+        check(SrpBridge.dispatch2d(handle, gather, longArrayOf(cd, field, rob, residents[4]),
+            longArrayOf(SrpBridge.SAMPLED, SrpBridge.SAMPLED, SrpBridge.SAMPLED, counts[4]), push,
+            if (first) width else width / 2, if (first) height else height / 2) == 0)
+    }
+
     internal fun solveResident(
         rgb: Long, scratch: Long, alpha: Float, beta: Float, pedestal: Float, wb: FloatArray,
     ) {

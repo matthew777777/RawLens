@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+// merge_app.comp for the reference frame (zero flow, r = 1, its own green gather):
+// writes the accumulators. See merge_app.comp (Bayer, colour differences,
+// Wronski per-frame kernels, continuous motion, wide faded R/B gather, detail
+// green): same formulas and summation order, without the mode branches. No
+// dynamic vector indexing; each green path is inlined once; the fade window is
+// evaluated per axis. Inputs are images: the texture unit does the gathers
+// (Mali LS 43 -> 4 cycles). Anything else keeps merge_splat.comp.
+// Push as merge_splat: pad[1] tiles per row, pad[2] [3] output size, tileSize,
+// scale, alpha = R/B kernel width factor, beta = green frame weight.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D comp_;
+layout(set = 0, binding = 2) uniform highp sampler2D cov_;
+layout(set = 0, binding = 4)  buffer Num { float num_[]; };
+layout(set = 0, binding = 5)  buffer Den { float den_[]; };
+
+float fade(float x) { return 1.0 - smoothstep(2.5, 3.5, abs(x)); }
+
+void splat(uvec2 hr) {
+  uint id = hr.y * p.pad[2] + hr.x;
+  uint lrW = p.width, lrH = p.height;
+  float lr_x = (float(hr.x) + 0.5) / p.scale;
+  float lr_y = (float(hr.y) + 0.5) / p.scale;
+  uint gw = lrW / 2u, gh = lrH / 2u;
+  float mov_x = lr_x, mov_y = lr_y;
+
+  float ixx, ixy, iyy, det;
+  {
+    float kj = mov_x / 2.0 - 0.5, ki = mov_y / 2.0 - 0.5;
+    float fx = kj - float(int(kj)), fy = ki - float(int(ki));
+    uint x0 = uint(max(int(kj), 0)), y0 = uint(max(int(ki), 0));
+    uint x1 = min(x0 + 1u, gw - 1u), y1 = min(y0 + 1u, gh - 1u);
+    vec3 c = mix(mix(texelFetch(cov_, ivec2(x0, y0), 0).xyz, texelFetch(cov_, ivec2(x1, y0), 0).xyz, fx),
+                 mix(texelFetch(cov_, ivec2(x0, y1), 0).xyz, texelFetch(cov_, ivec2(x1, y1), 0).xyz, fx), fy);
+    det = c.x * c.z - c.y * c.y;
+    float inv = 1.0 / det;
+    ixx = inv * c.z; ixy = -inv * c.y; iyy = inv * c.x;
+  }
+  int center_j = int(mov_x), center_i = int(mov_y);
+  float mov_j = mov_x - 0.5, mov_i = mov_y - 0.5;
+  float cs = p.alpha > 0.0 ? p.alpha : 1.0;
+  float chromaInv = 1.0 / (cs * cs);
+  vec3 val = vec3(0.0), acc = vec3(0.0);
+  for (int di = -3; di <= 3; di++) {
+    int i2 = center_i + di;
+    if (i2 < 0 || i2 >= int(lrH)) continue;
+    float dy = float(i2) - mov_i;
+    float wy = fade(dy);
+    [[dont_unroll]] for (int dj = -3; dj <= 3; dj++) {
+      int j = center_j + dj;
+      if (j < 0 || j >= int(lrW)) continue;
+      int ch = (i2 & 1) + (j & 1);
+      float c = texelFetch(comp_, ivec2(j, i2), 0).x;
+      float dx = float(j) - mov_j;
+      float z = max(ixx * dx * dx + 2.0 * ixy * dx * dy + iyy * dy * dy, 0.0);
+      if (ch != 1) z *= chromaInv;
+      float w = exp(-0.5 * z) * (fade(dx) * wy);
+      vec3 sel = vec3(ch == 0, ch == 1, ch == 2) * w;
+      val += sel * c;
+      acc += sel;
+    }
+  }
+  num_[id*3u] = val.x; num_[id*3u+1u] = val.y; num_[id*3u+2u] = val.z;
+  den_[id*3u] = acc.x; den_[id*3u+1u] = acc.y; den_[id*3u+2u] = acc.z;
+}
+void main() {
+  if (gl_GlobalInvocationID.x >= p.pad[2] || gl_GlobalInvocationID.y >= p.pad[3]) return;
+  splat(gl_GlobalInvocationID.xy);
+}

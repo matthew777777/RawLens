@@ -40,6 +40,12 @@ internal class MotionField(private val width: Int, private val height: Int, hess
         dataWeight = FloatArray(count) { 0.05f + min(16f, max(0f, support[it] - floor) / (4f * floor)) }
     }
 
+    /** [regularize] in native code on an interleaved flow (same arithmetic), in place. */
+    fun regularizeNative(flow: FloatArray, motionThreshold: Float) {
+        require(flow.size == 2 * count && flow.all(Float::isFinite))
+        com.rawlens.srpipeline.SrpBridge.nativeMotionRegularize(flow, dataWeight, width, height, motionThreshold)
+    }
+
     fun regularize(flow: Array<Array<FloatArray>>, motionThreshold: Float = .8f) {
         require(flow.size == height && flow.all { it.size == width && it.all { v -> v.size == 2 && v.all(Float::isFinite) } })
         require(motionThreshold.isFinite())

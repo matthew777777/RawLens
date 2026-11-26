@@ -69,4 +69,40 @@ Status SrpUploadResident(Context* ctx, int64_t handle, const float* in,
 Status SrpResidentBuffer(Context* ctx, int64_t handle, size_t min_floats,
                          VkBuffer* out);
 
+// Host-visible + coherent memory type, HOST_CACHED preferred (srp_context.cpp).
+bool SrpFindHostMemory(VkPhysicalDevice physical, uint32_t type_bits, uint32_t* out_index);
+
+// Context-lifetime stage scratch for `slot` (uninitialised, exactly `nfloats`;
+// reallocated when the size changes). Serial use, like every dispatch.
+VkBuffer SrpScratch(Context* ctx, uint32_t slot, size_t nfloats);
+
+// Batched submission (a few slots): between Begin and Submit every
+// SrpDispatchGroups call is recorded into one command buffer (a memory barrier
+// before each dispatch) instead of being submitted and waited for. Submit
+// returns at once; BatchWait(slot), or a new Begin on that slot, waits. The
+// caller must not touch or free buffers a pending batch uses.
+constexpr uint32_t kBatchSlots = 4;
+Status SrpBatchBegin(Context* ctx, uint32_t slot);
+Status SrpBatchSubmit(Context* ctx);
+Status SrpBatchWait(Context* ctx, uint32_t slot);
+// Open command buffer (null outside Begin/Submit) and a set from its pool.
+VkCommandBuffer SrpBatchCommand(Context* ctx);
+Status SrpBatchSet(Context* ctx, VkDescriptorSetLayout layout, VkDescriptorSet* set);
+
+int64_t SrpCreateHostResident(Context* ctx, size_t nfloats);
+const float* SrpMapResident(Context* ctx, int64_t handle, size_t nfloats);
+void SrpUnmapResident(Context* ctx, int64_t handle);
+
+// Float images (texture-unit reads; negative handles). Binding kinds pack two
+// bits per binding: 0 storage buffer, 1 sampled image, 2 storage image.
+int64_t SrpCreateImage(Context* ctx, uint32_t w, uint32_t h, uint32_t channels);
+VkImageView SrpImageView(Context* ctx, int64_t handle);
+VkSampler SrpSampler(Context* ctx);
+void SrpFreeImage(Context* ctx, int64_t handle);
+inline VkDescriptorType SrpBindType(uint32_t kinds, uint32_t i) {
+  const uint32_t k = (kinds >> (2 * i)) & 3u;
+  return k == 0 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+      : k == 1 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+}
+
 }  // namespace srp

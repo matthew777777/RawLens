@@ -9,6 +9,7 @@ add_library(srpipeline SHARED
     srp_pipeline.cpp
     srp_fft.cpp
     srp_dng.cpp
+    srp_host.cpp
     srp_jni.cpp)
 
 # Pinned TinyDNG v3 writer: the SAME vendored sources the app builds

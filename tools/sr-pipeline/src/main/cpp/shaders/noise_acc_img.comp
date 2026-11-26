@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// noise_acc.comp with the robustness map sampled.
+// width/height = guide grid, beta = green frame weight, mode 1 = first frame.
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) uniform highp sampler2D r_;
+layout(set = 0, binding = 1)  buffer Acc { vec4 acc_[]; };
+void main() {
+  uvec2 q = gl_GlobalInvocationID.xy;
+  if (any(greaterThanEqual(q, uvec2(p.width, p.height)))) return;
+  float r = texelFetch(r_, ivec2(q), 0).x;
+  if (!(r > 0.0)) r = 0.0;
+  float gr = p.beta * r;
+  vec4 v = vec4(gr, gr * gr, r, r * r);
+  uint id = q.y * p.width + q.x;
+  acc_[id] = p.mode == 1u ? v : acc_[id] + v;
+}
