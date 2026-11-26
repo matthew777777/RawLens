@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Highlight compression adapted from Khronos PBR Neutral (2024 The Khronos Group, Inc.; Apache-2.0).
 
-#ifndef RAPIDRAW_OUTPUT_FUSED
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-#endif
 layout(binding = 0, rgba16f) readonly uniform highp image2D img_scene;
 layout(binding = 1, rgba8) writeonly uniform highp image2D img_encoded;
 layout(binding = 2, rgba8) writeonly uniform highp image2D img_gainmap;
@@ -46,18 +44,8 @@ uniform highp int u_multi_channel;
 uniform highp float u_grain_amount;
 uniform highp float u_grain_size;
 uniform highp uint u_grain_seed;
-#ifdef RAPIDRAW_BASIC
-#define EFFECTIVE_BASIC RAPIDRAW_BASIC
-#else
 #define EFFECTIVE_BASIC u_basic
-#endif
 
-#ifdef RAPIDRAW_OUTPUT_FUSED
-#define EFFECTIVE_HDR_PQ 0
-#define EFFECTIVE_GRAIN_AMOUNT 0.0
-#define EFFECTIVE_GAINMAP_ONLY 0
-#define EFFECTIVE_WRITE_GAINMAP RAPIDRAW_GAINMAP
-#else
 #ifdef RAWLENS_STILL_SDR
 #define EFFECTIVE_HDR_PQ 0
 #else
@@ -66,7 +54,6 @@ uniform highp uint u_grain_seed;
 #define EFFECTIVE_GRAIN_AMOUNT u_grain_amount
 #define EFFECTIVE_GAINMAP_ONLY u_gainmap_only
 #define EFFECTIVE_WRITE_GAINMAP u_write_gainmap
-#endif
 
 // Google Filament AgX Base and Punchy looks.
 // Filament's matrices are Rec.2020. RawLens explicitly converts ACEScg D60 to Rec.2020 D65.
@@ -242,13 +229,7 @@ highp float grain_hash(ivec2 p, uint channel) {
 }
 
 void main() {
-    #ifdef RAPIDRAW_OUTPUT_FUSED
-    prepareCleanupTile();
-    #endif
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    #ifdef RAPIDRAW_OUTPUT_FUSED
-    pixel += u_dispatch_offset;
-    #endif
     #ifdef RAWLENS_JXL
     pixel += u_jxl_dispatch_offset;
     #endif
@@ -260,19 +241,10 @@ void main() {
     } else if (any(greaterThanEqual(pixel, u_size))) {
         return;
     }
-    #ifdef RAPIDRAW_OUTPUT_FUSED
-    highp vec3 sceneAcescg = cleanupPixel(scenePixel);
-    // Preserve the existing RGBA16F intermediate's rounding without storing it.
-    sceneAcescg = vec3(unpackHalf2x16(packHalf2x16(sceneAcescg.rg)),
-        unpackHalf2x16(packHalf2x16(vec2(sceneAcescg.b, 0.0))).r);
-    ivec2 gainPixel = pixel / 4;
-    bool writeGain = EFFECTIVE_WRITE_GAINMAP != 0 && all(equal(pixel, min(gainPixel * 4 + ivec2(2), u_size - 1)));
-    #else
     highp vec4 sceneSample = imageLoad(img_scene, scenePixel);
     highp vec3 sceneAcescg = sceneSample.rgb;
     ivec2 gainPixel = pixel;
     bool writeGain = EFFECTIVE_WRITE_GAINMAP != 0 && EFFECTIVE_GAINMAP_ONLY != 0;
-    #endif
     highp vec3 balancedAcescg = camera_tone_balance(sceneAcescg);
     highp vec3 balancedRec2020 = ACESCG_TO_REC2020_D65 * balancedAcescg;
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;

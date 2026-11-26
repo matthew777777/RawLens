@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Assemble RawLens runtime GLES compute shaders and analyze them offline.
 
-Mirrors Gles31AmazeProcessor.ProgramCache: `#import amaze|quad|agx_output|cleanup`
+Mirrors Gles31AmazeProcessor.ProgramCache: `#import amaze|quad|agx_output|cleanup|luma`
 expansion, the `// SIGMOID_FUNCTIONS` substitution, and the `#version 310 es`
 prefix. Writes assembled sources to <output>/src and runs malioc (--opengles)
 and/or AOC (-api=OpenGLES) on them. Pass runtime shader dumps as .frag paths.
@@ -14,7 +14,7 @@ import argparse, concurrent.futures, hashlib, json, os, re, subprocess, sys, tex
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ASSETS = ROOT / 'app/src/main/assets/shaders'
+ASSETS = Path(os.environ.get('RAWLENS_SHADER_ASSETS', ROOT / 'app/src/main/assets/shaders'))
 KOTLIN = ROOT / 'app/src/main/java/com/matthew/rawlens'
 DEFAULT = ['amaze/' + n for n in (
     'pad', 'gradcd', 'hvwt', 'nyqref', 'area', 'nyq2', 'green', 'gcorr', 'bound',
@@ -47,11 +47,7 @@ def read(rel, baseline_ref=None):
     return body
 
 
-RAPIDRAW_MODES = {0: 'nr_half', 1: 'nr_quarter', 2: 'nr_relwiden', 3: 'nr_filter', 4: 'nr_upsample',
-                  5: 'nr_core', 7: 'md_sample', 8: 'out_band', 9: 'md_hist', 10: 'md_pick'}
-EXTRA = ['display/agx_srgb8', 'display/agx_srgb8@jxl', 'merged/develop'] + [
-    'rapidraw/' + n for n in RAPIDRAW_MODES.values()] + [
-    f'rapidraw/fused-{b}-{g}' for b in ('agx', 'basic') for g in ('sdr', 'hdr')]
+EXTRA = ['display/agx_srgb8', 'display/agx_srgb8@jxl', 'merged/develop']
 
 
 def assemble(asset, baseline_ref=None):
@@ -65,23 +61,14 @@ def assemble(asset, baseline_ref=None):
         return '#version 310 es\n' + body
     if asset == 'merged/develop':
         return read('merged/develop.glsl').replace('#import cleanup', read('amaze/cleanup.glsl'))
-    if asset.startswith('rapidraw/'):
-        name = asset.split('/', 1)[1]
-        src = read('display/rapidraw_develop.glsl')
-        if name.startswith('fused-'):
-            _, b, g = name.split('-')
-            return ('#version 310 es\n#define MODE 8\n#define RAPIDRAW_OUTPUT_FUSED 1\n'
-                    f'#define RAPIDRAW_BASIC {int(b == "basic")}\n#define RAPIDRAW_GAINMAP {int(g == "hdr")}\n'
-                    'layout(local_size_x=8,local_size_y=8) in;\n' + src + '\n' + read('display/agx_srgb8.glsl', baseline_ref))
-        mode = {v: k for k, v in RAPIDRAW_MODES.items()}[name]
-        return f'#version 310 es\n#define MODE {mode}\n' + src
     agx = read('display/agx_srgb8.glsl', baseline_ref)
     agx = agx[agx.index('uniform highp int u_basic;'):agx.index('void main()')]
     body = (read(asset + '.glsl', baseline_ref)
             .replace('#import amaze', read('utils/import_amaze.glsl'))
             .replace('#import quad', read('quad/common.glsl') if asset.startswith('quad/') else '')
             .replace('#import agx_output', agx)
-            .replace('#import cleanup', read('amaze/cleanup.glsl')))
+            .replace('#import cleanup', read('amaze/cleanup.glsl'))
+            .replace('#import luma', read('amaze/luma.glsl') if (ASSETS / 'amaze/luma.glsl').exists() else ''))
     return body if body.startswith('#version') else '#version 310 es\n' + body
 
 
