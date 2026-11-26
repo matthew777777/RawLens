@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.opengl.GLES30
 import android.opengl.GLES31
 import android.os.SystemClock
+import java.io.Closeable
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -120,6 +121,9 @@ class RawDevelopmentCoordinator(context: Context) {
     private val amaze = Gles31AmazeProcessor(context)
     private val jpegOutput = Gles31JpegOutputProcessor(context)
     private val jxlOutput = Gles31JxlOutputProcessor(context)
+    private val portraitBokeh = Gles31PortraitBokeh(context).also {
+        PortraitDebugDump.dir = context.getExternalFilesDir("portrait")
+    }
     // SR merge path: separate instances for the retained develop EGL context.
     // GL program and texture names are context-local, so the AMaZE-context
     // instances above must never touch merged-frame work even on the same
@@ -148,13 +152,13 @@ class RawDevelopmentCoordinator(context: Context) {
         return settings.exposureEv + correction *
             settings.adaptiveExposureStrength.coerceIn(0f, 1f)
     }
-    private val aiDenoiser by lazy { RawNindDenoiser(appContext) }
-    private val waveletDenoiser by lazy { WaveletDenoiser(appContext) }
+    private val rawDenoiser = RawDenoiser(appContext)
+    private val captureSharpener by lazy { CaptureSharpener() }
 
     fun probe(width: Int, height: Int): AmazeCapability = amaze.probe(width, height)
 
-    /** Enable-time Vulkan preload for the post-demosaic wavelet stage. */
-    fun prewarmWavelet() = waveletDenoiser.ensureInit()
+    /** Enable-time Vulkan preload for the RAW denoiser. */
+    fun prewarmRawDenoise() = rawDenoiser.ensureInit()
 
     // Coordinator-owned device and cached pipeline; per-photo images release in the runner.
     @Volatile private var hlVkHandle: VulkanHub.Handle? = null
@@ -234,16 +238,36 @@ class RawDevelopmentCoordinator(context: Context) {
             ?: throw UnsupportedOperationException("RAW buffer geometry is not proven")
         val normalization = metadata.normalizationOrNull()
             ?: throw UnsupportedOperationException("RAW black/white/CFA normalization metadata is invalid")
-        val rowStride = metadata.rawPlaneRowStride
+        // Single-frame captures only; merges are denoised by their merge.
+        val denoised = if (settings.denoise.rawDenoise.active) rawDenoiser.process(
+            rawPlane, metadata, geometry, normalization, RawPreDemosaicPipeline.lensShadingModel(metadata),
+            settings.denoise.rawDenoise
+        ) else null
+        return (denoised ?: Closeable {}).use {
+            developBayer(rawPlane, denoised, geometry, normalization, metadata, settings, fusedOutputSettings,
+                allowOutputFusion, startedAt, consume)
+        }
+    }
+
+    /** Bayer develop of the sensor plane or, when present, of its [denoised] replacement. */
+    private fun <T> developBayer(
+        sensorPlane: ByteBuffer, denoised: DenoisedRaw?, geometry: RawBufferGeometry.Supported,
+        sensorNormalization: RawNormalization, metadata: RawFrameMetadata, settings: RawDevelopmentSettings,
+        fusedOutputSettings: JpegOutputSettings?, allowOutputFusion: Boolean, startedAt: Long,
+        consume: (SceneLinearGpuFrame) -> T
+    ): T {
+        val rawPlane = denoised?.plane ?: sensorPlane
+        val normalization = denoised?.normalization ?: sensorNormalization
+        val rowStride = denoised?.layout?.rowStride ?: metadata.rawPlaneRowStride
             ?: throw UnsupportedOperationException("RAW row stride is missing")
-        val pixelStride = metadata.rawPlanePixelStride
+        val pixelStride = denoised?.layout?.pixelStride ?: metadata.rawPlanePixelStride
             ?: throw UnsupportedOperationException("RAW pixel stride is missing")
         // Packed planes carry stride 0, which RawPlaneLayout rightly refuses:
         // only unpacked frames get a layout. Packed frames unpack through
         // the bridge below, and their adaptive metering analyzes the
         // resulting CFA instead of sampling the packed plane.
-        val packedFormat = PackedRawFormat.ofInt(metadata.rawImageFormat)
-        val layout = if (packedFormat == null) RawPlaneLayout(
+        val packedFormat = if (denoised != null) null else PackedRawFormat.ofInt(metadata.rawImageFormat)
+        val layout = denoised?.layout ?: if (packedFormat == null) RawPlaneLayout(
             metadata.imageWidth,
             metadata.imageHeight,
             rowStride,
@@ -251,16 +275,14 @@ class RawDevelopmentCoordinator(context: Context) {
             geometry.sensorOriginX,
             geometry.sensorOriginY
         ) else null
+        // Metering and clip evidence read the sensor samples: the night exposure rule measures their noise.
+        val sensorLayout = denoised?.sourceLayout ?: layout
+        val meterPlane = denoised?.sourcePlane ?: sensorPlane
         // Sparse metadata defects and the optional MAD detector still require the reference CPU
         // implementation. Normal captures take the zero-copy-to-JVM direct GPU path.
-        // NOTE: AI Bayer denoise is applied by the caller (denoiseCaptureCfa /
-        // denoiseCfa, then developCfaJpeg) so one capture pays for exactly one
-        // inference shared by the denoised DNG and the JPEG. develop() itself
-        // stays AI-free on purpose: an internal hook here would re-run
-        // inference on CFAs the controller already denoised.
         val opposedEnabled = (fusedOutputSettings?.hlReconstruction ?: false) && !metadata.quadBayer
         val directGpu = !opposedEnabled && pixelStride == Short.SIZE_BYTES && rowStride % Short.SIZE_BYTES == 0 &&
-            metadata.hotPixels.isEmpty() && !settings.preDemosaic.defectCorrection.autoDetect
+            (denoised != null || metadata.hotPixels.isEmpty()) && !settings.preDemosaic.defectCorrection.autoDetect
         val lensModel = RawPreDemosaicPipeline.lensShadingModel(metadata)
         val preparedAt: Long
         val preDemosaic: PreDemosaicResult
@@ -292,20 +314,20 @@ class RawDevelopmentCoordinator(context: Context) {
             preparedAt = SystemClock.elapsedRealtime()
         }
         val captureClip = if (settings.denoise.captureSharpening.enabled && !metadata.quadBayer && packedFormat == null) {
-            CaptureSharpeningClipState.fromRawSensor(rawPlane, requireNotNull(layout), normalization, geometry.processingCrop)
+            CaptureSharpeningClipState.fromRawSensor(meterPlane, requireNotNull(sensorLayout), sensorNormalization, geometry.processingCrop)
         } else cpuCfa?.captureSharpeningClipState
         // Direct RAW sampling avoids materializing a 50 MB FloatArray just for exposure metering.
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
-                if (cpuCfa != null) AdaptiveDevelopmentExposure.analyze(
+                if (cpuCfa != null && denoised == null) AdaptiveDevelopmentExposure.analyze(
                     cpuCfa, adaptiveWorkspace, settings.adaptiveExposureTuning,
                     singleFrame = true
                 )
                 else AdaptiveDevelopmentExposure.analyzeRaw(
                     // Packed frames never reach here: their branch above
                     // always produces a CFA, so analyze() wins instead.
-                    rawPlane, requireNotNull(layout),
-                    normalization, geometry.processingCrop, lensModel,
+                    meterPlane, requireNotNull(sensorLayout),
+                    sensorNormalization, geometry.processingCrop, lensModel,
                     adaptiveWorkspace, settings.adaptiveExposureTuning,
                     singleFrame = true
                 )
@@ -320,14 +342,12 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         val demosaicCfa = cpuCfa?.let { reconstructBayer(it, opposedEnabled, metadata, owned = true) }
         val transformAt = SystemClock.elapsedRealtime()
-        // Post-demosaic wavelet (resolver parity): single-frame only,
-        // never Quad-Bayer (no camera-linear tap there yet), never fused
-        // (the wavelet stage needs the unfused RGBA16F frame).
-        val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
-            !metadata.quadBayer
-        // Sharpening and wavelet share the pre-WB tap.
-        val cameraLinearPlan = waveletPlan ||
-            (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
+        // Capture sharpening needs the pre-WB camera-linear frame; the denoised luma is then added after it.
+        // Otherwise the luma is added inside the final (fused) demosaic pass.
+        val cameraLinearPlan = settings.denoise.captureSharpening.enabled && !metadata.quadBayer
+        // Every demosaic path lens-shades its output now (direct RCD in rcd_final), so the
+        // luma residual is shaded with it.
+        val luma = denoised?.luma
         val effectiveFused = if (cameraLinearPlan || !allowOutputFusion) null else fusedOutputSettings
         val consumeOutput: (AmazeGpuOutput) -> T = { output ->
             Log.i(LOG_TAG, "Demosaic done: ${SystemClock.elapsedRealtime() - transformAt}ms")
@@ -335,11 +355,10 @@ class RawDevelopmentCoordinator(context: Context) {
                 output.internalFormat == AmazeTextureFormat.RGBA16F
             ) {
                 consumeCameraLinearTail(
-                    output, metadata, normalization, transform, preDemosaic,
-                    settings.denoise.wavelet, settings.denoise.captureSharpening,
+                    output, metadata, transform, preDemosaic, settings.denoise.captureSharpening,
                     normalization.sensorPattern.shifted(
                         geometry.sensorOriginX + geometry.processingCrop.left,
-                        geometry.sensorOriginY + geometry.processingCrop.top), clipState = captureClip, consume = consume
+                        geometry.sensorOriginY + geometry.processingCrop.top), captureClip, luma, consume
                 )
             } else {
                 consume(SceneLinearGpuFrame(output, preDemosaic, transform))
@@ -361,6 +380,7 @@ class RawDevelopmentCoordinator(context: Context) {
                     fusedOutputSettings = effectiveFused,
                     whiteWindow = tapWhiteWindow,
                     cameraLinear = cameraLinearPlan,
+                    luma = luma,
                     consume = consumeOutput
                 )
             } else {
@@ -371,6 +391,7 @@ class RawDevelopmentCoordinator(context: Context) {
                     fusedOutputSettings = effectiveFused,
                     whiteWindow = tapWhiteWindow,
                     cameraLinear = cameraLinearPlan,
+                    luma = luma,
                     consume = consumeOutput
                 )
             }
@@ -390,6 +411,7 @@ class RawDevelopmentCoordinator(context: Context) {
                         cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                         cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                         cameraLinear = cameraLinearPlan,
+                        luma = luma,
                         whiteWindow = tapWhiteWindow,
                         consume = consumeOutput
                     )
@@ -399,6 +421,7 @@ class RawDevelopmentCoordinator(context: Context) {
                         cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                         cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                         cameraLinear = cameraLinearPlan,
+                        luma = luma,
                         whiteWindow = tapWhiteWindow,
                         consume = consumeOutput
                     )
@@ -427,96 +450,29 @@ class RawDevelopmentCoordinator(context: Context) {
     }
 
     /**
-     * Post-demosaic camera-linear tail: Capture Sharpening, then profiled
-     * wavelet (Vulkan), then the WB/color matrix to ACEScg. Hands a
-     * standard scene-linear frame to [consume]. Any wavelet failure falls
-     * back to the un-denoised readback (no re-demosaic); the JPEG never
-     * fails for denoise reasons. JPEG only — the DNG path is untouched.
+     * Post-demosaic camera-linear tail: capture sharpening, then the RAW
+     * denoiser's luma residual (after sharpening, so grain is not sharpened)
+     * together with the WB/color matrix to ACEScg.
      */
     private fun <T> consumeCameraLinearTail(
         output: AmazeGpuOutput,
         metadata: RawFrameMetadata,
-        normalization: RawNormalization,
         transform: ResolvedSceneLinearTransform,
         preDemosaic: PreDemosaicResult,
-        settings: WaveletSettings,
         sharpening: CaptureSharpeningSettings,
         pattern: BayerPattern,
-        clipState: CaptureSharpeningClipState? = preDemosaic.cfa?.captureSharpeningClipState,
+        clipState: CaptureSharpeningClipState?,
+        luma: RawLumaResidual?,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
-        val t0 = SystemClock.elapsedRealtime()
-        val camera = try {
-            amaze.readbackHalfFloat(output, nativeOwned = true)
-        } catch (failure: Exception) {
-            if (sharpening.enabled) throw failure
-            Log.w(LOG_TAG, "Wavelet readback failed, developing without denoise", failure)
-            return consumeFallbackCameraLinear(output, transform, preDemosaic, consume)
-        }
+        val matrix = transform.glslColumnMajorMatrix()
+        val camera = amaze.readbackHalfFloat(output, nativeOwned = true)
         try {
-            val t1 = SystemClock.elapsedRealtime()
-            val greenSites = (0..3).filter {
-                normalization.sensorPattern.colorAt(it and 1, it shr 1) == CfaColor.GREEN
-            }
-            val black = (normalization.blackLevels[greenSites[0]] +
-                normalization.blackLevels[greenSites[1]]) * 0.5f
-            val noise = RawNoiseModel.noiseAB(
-                metadata.noiseProfile?.toDoubleArray(), normalization.sensorPattern,
-                black, normalization.whiteLevel
-            )
-            val denoiseWb = WaveletDenoiser.rawrWhiteBalance(metadata.wbGains?.toFloatArray())
-            // Both rules can use the learned model or estimate without a sensor profile.
-            if (settings.enabled && settings.strength > 0f && denoiseWb == null) {
-                Log.w(LOG_TAG, "Wavelet bypass: missing or invalid WB gains " +
-                    "entries=${metadata.noiseProfile?.size ?: 0}")
-            }
-            val denoise = settings.enabled && settings.strength > 0f && denoiseWb != null
-            val sharpenWb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
-            // Sharpening alone keeps its own call. With denoise it runs first in the
-            // same GPU submit (no extra 8 B/px download/upload); the sharpening WB is
-            // the same RAWR collapse of the capture gains as the denoise WB.
-            val fused = denoise && sharpening.enabled && denoiseWb.contentEquals(sharpenWb)
-            if (sharpening.enabled && !fused) {
-                waveletDenoiser.captureSharpen(camera, output.width, output.height,
-                    sharpenWb, pattern, sharpening, clipState)
-            }
-            val reconstructed = camera
-            val t2 = SystemClock.elapsedRealtime()
-            try {
-                // Native stages the complete input before processing, then copies
-                // output back only after a successful GPU wait. Reuse this owned
-                // readback buffer: ~100 MiB less live memory for a 13 MP frame.
-                if (denoise) waveletDenoiser.process(
-                    reconstructed, reconstructed, output.width, output.height,
-                    settings.bounded(), noise?.first ?: 0f, noise?.second ?: 0f, denoiseWb,
-                    if (fused) WaveletDenoiser.SharpenRequest(sharpening, pattern, clipState) else null,
-                    pattern,
-                    RawNoiseModel.Source.of(metadata)
-                )
-            } catch (failure: Exception) {
-                Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
-                // Native leaves the buffer untouched on failure: still sharpen
-                // (its own failures propagate, as on the unfused path).
-                if (fused) waveletDenoiser.captureSharpen(camera, output.width, output.height,
-                    sharpenWb, pattern, sharpening, clipState)
-            }
-            val upload = reconstructed
-            val t3 = SystemClock.elapsedRealtime()
-            var t4 = 0L
-            val result = amaze.transformCameraLinear(
-                upload, output.width, output.height,
-                transform.glslColumnMajorMatrix()
-            ) { aces ->
-                t4 = SystemClock.elapsedRealtime()
+            captureSharpener.process(camera, output.width, output.height,
+                CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray()), pattern, sharpening, clipState)
+            return amaze.transformCameraLinear(camera, output.width, output.height, matrix, luma) { aces ->
                 consume(SceneLinearGpuFrame(aces, preDemosaic, transform))
             }
-            val t5 = SystemClock.elapsedRealtime()
-            Log.i(
-                LOG_TAG,
-                "Wavelet tap stages: readback=${t1 - t0}ms hl=${t2 - t1}ms wavelet=${t3 - t2}ms " +
-                    "upload+toAces=${t4 - t3}ms output=${t5 - t4}ms"
-            )
-            return result
         } finally {
             HdrPlusVulkan.freeBuffer(camera)
         }
@@ -548,30 +504,14 @@ class RawDevelopmentCoordinator(context: Context) {
         val pixels = if (externalContext) amaze.readbackHalfFloatCurrentContext(output, nativeOwned = true) else amaze.readbackHalfFloat(output, nativeOwned = true)
         try {
             val wb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
-            waveletDenoiser.captureSharpen(pixels, output.width, output.height, wb, pattern, sharpening, clipState)
+            captureSharpener.process(pixels, output.width, output.height, wb, pattern, sharpening, clipState)
             return if (externalContext) amaze.transformCameraLinearFromExternalContext(
                 pixels, output.width, output.height, transform.glslColumnMajorMatrix(), consume)
             else amaze.transformCameraLinear(pixels, output.width, output.height,
-                transform.glslColumnMajorMatrix(), consume)
+                transform.glslColumnMajorMatrix(), null, consume)
         } finally {
             HdrPlusVulkan.freeBuffer(pixels)
         }
-    }
-
-    /**
-     * Readback itself failed (no CPU pixels): convert on-GPU straight from
-     * the camera-linear texture. The JPEG still develops, un-denoised —
-     * the capture never fails for wavelet reasons.
-     */
-    private fun <T> consumeFallbackCameraLinear(
-        output: AmazeGpuOutput,
-        transform: ResolvedSceneLinearTransform,
-        preDemosaic: PreDemosaicResult,
-        consume: (SceneLinearGpuFrame) -> T
-    ): T {
-        return amaze.transformCameraTexture(
-            output, transform.glslColumnMajorMatrix()
-        ) { aces -> consume(SceneLinearGpuFrame(aces, preDemosaic, transform)) }
     }
 
     private fun <T> developQuadBayer(
@@ -647,133 +587,20 @@ class RawDevelopmentCoordinator(context: Context) {
             metadata,
             settings,
             fusedOutputSettings = outputSettings,
-            // RapidRAW chroma/detail preprocessing needs the linear frame before encoding.
-            allowOutputFusion = !outputSettings.chromaCleanup.rapidRawActive
+            // Portrait needs the scene-linear texture: no fused AgX/encode.
+            allowOutputFusion = !outputSettings.portrait.enabled
         ) { frame ->
             if (frame.texture.internalFormat == AmazeTextureFormat.RGBA8) {
                 jpegOutput.processEncoded(frame.texture, outputSettings)
             } else {
+                applyPortrait(frame.texture, outputSettings, metadata)
                 jpegOutput.process(frame.texture, outputSettings)
             }
         }
     }
 
     /**
-     * AI Bayer denoise for an already unpacked, pre-demosaic CFA (the exact
-     * training domain: normalized, lens-shading-corrected). Returns the
-     * denoised CFA (with the original local pattern) or null when AI is
-     * unavailable — inference failure, OOM, or unsupported geometry all fall
-     * back silently. Never throws for AI reasons; callers use `?: cfa`.
-     */
-    fun denoiseCfa(
-        cfa: UnpackedRawCfa,
-        metadata: RawFrameMetadata,
-        strength: Float = 1f
-    ): UnpackedRawCfa? {
-        return try {
-            aiDenoiser.denoise(cfa, CfaNoiseModel.from(metadata.noiseProfile), strength)
-        } catch (failure: Exception) {
-            Log.w(LOG_TAG, "AI CFA denoise failed, falling back", failure)
-            null
-        }
-    }
-
-    /**
-     * Bayer-model denoise+demosaic for an already unpacked, pre-demosaic CFA
-     * (same normalized training domain as [denoiseCfa]; no noise profile
-     * needed — the model handles arbitrary gain). Returns full-resolution
-     * denoised camRGB (bypasses AMaZE) or null when the bayer model is
-     * unavailable — inference failure, OOM, or unsupported geometry all fall
-     * back silently. Never throws for AI reasons; callers use `?:` fallback.
-     */
-    fun denoiseCfaBayerRgb(cfa: UnpackedRawCfa, strength: Float = 1f): BayerDenoisedRgb? {
-        if (!aiDenoiser.isBayerReady()) return null
-        return try {
-            aiDenoiser.denoiseBayerRgb(cfa, strength)
-        } catch (failure: Exception) {
-            Log.w(LOG_TAG, "AI bayer CFA denoise failed, falling back", failure)
-            null
-        }
-    }
-
-    /**
-     * Runs unpack + pre-demosaic + AI denoise for a fresh capture plane and
-     * returns the denoised CFA for shared use (denoised-DNG write-back and
-     * JPEG-from-denoised), so one capture pays for exactly one inference.
-     * Returns null when AI is disabled/unavailable; any failure falls back
-     * silently and the caller runs the normal development path instead.
-     */
-    fun denoiseCaptureCfa(
-        rawPlane: ByteBuffer,
-        metadata: RawFrameMetadata,
-        settings: RawDevelopmentSettings = RawDevelopmentSettings()
-    ): UnpackedRawCfa? {
-        if (!settings.denoise.aiEnabled || settings.denoise.aiStrength == 0f) return null
-        return try {
-            metadata.rawDevelopmentUnsupportedReason?.let { return null }
-            val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
-                ?: return null
-            val normalization = metadata.normalizationOrNull() ?: return null
-            val rowStride = metadata.rawPlaneRowStride ?: return null
-            val pixelStride = metadata.rawPlanePixelStride ?: return null
-            val unpacked = RawPackedUnpacker.unpackFrameNormalized(
-                rawPlane, metadata.imageWidth, metadata.imageHeight,
-                rowStride, pixelStride, metadata.rawImageFormat, normalization,
-                geometry.sensorOriginX, geometry.sensorOriginY,
-                geometry.processingCrop, ByteOrder.nativeOrder()
-            )
-            val prepared = RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic)
-            val cfa = prepared.cfa ?: return null
-            denoiseCfa(cfa, metadata, settings.denoise.aiStrength)
-        } catch (failure: Exception) {
-            Log.w(LOG_TAG, "AI capture denoise failed, falling back", failure)
-            null
-        } catch (oom: OutOfMemoryError) {
-            Log.w(LOG_TAG, "AI capture denoise OOM, falling back", oom)
-            null
-        }
-    }
-
-    /**
-     * Runs unpack + pre-demosaic + bayer-model denoise+demosaic for a fresh
-     * capture plane and returns full-resolution denoised camRGB for the color
-     * pipeline (instead of a CFA for AMaZE), so one capture pays for exactly
-     * one inference. Returns null when AI is disabled/unavailable; any
-     * failure falls back silently.
-     */
-    fun denoiseCaptureCfaBayerRgb(
-        rawPlane: ByteBuffer,
-        metadata: RawFrameMetadata,
-        settings: RawDevelopmentSettings = RawDevelopmentSettings()
-    ): BayerDenoisedRgb? {
-        if (!settings.denoise.aiEnabled || !aiDenoiser.isBayerReady()) return null
-        return try {
-            metadata.rawDevelopmentUnsupportedReason?.let { return null }
-            val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
-                ?: return null
-            val normalization = metadata.normalizationOrNull() ?: return null
-            val rowStride = metadata.rawPlaneRowStride ?: return null
-            val pixelStride = metadata.rawPlanePixelStride ?: return null
-            val unpacked = RawPackedUnpacker.unpackFrameNormalized(
-                rawPlane, metadata.imageWidth, metadata.imageHeight,
-                rowStride, pixelStride, metadata.rawImageFormat, normalization,
-                geometry.sensorOriginX, geometry.sensorOriginY,
-                geometry.processingCrop, ByteOrder.nativeOrder()
-            )
-            val prepared = RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic)
-            val cfa = prepared.cfa ?: return null
-            denoiseCfaBayerRgb(cfa, settings.denoise.aiStrength)
-        } catch (failure: Exception) {
-            Log.w(LOG_TAG, "AI bayer capture denoise failed, falling back", failure)
-            null
-        } catch (oom: OutOfMemoryError) {
-            Log.w(LOG_TAG, "AI bayer capture denoise OOM, falling back", oom)
-            null
-        }
-    }
-
-    /**
-     * Develops a JPEG from an in-memory CFA (AI-denoised capture or HDR
+     * Develops a JPEG from an in-memory CFA (imported DNG or HDR
      * merge) honoring the full development settings, including adaptive
      * exposure analyzed on the given CFA.
      */
@@ -801,10 +628,7 @@ class RawDevelopmentCoordinator(context: Context) {
         val transform = SceneLinearColorProcessor.resolve(
             SceneLinearColorMetadata.from(metadata), resolvedExposureEv
         )
-        val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
-            !metadata.quadBayer
-        val cameraLinearPlan = waveletPlan ||
-            (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
+        val cameraLinearPlan = settings.denoise.captureSharpening.enabled && !metadata.quadBayer
         val tapWhiteWindow = if (outputSettings.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
@@ -817,29 +641,18 @@ class RawDevelopmentCoordinator(context: Context) {
                 clipPoint = reconstructedCfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = if (cameraLinearPlan || outputSettings.chromaCleanup.rapidRawActive) null else outputSettings,
+                fusedOutputSettings = if (cameraLinearPlan) null else outputSettings,
                 whiteWindow = tapWhiteWindow,
                 cameraLinear = cameraLinearPlan
             ) { output ->
                 if (cameraLinearPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
                     output.internalFormat == AmazeTextureFormat.RGBA16F
                 ) {
-                    val normalization = metadata.normalizationOrNull()
-                    if (normalization == null) {
-                        Log.w(LOG_TAG, "Camera-linear tap skipped: CFA normalization metadata is invalid")
-                        amaze.transformCameraTexture(
-                            output, transform.glslColumnMajorMatrix()
-                        ) { aces -> finishJpeg(aces, outputSettings) }
-                    } else {
-                        consumeCameraLinearTail(
-                            output, metadata, normalization, transform,
-                            PreDemosaicResult(
-                                null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
-                            ),
-                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern,
-                            sharpeningClipState(cfa)
-                        ) { frame -> finishJpeg(frame.texture, outputSettings) }
-                    }
+                    consumeCameraLinearTail(
+                        output, metadata, transform,
+                        PreDemosaicResult(null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)),
+                        settings.denoise.captureSharpening, cfa.pattern, sharpeningClipState(cfa), null
+                    ) { frame -> finishJpeg(frame.texture, outputSettings) }
                 } else {
                     finishJpeg(output, outputSettings)
                 }
@@ -882,7 +695,7 @@ class RawDevelopmentCoordinator(context: Context) {
         return monoFromCfa(cfa, metadata, look, wantMono, wantPacked)
     }
 
-    /** B&W from an already-corrected CFA (single-frame AI denoise or HDR+ merge). */
+    /** B&W from an already-corrected CFA (HDR+ merge). */
     fun monoFromCfa(
         cfa: UnpackedRawCfa, metadata: RawFrameMetadata, look: JpegOutputSettings,
         wantMono: Boolean, wantPacked: Boolean, merged: Boolean = false,
@@ -940,6 +753,27 @@ class RawDevelopmentCoordinator(context: Context) {
         return SceneLinearColorProcessor.resolve(SceneLinearColorMetadata.from(metadata), settings.exposureEv + correction)
     }
 
+    /**
+     * Portrait bokeh, in place on the scene-linear texture (current EGL context).
+     * Never fails the JPEG: any error leaves the picture unblurred.
+     */
+    private fun applyPortrait(output: AmazeGpuOutput, outputSettings: JpegOutputSettings, metadata: RawFrameMetadata) {
+        val portrait = outputSettings.portrait
+        if (!portrait.enabled) return
+        if (output.internalFormat != AmazeTextureFormat.RGBA16F || output.colorDomain != AmazeColorDomain.ACESCG) return
+        val nets = PortraitNetsHolder.get(appContext) ?: run {
+            Log.w(LOG_TAG, "Portrait skipped: no depth network on this build")
+            return
+        }
+        runCatching {
+            portraitBokeh.apply(output, portrait, nets, metadata.exifOrientation, metadata.frameNumber.toInt())
+        }.onSuccess {
+            Log.i(LOG_TAG, "Portrait ${output.width}x${output.height} ${PortraitSettings.label(portrait.fNumber)}: " +
+                "total=${it.totalMs}ms nets=${it.netsMs}ms gpu=${it.gpuMs}ms focus=${"%.3f".format(it.focus)} " +
+                "person=${"%.3f".format(it.personFraction)} layers=${it.layers} (${it.nets})")
+        }.onFailure { Log.e(LOG_TAG, "Portrait failed; saving without blur", it) }
+    }
+
     private fun finishJpeg(
         output: AmazeGpuOutput,
         outputSettings: JpegOutputSettings
@@ -965,9 +799,6 @@ class RawDevelopmentCoordinator(context: Context) {
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         cfa.requireAmazeCompatible()
-        // Callers AI-denoise the merged CFA first (denoiseCfa) and share it
-        // between the merged-DNG write and this develop; no internal hook here
-        // so inference never runs twice for one capture.
         // HDR brackets add HDR-tuned adaptive exposure on top of the display
         // compensation: without it the develop restores reference brightness
         // exactly, which meters high-DR scenes dark. Uniform same-exposure
@@ -1021,17 +852,21 @@ class RawDevelopmentCoordinator(context: Context) {
                 clipPoint = reconstructed.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = if (developOutput.chromaCleanup.rapidRawActive ||
-                    (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)) null else developOutput,
+                fusedOutputSettings = if ((settings.denoise.captureSharpening.enabled && !metadata.quadBayer) ||
+                    outputSettings.portrait.enabled) null else developOutput,
                 whiteWindow = whiteWindow,
                 cameraLinear = settings.denoise.captureSharpening.enabled && !metadata.quadBayer
             ) { output ->
                 if (output.colorDomain == AmazeColorDomain.CAMERA_LINEAR) {
                     consumeCaptureSharpened(output, transform, reconstructed.pattern,
-                        settings.denoise.captureSharpening, metadata, sharpeningClipState(cfa)) { aces -> finishJpeg(aces, developOutput) }
+                        settings.denoise.captureSharpening, metadata, sharpeningClipState(cfa)) { aces ->
+                        applyPortrait(aces, developOutput, metadata)
+                        finishJpeg(aces, developOutput)
+                    }
                 } else if (output.internalFormat == AmazeTextureFormat.RGBA8) {
                     jpegOutput.processEncoded(output, developOutput)
                 } else {
+                    applyPortrait(output, developOutput, metadata)
                     jpegOutput.process(output, developOutput)
                 }
             }
@@ -1278,7 +1113,7 @@ class RawDevelopmentCoordinator(context: Context) {
 
     /**
      * Denoised-CFA JPEG XL twin of [developCfaJpeg]: identical adaptive
-     * metering, HL/wavelet camera-linear tail, and AMaZE path, finishing
+     * metering, HL/capture-sharpening camera-linear tail, and AMaZE path, finishing
      * through the half-float JXL output stage (fusion disabled) instead of
      * the 8-bit JPEG one.
      */
@@ -1306,10 +1141,7 @@ class RawDevelopmentCoordinator(context: Context) {
         val transform = SceneLinearColorProcessor.resolve(
             SceneLinearColorMetadata.from(metadata), resolvedExposureEv
         )
-        val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
-            !metadata.quadBayer
-        val cameraLinearPlan = waveletPlan ||
-            (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
+        val cameraLinearPlan = settings.denoise.captureSharpening.enabled && !metadata.quadBayer
         val tapWhiteWindow = if (look.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
@@ -1329,22 +1161,11 @@ class RawDevelopmentCoordinator(context: Context) {
                 if (cameraLinearPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
                     output.internalFormat == AmazeTextureFormat.RGBA16F
                 ) {
-                    val normalization = metadata.normalizationOrNull()
-                    if (normalization == null) {
-                        Log.w(LOG_TAG, "Camera-linear tap skipped: CFA normalization metadata is invalid")
-                        amaze.transformCameraTexture(
-                            output, transform.glslColumnMajorMatrix()
-                        ) { aces -> finishJxl(aces, look, jxl) }
-                    } else {
-                        consumeCameraLinearTail(
-                            output, metadata, normalization, transform,
-                            PreDemosaicResult(
-                                null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
-                            ),
-                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern,
-                            sharpeningClipState(cfa)
-                        ) { frame -> finishJxl(frame.texture, look, jxl) }
-                    }
+                    consumeCameraLinearTail(
+                        output, metadata, transform,
+                        PreDemosaicResult(null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)),
+                        settings.denoise.captureSharpening, cfa.pattern, sharpeningClipState(cfa), null
+                    ) { frame -> finishJxl(frame.texture, look, jxl) }
                 } else {
                     finishJxl(output, look, jxl)
                 }
@@ -1370,9 +1191,6 @@ class RawDevelopmentCoordinator(context: Context) {
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         cfa.requireAmazeCompatible()
-        // Callers AI-denoise the merged CFA first (denoiseCfa) and share it
-        // between the merged-DNG write and this develop; no internal hook here
-        // so inference never runs twice for one capture.
         val mergedAdaptive = resolveMergedAdaptive(cfa, settings, adaptiveWorkspace)
         val resolvedExposureEv = settings.exposureEv +
             (mergedAdaptive?.correctionEv ?: 0.0) *
@@ -1469,7 +1287,7 @@ class RawDevelopmentCoordinator(context: Context) {
             "JXL develop needs the scene-linear RGBA16F frame, not fused RGBA8"
         }
         require(output.colorDomain == AmazeColorDomain.ACESCG) {
-            "JXL develop needs scene-linear ACEScg, not camera-linear (wavelet tail missing?)"
+            "JXL develop needs scene-linear ACEScg, not camera-linear (camera-linear tail missing?)"
         }
         return jxlOutput.process(output, look, jxl)
     }
@@ -1484,7 +1302,8 @@ class RawDevelopmentCoordinator(context: Context) {
 
     /** Releases cached programs and the thread-confined EGL session after queued saves finish. */
     fun close() {
-        waveletDenoiser.release()
+        rawDenoiser.close()
+        captureSharpener.release()
         // The merged pair runs on the retained develop context (created on
         // the first merged save); make it current before deleting its
         // programs. With no merged save the closes are safe no-ops.
@@ -1496,6 +1315,7 @@ class RawDevelopmentCoordinator(context: Context) {
         amaze.makeProcessingContextCurrent()
         jxlOutput.close()
         jpegOutput.close()
+        portraitBokeh.close()
         amaze.close()
         opposedSession?.close()
         opposedSession = null
@@ -1524,8 +1344,7 @@ class RawDevelopmentCoordinator(context: Context) {
         fun estimateMemory(
             width: Int,
             height: Int,
-            ultraHdr: Boolean = false,
-            aiDenoise: Boolean = false
+            ultraHdr: Boolean = false
         ): RawDevelopmentMemoryEstimate {
             require(width > 0 && height > 0)
             val pixels = width.toLong() * height
@@ -1538,20 +1357,10 @@ class RawDevelopmentCoordinator(context: Context) {
             val gainPixels = ((width + 3) / 4).toLong() * ((height + 3) / 4).toLong()
             // GPU gain texture + direct readback + Android Bitmap, all RGBA8.
             val gainmap = if (ultraHdr) gainPixels * 12L else 0L
-            // AI peak (managed heap + direct buffers, transient): unpacked CFA
-            // + channel-last packed input + model output + result buffer.
-            // Tiny: 5ch input @ quarter res (5B/px) + 4ch packed out (4B/px).
-            // Bayer: 4ch input @ quarter res (4B/px) + 3ch camRGB @ full res
-            // (12B/px). Native tiled inference adds only fixed-size tile
-            // workspace on top (flat vs MP count). Size for the worst path.
-            val aiPeak = if (aiDenoise) {
-                raw + 2L * cfa + 16L * pixels
-            } else 0L
             val accountedPeak = maxOf(
                 raw + 2L * cfa,
                 raw + cfa + cfa + amaze,
-                raw + cfa + pixels * 8L + rgba8 + readback + bitmap + gainmap,
-                aiPeak
+                raw + cfa + pixels * 8L + rgba8 + readback + bitmap + gainmap
             )
             val overheadReserve = 96L * 1024L * 1024L
             return RawDevelopmentMemoryEstimate(

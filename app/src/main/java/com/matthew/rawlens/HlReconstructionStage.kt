@@ -20,7 +20,7 @@
 // output buffer does not fit the heap). The capture never fails for
 // highlight reasons.
 //
-// LOGGING (logcat tag "HlRecon", same shape as WaveletDenoiser): per-stage
+// LOGGING (logcat tag "HlRecon", one summary line): per-stage
 // milliseconds plus a one-line summary per photo — the numbers the
 // Vulkan-vs-CPU optimization decision needs.
 package com.matthew.rawlens

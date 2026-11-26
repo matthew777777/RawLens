@@ -70,19 +70,5 @@ internal object MergeScreenSettings {
     fun developedFormat(prefs: SharedPreferences): DevelopedFormat =
         DevelopedFormat.fromPreference(prefs.getString(MainActivity.KEY_DEVELOPED_FORMAT, null))
 
-    fun denoise(prefs: SharedPreferences): DenoiseSettings = DenoiseSettings(
-        captureSharpening = CaptureSharpeningSettings.read(prefs),
-            aiEnabled = prefs.getBoolean(MainActivity.KEY_AI_DENOISE_ENABLED, false),
-        saveOriginalDng = prefs.getBoolean(MainActivity.KEY_SAVE_ORIGINAL_DNG, true),
-        aiStrength = prefs.getInt(MainActivity.KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,
-        wavelet = WaveletSettings(
-            enabled = prefs.getBoolean(MainActivity.KEY_WAVELET_ENABLED, false),
-            strength = prefs.getInt(MainActivity.KEY_WAVELET_STRENGTH_PCT, 100).coerceIn(0, 800) / 100f,
-            detail = prefs.getInt(MainActivity.KEY_WAVELET_DETAIL_PCT, 100).coerceIn(0, 180) / 100f,
-            luma = prefs.getInt(MainActivity.KEY_WAVELET_LUMA_PCT, 25).coerceIn(0, 100) / 100f,
-            maxScale = prefs.getInt(MainActivity.KEY_WAVELET_SCALES, 7).coerceIn(1, 7),
-            algorithm = WaveletAlgorithm.fromOrdinal(prefs.getInt(MainActivity.KEY_WAVELET_ALGORITHM, WaveletAlgorithm.RAWR.ordinal)),
-            grain = prefs.getInt(MainActivity.KEY_WAVELET_GRAIN_PCT, (WaveletSettings.DEFAULT_GRAIN * 100).toInt()).coerceIn(0, 100) / 100f
-        )
-    )
+    fun denoise(prefs: SharedPreferences): DenoiseSettings = DenoiseSettings.read(prefs)
 }

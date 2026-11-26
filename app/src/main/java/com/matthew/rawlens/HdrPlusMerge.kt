@@ -376,7 +376,7 @@ class HdrPlusMerge(context: Context) {
     }
 
     /**
-     * The learned per-device noise model (shared store with the wavelet
+     * The learned per-device noise model (shared store with the RAW
      * stage and MFSR) as prior for the burst's own estimate. Null when the
      * source is unknown; the prior itself declines when untrained for the ISO.
      */

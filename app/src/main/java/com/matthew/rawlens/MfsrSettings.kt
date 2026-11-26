@@ -30,7 +30,7 @@ data class MfsrSettings(
     /**
      * Noise model for the merge (GAT, SNR -> tile/kernel params, robustness
      * LUT). On (default): the learned per-device model
-     * (WaveletDenoiser store, rawlens_noise::fit) sets the green level, the
+     * (RawNoiseModel store, rawlens_noise::fit) sets the green level, the
      * Camera2 profile only the R/B-to-G shape; until the model is trained
      * it falls back to the profile. Off: the Camera2 profile as reported
      * (this phone's overstates base-ISO noise 4-14x in variance,
@@ -175,7 +175,7 @@ data class MfsrSettings(
         )
 
         const val MIN_MERGE_FRAMES = 2
-        const val MAX_MERGE_FRAMES = 16
+        const val MAX_MERGE_FRAMES = 30
         /** LK-R at x1 follows the largest burst the app captures. */
         const val MAX_LKR_FRAMES = 59
         /**
