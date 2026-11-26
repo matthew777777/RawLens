@@ -224,6 +224,11 @@ android {
         buildConfig = true
     }
 
+    // Portrait networks are memory-mapped straight from the APK.
+    androidResources {
+        noCompress += "tflite"
+    }
+
     // Per-ABI APK splits plus a universal APK. Devices download/install
     // only their ABI's native libraries (roughly half the native payload
     // of the universal APK); the universal APK remains the fallback the
@@ -320,6 +325,10 @@ android {
             if (project.hasProperty("waveletCheck")) applicationIdSuffix = ".waveletcheck"
             if (project.hasProperty("lkrCheck")) applicationIdSuffix = ".lkrcheck"
             if (project.hasProperty("monoCheck")) applicationIdSuffix = ".monocheck"
+            if (project.hasProperty("portraitCheck")) {
+                applicationIdSuffix = ".portraitcheck"
+                manifestPlaceholders["appLabel"] = "RawLens Portrait"
+            }
             if (project.hasProperty("vfCheck")) applicationIdSuffix = ".vfcheck"
             if (project.hasProperty("stabCheck")) {
                 applicationIdSuffix = ".stabcheck"
@@ -445,6 +454,9 @@ dependencies {
     // Installs the Baseline Profile (src/main/baseline-prof.txt) at
     // first launch so startup code is AOT-compiled instead of JIT'd.
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    // Portrait depth/person networks (LiteRT + NNAPI). github only: F-Droid
+    // builds native code from source, so its PortraitNetsFactory is a stub.
+    "githubImplementation"("com.google.ai.edge.litert:litert:1.4.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito:mockito-core:5.24.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
