@@ -463,7 +463,7 @@ class HdrPlusMerge(context: Context) {
     private fun memoryPlan(
         width: Int, height: Int, frameCount: Int, refIndex: Int, settings: HdrPlusSettings
     ): MemoryPlan? {
-        val budget = MergeMemoryBudget.systemHeadroomBytes(appContext)
+        val budget = MergeMemoryBudget.mergeRunHeadroomBytes(appContext)
             ?: return MemoryPlan(0 until frameCount, false)
         val px = width.toDouble() * height
         fun bytes(n: Int, hq: Boolean): Double =

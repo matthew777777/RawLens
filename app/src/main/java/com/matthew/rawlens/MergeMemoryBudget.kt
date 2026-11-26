@@ -26,6 +26,20 @@ internal object MergeMemoryBudget {
         return info.availMem - info.threshold
     }
 
+    /**
+     * Budget for the one merge about to run: free memory down to HALF the low-memory threshold.
+     * The threshold is where Android starts trimming cached background apps, not where it kills the
+     * foreground app, so the running merge may use part of it. The full-threshold gate skipped HDR+
+     * by 2 MB and MFSR on an 8 GB Mi 10 Ultra with 1.8 GB free (logcat 2026-11-27). Queue and staging
+     * decisions keep [systemHeadroomBytes]; 50 MP-class merges (GBs) are still refused.
+     */
+    fun mergeRunHeadroomBytes(context: Context): Long? {
+        val am = context.getSystemService(ActivityManager::class.java) ?: return null
+        val info = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(info)
+        return info.availMem - info.threshold / 2
+    }
+
     /** availMem / threshold / totalMem behind [systemHeadroomBytes], for the skip logs. */
     fun describeSystem(context: Context): String {
         val am = context.getSystemService(ActivityManager::class.java) ?: return "system memory unknown"

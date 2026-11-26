@@ -741,7 +741,7 @@ internal object MfsrMerge {
             fun asset(name: String): ByteArray =
                 context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
             if (settings.useGreenFit) {
-                val budget = MergeMemoryBudget.systemHeadroomBytes(context)
+                val budget = MergeMemoryBudget.mergeRunHeadroomBytes(context)
                 // The packed equations and robustness map add 10 bytes per sensor pixel.
                 // Allow another byte per pixel for the flow grid and staging.
                 val estimate = w.toDouble() * h * (NATIVE_BYTES_PER_PX + 11.0) *
@@ -877,7 +877,7 @@ internal object MfsrMerge {
         val native = px * (NATIVE_BYTES_PER_PX + OUTPUT_BYTES_PER_PX * (scale * scale - 1)) *
             MergeMemoryBudget.ESTIMATE_MARGIN
         val java = px * JAVA_BYTES_PER_PX * MergeMemoryBudget.ESTIMATE_MARGIN
-        val systemBudget = MergeMemoryBudget.systemHeadroomBytes(context)
+        val systemBudget = MergeMemoryBudget.mergeRunHeadroomBytes(context)
         val javaBudget = MergeMemoryBudget.javaHeapHeadroomBytes()
         val mb = MergeMemoryBudget::mb
         Log.i(LOG_TAG, "sharp merge memory plan ${w}x$h: native est ${mb(native)}MB " +
@@ -885,7 +885,7 @@ internal object MfsrMerge {
             "budget ${mb(javaBudget.toDouble())}MB")
         if (systemBudget != null && native > systemBudget) {
             Log.e(LOG_TAG, "sharp merge skipped: ${w}x$h needs ~${mb(native)}MB, " +
-                "only ${mb(systemBudget.toDouble())}MB free above the low-memory threshold " +
+                "only ${mb(systemBudget.toDouble())}MB free above half the low-memory threshold " +
                 "(${MergeMemoryBudget.describeSystem(context)})")
             return false
         }
