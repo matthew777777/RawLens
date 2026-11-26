@@ -1,0 +1,35 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Rejection rescue, pass 2: frame k's weight = max(its LK-R weight w0, rescued support), the support being the minimum
+// over a 3x3 grid (2 px apart, like the rejection's spread) of rescue_e's support of frame k AND of the reference
+// where frame k's sample lands (current affine + block field, LB = pc.LB). The reference keeps w0.
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer S { float sup[]; };
+layout(std430, binding = 1) readonly buffer W0 { float w0[]; };
+layout(std430, binding = 4) writeonly buffer WL { float wl[]; };
+
+void main() {
+  int j = int(gl_GlobalInvocationID.x), i = int(gl_GlobalInvocationID.y), k = int(gl_GlobalInvocationID.z);
+  if (j >= pc.w || i >= pc.h) return;
+  int o = (k * pc.h + i) * pc.w + j;
+  float w = w0[o];
+  if (k > 0) {
+    ivec2 X = ivec2(floor(warpLR(k, vec2(j, i) + 0.5)));
+    float v = 0.0;
+    if (X.x >= 0 && X.y >= 0 && X.x < pc.w && X.y < pc.h) {
+      v = 1.0;
+      int base = k * pc.h * pc.w;
+      ivec2 hi = ivec2(pc.w, pc.h) - 1;
+      for (int dy = -2; dy <= 2; dy += 2)
+        for (int dx = -2; dx <= 2; dx += 2) {
+          ivec2 a = clamp(ivec2(j + dx, i + dy), ivec2(0), hi), b = clamp(X + ivec2(dx, dy), ivec2(0), hi);
+          v = min(v, min(sup[base + a.y * pc.w + a.x], sup[b.y * pc.w + b.x]));
+        }
+    }
+    w = max(w, v);
+  }
+  wl[o] = w;
+}

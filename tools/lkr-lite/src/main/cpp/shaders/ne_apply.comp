@@ -1,0 +1,38 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Gradient of the 1x merge from the summed normal equations (nes.comp): acc = U^T W U z - U^T W y.
+// mode 0: gradient; 1: gradient and the coverage U^T W 1;
+// mode 2: average step (z = 0): acc / cov hold the clipped samples' sums, the others are added.
+#include "lite_common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer LK { uvec2 lk[]; };
+layout(std430, binding = 2) readonly buffer N2 { ivec2 n2[]; };
+layout(std430, binding = 3) buffer ACC { int acc[]; };
+layout(std430, binding = 4) buffer COV { int cov[]; };
+
+void main() {
+  int n = 3 * pc.H * pc.W;
+  int i = int(gl_GlobalInvocationID.x);
+  if (i >= n) return;
+  int W = pc.W;
+  // Links across a border carry coefficient 0; the index only has to stay in the buffer.
+  int l = max(i - 1, 0), r = min(i + 1, n - 1), u = max(i - W, 0), d = min(i + W, n - 1);
+  int ul = max(i - W - 1, 0), ur = max(i - W + 1, 0), dl = min(i + W - 1, n - 1), dr = min(i + W + 1, n - 1);
+  ivec2 b = n2[i];
+  if (pc.mode == 2) { acc[i] -= b.x; cov[i] += b.y; return; }
+  if (pc.mode == 1) cov[i] = b.y;
+  float zi = z[i];
+  uvec2 c = lk[i];
+  uint cl = i > 0 ? lk[l].x & 0xffffu : 0u;
+  uint cul = i > W ? lk[ul].x >> 16 : 0u;
+  uint cu = i >= W ? lk[u].y & 0xffffu : 0u;
+  uint cur = i >= W ? lk[ur].y >> 16 : 0u;
+  // (N z)_i = sum N_ij (z_j - z_i) + (U^T W 1)_i z_i: the diagonal is not needed and the links' 16 bits
+  // only scale differences between neighbours.
+  float g = float(c.x & 0xffffu) * (z[r] - zi) + float(c.x >> 16) * (z[dr] - zi)
+          + float(c.y & 0xffffu) * (z[d] - zi) + float(c.y >> 16) * (z[dl] - zi)
+          + float(cl) * (z[l] - zi) + float(cul) * (z[ul] - zi) + float(cu) * (z[u] - zi) + float(cur) * (z[ur] - zi);
+  acc[i] = int(round(g * (pc.scale * float(pc.K) / 65535.0) + (float(b.y) * zi - float(b.x))));
+}

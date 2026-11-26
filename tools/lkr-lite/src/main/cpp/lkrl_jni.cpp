@@ -154,6 +154,8 @@ jobject Merge(JNIEnv* env, jobjectArray frames, jint w, jint h, jint row_stride_
       setenv("LKRL_RCD", "0", 0); setenv("LKRL_TDGATE", "0", 0); setenv("LKRL_DLN", "0", 0); setenv("LKRL_GCF", "0", 0); setenv("LKRL_CANC", "0", 0);
     }
     if (__system_property_get("debug.lkr.rcd", v) > 0 && v[0]) setenv("LKRL_RCD", v, 0);
+    if (__system_property_get("debug.lkr.align2", v) > 0 && v[0] && v[0] != '-') setenv("LKRL_ALIGN2", v, 1);
+    else unsetenv("LKRL_ALIGN2");
     if (__system_property_get("debug.lkr.tdgate", v) > 0 && v[0]) setenv("LKRL_TDGATE", v, 0);
     if (__system_property_get("debug.lkr.tdresid", v) > 0 && v[0]) setenv("LKRL_TDRESID", v, 0);
     if (__system_property_get("debug.lkr.dln", v) > 0 && v[0]) setenv("LKRL_DLN", v, 0);

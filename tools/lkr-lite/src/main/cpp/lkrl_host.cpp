@@ -434,6 +434,12 @@ std::array<double, 6> LkAffine(const LkRef& ref, const float* mov, int iters, co
   }
   p[2] /= std::pow(2.0, levels - 1);
   p[5] /= std::pow(2.0, levels - 1);
+  // Convergence: translation step below tol (px of the level) or the iteration cap (LKRL_LK_TOL / LKRL_LK_IT override;
+  // LKRL_LK_TOL=0.001 LKRL_LK_IT=0 = the old 1e-3 / 30). Default 0.05 / 5 since 2026-11-26: half the quadrant fits ran
+  // to the cap chasing 1e-3, the GPU refines motion anyway; real holdout 14 bursts within +-0.2 %, phone prep 41 -> 9 s.
+  static const double lk_tol = std::getenv("LKRL_LK_TOL") ? std::atof(std::getenv("LKRL_LK_TOL")) : 0.05;
+  static const int lk_cap = std::getenv("LKRL_LK_IT") ? std::atoi(std::getenv("LKRL_LK_IT")) : 5;
+  if (lk_cap > 0) iters = std::min(iters, lk_cap);
   for (int lv = levels - 1; lv >= 0; --lv) {
     const int H = ref.hs[size_t(lv)], W = ref.ws[size_t(lv)];
     const double* rg = ref.rgg[size_t(lv)].data();
@@ -482,7 +488,7 @@ std::array<double, 6> LkAffine(const LkRef& ref, const float* mov, int iters, co
       double dp[6];
       if (!solve6(A, b, dp)) break;
       for (int a = 0; a < 6; ++a) p[a] += dp[a];
-      if (std::max(std::fabs(dp[2]), std::fabs(dp[5])) < 1e-3) { if (std::getenv("LKRL_LK_STATS")) std::fprintf(stderr, "lkstat lv%d W%d it%d\n", lv, W, it + 1); break; }
+      if (std::max(std::fabs(dp[2]), std::fabs(dp[5])) < lk_tol) { if (std::getenv("LKRL_LK_STATS")) std::fprintf(stderr, "lkstat lv%d W%d it%d\n", lv, W, it + 1); break; }
       if (it + 1 == iters && std::getenv("LKRL_LK_STATS")) std::fprintf(stderr, "lkstat lv%d W%d it%d cap\n", lv, W, it + 1);
     }
     if (lv) {

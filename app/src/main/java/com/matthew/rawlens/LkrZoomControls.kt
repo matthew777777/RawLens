@@ -19,7 +19,7 @@ internal fun MainActivity.redmiRootMode(): LapisRootProfile.Mode =
  * (no capture change: every frame is still full sensor), so what you frame
  * is the crop the merge solves at x2.
  *
- * In the bottom row next to OFF / AUTO, the round resolution button toggles, independently of zoom,
+ * In the control row beside AE-L, the round resolution button toggles, independently of zoom,
  * the sensor-size output and the kept x2 solve, labelled in MP like the lens switcher.
  */
 internal fun MainActivity.wireLkrZoomChip() {

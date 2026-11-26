@@ -3,6 +3,7 @@
 #include "lkrl_prior.h"
 
 #include <algorithm>
+#include <fstream>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -36,6 +37,16 @@ static const uint32_t wminv[] = {
 static const uint32_t adj[] = {
 #include "adj.inc"
 };
+static const uint32_t nes[] = {
+#include "nes.inc"
+};
+static const uint32_t ne_apply[] = {
+#include "ne_apply.inc"
+};
+static const uint32_t ne_zupd[] = {
+#include "ne_zupd.inc"
+};
+
 static const uint32_t adj_s1[] = {   // adj.comp built per scale (ADJ_SCALE): fewer registers at 1x
 #include "adj_s1.inc"
 };
@@ -50,6 +61,9 @@ static const uint32_t edgeshift[] = {
 };
 static const uint32_t cdupd[] = {
 #include "cdupd.inc"
+};
+static const uint32_t cdrow[] = {
+#include "cdrow.inc"
 };
 static const uint32_t le_tensor[] = {
 #include "le_tensor.inc"
@@ -149,6 +163,27 @@ static const uint32_t kminh[] = {
 };
 static const uint32_t kmin[] = {
 #include "lkr_weight_min.inc"
+};
+static const uint32_t adj_cubic[] = {
+#include "adj_cubic.inc"
+};
+static const uint32_t jac_cubic[] = {
+#include "jac_cubic.inc"
+};
+static const uint32_t jacblk_cubic[] = {
+#include "jacblk_cubic.inc"
+};
+static const uint32_t lkr_resid_cubic[] = {
+#include "lkr_resid_cubic.inc"
+};
+static const uint32_t upfine[] = {
+#include "upfine.inc"
+};
+static const uint32_t rescue_e[] = {
+#include "rescue_e.inc"
+};
+static const uint32_t rescue_apply[] = {
+#include "rescue_apply.inc"
 };
 static const uint32_t solveblk[] = {
 #include "solveblk.inc"
@@ -311,7 +346,7 @@ bool solve6(double A[6][6], double b[6], double x[6]) {   // Gaussian eliminatio
 LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   if (!gpu_ || !gpu_->ok()) return;
   LKRL_PIPE(resid, 6); LKRL_PIPE(werr, 3); LKRL_PIPE(wavg, 2); LKRL_PIPE(wminh, 3); LKRL_PIPE(wminv, 5);
-  LKRL_PIPE(adj, 7); LKRL_PIPE(adj_s1, 7); LKRL_PIPE(adj_s2, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 4); LKRL_PIPE(le_tensor, 2); LKRL_PIPE(le_blur, 2); LKRL_PIPE(le_apply, 3); LKRL_PIPE(dln_apply, 3); LKRL_PIPE(axn_apply, 3); LKRL_PIPE(gcf_apply, 3); LKRL_PIPE(canc_apply, 5); LKRL_PIPE(rcd_start, 4); LKRL_PIPE(prior_conv, 4); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 5);
+  LKRL_PIPE(adj, 7); LKRL_PIPE(adj_s1, 7); LKRL_PIPE(adj_s2, 7); LKRL_PIPE(edgeshift, 3); LKRL_PIPE(cdupd, 5); LKRL_PIPE(cdrow, 3); LKRL_PIPE(le_tensor, 2); LKRL_PIPE(le_blur, 2); LKRL_PIPE(le_apply, 3); LKRL_PIPE(dln_apply, 3); LKRL_PIPE(axn_apply, 3); LKRL_PIPE(gcf_apply, 3); LKRL_PIPE(canc_apply, 5); LKRL_PIPE(rcd_start, 4); LKRL_PIPE(prior_conv, 4); LKRL_PIPE(zupd, 4); LKRL_PIPE(jac, 6); LKRL_PIPE(jacblk, 6); LKRL_PIPE(solveblk, 3); LKRL_PIPE(gstats, 3); LKRL_PIPE(wguide, 5); LKRL_PIPE(wvalid, 5);
 #define LKRL_KPIPE(name, nb) name##_ = gpu_->pipeline(spv::name, sizeof(spv::name), nb, sizeof(KPush))
   LKRL_KPIPE(kresid, 6); LKRL_KPIPE(ktdet, 4); LKRL_KPIPE(kth, 5); LKRL_KPIPE(kt, 6); LKRL_KPIPE(ktv, 8);
   LKRL_KPIPE(ktd, 8); LKRL_KPIPE(kguide, 6); LKRL_KPIPE(kminh, 3); LKRL_KPIPE(kmin, 5);
@@ -326,7 +361,7 @@ LiteSolver::LiteSolver(Gpu* gpu) : gpu_(gpu) {
   adjwg_ = gpu_->pipeline(spv::adj_wg, sizeof(spv::adj_wg), 7, sizeof(Push));
   fin_ = gpu_->pipeline(spv::fin, sizeof(spv::fin), 7, 80);
   ok_ = true;
-  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_, &le_tensor_, &le_blur_, &le_apply_, &dln_apply_, &axn_apply_, &gcf_apply_, &canc_apply_, &rcd_start_, &prior_conv_})
+  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_, &cdrow_, &le_tensor_, &le_blur_, &le_apply_, &dln_apply_, &axn_apply_, &gcf_apply_, &canc_apply_, &rcd_start_, &prior_conv_})
     ok_ = ok_ && q->pipe != VK_NULL_HANDLE;
 }
 
@@ -335,12 +370,12 @@ std::string LiteSolver::profileNames() const {
   char b[64];
   const std::pair<const Pipeline*, const char*> names[] = {
       {&resid_, "resid"}, {&werr_, "werr"}, {&wavg_, "wavg"}, {&wminh_, "wminh"}, {&wminv_, "wminv"},
-      {&adj_, "adj"}, {&adj_s1_, "adj_s1"}, {&adj_s2_, "adj_s2"}, {&zupd_, "zupd"}, {&jac_, "jac"}, {&jacblk_, "jacblk"}, {&solveblk_, "solveblk"},
+      {&adj_, "adj"}, {&adj_s1_, "adj_s1"}, {&adj_s2_, "adj_s2"}, {&nes_, "nes"}, {&ne_apply_, "ne_apply"}, {&ne_zupd_, "ne_zupd"}, {&zupd_, "zupd"}, {&jac_, "jac"}, {&jacblk_, "jacblk"}, {&solveblk_, "solveblk"},
       {&gstats_, "gstats"}, {&wguide_, "wguide"}, {&wvalid_, "wvalid"}, {&kresid_, "lkr_resid"},
       {&ktdet_, "lkr_weight_tdet"}, {&kth_, "lkr_weight_th"}, {&kt_, "lkr_weight_t"}, {&ktv_, "lkr_weight_tv"},
       {&ktd_, "lkr_weight_td"}, {&kguide_, "lkr_weight_guide"}, {&kminh_, "lkr_weight_minh"}, {&kmin_, "lkr_weight_min"},
       {&kdy_, "dct_y"}, {&kdu_, "dct_u"}, {&kdv_, "dct_v"}, {&kdyo_, "dct_y_old"}, {&kduo_, "dct_u_old"}, {&kdvo_, "dct_v_old"}, {&kdyuv_, "dct_yuv"},
-      {&hyb_, "hyb"}, {&adjwg_, "adj_wg"}, {&fin_, "fin"}, {&edgeshift_, "edgeshift"}, {&cdupd_, "cdupd"}, {&le_tensor_, "le_tensor"}, {&le_blur_, "le_blur"}, {&le_apply_, "le_apply"}, {&dln_apply_, "dln_apply"}, {&axn_apply_, "axn_apply"}, {&gcf_apply_, "gcf_apply"}, {&canc_apply_, "canc_apply"}, {&rcd_start_, "rcd_start"}, {&prior_conv_, "prior_conv"}};
+      {&hyb_, "hyb"}, {&adjwg_, "adj_wg"}, {&fin_, "fin"}, {&edgeshift_, "edgeshift"}, {&cdupd_, "cdupd"}, {&cdrow_, "cdrow"}, {&le_tensor_, "le_tensor"}, {&le_blur_, "le_blur"}, {&le_apply_, "le_apply"}, {&dln_apply_, "dln_apply"}, {&axn_apply_, "axn_apply"}, {&gcf_apply_, "gcf_apply"}, {&canc_apply_, "canc_apply"}, {&rcd_start_, "rcd_start"}, {&prior_conv_, "prior_conv"}, {&upfine_, "upfine"}, {&local_search_, "local_search"}, {&rescue_e_, "rescue_e"}, {&rescue_apply_, "rescue_apply"}};
   for (const auto& n : names) {
     std::snprintf(b, sizeof(b), "%s%s=%p", out.empty() ? "" : " ", n.second, static_cast<const void*>(n.first));
     out += b;
@@ -351,10 +386,11 @@ std::string LiteSolver::profileNames() const {
 LiteSolver::~LiteSolver() {
   if (!gpu_ || !gpu_->ok()) return;
   gpu_->destroy(local_search_);
+  for (Pipeline* q : {&ne_zupd_, &upfine_, &rescue_e_, &rescue_apply_, &adj_cubic_, &jac_cubic_, &jacblk_cubic_, &kresid_cubic_}) if (q->pipe) gpu_->destroy(*q);
   for (Entry& e : cache_) gpu_->free(e.buf);
   for (Entry& e : dcache_) gpu_->free(e.buf);
   for (Entry& e : fcache_) gpu_->free(e.buf);
-  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_, &le_tensor_, &le_blur_, &le_apply_, &dln_apply_, &axn_apply_, &gcf_apply_, &canc_apply_, &rcd_start_, &prior_conv_}) gpu_->destroy(*q);
+  for (Pipeline* q : {&resid_, &werr_, &wavg_, &wminh_, &wminv_, &adj_, &adj_s1_, &adj_s2_, &nes_, &ne_apply_, &zupd_, &jac_, &jacblk_, &solveblk_, &gstats_, &wguide_, &wvalid_, &kresid_, &ktdet_, &kth_, &kt_, &ktv_, &ktd_, &kguide_, &kminh_, &kmin_, &kdy_, &kdu_, &kdv_, &kdyuv_, &kdyo_, &kduo_, &kdvo_, &hyb_, &adjwg_, &fin_, &edgeshift_, &cdupd_, &cdrow_, &le_tensor_, &le_blur_, &le_apply_, &dln_apply_, &axn_apply_, &gcf_apply_, &canc_apply_, &rcd_start_, &prior_conv_}) gpu_->destroy(*q);
 }
 
 bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<float>& p, std::vector<float>& dloc,
@@ -427,6 +463,9 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     std::fill_n(dense.begin() + nLR * 2, size_t(h) * w, 1.0f);
   }
 
+  const int nbf = ((w + 7) / 8) * ((h + 7) / 8);   // 8 px field for the merge (local_fine)
+  const bool fine = prm.local_fine && !dense_path && LB == 16 && K > 1;
+  bool fine_pending = fine;
   // Buffers persist per solver (one per worker) and are reused while the tile size matches:
   // per-tile allocation cost 3.4 s summed on Mali for a 63-tile 1x merge.
   size_t slot = 0;
@@ -442,15 +481,23 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     return en.buf;
   };
   Buffer &y = buf((nLR + 1) / 2 * 4), &pb = buf(size_t(K) * 24, true),
-         &db = buf(dense_path ? dense.size() * sizeof(float) : size_t(K) * nb * 8, true);
+         &db = buf(dense_path ? dense.size() * sizeof(float) : size_t(K) * std::max(nb, fine ? nbf : 0) * 8, true);
+  // 1x merge on summed normal equations (nes.comp / ne_apply.comp / ne_zupd.comp). Default since 2026-11-26
+  // (96-101 dB vs the adjoint scatter, phone 1x ~-3 s); LKRL_NE=0 = the scatter path.
+  static const bool ne_env = !(std::getenv("LKRL_NE") && std::atoi(std::getenv("LKRL_NE")) == 0);
+  static const bool ne_exp = std::getenv("LKRL_CUBIC") || std::getenv("LKRL_FREQ") || std::getenv("LKRL_FITK") || std::getenv("LKRL_ADJ_WG");
+  const bool ne = ne_env && !ne_exp && s == 1;
+  Buffer &fxb = buf(fine ? size_t(K) * nbf * 8 : 16), &df = buf(fine ? size_t(K) * nbf * 8 : 16);
   Buffer &z = buf(nHR * 4, true), &z0 = buf(nHR * 4);
   Buffer &acc = buf(nHR * 4), &cov = buf(nHR * 4, true);
+  Buffer &nelk = buf(ne ? nHR * 8 : 16), &ne2 = buf(ne ? nHR * 8 : 16);
   // Edge position correction / colour-difference fit scratch.
   Buffer &dlb = buf(size_t(H) * W * 16), &ztb = buf(nHR * 4);
+  Buffer& cdb = buf(s == 2 ? size_t(H) * W * 24 : 16);   // cdrow / cdupd: row sums + kept coverage window sums
   Buffer& cov1 = buf(noise_scale ? nHR * 4 : 16, true);   // plain coverage U^T 1 (noise_scale only)
   Buffer &r = buf(nLR * 4), &vm = buf(nLR * 4), &e = buf(nLR * 4, resid_out != nullptr),
          &wt = buf(nLR * 4, weights_out != nullptr);
-  const uint32_t jg = div_up(uint32_t(h * w), 256);
+  const uint32_t jg = div_up(uint32_t(h * w), 256 * 8);   // jac.comp: 8 samples per lane (JAC_SPT)
   Buffer& part = buf(size_t(std::max(K - 1, 1)) * jg * 24 * 4, true);
   const bool guide = prm.guide > 0.0f && !(h & 1) && !(w & 1);
   Buffer &gm = buf(guide ? nLR * 4 : 16), &gv = buf(guide ? size_t(h) * w * 4 : 16);
@@ -567,6 +614,11 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   } else {
     std::memcpy(pb.map, p.data(), p.size() * 4);
     std::memcpy(db.map, dloc.data(), dloc.size() * 4);
+    if (fine) {
+      std::memcpy(fxb.map, prm.local_fine, size_t(K) * nbf * 8);
+      if (!upfine_.pipe) upfine_ = gpu_->pipeline(spv::upfine, sizeof(spv::upfine), 3, sizeof(Push));
+      if (!upfine_.pipe) return fail("upfine pipeline");
+    }
   }
   // HDR bracket: the start images demosaic the reference with its clipped samples filled from the
   // other frames (the data term still excludes them). frames stays the reference elsewhere.
@@ -682,6 +734,21 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   static const bool adj_generic = std::getenv("LKRL_ADJ_GENERIC") && std::atoi(std::getenv("LKRL_ADJ_GENERIC")) != 0;
   const Pipeline& adjP = adj_generic ? adj_ : (s == 2 ? adj_s2_ : adj_s1_);
   VkDescriptorSet sAdj = gpu_->set(adjP, {&z, &y, &pb, &db, &wt, &acc, &cov});
+  // Catmull-Rom forward model (experiment): LKRL_CUBIC bits 1 merge steps (U and U^T), 2 motion steps, 4 weight residual.
+  static const int cubic = std::getenv("LKRL_CUBIC") ? std::atoi(std::getenv("LKRL_CUBIC")) : 0;
+  auto lazy = [&](Pipeline& q, const uint32_t* code, size_t bytes, int nb_, size_t push) {
+    if (!q.pipe) q = gpu_->pipeline(code, bytes, nb_, push);
+    return q.pipe != VK_NULL_HANDLE;
+  };
+  if (((cubic & 1) && !lazy(adj_cubic_, spv::adj_cubic, sizeof(spv::adj_cubic), 7, sizeof(Push))) ||
+      ((cubic & 2) && (!lazy(jac_cubic_, spv::jac_cubic, sizeof(spv::jac_cubic), 6, sizeof(Push)) ||
+                       !lazy(jacblk_cubic_, spv::jacblk_cubic, sizeof(spv::jacblk_cubic), 6, sizeof(Push)))) ||
+      ((cubic & 4) && !lazy(kresid_cubic_, spv::lkr_resid_cubic, sizeof(spv::lkr_resid_cubic), 6, sizeof(KPush))))
+    return fail("cubic pipelines");
+  const Pipeline& jacP = (cubic & 2) ? jac_cubic_ : jac_;
+  const Pipeline& jacblkP = (cubic & 2) ? jacblk_cubic_ : jacblk_;
+  const Pipeline& kresidP = (cubic & 4) ? kresid_cubic_ : kresid_;
+  VkDescriptorSet sAdjC = (cubic & 1) ? gpu_->set(adj_cubic_, {&z, &y, &pb, &db, &wt, &acc, &cov}) : VK_NULL_HANDLE;
   // LKRL_ADJ_WG=1: workgroup-per-tile adjoint (bit-identical acc; phone A/B 2026-11-14: no gain, atomics
   // are not adj's cost -- off).
   static const bool adj_workgroup = std::getenv("LKRL_ADJ_WG") && std::atoi(std::getenv("LKRL_ADJ_WG")) != 0;
@@ -697,7 +764,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
                   kWV = VK_NULL_HANDLE, kWD = VK_NULL_HANDLE, kG = VK_NULL_HANDLE, kMH = VK_NULL_HANDLE,
                   kM = VK_NULL_HANDLE, kV = VK_NULL_HANDLE;
   if (lkw) {
-    kRT = gpu_->set(kresid_, {&z0, &y, &pb, &rrt, &db, &vm});
+    kRT = gpu_->set(kresidP, {&z0, &y, &pb, &rrt, &db, &vm});
     kTDet = gpu_->set(ktdet_, {&rrt, &y, &tdetb, &db});
     kTH = gpu_->set(kth_, {&rrt, &y, &rwt2, &wvt2, &tdetb});
     kWT = gpu_->set(kt_, {&rrt, &y, &rwt2, &wtr, &wvt2, &kebuf});
@@ -718,8 +785,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   // Final residual vs z (motion look): written to e, validity to r (both dead by then).
   VkDescriptorSet sResidZ = resid_out ? gpu_->set(resid_, {&z, &y, &pb, &db, &e, &r}) : VK_NULL_HANDLE;
   VkDescriptorSet sUpd = gpu_->set(zupd_, {&z, &acc, &cov, &dvb});
-  VkDescriptorSet sJac = gpu_->set(jac_, {&z, &y, &pb, &db, &wt, &part});
-  VkDescriptorSet sBlk = gpu_->set(jacblk_, {&z, &y, &pb, &db, &wt, &blk});
+  VkDescriptorSet sJac = gpu_->set(jacP, {&z, &y, &pb, &db, &wt, &part});
+  VkDescriptorSet sBlk = gpu_->set(jacblkP, {&z, &y, &pb, &db, &wt, &blk});
   Push qg = q;
   qg.mode = prm.gn_weights == 1 ? 1 : 0;   // 1: motion steps need no robust weights (refreshed lazily)
   VkDescriptorSet sSolveBlk = gpu_->set(solveblk_, {&blk, &db, &dtmp});
@@ -730,10 +797,33 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
   }
   gpu_->profile(prm.profile);
 
-  bool need_cov = true, weights_stale = false, chain_done = false;
+  bool need_cov = true, weights_stale = false, chain_done = false, rescued = false;
+  bool ne_stale = true;   // the sums follow the weights and the geometry
+  bool ne_delta = false;  // the sums hold the rescue merge's weights (s4): add only the change
+  bool ne_delta_vm = false;   // the delta's old weights are vm (else s4)
+  bool wvalid_skip = false;   // weights(): leave wt to the rescue that follows
+  bool cov1_done = false; // cov1 (plain coverage) taken from the rescue's weight-1 sums
+  if (ne) {
+    if (!nes_.pipe) nes_ = gpu_->pipeline(spv::nes, sizeof(spv::nes), 9, sizeof(Push));
+    if (!ne_apply_.pipe) ne_apply_ = gpu_->pipeline(spv::ne_apply, sizeof(spv::ne_apply), 5, sizeof(Push));
+    if (!ne_zupd_.pipe) ne_zupd_ = gpu_->pipeline(spv::ne_zupd, sizeof(spv::ne_zupd), 7, sizeof(Push));
+    if (!nes_.pipe || !ne_apply_.pipe || !ne_zupd_.pipe) return fail("ne pipelines");
+  }
+  VkDescriptorSet sNes = ne ? gpu_->set(nes_, {&nelk, &y, &pb, &db, &wt, &acc, &cov, &ne2, &s4}) : VK_NULL_HANDLE;
+  VkDescriptorSet sNesVm = ne ? gpu_->set(nes_, {&nelk, &y, &pb, &db, &vm, &acc, &cov, &ne2, &s4}) : VK_NULL_HANDLE;    // weights = validity
+  VkDescriptorSet sNesDvm = ne ? gpu_->set(nes_, {&nelk, &y, &pb, &db, &wt, &acc, &cov, &ne2, &vm}) : VK_NULL_HANDLE;   // delta from validity
+  VkDescriptorSet sNeApply = ne ? gpu_->set(ne_apply_, {&z, &nelk, &ne2, &acc, &cov}) : VK_NULL_HANDLE;
+  VkDescriptorSet sNeZupd = ne ? gpu_->set(ne_zupd_, {&z, &nelk, &ne2, &dvb, &ztb, &acc, &cov}) : VK_NULL_HANDLE;
+  // LKRL_NE_FUSE=0: separate ne_apply + zupd for the cached-divisor steps (A/B; the fused pass is bit-identical).
+  static const bool ne_fuse = !(std::getenv("LKRL_NE_FUSE") && std::atoi(std::getenv("LKRL_NE_FUSE")) == 0) &&
+                              !std::getenv("LKRL_CDFIT") && !std::getenv("LKRL_NO_DVCACHE") && !std::getenv("LKRL_UPDSMOOTH");
+  bool ne_fused = false;
+  Push ne_am{};
   const int fitK = std::getenv("LKRL_FITK") ? std::min(std::max(std::atoi(std::getenv("LKRL_FITK")), 1), K) : K;
   std::vector<float> zavg;
   auto weights = [&]() {   // robust weights vs the reference-only start image, current geometry
+    ne_stale = true;
+    ne_delta = false;
     if (lkw && chain_done && prm.lkr_weights_once) {   // keep LK-R's weights, new validity only
       gpu_->dispatch(resid_, sResid0, &q, gx, gy);
       gpu_->dispatch(wvalid_, kV, &q, div_up(uint32_t(nLR), 256));
@@ -746,7 +836,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       if (ktemporal && kq.rob_on > 0.5f) {
         KPush qt = kq; qt.rob_k = prm.temporal_k; qt.f3 = prm.temporal_tau;
         // The temporal warp also writes validity for the final weight pass.
-        gpu_->dispatch(kresid_, kRT, &qt, gx, gy, 1);
+        gpu_->dispatch(kresidP, kRT, &qt, gx, gy, 1);
         KPush qd = qt; qd.f0 = prm.temporal_detail; qd.f1 = prm.temporal_dark_wide ? 1.0f : 0.0f;
         qd.f2 = prm.temporal_dark_level;
         KPush qh = qd; qh.f1 = 0.0f;
@@ -807,7 +897,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
           }
         }
       }
-      gpu_->dispatch(wvalid_, kV, &q, div_up(uint32_t(nLR), 256));
+      if (!wvalid_skip) gpu_->dispatch(wvalid_, kV, &q, div_up(uint32_t(nLR), 256));
       need_cov = true;
       weights_stale = false;
       return;
@@ -888,7 +978,105 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         weights_stale = true;
         local_search_pending = false;
       }
+      if (fine_pending) {   // motion steps done: the merge warps with the 8 px field
+        Push u = q;
+        gpu_->dispatch(upfine_, gpu_->set(upfine_, {&db, &fxb, &df}), &u, div_up(uint32_t(K * nbf), 64));
+        gpu_->copy(df, db, size_t(K) * nbf * 8);
+        q.LB = 8; kq.kOff = 8;
+        weights_stale = true;
+        fine_pending = false;
+      }
+      // Rejection rescue (on by default; LKRL_RESCUE=0 turns it off): the weights compare every frame with the reference alone, whose aliased fine
+      // pattern (perforated panels, railings: 133623) no other frame matches, so all are rejected and its false colour
+      // stays. A 1x merge WITHOUT rejection that explains a frame AND the reference to within noise over 5x5 samples,
+      // on texture clearly above the noise, is a static scene: the frame's weight is restored there (rescue_e/_apply).
+      static const int rescue = std::getenv("LKRL_RESCUE") ? std::atoi(std::getenv("LKRL_RESCUE")) : 1;
+      // Auto-exposure drift (car burst 184641: 2.4 %) is not a bracket: the noise model still holds.
+      const bool bracket = hdr && *std::max_element(prm.exposure.begin(), prm.exposure.end()) >
+                                  1.1f * *std::min_element(prm.exposure.begin(), prm.exposure.end());
+      static const bool rescue_ne = !(std::getenv("LKRL_RESCUE_NE") && std::atoi(std::getenv("LKRL_RESCUE_NE")) == 0);
+      static const bool ne_inc = !(std::getenv("LKRL_NE_DELTA") && std::atoi(std::getenv("LKRL_NE_DELTA")) == 0);
+      const bool rescue_now = rescue && !rescued && lkw && !dense_path && !bracket && K >= 6;
+      const bool rne = ne && rescue_ne;
+      // Without HDR the weight-1 merge's weights are the validity itself (wvalid of 1 = vm): the NE sums read vm,
+      // LK-R's weights stay in wl (rescue_apply updates them in place), the delta scatter's old weights are vm.
+      const bool rvm = rne && ne_inc && !hdr;
+      // The chain's own validity pass would be overwritten by the rescue's before anything reads wt: skip it.
+      wvalid_skip = rescue_now && rvm;
       if (weights_stale) weights();
+      wvalid_skip = false;
+      if (rescue_now) {
+        rescued = true;
+        if (!rescue_e_.pipe) rescue_e_ = gpu_->pipeline(spv::rescue_e, sizeof(spv::rescue_e), 4, sizeof(Push));
+        if (!rescue_apply_.pipe) rescue_apply_ = gpu_->pipeline(spv::rescue_apply, sizeof(spv::rescue_apply), 5, sizeof(Push));
+        if (!rescue_e_.pipe || !rescue_apply_.pipe) return fail("rescue pipelines");
+        if (!rvm) {   // s4 keeps LK-R's weights, s3 the support (both free between weight refreshes).
+          gpu_->copy(wl, s4, nLR * 4);
+          gpu_->fill(wl, 0x3f800000u);
+          gpu_->dispatch(wvalid_, kV, &q, div_up(uint32_t(nLR), 256));
+        }
+        Push p1 = q; p1.s = 1; p1.H = h; p1.W = w;
+        const uint32_t n3 = div_up(uint32_t(3 * size_t(h) * w), 256);
+        Pipeline& a1 = adj_s1_.pipe ? adj_s1_ : adj_;
+        const VkDescriptorSet sA1 = gpu_->set(a1, {&z, &y, &pb, &db, &wt, &acc, &cov});
+        gpu_->fill(z, 0); gpu_->fill(cov, 0); gpu_->fill(acc, 0);
+        static const int rj = std::getenv("LKRL_RESCUE_J") ? std::atoi(std::getenv("LKRL_RESCUE_J")) : 1;
+        // With NE (1x): one scatter of the weight-1 sums, then the average and the steps from them (no adjoint passes).
+        if (rne) {
+          gpu_->fill(nelk, 0);
+          gpu_->fill(ne2, 0);
+          Push sm = q; sm.mode = 1; sm.rpow = hdr_in ? -2.0f : -1.0f; sm.tau = 0.0f;
+          gpu_->dispatch(nes_, rvm ? sNesVm : sNes, &sm, gx, gy);
+        }
+        for (int t = 0; t <= rj; ++t) {   // average, then rj merge steps (1x schedule's update)
+          Push am = p1; am.mode = t <= 1 ? 1 : 0;
+          if (t == 0) am.rpow = hdr_in ? -2.0f : -1.0f;
+          if (rne) {
+            Push an = q; an.mode = t == 0 ? 2 : (t == 1 ? 1 : 0);
+            if (!ne_fuse) gpu_->dispatch(ne_apply_, sNeApply, &an, div_up(uint32_t(nHR), 256));
+          } else {
+          if (t == 1) gpu_->fill(cov, 0);
+          gpu_->dispatch(a1, sA1, &am, uint32_t(K) * div_up(uint32_t(w), 16), gy);
+          }
+          Push um = p1; um.tau = 0.0f; um.LB = 0; um.a = t == 0 ? 0.0f : 8.0f; um.b = 1.45f * float(K) * 0.5f;
+          um.clip = 0.0f; um.mode = t <= 1 ? 1 : 0; um.robk = 0.0f; um.rpow = t == 0 ? (hdr_in ? -2.0f : -1.0f) : 1.6f;
+          if (rne && ne_fuse) {   // ne_apply + zupd fused (um.LB = 0, no filter)
+            Push uf = um; uf.K = q.K; uf.scale = q.scale; uf.dscale = q.dscale; uf.H = H; uf.W = W;
+            gpu_->dispatch(ne_zupd_, sNeZupd, &uf, div_up(uint32_t(nHR), 256));
+            gpu_->copy(ztb, z, nHR * 4);
+          } else {
+            gpu_->dispatch(zupd_, sUpd, &um, n3);
+          }
+          if (t == 0) gpu_->fill(acc, 0);
+        }
+        gpu_->dispatch(resid_, gpu_->set(resid_, {&z, &y, &pb, &db, &r, &vm}), &p1, gx, gy);
+        static const float lim = std::getenv("LKRL_RESCUE_LIM") ? float(std::atof(std::getenv("LKRL_RESCUE_LIM"))) : 4.0f;
+        static const float snr = std::getenv("LKRL_RESCUE_SNR") ? float(std::atof(std::getenv("LKRL_RESCUE_SNR"))) : 0.5f;
+        Push pe = q; pe.robk = lim; pe.tau = snr;
+        const uint32_t tx = div_up(uint32_t(w), 16), ty = div_up(uint32_t(h), 16);
+        gpu_->dispatch(rescue_e_, gpu_->set(rescue_e_, {&r, &vm, &y, &s3}), &pe, tx, ty, uint32_t(K));
+        gpu_->dispatch(rescue_apply_, gpu_->set(rescue_apply_, {&s3, rvm ? &wl : &s4, &pb, &db, &wl}), &q, tx, ty, uint32_t(K));   // in place: own sample only
+        if (std::getenv("LKRL_RESCUE_LOG")) {
+          if (!submit()) return fail("rescue log");
+          const float *W0 = s4.as<float>(), *W1 = wl.as<float>();
+          size_t nres = 0;
+          for (size_t i = size_t(h) * w; i < nLR; ++i) nres += W1[i] > W0[i] + 0.1f;
+          std::fprintf(stderr, "rescue: %.1f %% of samples\n", 100.0 * nres / double(nLR));
+          gpu_->begin();
+        }
+        gpu_->fill(acc, 0); gpu_->copy(z0, z, nHR * 4);
+        // validity depends on geometry and clipping only: at 1x the rescue's residual pass already wrote it
+        if (s != 1) gpu_->dispatch(resid_, sResid0, &q, gx, gy);
+        if (rne && ne_inc && !rvm) gpu_->copy(wt, s4, nLR * 4);   // the rescue merge's weights, still in the sums
+        // Its coverage (weights = validity: exposure weights are 1 without HDR) is the plain coverage of the final
+        // geometry, which the noise scale needs: same sums and rounding as the plain adjoint pass it replaces.
+        if (rne && noise_scale && !hdr && rj >= 1) { gpu_->copy(cov, cov1, nHR * 4); cov1_done = true; }
+        gpu_->dispatch(wvalid_, kV, &q, div_up(uint32_t(nLR), 256));
+        need_cov = true;
+        ne_stale = true;
+        ne_delta = rne && ne_inc;
+        ne_delta_vm = rvm;
+      }
       if (avg) { gpu_->fill(z, 0); need_cov = true; }
       if (need_cov) gpu_->fill(cov, 0);
       Push m = q; m.mode = need_cov ? 1 : 0;
@@ -970,12 +1158,28 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
           }
         PackHalf(Y2, nLR, y2.as<uint32_t>());
         gpu_->dispatch(adjP, sAdjF, &m, gx, gy);
+      } else if (ne) {
+        if (ne_stale) {
+          if (!ne_delta) {
+            gpu_->fill(nelk, 0);
+            gpu_->fill(ne2, 0);
+          }
+          Push sm = m; sm.mode = avg ? 1 : 0; sm.tau = ne_delta ? 1.0f : 0.0f;
+          gpu_->dispatch(nes_, ne_delta && ne_delta_vm ? sNesDvm : sNes, &sm, gx, gy);
+          ne_stale = false;
+          ne_delta = false;
+        }
+        Push am = q; am.mode = avg ? 2 : (need_cov ? 1 : 0);
+        ne_am = am;
+        ne_fused = ne_fuse && trace_prefix.empty();   // gradient + update in one pass below (ne_zupd)
+        if (!ne_fused) gpu_->dispatch(ne_apply_, sNeApply, &am, div_up(uint32_t(nHR), 256));
       } else if (!adj_old) {
         gpu_->dispatch(adjwg_, sAdjW, &m, gxw, gyw);
       } else {
         Push mk = m;
         if (!avg && fitK < K) mk.K = fitK;   // experiment: the fit on the first fitK frames only
-        gpu_->dispatch(adjP, sAdj, &mk, uint32_t(mk.K) * div_up(uint32_t(w), 16), gy);
+        const bool cub = (cubic & 1) && !avg;
+        gpu_->dispatch(cub ? adj_cubic_ : adjP, cub ? sAdjC : sAdj, &mk, uint32_t(mk.K) * div_up(uint32_t(w), 16), gy);
       }
       if (!avg) ++trace_j;
       if (!trace_prefix.empty() && !avg && trace_j==1) {
@@ -985,7 +1189,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         trace("coverage-J1.i32",cov.map,nHR*4);
         trace("weights.f32",wt.map,nLR*4);
         trace("affine.f32",pb.map,size_t(K)*24);
-        trace("local.f32",db.map,field_bytes);
+        trace("local.f32",db.map,fine ? size_t(K) * nbf * 8 : field_bytes);
         trace("adjoint-push.bin",&m,sizeof(m));
         gpu_->begin();
       }
@@ -1024,17 +1228,34 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
         static const int cd_cl = std::getenv("LKRL_CDCL") ? std::atoi(std::getenv("LKRL_CDCL")) : 97;
         pc2.K = cd_cl;
         pc2.mode = int(std::lround(256.0f * chroma_floor));  // coverage floor in Q8
+        static const float gsup_env = std::getenv("LKRL_GSUP") ? float(std::atof(std::getenv("LKRL_GSUP"))) : -1.0f;
+        const float gsup = gsup_env >= 0.0f ? gsup_env : prm.support_step;
+        pc2.s = s == 2 ? int(std::lround(256.0f * gsup * float(Kf) / 4.0f)) : 0;   // support-adaptive green step (Q8)
         if (cd_k > 0.0f) {   // the edge stop reads neighbours' G: write a copy, then swap it in
-          gpu_->dispatch(cdupd_, gpu_->set(cdupd_, {&z, &acc, &cov, &ztb}), &pc2, div_up(uint32_t(H * W), 256));
+          gpu_->dispatch(cdupd_, gpu_->set(cdupd_, {&z, &acc, &cov, &ztb, &cdb}), &pc2, div_up(uint32_t(H * W), 256));
           gpu_->copy(ztb, z, nHR * 4);
         } else {   // each invocation reads only its own z: update in place (no copy)
-          gpu_->dispatch(cdupd_, gpu_->set(cdupd_, {&z, &acc, &cov, &z}), &pc2, div_up(uint32_t(H * W), 256));
+          // separable window: cdrow's row sums (coverage rows only when the coverage changed), cdupd the columns
+          static const bool cd_sep = !(std::getenv("LKRL_CD_SEP") && std::atoi(std::getenv("LKRL_CD_SEP")) == 0);
+          pc2.h = !cd_sep ? -1 : (need_cov ? 1 : 0);
+          if (cd_sep) gpu_->dispatch(cdrow_, gpu_->set(cdrow_, {&acc, &cov, &cdb}), &pc2, div_up(uint32_t(H * W), 256));
+          gpu_->dispatch(cdupd_, gpu_->set(cdupd_, {&z, &acc, &cov, &z, &cdb}), &pc2, div_up(uint32_t(H * W), 256));
         }
         gpu_->fill(acc, 0);
         need_cov = false;
         continue;
       }
-      gpu_->dispatch(zupd_, sUpd, &u, div_up(uint32_t(nHR), 256));
+      if (ne_fused && (u.LB != 0 || u.robk > 0.0f)) {   // not the per-pixel update: the two passes
+        gpu_->dispatch(ne_apply_, sNeApply, &ne_am, div_up(uint32_t(nHR), 256));
+        ne_fused = false;
+      }
+      if (ne_fused) {
+        gpu_->dispatch(ne_zupd_, sNeZupd, &u, div_up(uint32_t(nHR), 256));
+        gpu_->copy(ztb, z, nHR * 4);
+        ne_fused = false;
+      } else {
+        gpu_->dispatch(zupd_, sUpd, &u, div_up(uint32_t(nHR), 256));
+      }
       if (u.robk > 0.0f || avg) gpu_->fill(acc, 0);
       need_cov = avg;   // the next J recomputes its (gain) divisor
       if (avg && cavg && gpu_hyb) {   // keep the average on the GPU for the combine
@@ -1059,7 +1280,9 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     } else if (c == 'G') {
       if (K < 2 || dense_path) continue;
       if (weights_stale && qg.mode == 0) weights();
-      gpu_->dispatch(jac_, sJac, &qg, jg, uint32_t(K - 1));
+      static const bool g_noaff = std::getenv("LKRL_G_NOAFF") && std::atoi(std::getenv("LKRL_G_NOAFF")) != 0;
+      if (!g_noaff) {   // the affine step (LKRL_G_NOAFF=1: block offsets only, no host round trip)
+      gpu_->dispatch(jacP, sJac, &qg, jg, uint32_t(K - 1));
       if (!submit()) return fail("submit (jac)");
       const double th = now_ms();
       const float* P = part.as<float>();
@@ -1092,7 +1315,8 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       }
       S.ms_host += now_ms() - th;
       gpu_->begin();
-      gpu_->dispatch(jacblk_, sBlk, &qg, uint32_t(nbx), uint32_t(nby), uint32_t(K - 1));
+      }
+      gpu_->dispatch(jacblkP, sBlk, &qg, uint32_t(nbx), uint32_t(nby), uint32_t(K - 1));
       // jacblk accumulates unnormalised squared camera-RGB gradients. Its
       // Hessian floor must have the same signal-squared units: a fixed .02
       // overwhelms dark wall texture and pins real subpixel misalignment.
@@ -1125,9 +1349,11 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
       Push m = q; m.mode = 2;
       gpu_->dispatch(adjP, sAdj, &m, gx, gy);
     }
-    gpu_->fill(cov1, 0);
-    Push m = q; m.mode = 2;
-    gpu_->dispatch(adjP, sAdjPlain, &m, gx, gy);
+    if (!cov1_done) {
+      gpu_->fill(cov1, 0);
+      Push m = q; m.mode = 2;
+      gpu_->dispatch(adjP, sAdjPlain, &m, gx, gy);
+    }
   }
   if (resid_out || weights_out) {
     if (weights_stale) weights();
@@ -1557,7 +1783,7 @@ bool LiteSolver::solve(const float* frames, int K, int h, int w, std::vector<flo
     if (S.prior_calls) trace("final-x.f32", x_out->data(), nHR * 4);
   }
   std::memcpy(p.data(), pb.map, p.size() * 4);
-  if (!dense_path) std::memcpy(dloc.data(), db.map, dloc.size() * 4);
+  if (!dense_path && !fine) std::memcpy(dloc.data(), db.map, dloc.size() * 4);
   if (prm.profile) S.profile = gpu_->profileReport();
   S.ms_total = now_ms() - t0;
   if (st) *st = S;
@@ -1729,11 +1955,16 @@ bool LiteSolver::finish(const float* z, std::vector<float>* x, int H, int W, con
     gpu_->dispatch(fin_, st, &p, gx, gy, planes);
   };
   static const bool notch2 = std::getenv("LKRL_NOTCH2") != nullptr;
+  // Three steps ping-pong P -> T -> P -> T, then one write-back (4 passes, was 6; same sums). LKRL_NOTCH2: separable.
   auto notch = [&](int pl, uint32_t planes = 1) {
-    for (int sm = 0; sm < 3; ++sm) {
-      run(notch2 ? 10 : 12, pl, sm, planes);
-      run(notch2 ? 11 : 13, pl, sm, planes);
+    if (notch2) {
+      for (int sm = 0; sm < 3; ++sm) { run(10, pl, sm, planes); run(11, pl, sm, planes); }
+      return;
     }
+    run(12, pl, 0, planes);
+    run(14, pl, 1, planes);
+    run(12, pl, 2, planes);
+    run(13, pl, 2, planes);
   };
   gpu_->begin();
   if (fa.notch) {

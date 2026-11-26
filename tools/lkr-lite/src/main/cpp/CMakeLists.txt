@@ -21,7 +21,7 @@ else()
 endif()
 set(LKRL_GEN "${CMAKE_CURRENT_BINARY_DIR}/lkrl_gen")
 file(MAKE_DIRECTORY "${LKRL_GEN}")
-set(LKRL_SHADERS resid werr wavg wminh wminv adj zupd jac jacblk solveblk local_search gstats wguide wvalid lkfit hyb adj_wg fin edgeshift cdupd le_tensor le_blur le_apply dln_apply axn_apply gcf_apply canc_apply rcd_start prior_conv)
+set(LKRL_SHADERS resid werr wavg wminh wminv adj nes ne_apply ne_zupd zupd jac jacblk upfine rescue_e rescue_apply solveblk local_search gstats wguide wvalid lkfit hyb adj_wg fin edgeshift cdupd cdrow le_tensor le_blur le_apply dln_apply axn_apply gcf_apply canc_apply rcd_start prior_conv)
 set(LKRL_INCS "")
 foreach(sh ${LKRL_SHADERS})
   add_custom_command(
@@ -41,6 +41,18 @@ foreach(sc 1 2)
       DEPENDS "${LKRL_DIR}/shaders/adj.comp" "${LKRL_DIR}/shaders/lite_common.glsl"
       VERBATIM)
   list(APPEND LKRL_INCS "${LKRL_GEN}/adj_s${sc}.inc")
+endforeach()
+# Catmull-Rom forward model experiment (LKRL_CUBIC).
+foreach(sh adj_cubic jac jacblk lkr/resid)
+  string(REPLACE "/" "_" _o "${sh}")
+  string(REPLACE "adj_cubic" "adj" _o "${_o}")
+  add_custom_command(
+      OUTPUT "${LKRL_GEN}/${_o}_cubic.inc"
+      COMMAND "${LKRL_GLSLC}" --target-env=vulkan1.1 -fshader-stage=compute -O -mfmt=num -DCUBIC
+              -I "${LKRL_DIR}/shaders" -I "${LKRL_DIR}/shaders/lkr" -o "${LKRL_GEN}/${_o}_cubic.inc" "${LKRL_DIR}/shaders/${sh}.comp"
+      DEPENDS "${LKRL_DIR}/shaders/${sh}.comp" "${LKRL_DIR}/shaders/cubic.glsl" "${LKRL_DIR}/shaders/lite_common.glsl"
+              "${LKRL_DIR}/shaders/lkr/lkr_common.glsl" VERBATIM)
+  list(APPEND LKRL_INCS "${LKRL_GEN}/${_o}_cubic.inc")
 endforeach()
 # LK-R's weight shaders, verbatim copies in shaders/lkr (own include dir: lkr_common.glsl).
 foreach(sh resid weight_tdet weight_th weight_t weight_tv weight_td weight_guide weight_minh weight_min dct_x_y dct_x_u dct_x_v dct_yuv dct_xo_y dct_xo_u dct_xo_v)
@@ -65,7 +77,7 @@ if(NOT ANDROID)
   find_path(LKRL_VULKAN_INCLUDE vulkan/vulkan.h HINTS /opt/homebrew/include /usr/local/include REQUIRED)
 endif()
 
-add_library(lkrl_core STATIC lkrl_gpu.cpp lkrl_solver.cpp lkrl_host.cpp lkrl_mhc.cpp lkrl_image.cpp lkrl_finish.cpp lkrl_adapter.cpp lkrl_full.cpp lkrl_lfc.cpp lkrl_blocksearch.cpp lkrl_gpulk.cpp lkrl_prior.cpp)
+add_library(lkrl_core STATIC lkrl_gpu.cpp lkrl_solver.cpp lkrl_host.cpp lkrl_mhc.cpp lkrl_image.cpp lkrl_finish.cpp lkrl_adapter.cpp lkrl_full.cpp lkrl_lfc.cpp lkrl_blocksearch.cpp lkrl_patchseed.cpp lkrl_gpulk.cpp lkrl_prior.cpp)
 add_dependencies(lkrl_core lkrl_shaders)
 target_include_directories(lkrl_core PUBLIC "${LKRL_DIR}" "${SRP_DIR}" "${LKRL_GEN}" ${LKRL_VULKAN_INCLUDE})
 target_compile_features(lkrl_core PUBLIC cxx_std_17)

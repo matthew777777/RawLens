@@ -273,8 +273,9 @@ void Gpu::profile(bool on) {
 std::string Gpu::profileReport() const {
   std::string out;
   char b[96];
-  for (const auto& e : prof_) {
-    std::snprintf(b, sizeof(b), "%s%p:%.1f", out.empty() ? "" : " ", (const void*)e.first, e.second);
+  for (size_t i = 0; i < prof_.size(); ++i) {
+    const auto& e = prof_[i];
+    std::snprintf(b, sizeof(b), "%s%p:%.1f#%d", out.empty() ? "" : " ", (const void*)e.first, e.second, profn_[i]);
     out += b;
   }
   return out;
@@ -373,8 +374,9 @@ bool Gpu::submit() {
     for (size_t i = 0; i < qwho_.size(); ++i) {
       const double ms = double(ts[2 * i + 1] - ts[2 * i]) * ts_period_ns_ * 1e-6;
       bool found = false;
-      for (auto& e : prof_) if (e.first == qwho_[i]) { e.second += ms; found = true; }
-      if (!found) prof_.push_back({qwho_[i], ms});
+      for (size_t q = 0; q < prof_.size(); ++q)
+        if (prof_[q].first == qwho_[i]) { prof_[q].second += ms; ++profn_[q]; found = true; }
+      if (!found) { prof_.push_back({qwho_[i], ms}); profn_.push_back(1); }
     }
   }
   return ok;

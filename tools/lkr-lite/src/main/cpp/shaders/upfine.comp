@@ -1,0 +1,31 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Motion field on an 8 px grid for the merge: the 16 px field (after the motion steps) sampled at the fine block
+// centres, or the tile preparation's own offset where it measured one (< 1e8; not moved by the motion steps). The warp shaders read it unchanged with LB = 8.
+#include "lite_common.glsl"
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer DIN { vec2 din[]; };
+layout(std430, binding = 1) readonly buffer EX { vec2 extra[]; };
+layout(std430, binding = 2) writeonly buffer DOUT { vec2 dout[]; };
+
+void main() {
+  int fx = (pc.w + 7) / 8, fy = (pc.h + 7) / 8, nf = fx * fy;
+  int nbx = (pc.w + 15) / 16, nby = (pc.h + 15) / 16;
+  int i = int(gl_GlobalInvocationID.x);
+  if (i >= pc.K * nf) return;
+  int k = i / nf, b = i - k * nf, by = b / fx, bx = b - by * fx;
+  vec2 c = (vec2(bx, by) * 8.0 + 4.0) / 16.0 - 0.5, fl = floor(c), f = c - fl;
+  int x0 = clamp(int(fl.x), 0, nbx - 1), y0 = clamp(int(fl.y), 0, nby - 1);
+  int x1 = clamp(int(fl.x) + 1, 0, nbx - 1), y1 = clamp(int(fl.y) + 1, 0, nby - 1);
+  int o = k * nbx * nby;
+  vec2 d = mix(mix(din[o + y0 * nbx + x0], din[o + y0 * nbx + x1], f.x), mix(din[o + y1 * nbx + x0], din[o + y1 * nbx + x1], f.x), f.y);
+  // The fine nodes (4, 12 of each 16) miss the coarse ones (8): plain samples cut the field's peaks and bends.
+  // Subtracting a share of the second difference at the nearest coarse node keeps its mean there (1 / 16).
+  ivec2 n0 = min(ivec2(bx, by) / 2, ivec2(nbx, nby) - 1);
+  vec2 m = din[o + n0.y * nbx + n0.x];
+  vec2 sx = din[o + n0.y * nbx + max(n0.x - 1, 0)] + din[o + n0.y * nbx + min(n0.x + 1, nbx - 1)] - 2.0 * m;
+  vec2 sy = din[o + max(n0.y - 1, 0) * nbx + n0.x] + din[o + min(n0.y + 1, nby - 1) * nbx + n0.x] - 2.0 * m;
+  d -= (sx + sy) / 16.0;
+  dout[i] = k == 0 ? vec2(0.0) : (extra[i].x < 1e8 ? extra[i] : d);
+}

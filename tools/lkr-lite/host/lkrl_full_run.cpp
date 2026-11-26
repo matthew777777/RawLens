@@ -227,6 +227,7 @@ int main(int argc, char** argv) {
   for (int c = 0; c < 4; ++c) black[c] = float(m.black_level_precise[c]);
   std::array<float, 3> wb{1, 1, 1};
   if (m.has_as_shot_neutral) wb = {float(m.as_shot_neutral[1] / m.as_shot_neutral[0]), 1.0f, float(m.as_shot_neutral[1] / m.as_shot_neutral[2])};
+  if (const char* pc = std::getenv("LKRL_PCACHE")) lkrl::Gpu::SetPipelineCacheFile(pc);   // benchmark runs: skip pipeline compilation
   lkrl::Gpu gpu;
   if (!gpu.ok()) return 1;
   std::printf("device: %s\n", gpu.info().c_str());

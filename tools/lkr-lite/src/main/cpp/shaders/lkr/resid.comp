@@ -16,6 +16,10 @@ layout(std430, binding = 2) readonly buffer P { float p[]; };
 layout(std430, binding = 3) writeonly buffer R { float r[]; };
 layout(std430, binding = 5) writeonly buffer VM { float vm[]; };
 
+#ifdef CUBIC
+#include "../cubic.glsl"
+#endif
+
 void invalid(int o) {
   r[o] = 0.0;
   vm[o] = 0.0;
@@ -50,9 +54,13 @@ void main() {
       precise vec2 q = sf * (vec2(a0 * u.x + a1 * u.y + a2, a3 * u.x + a4 * u.y + a5) + localD(k, u));
       ivec2 x0; vec2 a;
       if (!taps(q, x0, a)) { invalid(o); return; }
+#ifdef CUBIC
+      sum += crSample(base, x0, a);
+#else
       int t = base + x0.y * pc.W + x0.x;
       sum += (z[t] * (1.0 - a.x) + z[t + 1] * a.x) * (1.0 - a.y) +
              (z[t + pc.W] * (1.0 - a.x) + z[t + pc.W + 1] * a.x) * a.y;
+#endif
     }
   float v = sum / (sf * sf);
   float rv = pc.mode == 2 ? 1.0 : (pc.mode == 1 ? v : v - yv);

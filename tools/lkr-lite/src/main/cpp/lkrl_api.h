@@ -32,6 +32,10 @@ struct SolveParams {
   bool npu_denoise = false;
   bool no_prior = false;
   bool direct_rgb = false;  // Enough distinct Bayer shifts to fit the three planes independently.
+  // Motion v2 (default since 2026-11-25; LKRL_ALIGN2=0 / debug.lkr.align2=0 = off): noise-gated patch seed, 8 px warp
+  // field, 2x support step. See LiteParams::align2, support_step.
+  bool align2 = true;
+  float support_step = 0.0f;
   int s = 2;
   int T = 16;
   int z_steps = 3;
@@ -133,6 +137,7 @@ struct SolveParams {
   int local_block = 16;         // 0 = off (paper model); 16 = jacblk workgroup size
   float local_lambda = 0.1f;
   float local_floor = 0.02f;
+  const float* local_fine = nullptr;   // optional K x nb8 vec2, 8 px blocks: own offset, >= 1e8 = the 16 px field
   const float* local_init = nullptr;   // optional K x nb vec2 initial field (block search)
   float* local_out = nullptr;          // optional: final field (diagnostics)
   // Prior must not move the local mean: x += lowpass(z - x) after each

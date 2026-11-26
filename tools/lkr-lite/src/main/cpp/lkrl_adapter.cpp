@@ -186,6 +186,9 @@ bool Solver::solveBegin(const float* frames, int Kall, int h, int w, float* p, c
   if (const char* v = std::getenv("LKRL_LKRW")) lp.lkr_weights = std::atoi(v) != 0;
   lp.local_lambda = prm.local_lambda;   // MergeFull already applied the noise scaling
   lp.local_floor = prm.local_floor;
+  lp.align2 = prm.align2;
+  lp.local_fine = prm.local_block == 16 && !prm.holdout ? prm.local_fine : nullptr;
+  lp.support_step = prm.support_step;
   lp.auto_local_lambda = false;
   lp.profile = gpu_->profiling();
   // Research overrides (desktop A/B): LKRL_SCHEDULE, LKRL_COV_FLOOR, LKRL_DAMP, LKRL_MHC.

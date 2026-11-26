@@ -113,7 +113,7 @@ internal object LkrBridge {
     @JvmStatic external fun nativePrewarm(dir: String): Long
 
     /**
-     * Learned per-device noise model (WaveletDenoiser store file, [iso]) for the next
+     * Learned per-device noise model (RawNoiseModel store file, [iso]) for the next
      * [nativeMerge] / [nativeMergeStaged] on the calling thread: it refines the burst's
      * own noise fit as in HDR+. Null path = burst fit only. Consumed by that merge.
      */

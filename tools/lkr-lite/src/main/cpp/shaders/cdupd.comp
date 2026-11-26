@@ -15,6 +15,9 @@ layout(std430, binding = 0) buffer Z { float z[]; };   // = ZT when the edge sto
 layout(std430, binding = 1) readonly buffer ACC { int acc[]; };
 layout(std430, binding = 2) readonly buffer COV { int cov[]; };
 layout(std430, binding = 3) buffer ZT { float zt[]; };
+// Separable window (edge stop off): cdrow.comp's row sums, planes 0/1 acc R/B, 2/3 coverage R/B (written when the
+// coverage changed: pc.h = 1); planes 4/5 keep the coverage window sums for the steps that reuse the coverage.
+layout(std430, binding = 4) buffer CDB { float cdb[]; };
 
 void main() {
   int HW = pc.H * pc.W;
@@ -36,16 +39,32 @@ void main() {
   float nR = 0.0, dR = 0.0, nB = 0.0, dB = 0.0, sw = 0.0;
   int xFirst = max(-pc.LB, -X), xLast = min(pc.LB, pc.W - 1 - X);
   int yFirst = max(-pc.LB, -Y), yLast = min(pc.LB, pc.H - 1 - Y);
-  for (int dy = yFirst; dy <= yLast; ++dy) {
-    int row = (Y + dy) * pc.W + X;
-    for (int dx = xFirst; dx <= xLast; ++dx) {
-      int j = row + dx;
-      float w = float((pc.LB + 1 - abs(dx)) * (pc.LB + 1 - abs(dy)));
-      if (pc.robk > 0.0) { float dg = z[HW + j] - G; w *= exp(-dg * dg / (pc.robk * pc.robk * sig2)); }
-      nR += w * float(acc[j]); dR += w * float(cov[j]);
-      nB += w * float(acc[2 * HW + j]); dB += w * float(cov[2 * HW + j]);
-      sw += w;
+  if (pc.robk > 0.0 || pc.h < 0) {   // edge stop, or the full window (pc.h = -1: LKRL_CD_SEP=0 A/B)
+    for (int dy = yFirst; dy <= yLast; ++dy) {
+      int row = (Y + dy) * pc.W + X;
+      for (int dx = xFirst; dx <= xLast; ++dx) {
+        int j = row + dx;
+        float w = float((pc.LB + 1 - abs(dx)) * (pc.LB + 1 - abs(dy)));
+        if (pc.robk > 0.0) { float dg = z[HW + j] - G; w *= exp(-dg * dg / (pc.robk * pc.robk * sig2)); }
+        nR += w * float(acc[j]); dR += w * float(cov[j]);
+        nB += w * float(acc[2 * HW + j]); dB += w * float(cov[2 * HW + j]);
+        sw += w;
+      }
     }
+  } else {
+    float swx = 0.0, swy = 0.0;
+    for (int dx = xFirst; dx <= xLast; ++dx) swx += float(pc.LB + 1 - abs(dx));
+    bool newCov = pc.h != 0;
+    for (int dy = yFirst; dy <= yLast; ++dy) {
+      int j = (Y + dy) * pc.W + X;
+      float wy = float(pc.LB + 1 - abs(dy));
+      swy += wy;
+      nR += wy * cdb[j]; nB += wy * cdb[HW + j];
+      if (newCov) { dR += wy * cdb[2 * HW + j]; dB += wy * cdb[3 * HW + j]; }
+    }
+    sw = swx * swy;
+    if (newCov) { cdb[4 * HW + i] = dR; cdb[5 * HW + i] = dB; }
+    else { dR = cdb[4 * HW + i]; dB = cdb[5 * HW + i]; }
   }
   float redCoverage = dR / pc.dscale, blueCoverage = dB / pc.dscale;
   float redDivisor = max(redCoverage + pc.tau * sw, 1e-6);
@@ -55,6 +74,26 @@ void main() {
     float support = float(pc.mode) * (sw / 256.0);
     redDivisor /= clamp(redCoverage / support, 0.25, 1.0);
     blueDivisor /= clamp(blueCoverage / support, 0.25, 1.0);
+  }
+  // Support-adaptive green step (pc.rmin > 0, a share of the burst's expected coverage K / s^2): where most
+  // frames are rejected (moving water) the few samples left do not fill the 2x grid and the per-pixel step
+  // fits them alone as a diagonal comb. There the step is the local mean gradient over the local mean
+  // coverage; from that upwards it is the per-pixel step, unchanged.
+  if (pc.s > 0) {
+    float support = 2.0 * (redCoverage + blueCoverage) / sw;   // R + B carry half of the samples
+    float t = clamp((support * 256.0 / float(pc.s) - 0.5) * 2.0, 0.0, 1.0);
+    if (t < 1.0) {
+      float nG = 0.0, cGs = 0.0, wG = 0.0;
+      for (int dy = max(-2, -Y); dy <= min(2, pc.H - 1 - Y); ++dy)
+        for (int dx = max(-2, -X); dx <= min(2, pc.W - 1 - X); ++dx) {
+          int j = HW + (Y + dy) * pc.W + X + dx;
+          float w = float((3 - abs(dx)) * (3 - abs(dy)));
+          nG += w * float(acc[j]); cGs += w * float(cov[j]); wG += w;
+        }
+      float gs = nG / (wG * pc.scale) + be * (nR + nB) / (sw * pc.scale);
+      float cs = cGs / (wG * pc.dscale) + be * (redCoverage + blueCoverage) / sw;
+      Gn = G - mix(gs / max(cs + pc.tau, 1e-6), G - Gn, t);
+    }
   }
   float DR = (R - G) - (nR / pc.scale) / redDivisor;
   float DB = (B - G) - (nB / pc.scale) / blueDivisor;

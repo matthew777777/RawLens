@@ -1,0 +1,28 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// Row pass of cdupd.comp's separable window (edge stop off): weighted sums (LB + 1 - |dx|) along the row of the
+// R and B gradient, and of the R and B coverage when it changed (pc.h = 1). cdupd sums the rows' columns.
+#include "lite_common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer ACC { int acc[]; };
+layout(std430, binding = 1) readonly buffer COV { int cov[]; };
+layout(std430, binding = 2) writeonly buffer CDB { float cdb[]; };
+
+void main() {
+  int HW = pc.H * pc.W;
+  int i = int(gl_GlobalInvocationID.x);
+  if (i >= HW) return;
+  int Y = i / pc.W, X = i - Y * pc.W;
+  int xFirst = max(-pc.LB, -X), xLast = min(pc.LB, pc.W - 1 - X);
+  bool newCov = pc.h != 0;
+  float aR = 0.0, aB = 0.0, cR = 0.0, cB = 0.0;
+  for (int dx = xFirst; dx <= xLast; ++dx) {
+    int j = i + dx;
+    float w = float(pc.LB + 1 - abs(dx));
+    aR += w * float(acc[j]); aB += w * float(acc[2 * HW + j]);
+    if (newCov) { cR += w * float(cov[j]); cB += w * float(cov[2 * HW + j]); }
+  }
+  cdb[i] = aR; cdb[HW + i] = aB;
+  if (newCov) { cdb[2 * HW + i] = cR; cdb[3 * HW + i] = cB; }
+}

@@ -1,0 +1,60 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// ne_apply + zupd in one pass for the 1x NE merge steps (per-pixel coverage, LB = 0; no update filter), selected
+// like zupd: rpow < 0 average step, else mode 1 (divisor from the coverage, stored) or mode 0 (cached divisor).
+// Same integer sums and float expressions as the two passes: bit-identical. Neighbours read the old z, so the
+// result goes to zo (copied back by the caller). acc is only read (the average's clipped samples); cov gets
+// what ne_apply would leave there (mode 1: U^T W 1; average: plus the clipped samples).
+#include "lite_common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer LK { uvec2 lk[]; };
+layout(std430, binding = 2) readonly buffer N2 { ivec2 n2[]; };
+layout(std430, binding = 3) buffer DV { float dv[]; };
+layout(std430, binding = 4) writeonly buffer ZO { float zo[]; };
+layout(std430, binding = 5) readonly buffer ACC { int acc[]; };
+layout(std430, binding = 6) buffer COV { int cov[]; };
+
+void main() {
+  int n = 3 * pc.H * pc.W;
+  int i = int(gl_GlobalInvocationID.x);
+  if (i >= n) return;
+  ivec2 b = n2[i];
+  if (pc.rpow < 0.0) {   // average: ne_apply mode 2, then zupd's shift-and-add with LB = 0 (weight 1)
+    int ai = acc[i] - b.x, ci = cov[i] + b.y;
+    cov[i] = ci;
+    float sa = 0.0, sc = 0.0;
+    sa += 1.0 * float(ai); sc += 1.0 * float(ci);
+    zo[i] = sc > 0.0 ? -(sa / pc.scale) / (sc / pc.dscale) : 0.0;
+    return;
+  }
+  int W = pc.W;
+  int l = max(i - 1, 0), r = min(i + 1, n - 1), u = max(i - W, 0), d = min(i + W, n - 1);
+  int ul = max(i - W - 1, 0), ur = max(i - W + 1, 0), dl = min(i + W - 1, n - 1), dr = min(i + W + 1, n - 1);
+  float zi = z[i];
+  uvec2 c = lk[i];
+  uint cl = i > 0 ? lk[l].x & 0xffffu : 0u;
+  uint cul = i > W ? lk[ul].x >> 16 : 0u;
+  uint cu = i >= W ? lk[u].y & 0xffffu : 0u;
+  uint cur = i >= W ? lk[ur].y >> 16 : 0u;
+  float g0 = float(c.x & 0xffffu) * (z[r] - zi) + float(c.x >> 16) * (z[dr] - zi)
+           + float(c.y & 0xffffu) * (z[d] - zi) + float(c.y >> 16) * (z[dl] - zi)
+           + float(cl) * (z[l] - zi) + float(cul) * (z[ul] - zi) + float(cu) * (z[u] - zi) + float(cur) * (z[ur] - zi);
+  int a = int(round(g0 * (pc.scale * float(pc.K) / 65535.0) + (float(b.y) * zi - float(b.x))));
+  float g = float(a) / pc.scale;
+  float om = pc.rpow > 0.0 ? pc.rpow : 1.0;
+  if (pc.mode == 0) { zo[i] = zi - om * g / dv[i]; return; }
+  cov[i] = b.y;   // ne_apply mode 1
+  float cv = float(b.y) / pc.dscale;
+  float dd = max(cv + pc.tau, 1e-6);
+  if (pc.a > 0.0) {
+    float gain = 1.0 - pow(abs(1.0 - 1.8 * cv / pc.b), pc.a);
+    dd = cv > 0.0 ? max(dd / max(gain, 1e-4), 1e-6) : dd;
+  }
+  dd = max(dd, om * (float(b.y) / pc.dscale) / 1.8);
+  if (pc.clip > 0.0 && (i < pc.H * pc.W || i >= 2 * pc.H * pc.W))
+    dd /= clamp(cv / pc.clip, 0.25, 1.0);
+  dv[i] = dd;
+  zo[i] = zi - om * g / dd;
+}

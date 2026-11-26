@@ -15,6 +15,9 @@ layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
 float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
 layout(std430, binding = 4) readonly buffer WT { float wt[]; };
 layout(std430, binding = 5) writeonly buffer BLK { float blk[]; };
+#ifdef CUBIC
+#include "cubic.glsl"
+#endif
 shared float sh[64][5];   // >= 256 / minimum subgroup size (4)
 
 void main() {
@@ -34,11 +37,16 @@ void main() {
         for (int ox = 0; ox < pc.s; ++ox) {
           ivec2 x0; vec2 f;
           if (!taps(warpQ(k, subPos(i, j, ox, oy)), x0, f)) { ok = false; continue; }
+#ifdef CUBIC
+          vec3 vg = crSampleGrad(base, x0, f);
+          pred += vg.x; jx += vg.y * sf * invn; jy += vg.z * sf * invn;
+#else
           int t = base + x0.y * pc.W + x0.x;
           float z00 = z[t], z01 = z[t + 1], z10 = z[t + pc.W], z11 = z[t + pc.W + 1];
           pred += mix(mix(z00, z01, f.x), mix(z10, z11, f.x), f.y);
           jx += mix(z01 - z00, z11 - z10, f.y) * sf * invn;
           jy += mix(z10 - z00, z11 - z01, f.x) * sf * invn;
+#endif
         }
       float yv = yv(int(o));
       float r = pred * invn - yv;

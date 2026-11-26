@@ -63,6 +63,13 @@ struct LiteParams {
   // Motion-step sample weights: 0 = robust weights (computed with the CURRENT, possibly wrong,
   // geometry: rejects exactly the samples that would fix it), 1 = validity only.
   int gn_weights = 1;
+  // Motion v2 (SolveParams::align2): informs nothing here but the fields below; the patch seed and the 8 px
+  // offsets come from the tile preparation (lkrl_patchseed.h).
+  bool align2 = false;
+  const float* local_fine = nullptr;   // K x nb8 vec2 (8 px blocks): own offset, >= 1e8 = the 16 px field after the motion steps
+  // 2x: below this share of the burst's expected coverage the green step is the local mean (no comb in
+  // moving water). 0 = off.
+  float support_step = 0.0f;
   // Jacobi damping delta = jacobi_damp * K / s^2 (a fully covered pixel has ~K / s^2 per channel
   // share): 0 = plain Jacobi.
   float jacobi_damp = -1.0f;   // < 0: by scale (0 at 1x and 2x: 0.1 at 2x lowered the HR checker but cost
@@ -120,9 +127,10 @@ class LiteSolver {
   std::deque<Entry> fcache_;   // finish() buffers   // per-solver buffers, reused across tiles (deque: stable references)
   Gpu* gpu_;
   bool ok_ = false;
-  Pipeline local_search_;
+  Pipeline nes_, ne_apply_, ne_zupd_;
+  Pipeline local_search_, upfine_, rescue_e_, rescue_apply_, adj_cubic_, jac_cubic_, jacblk_cubic_, kresid_cubic_;
   Pipeline resid_, werr_, wavg_, wminh_, wminv_, adj_, adj_s1_, adj_s2_, zupd_, jac_, jacblk_, solveblk_, gstats_, wguide_, wvalid_,
-      kresid_, ktdet_, kth_, kt_, ktv_, ktd_, kguide_, kminh_, kmin_, kdy_, kdu_, kdv_, kdyuv_, kdyo_, kduo_, kdvo_, hyb_, adjwg_, fin_, edgeshift_, cdupd_, le_tensor_, le_blur_, le_apply_, dln_apply_, axn_apply_, gcf_apply_, canc_apply_, rcd_start_, prior_conv_;
+      kresid_, ktdet_, kth_, kt_, ktv_, ktd_, kguide_, kminh_, kmin_, kdy_, kdu_, kdv_, kdyuv_, kdyo_, kduo_, kdvo_, hyb_, adjwg_, fin_, edgeshift_, cdupd_, cdrow_, le_tensor_, le_blur_, le_apply_, dln_apply_, axn_apply_, gcf_apply_, canc_apply_, rcd_start_, prior_conv_;
 };
 
 }  // namespace lkrl

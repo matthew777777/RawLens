@@ -24,17 +24,20 @@ float sg(int X, int Y) { return (((pc.sm == 0 ? X : (pc.sm == 1 ? Y : X + Y)) & 
 // = mode 10 then 11, same sums in the same order.
 shared float tl[20][20];
 shared float tr[20][16];
+shared bool hm[22][22];
 void main() {
   int X = int(gl_GlobalInvocationID.x), Y = int(gl_GlobalInvocationID.y);
   int layer = int(gl_WorkGroupID.z), plane = pc.pl + layer;
-  if (pc.mode == 12) {
+  if (pc.mode == 12 || pc.mode == 14) {   // 14: the same step from T (layer) back into P (ping-pong, no write-back pass)
     int HW0 = pc.H * pc.W;
+    bool back = pc.mode == 14;
+    int src = back ? layer * HW0 : plane * HW0;
     ivec2 org = ivec2(gl_WorkGroupID.xy) * 16 - 2;
     int lid = int(gl_LocalInvocationIndex);
     for (int t = lid; t < 400; t += 256) {
       int ly = t / 20, lx = t - ly * 20;
       int gy = refl(org.y + ly, pc.H), gx = refl(org.x + lx, pc.W);
-      tl[ly][lx] = P[plane * HW0 + gy * pc.W + gx] * sg(gx, gy);
+      tl[ly][lx] = (back ? T[src + gy * pc.W + gx] : P[src + gy * pc.W + gx]) * sg(gx, gy);
     }
     barrier();
     for (int t = lid; t < 320; t += 256) {
@@ -49,7 +52,28 @@ void main() {
     float s = 0.0;
     for (int d = 0; d < 5; ++d) s += k5[d] * tr[l.y + d][l.x];
     int gi = Y * pc.W + X;
-    T[layer * HW0 + gi] = P[plane * HW0 + gi] - s * sg(X, Y);   // not in place: neighbours read P as apron
+    // not in place: neighbours read the source as apron
+    if (back) P[plane * HW0 + gi] = T[src + gi] - s * sg(X, Y);
+    else T[layer * HW0 + gi] = P[src + gi] - s * sg(X, Y);
+    return;
+  }
+  if (pc.mode == 1) {   // halo (7x7 dilation of hot, shared tile; same result as the per-pixel scan) + keep x
+    ivec2 org = ivec2(gl_WorkGroupID.xy) * 16 - 3;
+    int lid = int(gl_LocalInvocationIndex);
+    for (int t = lid; t < 484; t += 256) {
+      int ly = t / 22, lx = t - ly * 22;
+      int gy = org.y + ly, gx = org.x + lx;
+      hm[ly][lx] = gy >= 0 && gy < pc.H && gx >= 0 && gx < pc.W && M[gy * pc.W + gx] > 0.5;
+    }
+    barrier();
+    if (X >= pc.W || Y >= pc.H) return;
+    int HW1 = pc.H * pc.W, i1 = Y * pc.W + X;
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    bool h = false;
+    for (int dy = 0; dy < 7; ++dy)
+      for (int dx = 0; dx < 7; ++dx) h = h || hm[l.y + dy][l.x + dx];
+    M[HW1 + i1] = h ? 1.0 : 0.0;
+    for (int c = 0; c < 3; ++c) KP[c * HW1 + i1] = x[c * HW1 + i1];
     return;
   }
   if (X >= pc.W || Y >= pc.H) return;
@@ -58,15 +82,6 @@ void main() {
   vec3 q = vec3(0.25, 0.5, 0.25) * wb;
   if (pc.mode == 0) {          // hot: near-clipped
     M[i] = max(x[i], max(x[HW + i], x[2 * HW + i])) >= 0.92 * pc.clip ? 1.0 : 0.0;
-  } else if (pc.mode == 1) {   // halo (7x7 dilation of hot) + keep x
-    float h = 0.0;
-    for (int dy = -3; dy <= 3 && h == 0.0; ++dy)
-      for (int dx = -3; dx <= 3; ++dx) {
-        int yy = Y + dy, xx = X + dx;
-        if (yy >= 0 && yy < pc.H && xx >= 0 && xx < pc.W && M[yy * pc.W + xx] > 0.5) { h = 1.0; break; }
-      }
-    M[HW + i] = h;
-    for (int c = 0; c < 3; ++c) KP[c * HW + i] = x[c * HW + i];
   } else if (pc.mode == 2) {   // L and chroma planes from x
     float L = q.x * x[i] + q.y * x[HW + i] + q.z * x[2 * HW + i];
     P[i] = L;

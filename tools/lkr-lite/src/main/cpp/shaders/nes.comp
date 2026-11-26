@@ -1,0 +1,70 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// 1x merge, normal equations (LKRL_NE): the weights do not change between merge steps, so one pass
+// accumulates U^T W y, U^T W 1 and the links of U^T W U; every step then is ne_apply.comp, which reads
+// no frame. Per HR value: n2 = (U^T W y, U^T W 1), int32 fixed point as adj.comp; links = two packed
+// 16-bit sums per word, (E, SE) and (S, SW): E couples i with i+1, S with i+W, SE with i+W+1, SW with
+// i+W-1 (stored at the upper pixel; scale 65535 / K). The diagonal is not needed: rows sum to U^T W 1.
+// mode 1 (schedule has the average step): clipped samples go to acc / cov with the average's tiny weight
+// (adj.comp, pc.rpow), apart from the fit's sums.
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) buffer LK { uint lk[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 4) readonly buffer WT { float wt[]; };
+layout(std430, binding = 5) buffer ACC { int acc[]; };
+layout(std430, binding = 6) buffer COV { int cov[]; };
+layout(std430, binding = 7) buffer N2 { int n2[]; };
+// pc.tau > 0.5 (delta): the sums already hold the weights wo (rescue's weight-1 merge); add only the change to wt,
+// per sample the exact integer difference of the two rounded contributions, so the result is bit-identical to a
+// fresh scatter with wt. Samples whose weight did not change exit at once. Clipped samples (mode 1) go to acc / cov
+// in full (those were consumed by the earlier merge).
+layout(std430, binding = 8) readonly buffer WO { float wo[]; };
+
+int fx(float v) { return int(round(v)); }
+
+void main() {
+  int k, i, j;
+  lrIndex(k, i, j);
+  if (j >= pc.w || i >= pc.h) return;
+  int o = (k * pc.h + i) * pc.w + j;
+  if (pc.LB == 1 && dloc[pc.K * pc.h * pc.w + o / 2][o & 1] <= 0.5) return;
+  float y = yv(o);
+  bool clipped = y >= pc.clip;
+  float wk = wt[o];
+  bool delta = pc.tau > 0.5;
+  float wq = delta && !clipped ? wo[o] : 0.0;
+  if (delta && !clipped && wq == wk) return;
+  if (clipped) wk = pc.mode == 1 ? (pc.rpow < -1.5 ? 1e-6 : 1e-3) : 0.0;
+  if (wk == 0.0 && wq == 0.0) return;
+  ivec2 x0; vec2 f;
+  if (!taps(warpQ(k, subPos(i, j, 0, 0)), x0, f)) return;
+  int t = bayerChannel(i, j) * pc.H * pc.W + x0.y * pc.W + x0.x;
+  vec2 g = 1.0 - f;
+  float w00 = g.x * g.y, w01 = f.x * g.y, w10 = g.x * f.y, w11 = f.x * f.y;
+  float wy = wk * y * pc.scale;
+  if (clipped) {
+    float cv = wk * pc.dscale;
+    atomicAdd(acc[t], -fx(wy * w00)); atomicAdd(acc[t + 1], -fx(wy * w01));
+    atomicAdd(acc[t + pc.W], -fx(wy * w10)); atomicAdd(acc[t + pc.W + 1], -fx(wy * w11));
+    atomicAdd(cov[t], fx(cv * w00)); atomicAdd(cov[t + 1], fx(cv * w01));
+    atomicAdd(cov[t + pc.W], fx(cv * w10)); atomicAdd(cov[t + pc.W + 1], fx(cv * w11));
+    return;
+  }
+  float cv = wk * pc.dscale, ls = wk * 65535.0 / float(pc.K);   // a field's sum stays <= K / 2 (taps' products <= 1/4)
+  float wyq = wq * y * pc.scale, cvq = wq * pc.dscale, lsq = wq * 65535.0 / float(pc.K);   // 0 unless delta
+  int t1 = t + 1, t2 = t + pc.W, t3 = t2 + 1;
+  atomicAdd(n2[2 * t], fx(wy * w00) - fx(wyq * w00)); atomicAdd(n2[2 * t + 1], fx(cv * w00) - fx(cvq * w00));
+  atomicAdd(n2[2 * t1], fx(wy * w01) - fx(wyq * w01)); atomicAdd(n2[2 * t1 + 1], fx(cv * w01) - fx(cvq * w01));
+  atomicAdd(n2[2 * t2], fx(wy * w10) - fx(wyq * w10)); atomicAdd(n2[2 * t2 + 1], fx(cv * w10) - fx(cvq * w10));
+  atomicAdd(n2[2 * t3], fx(wy * w11) - fx(wyq * w11)); atomicAdd(n2[2 * t3 + 1], fx(cv * w11) - fx(cvq * w11));
+  // packed fields: the 32-bit word is linear in its two fields, so the difference of the packed words is exact
+  uint diag = uint(round(ls * w00 * w11)), dq = uint(round(lsq * w00 * w11));   // = w01 * w10
+  atomicAdd(lk[2 * t], (uint(round(ls * w00 * w01)) | (diag << 16)) - (uint(round(lsq * w00 * w01)) | (dq << 16)));
+  atomicAdd(lk[2 * t + 1], uint(round(ls * w00 * w10)) - uint(round(lsq * w00 * w10)));
+  atomicAdd(lk[2 * t1 + 1], (uint(round(ls * w01 * w11)) | (diag << 16)) - (uint(round(lsq * w01 * w11)) | (dq << 16)));
+  atomicAdd(lk[2 * t2], uint(round(ls * w10 * w11)) - uint(round(lsq * w10 * w11)));
+}

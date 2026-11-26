@@ -21,7 +21,10 @@
 #include "lkrl_pack.h"
 #include "lkrl_host.h"
 #include "lkrl_gpulk.h"
+#include "lkrl_patchseed.h"
 
+namespace lkrl { std::atomic<long long> g_prep_us[3];   // prep profile (LKRL_PREP_LOG): tile LK, quadrant LK, patch seed
+}
 namespace lkrl {
 
 namespace {
@@ -300,11 +303,21 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   std::thread noise_fit([&] {
     const double tn = now_ms();
     std::vector<float> c(size_t(g.w) * g.h);
-    LoadTile(frames[0], g, 0, 0, g.w, g.h, black, white, c.data());
-    S.sigma = NoiseSigma(c.data(), g.h, g.w);
-    if (const char* v = std::getenv("LKRL_SIGMA")) S.sigma = float(std::atof(v));   // diagnostics
+    {   // row bands in parallel (same values); the coarse LK threads are short, the noise fit is the critical path
+      const int nb = 4, band = ((g.h / nb) + 1) & ~1;
+      std::vector<std::thread> ld;
+      for (int b = 0; b < nb; ++b) {
+        const int y0 = b * band, y1 = std::min(g.h, y0 + band);
+        if (y0 >= y1) break;
+        ld.emplace_back([&, y0, y1] { LoadTile(frames[0], g, 0, y0, g.w, y1 - y0, black, white, c.data() + size_t(y0) * g.w); });
+      }
+      for (auto& th : ld) th.join();
+    }
+    std::thread sig([&] { S.sigma = NoiseSigma(c.data(), g.h, g.w); });   // independent of the block fit
     int bins = 0;
     NoiseAB(c.data(), g.h, g.w, &S.a, &S.b, &bins);
+    sig.join();
+    if (const char* v = std::getenv("LKRL_SIGMA")) S.sigma = float(std::atof(v));   // diagnostics
     S.fit_a = S.a;
     S.fit_b = S.b;
     // Learned per-device model (app): prior mixed with this burst's fit by its
@@ -471,6 +484,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   // Grid -> output offset (HR px): the grid starts (g.x0 - rx) sensor px in.
   const int offx = s * (g.x0 - rx), offy = s * (g.y0 - ry);
   SolveParams sp = prm.solve;
+  if (const char* v = std::getenv("LKRL_ALIGN2")) sp.align2 = std::atoi(v) != 0;
+  if (sp.align2 && sp.support_step <= 0.0f) sp.support_step = 0.5f;
   sp.s = s;
   sp.sigma_noise = S.sigma;
   sp.sigma_max = prm.smax_x * S.sigma;
@@ -614,6 +629,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   bool failed = false;
   std::string fail_msg;
   std::map<std::string, double> shader_ms;
+  std::map<std::string, int> shader_n;   // dispatches (LKRL_PROF_N prints ms/count)
   // A finished tile: blended strictly in job order (deterministic sums where tiles overlap), but
   // by whichever worker closes the gap, so nobody idles waiting for an earlier tile.
   struct Done {
@@ -693,7 +709,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     // Same computation per tile: output identical. LKRL_NO_PREFETCH = the old sequential order.
     struct Prepared {
       size_t ji = SIZE_MAX;
-      std::vector<float> tf, p, sub_field;
+      std::vector<float> tf, p, sub_field, fine_field;
       bool use_sub = false, fail = false;
       double prep_ms = 0.0, load_ms = 0.0;
     };
@@ -769,6 +785,10 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       sub_field.clear();
       if (use_sub) sub_field.assign(size_t(K) * sub_nbx * sub_nby * 2, 0.0f);
       o.use_sub = use_sub;
+      const int nfx = (n + 7) / 8, nfy = (n + 7) / 8;
+      static const int fine_env = std::getenv("LKRL_FINE") ? std::atoi(std::getenv("LKRL_FINE")) : -1;
+      const bool use_fine = use_sub && K > 1 && (fine_env >= 0 ? fine_env != 0 : sp.align2);
+      o.fine_field.assign(use_fine ? size_t(K) * nfx * nfy * 2 : 0, 1e9f);   // no own offset
       std::vector<LkRef> qref;   // quadrant references, row-major in the order align_frame visits them
       if (use_sub) {
         const int gs = sub_gs;
@@ -785,6 +805,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
       // workers x 3 <= 9 threads on the 8-core phone; the solver threads mostly
       // wait on the GPU meanwhile). Per-frame results are identical.
       auto align_frame = [&](int k, std::vector<float>& gm) {
+        const double pt0 = now_ms();
         const auto& q = P[k];
         std::array<double, 6> pt{q[0], q[1], q[0] * gx + q[1] * gy + q[2] - gx,
                                  q[3], q[4], q[3] * gx + q[4] * gy + q[5] - gy};
@@ -796,6 +817,9 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
             pt = {pr[0], pr[1], pr[2] * 2.0, pr[3], pr[4], pr[5] * 2.0};
         }
         for (int c = 0; c < 6; ++c) p[k * 6 + c] = float(pt[c]);
+        const double pt1 = now_ms();
+        g_prep_us[0] += (long long)(1000.0 * (pt1 - pt0));
+        struct SubT { double t; ~SubT() { g_prep_us[1] += (long long)(1000.0 * (now_ms() - t)); } } subt{pt1};
         // Sub-tile alignment (parallax): quadrant affine relative to the tile's,
         // written as the local motion start d(u) = (A' u + t') - (A u + t), LR px.
         if (k > 0 && use_sub) {
@@ -838,6 +862,43 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
                 }
             }
         }
+      };
+      // align2 (LKRL_PATCH_SEED=0 off): noise-gated block offsets on the cell grey, frame by frame.
+      auto patch_seed = [&](int k, const std::vector<float>& gm) {
+        static const int ps_env = std::getenv("LKRL_PATCH_SEED") ? std::atoi(std::getenv("LKRL_PATCH_SEED")) : -1;
+        const bool on = ps_env >= 0 ? ps_env != 0 : sp.align2;
+        if (!on || k == 0 || !use_sub) return;
+        struct PsT { double t; ~PsT() { g_prep_us[2] += (long long)(1000.0 * (now_ms() - t)); } } pst{now_ms()};
+        auto envf = [](const char* n, float d) { const char* v = std::getenv(n); return v ? float(std::atof(v)) : d; };
+        static const float trig = envf("LKRL_PS_TRIG", 1.3f), gn = envf("LKRL_PS_GAIN", 0.85f), srch = envf("LKRL_PS_SEARCH", 5.0f), slk = envf("LKRL_PS_SLACK", 0.5f);
+        PatchSeedParams pp;
+        pp.noise_a = S.a; pp.noise_b = S.b; pp.trigger = trig; pp.gain = gn; pp.search = int(srch); pp.slack = slk;
+        static const float uniq = envf("LKRL_PS_UNIQUE", 0.0f);
+        pp.unique = uniq;
+        const float* q = p.data() + size_t(k) * 6;
+        const double pg[6] = {q[0], q[1], q[2] * 0.5, q[3], q[4], q[5] * 0.5};
+        const PatchSeedStats ps = PatchSeed(gref.data(), gm.data(), g2, pg, pp,
+                                            sub_field.data() + size_t(k) * sub_nbx * sub_nby * 2, sub_nbx, sub_nby);
+        static const float pfu = envf("LKRL_PF_UNIQUE", 3.0f), pfa = envf("LKRL_PF_AGREE", 2.0f);
+        pp.fine_unique = pfu; pp.fine_agree = int(pfa);
+        if (use_fine)
+          PatchSeedFine(gref.data(), gm.data(), g2, pg, pp, sub_field.data() + size_t(k) * sub_nbx * sub_nby * 2, sub_nbx, sub_nby,
+                        o.fine_field.data() + size_t(k) * nfx * nfy * 2, nfx, nfy);
+        if (use_fine) {   // changed blocks: the measured offset itself (the motion steps do not move it)
+          const float* f = sub_field.data() + size_t(k) * sub_nbx * sub_nby * 2;
+          float* ex = o.fine_field.data() + size_t(k) * nfx * nfy * 2;
+          for (int by = 0; by < nfy; ++by) for (int bx = 0; bx < nfx; ++bx, ex += 2) {
+            if (ex[0] == 0 && ex[1] == 0) { ex[0] = ex[1] = 1e9f; continue; }
+            const float cx = (bx * 8 + 4) / 16.0f - 0.5f, cy = (by * 8 + 4) / 16.0f - 0.5f;
+            const int ix = int(std::floor(cx)), iy = int(std::floor(cy));
+            const float fx = cx - ix, fy = cy - iy;
+            auto F = [&](int x, int y, int d) { return f[2 * (size_t(std::clamp(y, 0, sub_nby - 1)) * sub_nbx + std::clamp(x, 0, sub_nbx - 1)) + d]; };
+            for (int d = 0; d < 2; ++d)
+              ex[d] += (F(ix, iy, d) * (1 - fx) + F(ix + 1, iy, d) * fx) * (1 - fy) + (F(ix, iy + 1, d) * (1 - fx) + F(ix + 1, iy + 1, d) * fx) * fy;
+          }
+        }
+        if (std::getenv("LKRL_PS_LOG"))
+          std::fprintf(stderr, "patch seed k%d: %d blocks, %d checked, %d changed\n", k, ps.blocks, ps.checked, ps.changed);
       };
       if (gpu_lk && prm.tile_lk && !prm.paper_parity && K > 1) {
         // Same steps as align_frame, phase by phase so every frame's (then every sub-tile's) LK
@@ -917,10 +978,18 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         for (int h = 1; h < nt; ++h)
           helpers.emplace_back([&, h] {
             std::vector<float> gm;
-            for (int k = h; k < K; k += nt) align_frame(k, gm);
+            for (int k = h; k < K; k += nt) { align_frame(k, gm); patch_seed(k, gm); }
           });
-        for (int k = 0; k < K; k += nt) align_frame(k, gmov);
+        for (int k = 0; k < K; k += nt) { align_frame(k, gmov); patch_seed(k, gmov); }
         for (auto& th : helpers) th.join();
+      }
+      // No block of any frame moves on its own: the merge keeps the plain 16 px field.
+      static const float pf_min = std::getenv("LKRL_PF_MIN") ? float(std::atof(std::getenv("LKRL_PF_MIN"))) : 0.01f;
+      if (use_fine) {
+        size_t moved = 0;
+        for (size_t q = 0; q < o.fine_field.size(); q += 2) moved += o.fine_field[q] < 1e8f;
+        if (moved <= size_t(pf_min * float(o.fine_field.size() / 2))) o.fine_field.clear();
+        if (std::getenv("LKRL_PS_LOG")) std::fprintf(stderr, "fine: %zu of %zu blocks\n", moved, o.fine_field.size() / 2);
       }
       o.prep_ms = now_ms() - tprep;
       o.load_ms = tl1 - tl0;
@@ -1036,6 +1105,7 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         }
       }
 
+      if (use_sub && !cur.fine_field.empty()) spt.local_fine = cur.fine_field.data();
       if (use_sub) spt.local_init = sub_field.data();   // parallax start
       // Local motion start: MFSR block search (align.comp) on affine-prewarped greys.
       if (use_block_search && bsearch.ok() &&
@@ -1098,6 +1168,8 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
         name = names.substr(start, at - start);
       }
       shader_ms[name] += std::atof(report.c_str() + colon + 1);
+      const size_t hash = report.find('#', colon);
+      if (hash != std::string::npos && (end == std::string::npos || hash < end)) shader_n[name] += std::atoi(report.c_str() + hash + 1);
       if (end == std::string::npos) break;
       pos = end + 1;
     }
@@ -1107,6 +1179,9 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
     for (size_t w = 1; w < gpus.size(); ++w) th.emplace_back(worker, gpus[w]);
     worker(gpus[0]);
     for (auto& t : th) t.join();
+    if (std::getenv("LKRL_PREP_LOG"))
+      std::fprintf(stderr, "prep cpu ms (summed over threads): tile LK %.0f quadrant LK %.0f patch seed %.0f\n",
+                   g_prep_us[0] / 1000.0, g_prep_us[1] / 1000.0, g_prep_us[2] / 1000.0);
 
   if (dbg_path && !dmaps.empty()) {
     for (int m = 0; m < kDebugMaps; ++m)
@@ -1162,7 +1237,9 @@ bool MergeFull(Gpu* gpu, const std::vector<RawFrame>& frames_in, int W, int H, c
   std::sort(ranked.rbegin(), ranked.rend());
   for (const auto& e : ranked) {
     char line[128];
-    std::snprintf(line, sizeof(line), "%s %.1f, ", e.second.c_str(), e.first);
+    static const bool prof_n = std::getenv("LKRL_PROF_N") != nullptr;
+    if (prof_n) std::snprintf(line, sizeof(line), "%s %.1f/%d, ", e.second.c_str(), e.first, shader_n[e.second]);
+    else std::snprintf(line, sizeof(line), "%s %.1f, ", e.second.c_str(), e.first);
     S.gpu_profile += line;
   }
   for (const Gpu* wg : gpus) {

@@ -1,0 +1,60 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SPDX-License-Identifier: Apache-2.0
+// adj.comp with a Catmull-Rom forward model (LKRL_CUBIC): acc += U^T W (U z - y), and in mode 1 the Jacobi divisor
+// cov += |U|^T W |U| 1 (U has negative weights: U^T W 1 does not bound U^T W U, this does). Each Bayer sample reads
+// and writes its own camera-RGB plane only. Modes 2 and the average step stay with adj.comp.
+#define LITE_WARP 2
+#include "lite_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Z { float z[]; };
+layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
+float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
+layout(std430, binding = 4) readonly buffer WT { float wt[]; };
+layout(std430, binding = 5) buffer ACC { int acc[]; };
+layout(std430, binding = 6) buffer COV { int cov[]; };
+#include "cubic.glsl"
+
+void main() {
+  int k, i, j;
+  lrIndex(k, i, j);
+  if (j >= pc.w || i >= pc.h) return;
+  int o = (k * pc.h + i) * pc.w + j;
+  if (pc.LB == 1 && dloc[pc.K * pc.h * pc.w + o / 2][o & 1] <= 0.5) return;
+  float wk = wt[o], y = yv(o);
+  if (wk == 0.0 || y >= pc.clip) return;
+  int base = bayerChannel(i, j) * pc.H * pc.W, ns = pc.s * pc.s;
+  ivec2 lo = ivec2(1 << 28), hi = ivec2(-(1 << 28));
+  for (int q = 0; q < ns; ++q) {
+    ivec2 x0; vec2 f;
+    if (!taps(warpQ(k, subPos(i, j, q % pc.s, q / pc.s)), x0, f)) return;
+    lo = min(lo, x0); hi = max(hi, x0);
+  }
+  // Summed sample weights over the footprint (4 + the sub-samples' spread per axis, <= 8).
+  ivec2 n = min(hi - lo + 4, ivec2(8));
+  float w[64];
+  for (int t = 0; t < n.x * n.y; ++t) w[t] = 0.0;
+  for (int q = 0; q < ns; ++q) {
+    ivec2 x0; vec2 f;
+    taps(warpQ(k, subPos(i, j, q % pc.s, q / pc.s)), x0, f);
+    vec4 wx = crW(f.x), wy = crW(f.y);
+    ivec2 d = x0 - lo;
+    for (int b = 0; b < 4; ++b)
+      for (int a = 0; a < 4; ++a)
+        if (d.x + a < n.x && d.y + b < n.y) w[(d.y + b) * n.x + d.x + a] += wx[a] * wy[b];
+  }
+  float invn = 1.0 / float(ns), sum = 0.0, row = 0.0;
+  for (int t = 0; t < n.x * n.y; ++t) {
+    w[t] *= invn;
+    int X = cpos(lo.x - 1 + t % n.x, pc.W), Y = cpos(lo.y - 1 + t / n.x, pc.H);
+    sum += w[t] * z[base + Y * pc.W + X];
+    row += abs(w[t]);
+  }
+  float rs = (sum - y) * wk * pc.scale, cv = wk * row * pc.dscale;
+  for (int t = 0; t < n.x * n.y; ++t) {
+    if (w[t] == 0.0) continue;
+    int X = cpos(lo.x - 1 + t % n.x, pc.W), Y = cpos(lo.y - 1 + t / n.x, pc.H), p = base + Y * pc.W + X;
+    atomicAdd(acc[p], int(round(rs * w[t])));
+    if (pc.mode >= 1) atomicAdd(cov[p], int(round(cv * abs(w[t]))));
+  }
+}

@@ -113,6 +113,7 @@ class Gpu {
   uint32_t nq_ = 0;
   std::vector<const Pipeline*> qwho_;
   std::vector<std::pair<const Pipeline*, double>> prof_;
+  std::vector<int> profn_;   // dispatch count per prof_ entry
 };
 
 }  // namespace lkrl

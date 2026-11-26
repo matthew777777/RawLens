@@ -18,12 +18,21 @@ layout(std430, binding = 1) readonly buffer Y { uint yh[]; };
 float yv(int o) { vec2 v = unpackHalf2x16(yh[o >> 1]); return (o & 1) != 0 ? v.y : v.x; }
 layout(std430, binding = 4) readonly buffer WT { float wt[]; };
 layout(std430, binding = 5) writeonly buffer PART { float part[]; };
+#ifdef CUBIC
+#include "cubic.glsl"
+#endif
 shared float sh[64][24];   // >= 256 / minimum subgroup size (4)
 
+// JAC_SPT samples per lane (strided by the group size: reads stay coalesced), summed in registers before the
+// 24 subgroup sums: 8x fewer reductions (Mali-G615: the subgroup sums dominated this pass).
+#define JAC_SPT 8
 void main() {
   int k = int(gl_WorkGroupID.y) + 1;
   int n = pc.h * pc.w;
-  int idx = int(gl_GlobalInvocationID.x);
+  float v[24];
+  for (int t = 0; t < 24; ++t) v[t] = 0.0;
+  for (int sp = 0; sp < JAC_SPT; ++sp) {
+  int idx = int(gl_WorkGroupID.x) * 256 * JAC_SPT + sp * 256 + int(gl_LocalInvocationIndex);
   float gxx = 0.0, gxy = 0.0, gyy = 0.0, rx = 0.0, ry = 0.0, cx = 0.0, cy = 0.0;
   if (idx < n) {
     int i = idx / pc.w, j = idx - i * pc.w;
@@ -38,11 +47,16 @@ void main() {
         for (int ox = 0; ox < pc.s; ++ox) {
           ivec2 x0; vec2 f;
           if (!taps(warpQ(k, subPos(i, j, ox, oy)), x0, f)) { ok = false; continue; }
+#ifdef CUBIC
+          vec3 vg = crSampleGrad(base, x0, f);
+          pred += vg.x; gx += vg.y; gy += vg.z;
+#else
           int t = base + x0.y * pc.W + x0.x;
           float z00 = z[t], z01 = z[t + 1], z10 = z[t + pc.W], z11 = z[t + pc.W + 1];
           pred += mix(mix(z00, z01, f.x), mix(z10, z11, f.x), f.y);
           gx += mix(z01 - z00, z11 - z10, f.y);
           gy += mix(z10 - z00, z11 - z01, f.x);
+#endif
         }
       if (ok) {
         float yv = yv(int(o));
@@ -57,9 +71,9 @@ void main() {
     }
   }
   float m[6] = float[6](cx * cx, cx * cy, cy * cy, cx, cy, 1.0);
-  float v[24];
-  for (int t = 0; t < 6; ++t) { v[t] = gxx * m[t]; v[6 + t] = gxy * m[t]; v[12 + t] = gyy * m[t]; }
-  v[18] = rx * cx; v[19] = rx * cy; v[20] = rx; v[21] = ry * cx; v[22] = ry * cy; v[23] = ry;
+  for (int t = 0; t < 6; ++t) { v[t] += gxx * m[t]; v[6 + t] += gxy * m[t]; v[12 + t] += gyy * m[t]; }
+  v[18] += rx * cx; v[19] += rx * cy; v[20] += rx; v[21] += ry * cx; v[22] += ry * cy; v[23] += ry;
+  }
   for (int t = 0; t < 24; ++t) v[t] = subgroupAdd(v[t]);
   if (subgroupElect())
     for (int t = 0; t < 24; ++t) sh[gl_SubgroupID][t] = v[t];
