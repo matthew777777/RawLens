@@ -7737,8 +7737,10 @@ class RawCameraController(
                 cameraHandler.post { onState("FULL-SIZE RAW COPY FAILED") }
                 return
             }
+            // Read the size before release: a closed Image throws on getWidth (vivo 200 MP crash).
+            val sourceSize = "${image.width}x${image.height}"
             RawImageOwnership.release(image)
-            Log.i(LOG_TAG, "Full-size RAW ${image.width}x${image.height} block=${photo?.block ?: 1} -> ${view.width}x${view.height}")
+            Log.i(LOG_TAG, "Full-size RAW $sourceSize block=${photo?.block ?: 1} -> ${view.width}x${view.height}")
             saveRawFrame(image, result, captureLabel, CloseOnceOwner(listOf(view), FullSizeRaw::free), raw = view)
             return
         }
