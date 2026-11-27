@@ -118,6 +118,19 @@ object DualRawDngWriter {
             matrixTag(50965, metadata.forwardMatrix2)
             fields.shorts(50779, metadata.referenceIlluminant2)
         }
+        // Vignetting: the merge never applies lens shading, so the samples are uncorrected and
+        // need the camera's map as an OpcodeList2 GainMap, like the HDR+ and single-frame DNGs.
+        // Without it the dual-exposure DNG opened with dark corners.
+        val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
+        // Whole mosaic, as HdrPlusDngWriter: gainMap's area starts at 0,0.
+        val active = RawCrop(0, 0, width, height)
+        if (!metadata.lensShadingAlreadyApplied) metadata.lensShadingMap?.let { map ->
+            runCatching { TinyDngMetadata.gainMap(map, cfa, active, (geometry?.sensorOriginY ?: 0) + (geometry?.processingCrop?.top ?: 0)) }
+                .onSuccess { fields.undefined(51009, it) }
+        }
+        geometry?.processingCrop?.takeIf { it.width == width && it.height == height }
+            ?.let { DngLensCorrection.opcodeList(metadata, it) }
+            ?.let { fields.undefined(51022, it) }
         val exif = DngExifDirectory.fields(metadata, captureTimeMillis)
         TinyDngImageWriter.write(output, width, height,
             samplesPerPixel = 1, bitsPerSample = 16, sampleFormat = 1,
