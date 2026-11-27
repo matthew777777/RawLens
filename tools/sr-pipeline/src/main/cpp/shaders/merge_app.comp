@@ -210,6 +210,12 @@ void splat(uvec2 hr) {
         accG += w;
       }
     }
+    // rawr frame normalisation: the frame's green weight sum is pulled towards its robustness x
+    // frame weight (gamma 0.5, floor 0.1), so frames whose samples land near the pixel do not
+    // dominate and misaligned taps cannot smear detail in.
+    float rw = max(local_r * p.beta, 1e-30);
+    float sc = pow(1.0 / max(accG / rw, 0.1), 0.5);
+    valG *= sc; accG *= sc;
   } else if (p.beta > 0.0) {
     accG = 3.14159265359*sqrt(max(det,0.0))*local_r*p.beta;
     valG = accG * interpolateGreen(vec2(mov_x, mov_y));
