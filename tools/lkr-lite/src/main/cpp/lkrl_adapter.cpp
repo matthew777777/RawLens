@@ -12,6 +12,12 @@
 #include <cstdlib>
 
 #include "lkrl_prior.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#define LKRA_LOG(...) __android_log_print(ANDROID_LOG_INFO, "RawLensLkr", __VA_ARGS__)
+#else
+#define LKRA_LOG(...) (std::fprintf(stderr, __VA_ARGS__), std::fputc('\n', stderr))
+#endif
 #include "lkrl_api.h"
 
 namespace lkrl {
@@ -356,8 +362,41 @@ bool Solver::solveEnd(PendingPtr* pend, std::vector<float>* x_out, SolveStats* s
                               prm.highlight_desat && prm.highlight_recovery &&
                                   !(std::getenv("LKRL_HL_REC") && std::getenv("LKRL_HL_REC")[0] == '0')};
     std::string ferr;
+    // Per-Bayer-site means before / after the GPU finish (sampled), logged on every merge so a
+    // device-specific colour fault (Adreno 650 pink, 2026-11-27) shows in any saved log. A finish
+    // that moves a site by more than 2x or leaves non-finite values is replaced by the CPU finish.
+    auto siteMeans = [&](const float* v, double m[4], long* bad) {
+      double s4[4] = {0, 0, 0, 0}; long n4[4] = {0, 0, 0, 0}; *bad = 0;
+      for (int y = 0; y < H; y += 7)
+        for (int x = 0; x < W; x += 5) {
+          const float f = v[size_t(y) * W + x];
+          if (!std::isfinite(f)) { ++*bad; continue; }
+          const int c = ((y & 1) << 1) | (x & 1);
+          s4[c] += f; ++n4[c];
+        }
+      for (int c = 0; c < 4; ++c) m[c] = n4[c] ? s4[c] / n4[c] : 0.0;
+    };
+    double before[4], after[4]; long bad_before = 0, bad_after = 0;
+    siteMeans(x_out->data(), before, &bad_before);
+    const std::vector<float> x_solved = *x_out;   // kept for the CPU redo
     fin_done = lite_.finish(z.data(), x_out, H, W, fa, T.nscale.empty() ? nullptr : &T.nscale, &ferr);
-    if (!fin_done) std::fprintf(stderr, "lkr-lite: gpu finish failed (%s), CPU path\n", ferr.c_str());
+    if (!fin_done) {
+      LKRA_LOG("finish: GPU failed (%s), CPU path", ferr.c_str());
+      *x_out = x_solved;
+    } else {
+      siteMeans(x_out->data(), after, &bad_after);
+      bool sane = bad_after <= bad_before;
+      for (int c = 0; c < 4 && sane; ++c) {
+        const double lo = std::min(before[c], after[c]), hi = std::max(before[c], after[c]);
+        if (hi > 1e-4 && (lo <= 0.0 || hi / lo > 2.0)) sane = false;
+      }
+      LKRA_LOG("finish: GPU sites before %.4f %.4f %.4f %.4f (nonfinite %ld) after %.4f %.4f %.4f %.4f (nonfinite %ld) -> %s",
+               before[0], before[1], before[2], before[3], bad_before, after[0], after[1], after[2], after[3], bad_after,
+               sane ? "ok" : "REJECTED, CPU finish");
+      if (!sane) { *x_out = x_solved; fin_done = false; }
+    }
+  } else {
+    LKRA_LOG("finish: CPU path (%s)", fin_cpu ? "LKRL_FIN_CPU" : "fallback chroma");
   }
   if (!fin_done) FinishLook(z.data(), x_out->data(), H, W, prm, T.nscale.empty() ? nullptr : T.nscale.data(), nullptr);
   if (!T.holdout_raw.empty()) {
