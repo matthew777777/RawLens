@@ -87,12 +87,25 @@ internal class MobileMerge(
     private val frameMap = Array(2) { mapOf(frameRes[it], px) }
     private fun image(iw: Int, ih: Int, channels: Int) = SrpBridge.nativeCreateImage(handle, iw, ih, channels).also {
         require(it != 0L) { "MobileMerge: image allocation failed" }; images.add(it) }
+    /**
+     * fp16 storage for the RAW images and the quarter-res maps: decided once, by allocating the
+     * first such image. Needs every writer's twin and R16F/RGBA16F storage (native refuses otherwise).
+     */
+    private val half: Boolean = VulkanPipeline.halfStorage && mobile.hasHalf && listOf(1, 4).all { c ->
+        // Probe both formats before any real allocation: the shader set is chosen once for all images.
+        val r = SrpBridge.nativeCreateImage(handle, 1, 1, c or 0x100)
+        if (r != 0L) SrpBridge.nativeFreeImage(handle, r)
+        r != 0L
+    }.also { if (!it && VulkanPipeline.halfStorage && mobile.hasHalf) println("sr-pipeline mobile: fp16 images unsupported, using fp32") }
+    private fun halfImage(iw: Int, ih: Int, channels: Int): Long = image(iw, ih, if (half) channels or 0x100 else channels)
+    /** RAW images in fp16 too (alignment reads them): separate switch, see [VulkanPipeline.halfRaw]. */
+    private val rawHalf = half && VulkanPipeline.halfRaw
     private fun padded(v: Int) = (v + loop.tileSize - 1) / loop.tileSize * loop.tileSize
     /** Coarse-first level shapes (rows, cols) of the circularly padded frame. */
     private val shapes = Resample.pyramidShapes(padded(h), padded(w), loop.factors, loop.binomialPyramid)
     private val levels = loop.factors.size
     /** Raw image of the frame being merged and of the next one, already aligning. */
-    private val rawImg = LongArray(2) { image(w, h, 1) }
+    private val rawImg = LongArray(2) { if (rawHalf) halfImage(w, h, 1) else image(w, h, 1) }
     /** Colour differences; before that the FIR grey and pyramid temporary. */
     private val cdImg = image(padded(w), padded(h), 1)
     private val refLevels = shapes.map { (lh, lw) -> image(lw, lh, 1) }
@@ -113,15 +126,15 @@ internal class MobileMerge(
     /** Green at every sensor site (directional fill); during alignment the finest moving level. */
     private val greenImg = movLevels.last()
     /** Kernel covariances; before that the frame's local means. */
-    private val covImg = image(gw, gh, 4)
-    private val refImg = image(gw, gh, 4)
-    private val kernGrey = image(gw, gh, 1)
-    private val rTmp = image(gw, gh, 1)
-    private val ghost = image(gw, gh, 1)
-    private val work = image(gw, gh, 1)
-    private val rImg = image(gw, gh, 1)
+    private val covImg = halfImage(gw, gh, 4)
+    private val refImg = halfImage(gw, gh, 4)
+    private val kernGrey = halfImage(gw, gh, 1)
+    private val rTmp = halfImage(gw, gh, 1)
+    private val ghost = halfImage(gw, gh, 1)
+    private val work = halfImage(gw, gh, 1)
+    private val rImg = halfImage(gw, gh, 1)
     /** S.3 map of the reference (unused without S.3). */
-    private val hfImg = if (rp.s3) image(gw, gh, 1) else kernGrey
+    private val hfImg = if (rp.s3) halfImage(gw, gh, 1) else kernGrey
     private val numRes = host(total)
     private val denRes = host(total)
     private val evening = config.noiseEvening && spirvs.noiseEven != null
@@ -162,7 +175,8 @@ internal class MobileMerge(
     private fun waitFor(slot: Int) { if (!sync) ok("batch wait", SrpBridge.nativeBatchWait(handle, slot)) }
 
     private fun run2d(what: String, b: LongArray, sizes: LongArray, push: IntArray, gridW: Int, gridH: Int) {
-        timed("gpu.$what") { ok(what, SrpBridge.dispatch2d(handle, mobile[what], b, sizes, push, gridW, gridH)) }
+        val spirv = (if (half && (what != "raw_image" || rawHalf)) mobile.half(what) else null) ?: mobile[what]
+        timed("gpu.$what") { ok(what, SrpBridge.dispatch2d(handle, spirv, b, sizes, push, gridW, gridH)) }
     }
 
     /** Raw image and finest grey level (with the aligner's circular padding) of frame [slot]. */

@@ -38,6 +38,14 @@ abstract class CompileSrpShaders : DefaultTask() {
                     source.absolutePath, "-o", destination.resolve("${source.nameWithoutExtension}.spv")
                 )
             }
+            // fp16-storage twin for MobileMerge's intermediate images (shaders marked srp:half).
+            if (source.readText().contains("srp:half")) execOperations.exec {
+                commandLine(
+                    compiler.get().asFile.absolutePath,
+                    "--target-env=vulkan1.0", "-fshader-stage=compute", "-DSRP_HALF",
+                    source.absolutePath, "-o", destination.resolve("${source.nameWithoutExtension}_h.spv")
+                )
+            }
         }
     }
 }

@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #version 450
+// srp:half - the build also compiles <name>_h.spv with -DSRP_HALF (fp16 storage, MobileMerge).
+#ifdef SRP_HALF
+#define SRP_R r16f
+#define SRP_RGBA rgba16f
+#else
+#define SRP_R r32f
+#define SRP_RGBA rgba32f
+#endif
 // robustness.comp ops 2-4 in one pass: warp the frame means by the B-spline
 // flow, noise-corrected distance to the reference, thresholded robustness, and
 // the visibility-weighted ghost strength (op 10's input).
@@ -19,8 +27,8 @@ layout(set = 0, binding = 1) uniform highp sampler2D ref_;
 layout(set = 0, binding = 2) uniform highp sampler2D field_;
 layout(set = 0, binding = 3) readonly buffer Lut { float lut[]; };
 layout(set = 0, binding = 4) uniform highp sampler2D hf_;
-layout(set = 0, binding = 5, r32f) uniform writeonly highp image2D r_;
-layout(set = 0, binding = 6, r32f) uniform writeonly highp image2D ghost_;
+layout(set = 0, binding = 5, SRP_R) uniform writeonly highp image2D r_;
+layout(set = 0, binding = 6, SRP_R) uniform writeonly highp image2D ghost_;
 
 float dogson_q(float x) {
   float ax = abs(x);

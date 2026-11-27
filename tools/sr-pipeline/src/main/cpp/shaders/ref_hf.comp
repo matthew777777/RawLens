@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #version 450
+// srp:half - the build also compiles <name>_h.spv with -DSRP_HALF (fp16 storage, MobileMerge).
+#ifdef SRP_HALF
+#define SRP_R r16f
+#define SRP_RGBA rgba16f
+#else
+#define SRP_R r32f
+#define SRP_RGBA rgba32f
+#endif
 // Supplement S.3 variance-loss map (robustness.comp op 9) from ref_stats.comp.
 // width/height = guide grid. pad: [4] rho [5] K [6..8] alpha [9..11] beta (bits).
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -11,7 +19,7 @@ struct HmsrPush {
 };
 layout(push_constant) uniform Push { HmsrPush p; };
 layout(set = 0, binding = 0) uniform highp sampler2D ref_;
-layout(set = 0, binding = 1, r32f) uniform writeonly highp image2D out_;
+layout(set = 0, binding = 1, SRP_R) uniform writeonly highp image2D out_;
 void main() {
   ivec2 q = ivec2(gl_GlobalInvocationID.xy), sz = ivec2(p.width, p.height);
   if (any(greaterThanEqual(q, sz))) return;

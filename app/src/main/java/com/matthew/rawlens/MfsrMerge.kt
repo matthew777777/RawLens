@@ -909,8 +909,10 @@ internal object MfsrMerge {
     // during the frame loop: frame upload x2 8 + RAW images x2 8 + colour difference 4 + ref/moving
     // pyramids ~11 + num 12 + den 12 + cov 4 + ref stats 4 + six quarter-res maps 6 + noise evening 4
     // = ~73. The RGB output and the comparison staging no longer add to it (output is created after
-    // the loop's buffers are freed; app decoders need no staging).
-    private const val NATIVE_BYTES_PER_PX = 73.0
+    // the loop's buffers are freed; app decoders need no staging). The quarter-res maps (cov, ref
+    // stats, six singles: 14 B/px) are fp16 on devices with R16F/RGBA16F storage (all current Adreno
+    // and Mali), so ~66.
+    private const val NATIVE_BYTES_PER_PX = 66.0
     // Per extra OUTPUT pixel at scale > 1: num 12 + den 12 (the output itself comes after the peak).
     private const val OUTPUT_BYTES_PER_PX = 24.0
     // Java heap rows: the decoded frame (4) + loop/grey rows (4) live together.

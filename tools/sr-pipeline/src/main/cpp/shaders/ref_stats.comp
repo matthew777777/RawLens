@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #version 450
+// srp:half - the build also compiles <name>_h.spv with -DSRP_HALF (fp16 storage, MobileMerge).
+#ifdef SRP_HALF
+#define SRP_R r16f
+#define SRP_RGBA rgba16f
+#else
+#define SRP_R r32f
+#define SRP_RGBA rgba32f
+#endif
 // Reference statistics for rob_test.comp straight from the raw image: (mean R, G,
 // B, variance sum) of robustness.comp op 1. width/height = guide grid.
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -11,7 +19,7 @@ struct HmsrPush {
 };
 layout(push_constant) uniform Push { HmsrPush p; };
 layout(set = 0, binding = 0) uniform highp sampler2D raw_;
-layout(set = 0, binding = 1, rgba32f) uniform writeonly highp image2D out_;
+layout(set = 0, binding = 1, SRP_RGBA) uniform writeonly highp image2D out_;
 vec3 guide(ivec2 g) {
   ivec2 j = 2 * g;
   float r = texelFetch(raw_, j, 0).x, g1 = texelFetch(raw_, j + ivec2(1, 0), 0).x;

@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #version 450
+// srp:half - the build also compiles <name>_h.spv with -DSRP_HALF (fp16 storage, MobileMerge).
+#ifdef SRP_HALF
+#define SRP_R r16f
+#define SRP_RGBA rgba16f
+#else
+#define SRP_R r32f
+#define SRP_RGBA rgba32f
+#endif
 // Uploaded frame buffer -> R32F image (every later stage samples it).
 layout(local_size_x = 16, local_size_y = 16) in;
 struct HmsrPush {
@@ -10,7 +18,7 @@ struct HmsrPush {
 };
 layout(push_constant) uniform Push { HmsrPush p; };
 layout(set = 0, binding = 0) readonly buffer A { float a_[]; };
-layout(set = 0, binding = 1, r32f) uniform writeonly highp image2D out_;
+layout(set = 0, binding = 1, SRP_R) uniform writeonly highp image2D out_;
 void main() {
   uvec2 q = gl_GlobalInvocationID.xy;
   if (any(greaterThanEqual(q, uvec2(p.width, p.height)))) return;

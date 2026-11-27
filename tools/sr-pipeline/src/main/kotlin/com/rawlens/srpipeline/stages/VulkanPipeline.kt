@@ -60,19 +60,34 @@ object VulkanPipeline {
     const val GHOST_VISIBILITY = 100f
 
     /** Diagnostics: per-frame flow before/after regularisation and robustness maps (`SRP_R_DUMP` or `-Dsrpipeline.rDump`). */
+    /**
+     * MobileMerge keeps its quarter-res maps and RAW images in fp16 when the twins exist and the
+     * device stores R16F/RGBA16F (~11 B per sensor pixel less). Off: -Dsrpipeline.half=false or SRP_HALF=0.
+     */
+    internal val halfStorage: Boolean get() = (System.getenv("SRP_HALF") ?: System.getProperty("srpipeline.half")) != "0" &&
+        System.getProperty("srpipeline.half") != "false"
+    /** fp16 RAW images as well (default off: they feed alignment; SRP_HALF_RAW=1 to enable). */
+    internal val halfRaw: Boolean get() = (System.getenv("SRP_HALF_RAW") ?: System.getProperty("srpipeline.halfRaw")) == "1"
     internal val dumpDir: String? get() = (System.getenv("SRP_R_DUMP") ?: System.getProperty("srpipeline.rDump"))?.takeIf { it.isNotEmpty() }
 
 
     /** Modules of the [MobileMerge] path. */
-    class MobileSpirvs(private val modules: Map<String, ByteArray>) {
+    class MobileSpirvs(private val modules: Map<String, ByteArray>, private val halfModules: Map<String, ByteArray> = emptyMap()) {
         operator fun get(name: String): ByteArray = requireNotNull(modules[name]) { "mobile module $name missing" }
+        /** fp16-storage twin of [name] (writers of MobileMerge's intermediate images), or null. */
+        fun half(name: String): ByteArray? = halfModules[name]
+        /** Every writer of the fp16 image set has its twin (all or nothing). */
+        val hasHalf: Boolean get() = HALF_NAMES.all { it in halfModules }
         companion object {
+            /** Shaders writing MobileMerge's quarter-res maps and RAW images: compiled again with -DSRP_HALF. */
+            val HALF_NAMES = listOf("raw_image", "rob_means", "kern_cov", "ref_stats", "ref_hf", "rob_test", "rob_window", "kern_pre")
             private val NAMES = listOf("raw_image", "colour_diff", "kern_pre", "kern_cov", "ref_stats", "ref_hf", "motion_field",
                 "rob_means", "rob_test", "rob_window", "noise_acc_img", "grey_fir_img", "green_gather",
                 "merge_app", "merge_app_ref", "mfsr_finish", "mfsr_divide", "img_dump",
                 "pyr_img", "hess_img", "flow_up", "align_l2_img", "align_l2_tie", "align_l2_tie64", "align_l1_img", "align_l1_tie", "ica_img")
             /** From SPIR-V by shader name. */
-            fun load(asset: (String) -> ByteArray) = MobileSpirvs(NAMES.associateWith(asset))
+            fun load(asset: (String) -> ByteArray) = MobileSpirvs(NAMES.associateWith(asset),
+                HALF_NAMES.mapNotNull { n -> runCatching { asset(n + "_h") }.getOrNull()?.let { n to it } }.toMap())
         }
     }
 

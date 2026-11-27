@@ -69,6 +69,19 @@ function(srp_spv name)
   add_custom_target("srp_${name}_spv" ALL
       DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/${name}.spv")
 endfunction()
+# fp16-storage twins (MobileMerge intermediates; shaders marked srp:half).
+function(srp_spv_half name)
+  add_custom_command(
+      OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${name}_h.spv"
+      COMMAND "${SRP_GLSLANG}" -V -DSRP_HALF -o "${CMAKE_CURRENT_BINARY_DIR}/${name}_h.spv"
+              "${SRP_ROOT}/shaders/${name}.comp"
+      DEPENDS "${SRP_ROOT}/shaders/${name}.comp")
+  add_custom_target("srp_${name}_h_spv" ALL
+      DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/${name}_h.spv")
+endfunction()
+foreach(_h rob_means kern_cov ref_stats ref_hf rob_test rob_window kern_pre raw_image)
+  srp_spv_half(${_h})
+endforeach()
 srp_spv(merge_accumulate)
 srp_spv(gat)
 srp_spv(align)

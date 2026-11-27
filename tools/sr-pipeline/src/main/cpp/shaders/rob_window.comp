@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #version 450
+// srp:half - the build also compiles <name>_h.spv with -DSRP_HALF (fp16 storage, MobileMerge).
+#ifdef SRP_HALF
+#define SRP_R r16f
+#define SRP_RGBA rgba16f
+#else
+#define SRP_R r32f
+#define SRP_RGBA rgba32f
+#endif
 // Separable 1-D windows of the robustness map (ghost mask and 5x5 minimum):
 // same results as robustness.comp ops 10 and 5. Large maxima run as two short
 // passes (window 7, then taps at most 7 apart), which is exact because max is
@@ -16,7 +24,7 @@ struct HmsrPush {
 };
 layout(push_constant) uniform Push { HmsrPush p; };
 layout(set = 0, binding = 0) uniform highp sampler2D in_;
-layout(set = 0, binding = 1, r32f) uniform writeonly highp image2D out_;
+layout(set = 0, binding = 1, SRP_R) uniform writeonly highp image2D out_;
 layout(set = 0, binding = 2) uniform highp sampler2D cap_;
 void main() {
   ivec2 q = ivec2(gl_GlobalInvocationID.xy), sz = ivec2(p.width, p.height);

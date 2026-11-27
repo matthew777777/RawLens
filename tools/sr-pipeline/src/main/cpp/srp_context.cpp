@@ -675,7 +675,7 @@ int64_t SrpCreateResident(Context* ctx, size_t nfloats) {
   return handle;
 }
 
-// Device-local float image (1, 2 or 4 channels, 32-bit each), GENERAL layout,
+// Device-local float image (1, 2 or 4 channels, 32-bit each, or 16-bit with 0x100), GENERAL layout,
 // sampled (nearest) and storage. Returns a negative handle, 0 on failure.
 int64_t SrpCreateImage(Context* ctx, uint32_t w, uint32_t h, uint32_t channels) {
   if (ctx == nullptr || ctx->device == VK_NULL_HANDLE || w == 0 || h == 0) return 0;
@@ -684,8 +684,19 @@ int64_t SrpCreateImage(Context* ctx, uint32_t w, uint32_t h, uint32_t channels) 
   VkImageCreateInfo ii{};
   ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   ii.imageType = VK_IMAGE_TYPE_2D;
-  ii.format = channels == 1 ? VK_FORMAT_R32_SFLOAT
-      : channels == 2 ? VK_FORMAT_R32G32_SFLOAT : VK_FORMAT_R32G32B32A32_SFLOAT;
+  // channels | kSrpImageHalf: 16-bit float storage (MobileMerge intermediates), refused (0) when the
+  // device cannot sample and store that format, so the caller can keep 32-bit.
+  const bool half = (channels & 0x100u) != 0;
+  channels &= 0xffu;
+  ii.format = half
+      ? (channels == 1 ? VK_FORMAT_R16_SFLOAT : channels == 2 ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_R16G16B16A16_SFLOAT)
+      : (channels == 1 ? VK_FORMAT_R32_SFLOAT : channels == 2 ? VK_FORMAT_R32G32_SFLOAT : VK_FORMAT_R32G32B32A32_SFLOAT);
+  if (half) {
+    VkFormatProperties fp{};
+    vkGetPhysicalDeviceFormatProperties(ctx->physical, ii.format, &fp);
+    const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+    if ((fp.optimalTilingFeatures & need) != need) return 0;
+  }
   ii.extent = {w, h, 1};
   ii.mipLevels = ii.arrayLayers = 1;
   ii.samples = VK_SAMPLE_COUNT_1_BIT;
