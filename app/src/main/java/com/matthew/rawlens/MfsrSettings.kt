@@ -99,6 +99,14 @@ data class MfsrSettings(
      */
     val lkrHdr: LkrHdrMode = LkrHdrMode.AUTO
 ) {
+    /**
+     * The one user-facing 2x switch (Settings -> Merge and the round MP button): MFSR merges at 2x,
+     * LK-R keeps its x2 solve. Shown from the active engine's flag; [withSuperResolution2x] sets both
+     * so the two controls can never disagree when the engine changes.
+     */
+    val superResolution2x: Boolean get() = if (engine == MfsrEngine.LKR) lkrFullRes else mfsrFullRes
+    fun withSuperResolution2x(on: Boolean): MfsrSettings = copy(mfsrFullRes = on, lkrFullRes = on)
+
     /** Quick-tile / status label of the active engine. */
     val label: String get() = if (engine == MfsrEngine.LKR) "LK-R" else "MFSR"
     /** Follow the shared burst / ZSL frame count, up to the active engine's ceiling. */

@@ -96,14 +96,15 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 }
             }
         })
-        content.addView(settingsCheck("2× super-resolution", mfsrSettings.mfsrFullRes).apply {
+        // One 2x switch for both engines, the same flag as the round MP button in the viewfinder.
+        content.addView(settingsCheck("2× super-resolution", mfsrSettings.superResolution2x).apply {
             setOnCheckedChangeListener { _, checked ->
-                if (checked != mfsrSettings.mfsrFullRes) {
-                    if (applyMfsrSettings(mfsrSettings.copy(mfsrFullRes = checked))) {
-                        setStatus(if (checked) "MFSR 2× • ON" else "MFSR 2× • OFF")
+                if (checked != mfsrSettings.superResolution2x) {
+                    if (applyMfsrSettings(mfsrSettings.withSuperResolution2x(checked))) {
+                        setStatus(if (checked) "2× SUPER-RESOLUTION • ON" else "2× SUPER-RESOLUTION • OFF")
                         updateLkrZoomChip()
                     } else {
-                        isChecked = mfsrSettings.mfsrFullRes
+                        isChecked = mfsrSettings.superResolution2x
                     }
                 }
             }

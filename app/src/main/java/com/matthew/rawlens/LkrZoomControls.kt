@@ -34,17 +34,17 @@ internal fun MainActivity.wireLkrZoomChip() {
     findViewById<TextView>(R.id.lkrResChip).setOnClickListener { button ->
         // Same round button for both sharp-merge engines: LK-R keeps its x2
         // solve, MFSR merges at 2x (Wronski super-resolution).
+        // One flag for both engines (Settings -> Merge -> 2× super-resolution shows the same).
+        val next = !mfsrSettings.superResolution2x
         if (mfsrSettings.isOn(MfsrEngine.MFSR)) {
-            val next = !mfsrSettings.mfsrFullRes
-            if (applyMfsrSettings(mfsrSettings.copy(mfsrFullRes = next))) {
+            if (applyMfsrSettings(mfsrSettings.withSuperResolution2x(next))) {
                 button.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                 setStatus("MFSR ${lkrMegapixelLabel(next, LkrZoom.X1)}")
                 updateLkrZoomChip()
             }
             return@setOnClickListener
         }
-        val next = !mfsrSettings.lkrFullRes
-        if (applyMfsrSettings(mfsrSettings.copy(lkrFullRes = next))) {
+        if (applyMfsrSettings(mfsrSettings.withSuperResolution2x(next))) {
             button.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
             setStatus("LK-R ${lkrMegapixelLabel(next, mfsrSettings.lkrZoom)}")
             updateLkrZoomChip()
