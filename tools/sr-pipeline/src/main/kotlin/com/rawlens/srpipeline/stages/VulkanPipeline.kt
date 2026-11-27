@@ -69,6 +69,8 @@ object VulkanPipeline {
     /** fp16 RAW images as well (default off: they feed alignment; SRP_HALF_RAW=1 to enable). */
     /** Packed fp16 merge accumulators (default on; SRP_HALF_ACC=0 / -Dsrpipeline.halfAcc=false off). */
     internal val halfAcc: Boolean get() = (System.getenv("SRP_HALF_ACC") ?: System.getProperty("srpipeline.halfAcc")).let { it != "0" && it != "false" }
+    /** Kernel-regression green in merge_app instead of per-frame cubic green (A/B; SRP_GREEN_KERNEL=1). */
+    internal val greenKernel: Boolean get() = (System.getenv("SRP_GREEN_KERNEL") ?: System.getProperty("srpipeline.greenKernel")) == "1"
     internal val halfRaw: Boolean get() = (System.getenv("SRP_HALF_RAW") ?: System.getProperty("srpipeline.halfRaw")) == "1"
     internal val dumpDir: String? get() = (System.getenv("SRP_R_DUMP") ?: System.getProperty("srpipeline.rDump"))?.takeIf { it.isNotEmpty() }
 

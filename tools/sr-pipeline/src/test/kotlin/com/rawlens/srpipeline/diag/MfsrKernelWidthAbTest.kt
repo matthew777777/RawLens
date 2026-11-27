@@ -153,13 +153,13 @@ class MfsrKernelWidthAbTest {
             val wb = floatArrayOf((t.neutral[1] / t.neutral[0]).toFloat(), (t.neutral[1] / t.neutral[2]).toFloat())
             println("KW snr %.1f tile %d kDetail %.3f kDenoise %.2f".format(fin.snr, fin.tileSize, fin.kDetail, fin.kDenoise))
             val app = SrTuning.APP_DEFAULT
+            // (name, tuning, kernel-regression green)
             val variants = listOf(
-                "app (kDen x1.30)" to app,
-                "kDen x0.60" to app.copy(kDenoiseScale = 0.6f),
-                "kDen x0.35" to app.copy(kDenoiseScale = 0.35f),
-                "kMin 0.50" to app.copy(kMin = 0.5f),
-                "kMin 0.40" to app.copy(kMin = 0.4f),
-                "kMin 0" to app.copy(kMin = 0f),
+                Triple("app (cubic green)", app, false),
+                Triple("kgreen kMin .64", app, true),
+                Triple("kgreen kMin .40", app.copy(kMin = 0.4f), true),
+                Triple("kgreen kMin .25", app.copy(kMin = 0.25f), true),
+                Triple("kgreen .25 str1.75", app.copy(kMin = 0.25f, kStretch = 1.75f), true),
             )
             val places = listOf("tex" to origin(fulls[0], true), "flat" to origin(fulls[0], false))
             for (scale in listOf(1f, 2f)) {
@@ -173,7 +173,8 @@ class MfsrKernelWidthAbTest {
                     val single = bilinear(frames[0]); val h0 = hf(single)
                     val panels = ArrayList<Array<Array<FloatArray>>>()
                     val line = StringBuilder("KW x%.0f %s(%d,%d) single %.5f".format(scale, place, ox, oy, h0))
-                    for ((name, tu) in variants) {
+                    for ((name, tu, kg) in variants) {
+                        System.setProperty("srpipeline.greenKernel", if (kg) "1" else "0")
                         val c = PipelineConfig(scale = scale, bayer = true, factors = listOf(1, 2, 4, 4), tileSizes = fin.tileSizes,
                             greyMethod = "FIR7", kernelParams = tu.kernelParams(fin), kernelPreprocessing = "gat",
                             kernelAlpha = FloatArray(4) { alpha[it].toFloat() }, kernelBeta = FloatArray(4) { beta[it].toFloat() },
@@ -205,6 +206,6 @@ class MfsrKernelWidthAbTest {
                 }
             }
         } finally { SrpBridge.nativeDestroy(handle) }
-        println("KW sheets in ${out.absolutePath} (single | app | kDen 0.6 | kDen 0.35 | kMin 0.5 | kMin 0.4 | kMin 0)")
+        println("KW sheets in ${out.absolutePath} (single | app | kgreen .64 | .40 | .25 | .25+stretch 1.75)")
     }
 }

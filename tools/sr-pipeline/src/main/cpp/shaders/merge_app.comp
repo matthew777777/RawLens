@@ -192,7 +192,25 @@ void splat(uvec2 hr) {
     if (blue) { valB = v; accB = a; } else { valR = v; accR = a; }
   }
   float valG = 0.0, accG = 0.0;
-  if (p.beta > 0.0) {
+  if (p.pad[4] != 0u) {
+    // Kernel-regression green (rawr Rexture style): the frame's own raw green samples weighted by
+    // the anisotropic kernel, no per-frame interpolation (the cubic path low-passes every frame
+    // before the average). pad[4] = 1.
+    for (int di = -2; di <= 2; di++) {
+      int i2 = center_i + di;
+      if (i2 < 0 || i2 >= int(lrH)) continue;
+      float dy = float(i2) - mov_i;
+      for (int dj = -2 + ((center_j - 2 + i2 + 1) & 1); dj <= 2; dj += 2) {
+        int j = center_j + dj;
+        if (j < 0 || j >= int(lrW)) continue;
+        float dx = float(j) - mov_j;
+        float z = max(ixx * dx * dx + 2.0 * ixy * dx * dy + iyy * dy * dy, 0.0);
+        float w = exp(-0.5 * z) * local_r * p.beta;
+        valG += w * texelFetch(comp_, ivec2(j, i2), 0).x;
+        accG += w;
+      }
+    }
+  } else if (p.beta > 0.0) {
     accG = 3.14159265359*sqrt(max(det,0.0))*local_r*p.beta;
     valG = accG * interpolateGreen(vec2(mov_x, mov_y));
   }

@@ -294,7 +294,7 @@ internal class MobileMerge(
             else if (ref) longArrayOf(cdImg, cdImg, covImg, rImg, numRes, denRes, greenImg) else longArrayOf(cdImg, fieldImg, covImg, rImg, numRes, denRes, greenImg),
             longArrayOf(SAMPLED, SAMPLED, SAMPLED, SAMPLED, total, total, SAMPLED),
             push(0 to w, 1 to h, 5 to tile, 6 to scale, 7 to config.chromaScale, 8 to greenW, 10 to (if (index == 0) 1 else 0),
-                12 to ftx, 13 to outW, 14 to outH), outW, outH)
+                12 to ftx, 13 to outW, 14 to outH, 15 to (if (VulkanPipeline.greenKernel) 1 else 0)), outW, outH)
         if (evening) {
             run2d("noise_acc_img", longArrayOf(rImg, evenAcc), longArrayOf(SAMPLED, 4 * n),
                 push(0 to gw, 1 to gh, 8 to greenW, 10 to (if (index == 0) 1 else 0)), gw, gh)
