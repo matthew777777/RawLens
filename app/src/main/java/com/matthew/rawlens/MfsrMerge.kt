@@ -770,8 +770,8 @@ internal object MfsrMerge {
             val fft = asset("fft")
             val t0 = System.nanoTime()
             // Output in native memory (see VulkanPipeline.run): released by
-            // MfsrResult.release(), or below if the engine fails.
-            nativeOut = SrpBridge.nativeFloats(outW * outH * 3)
+            // MfsrResult.release(), or below if the engine fails. Created by the engine only after
+            // the merge has freed its working set, so it does not add to the peak.
             val rgb = VulkanPipeline.run(
                 { first },
                 decoders.drop(1).map { decode ->
@@ -804,8 +804,10 @@ internal object MfsrMerge {
                     robFeather = asset("rob_feather"),
                     mobile = VulkanPipeline.MobileSpirvs.load(::asset),
                 ),
-                output = nativeOut,
                 greenFit = greenFit,
+                outputFactory = { n -> SrpBridge.nativeFloats(n).also { nativeOut = it } },
+                // The decoders below ignore their staging argument.
+                comparisonsUseStaging = false,
             )
             greenFit?.close()
             greenFit = null
@@ -903,13 +905,14 @@ internal object MfsrMerge {
         return true
     }
 
-    // Peak bytes per CFA pixel of tools/sr-pipeline VulkanPipeline.run at scale 1 (bayer):
-    // GPU residents means 3 + vars 3 + num 12 + den 12 + frame 4 + kernPre 4 + kernGrey 1
-    //   + grads 2 + cov 4 + S.3 map 1 = 46; pinned align spectra/statics ~4;
-    // native scratch frameBuf 4 + kernPre 4 + RGB output 12 = 20; init transients ~10.
-    private const val NATIVE_BYTES_PER_PX = 80.0
-    // Per OUTPUT pixel: GPU num 12 + den 12 + native RGB output 12.
-    private const val OUTPUT_BYTES_PER_PX = 36.0
+    // Peak bytes per CFA pixel of the mobile path (tools/sr-pipeline MobileMerge) at scale 1, all fp32,
+    // during the frame loop: frame upload x2 8 + RAW images x2 8 + colour difference 4 + ref/moving
+    // pyramids ~11 + num 12 + den 12 + cov 4 + ref stats 4 + six quarter-res maps 6 + noise evening 4
+    // = ~73. The RGB output and the comparison staging no longer add to it (output is created after
+    // the loop's buffers are freed; app decoders need no staging).
+    private const val NATIVE_BYTES_PER_PX = 73.0
+    // Per extra OUTPUT pixel at scale > 1: num 12 + den 12 (the output itself comes after the peak).
+    private const val OUTPUT_BYTES_PER_PX = 24.0
     // Java heap rows: the decoded frame (4) + loop/grey rows (4) live together.
     private const val JAVA_BYTES_PER_PX = 8.0
 

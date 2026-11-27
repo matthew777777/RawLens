@@ -262,8 +262,15 @@ object VulkanPipeline {
         /** Diagnostic replacement for each comparison frame's regularized flow, before robustness. */
         flowTransform: ((Int, Array<Array<FloatArray>>) -> Array<Array<FloatArray>>)? = null,
         greenFit: GreenNormalTile? = null,
+        /**
+         * Creates the output when [output] is null, given the float count. The mobile path calls it
+         * only after the merge, once its own buffers are freed, so the output is not part of the peak.
+         */
+        outputFactory: ((Int) -> ByteBuffer)? = null,
+        /** False when the comparison decoders ignore their staging buffer (app): saves 4 B/px on the mobile path. */
+        comparisonsUseStaging: Boolean = true,
     ): ByteBuffer = SrpBridge.NativeFloats().use { scratch ->
-        runScoped(reference, comparisons, config, handle, alignSpirvs, spirvs, output, scratch, frameObserver, flowTransform, greenFit)
+        runScoped(reference, comparisons, config, handle, alignSpirvs, spirvs, output, scratch, frameObserver, flowTransform, greenFit, outputFactory, comparisonsUseStaging)
     }
 
     private fun runScoped(
@@ -278,6 +285,8 @@ object VulkanPipeline {
         frameObserver: ((ByteBuffer, Array<Array<FloatArray>>, ByteBuffer) -> Unit)?,
         flowTransform: ((Int, Array<Array<FloatArray>>) -> Array<Array<FloatArray>>)?,
         greenFit: GreenNormalTile?,
+        outputFactory: ((Int) -> ByteBuffer)?,
+        comparisonsUseStaging: Boolean,
     ): ByteBuffer {
         require(handle != 0L) { "VulkanPipeline: null context handle" }
         require(!config.organicReconstruction) { "pooled polynomial reconstruction is currently a CPU prototype" }
@@ -297,14 +306,16 @@ object VulkanPipeline {
         if (frameObserver == null && flowTransform == null && (greenFit == null || greenFit.onDevice) &&
             MobileMerge.supports(config, spirvs)) {
             val floats = (h * config.scale).toInt() * (w * config.scale).toInt() * 3
-            val out = output?.also {
-                require(it.capacity() >= floats * 4) { "VulkanPipeline: output buffer too small" }
-                it.clear()
-            } ?: SrpBridge.directFloats(floats)
+            val out = {
+                output?.also {
+                    require(it.capacity() >= floats * 4) { "VulkanPipeline: output buffer too small" }
+                    it.clear()
+                } ?: outputFactory?.invoke(floats) ?: SrpBridge.directFloats(floats)
+            }
             val frame = refBox!!
             refBox = null
             return MobileMerge(handle, config, spirvs, spirvs.mobile!!, greenFit, w, h, comparisons.size + 1).use {
-                it.run(frame, comparisons, scratch.floats(w * h), out)
+                it.run(frame, comparisons, scratch.floats(if (comparisonsUseStaging) w * h else 1), out)
             }
         }
         // Mobile grey (FIR7/11/15): half-band taps shared with Grey.firLowpass.
@@ -1014,7 +1025,7 @@ object VulkanPipeline {
         val outBuf = output?.also {
             require(it.capacity() >= total * java.lang.Float.BYTES) { "VulkanPipeline: output buffer too small" }
             it.clear()
-        } ?: SrpBridge.directFloats(total)
+        } ?: outputFactory?.invoke(total) ?: SrpBridge.directFloats(total)
         timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, evenRes, outBuf, total.toLong())) }
         outBuf.rewind()
         // Lateral CA: fit on the merged (co-sited) colour-difference output;

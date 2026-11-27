@@ -296,12 +296,13 @@ internal class MobileMerge(
     private class Ready(val blur: Float)
 
     fun run(reference: Array<FloatArray>, comparisons: List<(ByteBuffer) -> Array<FloatArray>>,
-            staging: ByteBuffer, output: ByteBuffer): ByteBuffer {
+            staging: ByteBuffer, output: () -> ByteBuffer): ByteBuffer {
         val start = System.nanoTime()
         var refRows: Array<FloatArray>? = reference
         val sharpA = (config.kernelAlpha[1] + config.kernelAlpha[3]) / 2f
         val sharpB = (config.kernelBeta[1] + config.kernelBeta[3]) / 2f
         val pool = Executors.newFixedThreadPool(3)
+        var result: ByteBuffer? = null
         try {
             val refFuture = refRows!!.let { r ->
                 val ped = pool.submit(Callable { if (config.blackPedestal) timed("cpu.pedestal") { BlackPedestal.estimate(r, config.kernelAlpha, config.kernelBeta) } else null })
@@ -393,7 +394,7 @@ internal class MobileMerge(
             val ped = refFuture.first.get()?.also {
                 println("sr-pipeline black pedestal %.5f (R %.5f G %.5f B %.5f, se %.6f, %d blocks, neutral %b)".format(
                     it.pedestal, it.r, it.g, it.b, it.sigma, it.blocks, it.neutral)) }?.pedestal ?: 0f
-            finish(ped, output)
+            result = finish(ped, output)
         } finally {
             pool.shutdownNow()
             pool.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS)
@@ -402,10 +403,25 @@ internal class MobileMerge(
             println("sr-pipeline mobile %.0f ms%s".format((System.nanoTime() - start) / 1e6, if (sync) " (sync)" else ""))
             for ((k, v) in clock.entries.sortedByDescending { it.value }) println("  %.1f %s".format(v / 1e6, k))
         }
-        return output
+        return result!!
     }
 
-    private fun finish(pedestal: Float, output: ByteBuffer) {
+    /**
+     * Frees every image and resident except [keep] once the GPU is idle. The merge's peak is the
+     * frame loop; releasing its working set before the output exists keeps the output (12 B per
+     * output pixel, 48 B per sensor pixel at 2x) out of that peak. Numerics are unchanged.
+     */
+    private fun releaseAllBut(keep: Long) {
+        for (s in 0..3) SrpBridge.nativeBatchWait(handle, s)
+        for (r in mapped) if (r != keep) SrpBridge.nativeUnmapResident(handle, r)
+        mapped.retainAll { it == keep }
+        for (i in images) if (i != keep) SrpBridge.nativeFreeImage(handle, i)
+        images.retainAll { it == keep }
+        for (r in owned) if (r != keep) SrpBridge.freeResident(handle, r)
+        owned.retainAll { it == keep }
+    }
+
+    private fun finish(pedestal: Float, output: () -> ByteBuffer): ByteBuffer {
         begin(0)
         run("mfsr_divide", mobile["mfsr_divide"], longArrayOf(numRes, denRes), longArrayOf(total, total), push(2 to total.toInt()), total)
         var img = numRes
@@ -439,8 +455,11 @@ internal class MobileMerge(
             push(0 to outW, 1 to outH, 2 to outPx.toInt(), 7 to wb[0], 8 to wb[1], 9 to maxOf(0f, pedestal)), outPx)
         submit()
         timed("cpu.finishWait") { waitFor(1) }
-        timed("download") { ok("download", SrpBridge.downloadResident(handle, img, output, total)) }
-        output.rewind()
+        releaseAllBut(img)
+        val out = output()
+        timed("download") { ok("download", SrpBridge.downloadResident(handle, img, out, total)) }
+        out.rewind()
+        return out
     }
 
     override fun close() {

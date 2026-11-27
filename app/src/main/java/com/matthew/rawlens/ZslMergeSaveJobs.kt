@@ -399,16 +399,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Hd
                     LkrMerge.Settings(network = settings.lkrNetwork, npuDenoise = settings.lkrNpuDenoise, noPrior = settings.lkrNoPrior, highlightRecovery = settings.lkrHighlightRecovery, dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
                         zoom = settings.lkrZoom, fullRes = settings.lkrFullRes, hdrBracket = hdr),
                     releaseInputs = host::releaseInputs) }
-            else MfsrMerge.merge(context, ordered, settings) ?: run {
-                // MFSR refused (usually the memory gate: Mi 10 Ultra 1 GB, POCO F7 2x 2.5 GB). LK-R works per
-                // tile with a far smaller peak, so the same frames still give a merged photo, not an ERROR.
-                Log.w(LOG_TAG, "MFSR merge unavailable; falling back to LK-R on the same frames")
-                host.reportSaveState("MFSR -> LK-R")
-                MergeGpuQuiet.during { LkrMerge.mergeLive(context, ordered,
-                    LkrMerge.Settings(network = settings.lkrNetwork, npuDenoise = settings.lkrNpuDenoise, noPrior = settings.lkrNoPrior, highlightRecovery = settings.lkrHighlightRecovery, dctPrior = settings.lkrDctPrior, tuning = LkrTuning.overrides(context),
-                        zoom = LkrZoom.X1, fullRes = false, hdrBracket = false),
-                    releaseInputs = host::releaseInputs) }
-            }
+            else MfsrMerge.merge(context, ordered, settings)
         } finally {
             host.releaseInputs()
         } ?: run {
