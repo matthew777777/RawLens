@@ -39,11 +39,20 @@ abstract class CompileSrpShaders : DefaultTask() {
                 )
             }
             // fp16-storage twin for MobileMerge's intermediate images (shaders marked srp:half).
-            if (source.readText().contains("srp:half")) execOperations.exec {
+            val text = source.readText()
+            if (Regex("srp:half\\b").containsMatchIn(text)) execOperations.exec {
                 commandLine(
                     compiler.get().asFile.absolutePath,
                     "--target-env=vulkan1.0", "-fshader-stage=compute", "-DSRP_HALF",
                     source.absolutePath, "-o", destination.resolve("${source.nameWithoutExtension}_h.spv")
+                )
+            }
+            // Packed fp16 merge accumulators (rawr-style; shaders marked srp:halfacc).
+            if (text.contains("srp:halfacc")) execOperations.exec {
+                commandLine(
+                    compiler.get().asFile.absolutePath,
+                    "--target-env=vulkan1.0", "-fshader-stage=compute", "-DSRP_HALF_ACC",
+                    source.absolutePath, "-o", destination.resolve("${source.nameWithoutExtension}_a.spv")
                 )
             }
         }

@@ -20,8 +20,27 @@ struct HmsrPush {
 layout(push_constant) uniform Push { HmsrPush p; };
 layout(set = 0, binding = 0) uniform highp sampler2D comp_;
 layout(set = 0, binding = 2) uniform highp sampler2D cov_;
+#ifdef SRP_HALF_ACC
+// srp:halfacc - <name>_a.spv: mean + weight packed as fp16 in one buffer, 3 uints per
+// output pixel (numR numG | numB denR | denG denB); added in fp32, rounded once per frame (rawr).
+layout(set = 0, binding = 4)  buffer Acc { uint acc_[]; };
+// Stored as running mean m = num/den (bounded, fp16-accurate) + weight den; raw sums lost
+// precision where weights fall below fp16's normal range (1x, large tiles).
+void accStore(uint id, vec3 v, vec3 a, bool init) {
+  vec3 m = vec3(0.0), w = vec3(0.0);
+  if (!init) {
+    vec2 x = unpackHalf2x16(acc_[id*3u]), y = unpackHalf2x16(acc_[id*3u+1u]), z = unpackHalf2x16(acc_[id*3u+2u]);
+    m = vec3(x, y.x); w = exp2(vec3(y.y, z));   // weight stored as log2 (any range); -65504 = 0
+  }
+  vec3 wn = w + a;
+  vec3 mn = mix(m, (m * w + v) / max(wn, vec3(1e-30)), greaterThan(wn, vec3(0.0)));
+  wn = mix(vec3(-65504.0), log2(max(wn, vec3(1e-38))), greaterThan(wn, vec3(0.0)));
+  acc_[id*3u] = packHalf2x16(mn.xy); acc_[id*3u+1u] = packHalf2x16(vec2(mn.z, wn.x)); acc_[id*3u+2u] = packHalf2x16(wn.yz);
+}
+#else
 layout(set = 0, binding = 4)  buffer Num { float num_[]; };
 layout(set = 0, binding = 5)  buffer Den { float den_[]; };
+#endif
 
 float fade(float x) { return 1.0 - smoothstep(2.5, 3.5, abs(x)); }
 
@@ -69,8 +88,12 @@ void splat(uvec2 hr) {
       acc += sel;
     }
   }
+#ifdef SRP_HALF_ACC
+  accStore(id, val, acc, true);
+#else
   num_[id*3u] = val.x; num_[id*3u+1u] = val.y; num_[id*3u+2u] = val.z;
   den_[id*3u] = acc.x; den_[id*3u+1u] = acc.y; den_[id*3u+2u] = acc.z;
+#endif
 }
 void main() {
   if (gl_GlobalInvocationID.x >= p.pad[2] || gl_GlobalInvocationID.y >= p.pad[3]) return;

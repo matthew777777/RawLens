@@ -10,8 +10,23 @@ struct HmsrPush {
 };
 layout(push_constant) uniform Push { HmsrPush p; };
 
+#ifdef SRP_HALF_ACC
+// srp:halfacc - <name>_a.spv: packed fp16 accumulators (merge_app_a) -> fp32 RGB. pixelCount = 3 * pixels.
+layout(set = 0, binding = 0) readonly buffer Acc { uint acc_[]; };
+layout(set = 0, binding = 1) writeonly buffer Out { float o_[]; };
+void main() {
+  for (uint q = gl_GlobalInvocationID.x; q < p.pixelCount / 3u; q += gl_NumWorkGroups.x * 256u) {
+    vec2 x = unpackHalf2x16(acc_[q*3u]), y = unpackHalf2x16(acc_[q*3u+1u]), z = unpackHalf2x16(acc_[q*3u+2u]);
+    // Mean is stored directly; zero weight -> 0/0 like the fp32 divide.
+    vec3 m = vec3(x, y.x), lw = vec3(y.y, z);   // lw = log2 weight, -65504 = zero weight
+    vec3 r = mix(vec3(0.0) / vec3(0.0), m, greaterThan(lw, vec3(-60000.0)));
+    o_[q*3u] = r.x; o_[q*3u+1u] = r.y; o_[q*3u+2u] = r.z;
+  }
+}
+#else
 layout(set = 0, binding = 0) buffer Num { float n_[]; };
 layout(set = 0, binding = 1) readonly buffer Den { float d_[]; };
 void main() {
   for (uint i = gl_GlobalInvocationID.x; i < p.pixelCount; i += gl_NumWorkGroups.x * 256u) n_[i] = n_[i] / d_[i];
 }
+#endif

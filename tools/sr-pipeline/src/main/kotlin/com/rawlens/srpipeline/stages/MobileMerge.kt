@@ -135,8 +135,15 @@ internal class MobileMerge(
     private val rImg = halfImage(gw, gh, 1)
     /** S.3 map of the reference (unused without S.3). */
     private val hfImg = if (rp.s3) halfImage(gw, gh, 1) else kernGrey
-    private val numRes = host(total)
-    private val denRes = host(total)
+    /**
+     * Packed fp16 accumulators (rawr): numerator + denominator in one 12 B/out-px buffer, added in
+     * fp32 and rounded once per frame. The fp32 num/den pair only exists in [finish], after the
+     * frame loop's working set is freed, so the loop peak drops by 12 B per output pixel.
+     */
+    private val packedAcc = half && VulkanPipeline.halfAcc && mobile.hasAcc
+    private val accRes = if (packedAcc) host(total) else 0L
+    private var numRes = if (packedAcc) 0L else host(total)
+    private var denRes = if (packedAcc) 0L else host(total)
     private val evening = config.noiseEvening && spirvs.noiseEven != null
     private val evenAcc = if (evening) res(4 * n) else 0L
     private val lutN = config.sigmaSqCurve.size
@@ -175,7 +182,8 @@ internal class MobileMerge(
     private fun waitFor(slot: Int) { if (!sync) ok("batch wait", SrpBridge.nativeBatchWait(handle, slot)) }
 
     private fun run2d(what: String, b: LongArray, sizes: LongArray, push: IntArray, gridW: Int, gridH: Int) {
-        val spirv = (if (half && (what != "raw_image" || rawHalf)) mobile.half(what) else null) ?: mobile[what]
+        val spirv = (if (packedAcc) mobile.acc(what) else null)
+            ?: (if (half && (what != "raw_image" || rawHalf)) mobile.half(what) else null) ?: mobile[what]
         timed("gpu.$what") { ok(what, SrpBridge.dispatch2d(handle, spirv, b, sizes, push, gridW, gridH)) }
     }
 
@@ -282,7 +290,8 @@ internal class MobileMerge(
         // A unit-weight reference keeps its own narrow green gather; the first frame initialises the accumulators.
         val ref = index == 0 && greenW == 1f
         run2d(if (ref) "merge_app_ref" else "merge_app",
-            if (ref) longArrayOf(cdImg, cdImg, covImg, rImg, numRes, denRes, greenImg) else longArrayOf(cdImg, fieldImg, covImg, rImg, numRes, denRes, greenImg),
+            if (packedAcc) { if (ref) longArrayOf(cdImg, cdImg, covImg, rImg, accRes, accRes, greenImg) else longArrayOf(cdImg, fieldImg, covImg, rImg, accRes, accRes, greenImg) }
+            else if (ref) longArrayOf(cdImg, cdImg, covImg, rImg, numRes, denRes, greenImg) else longArrayOf(cdImg, fieldImg, covImg, rImg, numRes, denRes, greenImg),
             longArrayOf(SAMPLED, SAMPLED, SAMPLED, SAMPLED, total, total, SAMPLED),
             push(0 to w, 1 to h, 5 to tile, 6 to scale, 7 to config.chromaScale, 8 to greenW, 10 to (if (index == 0) 1 else 0),
                 12 to ftx, 13 to outW, 14 to outH), outW, outH)
@@ -425,19 +434,31 @@ internal class MobileMerge(
      * frame loop; releasing its working set before the output exists keeps the output (12 B per
      * output pixel, 48 B per sensor pixel at 2x) out of that peak. Numerics are unchanged.
      */
-    private fun releaseAllBut(keep: Long) {
+    private fun releaseAllBut(vararg keep: Long) {
         for (s in 0..3) SrpBridge.nativeBatchWait(handle, s)
-        for (r in mapped) if (r != keep) SrpBridge.nativeUnmapResident(handle, r)
-        mapped.retainAll { it == keep }
-        for (i in images) if (i != keep) SrpBridge.nativeFreeImage(handle, i)
-        images.retainAll { it == keep }
-        for (r in owned) if (r != keep) SrpBridge.freeResident(handle, r)
-        owned.retainAll { it == keep }
+        for (r in mapped) if (r !in keep) SrpBridge.nativeUnmapResident(handle, r)
+        mapped.retainAll { it in keep }
+        for (i in images) if (i !in keep) SrpBridge.nativeFreeImage(handle, i)
+        images.retainAll { it in keep }
+        for (r in owned) if (r !in keep) SrpBridge.freeResident(handle, r)
+        owned.retainAll { it in keep }
     }
 
     private fun finish(pedestal: Float, output: () -> ByteBuffer): ByteBuffer {
-        begin(0)
-        run("mfsr_divide", mobile["mfsr_divide"], longArrayOf(numRes, denRes), longArrayOf(total, total), push(2 to total.toInt()), total)
+        if (packedAcc) {
+            // Free the frame loop's images/buffers (accumulator + evening sums stay), then unpack.
+            releaseAllBut(accRes, evenAcc)
+            numRes = host(total)
+            begin(0)
+            run("mfsr_divide", mobile.acc("mfsr_divide")!!, longArrayOf(accRes, numRes), longArrayOf(total, total), push(2 to total.toInt()), total)
+            submit(); waitFor(0)
+            SrpBridge.freeResident(handle, accRes); owned.remove(accRes)
+            denRes = host(total)
+            begin(0)
+        } else {
+            begin(0)
+            run("mfsr_divide", mobile["mfsr_divide"], longArrayOf(numRes, denRes), longArrayOf(total, total), push(2 to total.toInt()), total)
+        }
         var img = numRes
         if (evening && frames > 1 && evenSumG2 > 0.0) {
             run("noiseEven", spirvs.noiseEven!!, longArrayOf(numRes, denRes, evenAcc), longArrayOf(total, total, 4 * n),

@@ -82,6 +82,15 @@ endfunction()
 foreach(_h rob_means kern_cov ref_stats ref_hf rob_test rob_window kern_pre raw_image)
   srp_spv_half(${_h})
 endforeach()
+# Packed fp16 merge accumulators (shaders marked srp:halfacc).
+foreach(_a merge_app merge_app_ref mfsr_divide)
+  add_custom_command(
+      OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${_a}_a.spv"
+      COMMAND "${SRP_GLSLANG}" -V -DSRP_HALF_ACC -o "${CMAKE_CURRENT_BINARY_DIR}/${_a}_a.spv"
+              "${SRP_ROOT}/shaders/${_a}.comp"
+      DEPENDS "${SRP_ROOT}/shaders/${_a}.comp")
+  add_custom_target("srp_${_a}_a_spv" ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/${_a}_a.spv")
+endforeach()
 srp_spv(merge_accumulate)
 srp_spv(gat)
 srp_spv(align)

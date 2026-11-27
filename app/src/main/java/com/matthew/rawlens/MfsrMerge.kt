@@ -881,8 +881,10 @@ internal object MfsrMerge {
      */
     private fun fitsMemory(context: Context, w: Int, h: Int, scale: Int = 1): Boolean {
         val px = w.toDouble() * h
-        // Output-sized buffers (num 12 + den 12 + RGB out 12 B/px) grow with scale^2.
-        val native = px * (NATIVE_BYTES_PER_PX + OUTPUT_BYTES_PER_PX * (scale * scale - 1)) *
+        // Two peaks (packed fp16 accumulators): the frame loop (working set + 12 B per output px)
+        // and the finish (loop freed; fp32 num + den = 24 B per output px + evening sums 4 B/px).
+        val s2 = (scale * scale).toDouble()
+        val native = px * maxOf(NATIVE_BYTES_PER_PX + ACC_BYTES_PER_PX * (s2 - 1), FINISH_BYTES_PER_PX * s2 + 4.0) *
             MergeMemoryBudget.ESTIMATE_MARGIN
         val java = px * JAVA_BYTES_PER_PX * MergeMemoryBudget.ESTIMATE_MARGIN
         val systemBudget = MergeMemoryBudget.mergeRunHeadroomBytes(context)
@@ -912,9 +914,12 @@ internal object MfsrMerge {
     // the loop's buffers are freed; app decoders need no staging). The quarter-res maps (cov, ref
     // stats, six singles: 14 B/px) are fp16 on devices with R16F/RGBA16F storage (all current Adreno
     // and Mali), so ~66.
-    private const val NATIVE_BYTES_PER_PX = 66.0
-    // Per extra OUTPUT pixel at scale > 1: num 12 + den 12 (the output itself comes after the peak).
-    private const val OUTPUT_BYTES_PER_PX = 24.0
+    // Packed fp16 mean+weight accumulator (12 B/out-px instead of num+den 24): 66 -> 54 at 1x.
+    private const val NATIVE_BYTES_PER_PX = 54.0
+    // Per extra OUTPUT pixel at scale > 1 during the frame loop: the packed accumulator.
+    private const val ACC_BYTES_PER_PX = 12.0
+    // Per OUTPUT pixel in the finish: fp32 num + den (ping-pong for evening / CA / green fit).
+    private const val FINISH_BYTES_PER_PX = 24.0
     // Java heap rows: the decoded frame (4) + loop/grey rows (4) live together.
     private const val JAVA_BYTES_PER_PX = 8.0
 
