@@ -696,6 +696,8 @@ private fun merge(plan: Plan) {
                         twoBandDct = if (plan.twoBandGpu) spv(dir, "twoband_dct") else null,
                         twoBandTensor = if (plan.twoBandGpu) spv(dir, "twoband_tensor") else null,
                         robFeather = if (plan.twoBandGpu) spv(dir, "rob_feather") else null,
+                        // SRP_MOBILE=1: the app's MobileMerge path (used when the config supports it).
+                        mobile = if (System.getenv("SRP_MOBILE") == "1") VulkanPipeline.MobileSpirvs.load { spv(dir, it) } else null,
                     ),
                     frameObserver = cache?.let { c -> { f, flow, r -> c.record(f,flow,r) } }
                         ?: twoBand?.let { t -> { f, flow, r -> t.record(f, flow, r) } }
