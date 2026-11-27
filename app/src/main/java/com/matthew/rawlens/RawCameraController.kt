@@ -3392,7 +3392,9 @@ class RawCameraController(
     private fun retryZslSelectionUntil(
         deadlineMs: Long,
         restartAttempted: Boolean = false,
-        emptyStreak: Int = 0
+        emptyStreak: Int = 0,
+        lastRingSize: Int = -1,
+        ringStallTicks: Int = 0
     ) {
         // A merge must never fall through to saving an unmerged top-up burst.
         val allowTopup = zslHybridTopupEnabled &&
@@ -3435,6 +3437,20 @@ class RawCameraController(
             val tickElapsedNanos = SystemClock.elapsedRealtimeNanos()
             val tickSensorCutoff = lastPreviewSensorTimestamp
             if (selectAndSaveRawZsl(tickElapsedNanos, tickSensorCutoff)) return@postDelayed
+            // Merge liveness: a merge needs the full ring and never tops up, so a
+            // ring that stops growing (stream delivering nothing, or frames held
+            // but never eligible) would end in ZSL NOT READY. Seen on a Moto
+            // main lens in low light (16 fps): every press NOT READY. ~1s with
+            // no ring growth -> a forward merge burst, like the non-ZSL path.
+            val ringSize = rawZslBuffer?.size ?: 0
+            val nextStallTicks = if (ringSize > lastRingSize) 0 else ringStallTicks + 1
+            val merging = activeHdrPlusSettings.enabled || activeMfsrSettings.enabled
+            if (merging && (nextStallTicks >= EMPTY_TOPUP_ESCALATION_TICKS ||
+                    SystemClock.elapsedRealtime() >= deadlineMs)) {
+                if (startForwardMergeFallback(
+                        "ring stalled buffered=$ringSize/$rawZslCapacity streaming=$rawZslStreaming " +
+                            "realtime=$rawZslRealtimeTimestamps")) return@postDelayed
+            }
             // Empty-ring escalation (P0 liveness): a ring that yields nothing
             // for ~1s is not going to refill (wedged HAL, dead stream), so fire
             // the full burst forward instead of riding out the whole deadline
@@ -3462,8 +3478,23 @@ class RawCameraController(
                 noteChainDeadAndMaybeRecover()
                 return@postDelayed
             }
-            retryZslSelectionUntil(deadlineMs, restartDone, nextEmptyStreak)
+            retryZslSelectionUntil(deadlineMs, restartDone, nextEmptyStreak, ringSize, nextStallTicks)
         }, ZSL_SELECTION_WAIT_MS)
+    }
+
+    /**
+     * HDR+/MFSR shot whose ZSL ring cannot deliver: drop the stalled ring and
+     * capture the merge burst forward (same path as a session without ZSL).
+     * False when the reader cannot host the burst; the caller keeps waiting.
+     */
+    private fun startForwardMergeFallback(reason: String): Boolean {
+        val count = zslSelectedFrameCount(activeCaptureFormat)
+        clearRawZslBuffer()
+        if (!photoMergeFitsReader(count)) return false
+        Log.w(LOG_TAG, "ZSL merge take impossible ($reason); forward merge burst of $count")
+        activePhotoMerge = true
+        captureFrames(count, captureAlreadyStarted = true)
+        return true
     }
 
     /**
