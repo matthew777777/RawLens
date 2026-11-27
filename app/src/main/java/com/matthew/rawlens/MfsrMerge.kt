@@ -616,7 +616,13 @@ internal object MfsrMerge {
         val count = decoders.size
         // MFSR resolution (viewfinder round button, like LK-R): 2x super-resolution
         // (12.5 -> 50 MP) instead of the sensor grid.
-        val scale = if (settings.mfsrFullRes) 2 else 1
+        var scale = if (settings.mfsrFullRes) 2 else 1
+        // 2x needs ~4x the output buffers (POCO F7 12 MP: ~2.5 GB). Drop to the sensor grid
+        // rather than saving nothing when only 1x fits.
+        if (scale == 2 && !fitsMemory(context, w, h, 2)) {
+            Log.w(LOG_TAG, "sharp merge: 2x does not fit memory, merging at 1x")
+            scale = 1
+        }
         val outW = w * scale
         val outH = h * scale
         // MFSR Lab (Settings -> Merge): code defaults + the user's overrides.
