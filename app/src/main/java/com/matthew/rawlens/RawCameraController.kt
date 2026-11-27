@@ -8857,7 +8857,11 @@ class RawCameraController(
             }
             Triple(logicalId, physicalId, logical)
         } ?: return directRawCharacteristics(cameraId)?.let { direct ->
-            val parentId = findAdvertisedLogicalParent(cameraId, direct)
+            // Xiaomi 13 Ultra only (its standalone IDs need the logical parent). Elsewhere a
+            // bound route loses per-lens behaviour: Moto 3x (5 via 0) ran without OIS.
+            val parentId = if (isXiaomi13Ultra &&
+                direct.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+            ) findAdvertisedLogicalParent(cameraId, direct) else null
             CameraRoute(cameraId, parentId ?: cameraId, cameraId.takeIf { parentId != null }, direct)
         }
 
