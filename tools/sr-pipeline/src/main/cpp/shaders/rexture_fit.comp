@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: Apache-2.0
+#version 450
+// Rexturation (port of rawr's rx_fit.comp, GPL-3 idea re-implemented on MobileMerge's buffers): one
+// over-relaxed forward-model step on green, folded into the merge (no second visit of the frames).
+// Forward model of a companion's green sample q: y_q ~ bilinear(z, q - flow) (1 px box aperture on
+// the output grid, 1x only). g = z0 + OMEGA (b - A z0) / (diag(A 1) + DELTA), b = sum w B^T y,
+// A = sum w B^T B (3 x 3 stencil per pixel). merge_app (pad[5] = 1) keeps per pixel, over the
+// companions' green samples covering it: bs = sum w b (y - base) and c0 / cE / cS / cSE / cSW; the
+// other four coefficients are the neighbours' (A is symmetric). The base frame's own green sites add
+// (y - z0) with weight 1.
+//   mode 0 (reference frame, after colour_diff): fitBg = (base green, its 3 x 3 SD); fitAcc = 0
+//   mode 3 (each companion, before merge_app): motion weight per half-res cell: the companion's green
+//          samples around the cell centre's warped position vs the base green at their scene points,
+//          e = mean (y - base)^2 / (2 sigma^2 + KAPPA sd^2), w = clamp((T2 - e) / (T2 - T1))
+//   mode 1 (finish, on the merged RGB): fitBg.x = the step's change dg (scaled by support / texture)
+//   mode 2: rgb += dg * (1/wbR, 1, 1/wbB): the green detail added as grey, colour untouched
+layout(local_size_x = 16, local_size_y = 16) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+// alpha/beta = green noise model; robustness = wbR; pad[0] = wbB bits; pad[1..2] = flow tiles x/y.
+layout(set = 0, binding = 0) uniform highp sampler2D tex0_;   // mode 0: green plane, mode 3: colour-diff (raw green at green sites)
+layout(set = 0, binding = 1) uniform highp sampler2D field_;  // mode 3: per-tile flow
+layout(set = 0, binding = 2) buffer FitBg { float bg_[]; };   // 2 per pixel
+layout(set = 0, binding = 3) buffer FitW { float fw_[]; };    // 1 per half-res cell
+layout(set = 0, binding = 4) buffer FitAcc { float acc_[]; }; // 6 per pixel: bs c0 cE cS cSE cSW
+layout(set = 0, binding = 5) buffer Rgb { float rgb_[]; };    // 3 per pixel (modes 1, 2)
+
+const float OMEGA = 2.0, DELTA = 1.0, CLIP = 0.95;
+const float KAPPA = 4.0, T1 = 3.0, T2 = 9.0;
+const float DS_FULL = 1.0, TEXF_LO = 1.5, TEXF_HI = 3.0;
+
+int W() { return int(p.width); }
+int H() { return int(p.height); }
+uint pix(ivec2 q) { q = clamp(q, ivec2(0), ivec2(W() - 1, H() - 1)); return uint(q.y * W() + q.x); }
+float noiseVar(float v) { return max(p.alpha * max(v, 0.0) + p.beta, 1e-12); }
+
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  uint mode = p.mode;
+  if (mode == 3u) {
+    int gw = W() / 2, gh = H() / 2;
+    if (q.x >= gw || q.y >= gh) return;
+    vec2 oc = vec2(2 * q) + 0.5;
+    // bilinear tile flow at the cell centre (merge_app samples the same field)
+    vec2 g = (oc + 0.5) / float(p.tileSize) - 0.5;
+    vec2 b = floor(g), fr = g - b;
+    ivec2 tn = ivec2(int(p.pad[1]), int(p.pad[2]));
+    vec2 fl = vec2(0.0);
+    for (int j = 0; j < 2; ++j) for (int i = 0; i < 2; ++i)
+      fl += (i == 1 ? fr.x : 1.0 - fr.x) * (j == 1 ? fr.y : 1.0 - fr.y) *
+            texelFetch(field_, clamp(ivec2(b) + ivec2(i, j), ivec2(0), tn - 1), 0).xy;
+    ivec2 c0 = ivec2(floor(oc + fl + 0.5));
+    float e = 0.0, cnt = 0.0;
+    for (int j = -1; j <= 1; ++j) for (int k = -1; k <= 1; ++k) {
+      ivec2 s = c0 + ivec2(k, j);
+      if (any(lessThan(s, ivec2(0))) || s.x >= W() || s.y >= H() || ((s.x + s.y) & 1) == 0) continue;
+      float y = texelFetch(tex0_, s, 0).x;
+      if (y >= CLIP) continue;
+      vec2 pos = vec2(s) - fl, pb = floor(pos), f = pos - pb;
+      ivec2 t = ivec2(pb);
+      float b00 = bg_[pix(t) * 2u], b10 = bg_[pix(t + ivec2(1, 0)) * 2u];
+      float b01 = bg_[pix(t + ivec2(0, 1)) * 2u], b11 = bg_[pix(t + ivec2(1, 1)) * 2u];
+      float base = mix(mix(b00, b10, f.x), mix(b01, b11, f.x), f.y);
+      float sd = bg_[pix(t + ivec2(f.x < 0.5 ? 0 : 1, f.y < 0.5 ? 0 : 1)) * 2u + 1u];
+      float r = y - base;
+      e += r * r / (2.0 * noiseVar(base) + KAPPA * sd * sd);
+      cnt += 1.0;
+    }
+    fw_[uint(q.y * gw + q.x)] = cnt > 0.0 ? clamp((T2 - e / cnt) / (T2 - T1), 0.0, 1.0) : 1.0;
+    return;
+  }
+  if (q.x >= W() || q.y >= H()) return;
+  uint id = pix(q);
+  if (mode == 0u) {
+    float s = 0.0, s2 = 0.0;
+    for (int j = -1; j <= 1; ++j) for (int k = -1; k <= 1; ++k) {
+      float v = texelFetch(tex0_, clamp(q + ivec2(k, j), ivec2(0), ivec2(W() - 1, H() - 1)), 0).x;
+      s += v; s2 += v * v;
+    }
+    float m = s / 9.0;
+    bg_[id * 2u] = texelFetch(tex0_, q, 0).x;
+    bg_[id * 2u + 1u] = sqrt(max(s2 / 9.0 - m * m, 0.0));
+    for (uint k = 0u; k < 6u; ++k) acc_[id * 6u + k] = 0.0;
+    return;
+  }
+  if (mode == 1u) {
+    float base = bg_[id * 2u], sd = bg_[id * 2u + 1u];
+    float z0 = rgb_[id * 3u + 1u];
+    #define Z(dx, dy) (rgb_[pix(q + ivec2(dx, dy)) * 3u + 1u] - base)
+    float c0 = acc_[id * 6u + 1u], cE = acc_[id * 6u + 2u], cS = acc_[id * 6u + 3u];
+    float cSE = acc_[id * 6u + 4u], cSW = acc_[id * 6u + 5u];
+    float cW = q.x > 0 ? acc_[pix(q - ivec2(1, 0)) * 6u + 2u] : 0.0;
+    float cN = q.y > 0 ? acc_[pix(q - ivec2(0, 1)) * 6u + 3u] : 0.0;
+    float cNW = q.x > 0 && q.y > 0 ? acc_[pix(q - ivec2(1, 1)) * 6u + 4u] : 0.0;
+    float cNE = q.x < W() - 1 && q.y > 0 ? acc_[pix(q + ivec2(1, -1)) * 6u + 5u] : 0.0;
+    float az = c0 * (z0 - base) + cE * Z(1, 0) + cS * Z(0, 1) + cSE * Z(1, 1) + cSW * Z(-1, 1)
+             + cW * Z(-1, 0) + cN * Z(0, -1) + cNW * Z(-1, -1) + cNE * Z(1, -1);
+    float ds = c0 + cE + cS + cSE + cSW + cW + cN + cNW + cNE;
+    float bt = 0.0, bd = 0.0;
+    if (((q.x + q.y) & 1) == 1 && base < CLIP) { bt = base - z0; bd = 1.0; }
+    float dg = OMEGA * (acc_[id * 6u] - az + bt) / (ds + bd + DELTA)
+             * max(clamp(ds / DS_FULL, 0.0, 1.0), smoothstep(TEXF_LO, TEXF_HI, sd / sqrt(noiseVar(base))));
+    if (isnan(dg) || isinf(dg)) dg = 0.0;
+    bg_[id * 2u] = dg;
+    return;
+  }
+  // mode 2
+  float dg = bg_[id * 2u];
+  rgb_[id * 3u] += dg / p.robustness;
+  rgb_[id * 3u + 1u] += dg;
+  rgb_[id * 3u + 2u] += dg / uintBitsToFloat(p.pad[0]);
+}

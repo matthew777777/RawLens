@@ -71,6 +71,8 @@ object VulkanPipeline {
     internal val halfAcc: Boolean get() = (System.getenv("SRP_HALF_ACC") ?: System.getProperty("srpipeline.halfAcc")).let { it != "0" && it != "false" }
     /** Kernel-regression green in merge_app instead of per-frame cubic green (A/B; SRP_GREEN_KERNEL=1). */
     internal val greenKernel: Boolean get() = (System.getenv("SRP_GREEN_KERNEL") ?: System.getProperty("srpipeline.greenKernel")) == "1"
+    /** Rexturation detail fit in MobileMerge at 1x (SRP_REXTURE=1 / -Dsrpipeline.rexture=1). */
+    internal val rexture: Boolean get() = (System.getenv("SRP_REXTURE") ?: System.getProperty("srpipeline.rexture")) == "1"
     internal val halfRaw: Boolean get() = (System.getenv("SRP_HALF_RAW") ?: System.getProperty("srpipeline.halfRaw")) == "1"
     internal val dumpDir: String? get() = (System.getenv("SRP_R_DUMP") ?: System.getProperty("srpipeline.rDump"))?.takeIf { it.isNotEmpty() }
 
@@ -82,6 +84,7 @@ object VulkanPipeline {
         fun acc(name: String): ByteArray? = accModules[name]
         val hasAcc: Boolean get() = ACC_NAMES.all { it in accModules }
         operator fun get(name: String): ByteArray = requireNotNull(modules[name]) { "mobile module $name missing" }
+        fun has(name: String): Boolean = name in modules
         /** fp16-storage twin of [name] (writers of MobileMerge's intermediate images), or null. */
         fun half(name: String): ByteArray? = halfModules[name]
         /** Every writer of the fp16 image set has its twin (all or nothing). */
@@ -95,7 +98,10 @@ object VulkanPipeline {
                 "merge_app", "merge_app_ref", "mfsr_finish", "mfsr_divide", "img_dump",
                 "pyr_img", "hess_img", "flow_up", "align_l2_img", "align_l2_tie", "align_l2_tie64", "align_l1_img", "align_l1_tie", "ica_img")
             /** From SPIR-V by shader name. */
-            fun load(asset: (String) -> ByteArray) = MobileSpirvs(NAMES.associateWith(asset),
+            /** Optional modules: loaded when present (rexture_fit: Rexturation). */
+            private val OPTIONAL = listOf("rexture_fit")
+            fun load(asset: (String) -> ByteArray) = MobileSpirvs(NAMES.associateWith(asset) +
+                OPTIONAL.mapNotNull { n -> runCatching { asset(n) }.getOrNull()?.let { n to it } },
                 HALF_NAMES.mapNotNull { n -> runCatching { asset(n + "_h") }.getOrNull()?.let { n to it } }.toMap(),
                 ACC_NAMES.mapNotNull { n -> runCatching { asset(n + "_a") }.getOrNull()?.let { n to it } }.toMap())
         }

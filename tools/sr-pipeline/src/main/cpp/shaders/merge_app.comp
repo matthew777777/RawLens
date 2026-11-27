@@ -45,6 +45,10 @@ layout(set = 0, binding = 4)  buffer Num { float num_[]; };
 layout(set = 0, binding = 5)  buffer Den { float den_[]; };
 #endif
 
+// Rexturation sums (rexture_fit.comp; pad[5] = 1, 1x only): bs c0 cE cS cSE cSW per pixel.
+layout(set = 0, binding = 7) buffer FitAcc { float fitAcc_[]; };
+layout(set = 0, binding = 8) readonly buffer FitW { float fitW_[]; };
+layout(set = 0, binding = 9) readonly buffer FitBg { float fitBg_[]; };
 vec4 flowWeights(float t) {
   float u = 1.0-t;
   return vec4(u*u*u, 4.0-6.0*t*t+3.0*t*t*t, 1.0+3.0*t+3.0*t*t-3.0*t*t*t, t*t*t) / 6.0;
@@ -219,6 +223,30 @@ void splat(uvec2 hr) {
   } else if (p.beta > 0.0) {
     accG = 3.14159265359*sqrt(max(det,0.0))*local_r*p.beta;
     valG = accG * interpolateGreen(vec2(mov_x, mov_y));
+  }
+  if (p.pad[5] != 0u) {
+    // The frame's green samples whose bilinear footprint covers this pixel (|d| < 1), weight
+    // (1-|dx|)(1-|dy|), centred on the base green; w = robustness x the frame's fit motion weight.
+    float base = fitBg_[id * 2u];
+    vec4 s4 = vec4(0.0); vec2 s2 = vec2(0.0);
+    int j0 = int(floor(mov_j)), i0 = int(floor(mov_i));
+    for (int di = 0; di <= 1; ++di) for (int dj = 0; dj <= 1; ++dj) {
+      int j = j0 + dj, i = i0 + di;
+      if (j < 0 || i < 0 || j >= int(lrW) || i >= int(lrH) || ((j + i) & 1) == 0) continue;
+      vec2 d = vec2(float(j) - mov_j, float(i) - mov_i);
+      if (abs(d.x) >= 1.0 || abs(d.y) >= 1.0) continue;
+      float y = texelFetch(comp_, ivec2(j, i), 0).x;
+      if (y >= 0.95) continue;
+      float ax = abs(d.x), ay = abs(d.y), bw = (1.0 - ax) * (1.0 - ay);
+      s4 += bw * vec4(y - base, bw, d.x > 0.0 ? ax * (1.0 - ay) : 0.0, d.y > 0.0 ? (1.0 - ax) * ay : 0.0);
+      if (d.y > 0.0) s2 += bw * ax * ay * vec2(d.x > 0.0 ? 1.0 : 0.0, d.x < 0.0 ? 1.0 : 0.0);
+    }
+    if (s4.y > 0.0) {
+      float wf = local_r * fitW_[(hr.y / 2u) * gw + min(hr.x / 2u, gw - 1u)];
+      fitAcc_[id * 6u] += wf * s4.x; fitAcc_[id * 6u + 1u] += wf * s4.y;
+      fitAcc_[id * 6u + 2u] += wf * s4.z; fitAcc_[id * 6u + 3u] += wf * s4.w;
+      fitAcc_[id * 6u + 4u] += wf * s2.x; fitAcc_[id * 6u + 5u] += wf * s2.y;
+    }
   }
 #ifdef SRP_HALF_ACC
   accStore(id, vec3(valR, valG, valB), vec3(accR, accG, accB), p.mode == 1u);

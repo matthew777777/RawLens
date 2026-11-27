@@ -146,6 +146,11 @@ internal class MobileMerge(
     private var denRes = if (packedAcc) 0L else host(total)
     private val evening = config.noiseEvening && spirvs.noiseEven != null
     private val evenAcc = if (evening) res(4 * n) else 0L
+    /** Rexturation (rawr detail fit, rexture_fit.comp): 1x only; 32 B/px + 1 B/px while on. */
+    private val rexture = VulkanPipeline.rexture && scale == 1f && mobile.has("rexture_fit")
+    private val fitBg = if (rexture) res(2 * px) else res(2)
+    private val fitAcc = if (rexture) res(6 * px) else res(6)
+    private val fitW = if (rexture) res(n) else res(1)
     private val lutN = config.sigmaSqCurve.size
     private val lutRes = upload(config.sigmaSqCurve + config.dSqCurve)
     private val abRes = upload(config.kernelAlpha + config.kernelBeta)
@@ -280,21 +285,35 @@ internal class MobileMerge(
         window(work, rImg, 1, 2, 5, 2, cap = if (config.ghostGrow) ghost else 0L, gain = blur)
     }
 
+    /** rexture_fit.comp op [mode]; [tex] is the mode's sampled input, [rgb] the merged image (modes 1, 2). */
+    private fun fit(mode: Int, tex: Long, gridW: Int, gridH: Int, rgb: Long = fitBg, rgbSize: Long = 2 * px) =
+        run2d("rexture_fit", longArrayOf(tex, fieldImg, fitBg, fitW, fitAcc, rgb),
+            longArrayOf(SAMPLED, SAMPLED, 2 * px, n, 6 * px, rgbSize),
+            push(0 to w, 1 to h, 5 to tile, 7 to config.kernelAlpha[1], 8 to config.kernelBeta[1], 9 to wb[0],
+                10 to mode, 11 to wb[1], 12 to ftx, 13 to fty), gridW, gridH)
+
     private fun merge(index: Int) {
         val raw = rawImg[index and 1]
         run2d("kern_pre", longArrayOf(raw, kernGrey, abRes), longArrayOf(SAMPLED, STORAGE, 8), push(0 to w, 1 to h), gw, gh)
         run2d("kern_cov", longArrayOf(kernGrey, covImg, kpRes), longArrayOf(SAMPLED, STORAGE, 11), push(0 to gw, 1 to gh), gw, gh)
         run2d("colour_diff", longArrayOf(raw, cdImg, greenImg), longArrayOf(SAMPLED, STORAGE, STORAGE), push(0 to w, 1 to h, 7 to wb[0], 8 to wb[1]), w, h)
         greenFit?.let { timed("gpu.greenFit") { it.recordImages(mobile["green_gather"], cdImg, fieldImg, rImg) } }
+        if (rexture) {
+            if (index == 0) fit(0, greenImg, w, h)          // base green + SD, zero the sums
+            else fit(3, cdImg, gw, gh)                       // this companion's motion weight
+        }
         val greenW = greenWeights[index]
         // A unit-weight reference keeps its own narrow green gather; the first frame initialises the accumulators.
         val ref = index == 0 && greenW == 1f
         run2d(if (ref) "merge_app_ref" else "merge_app",
-            if (packedAcc) { if (ref) longArrayOf(cdImg, cdImg, covImg, rImg, accRes, accRes, greenImg) else longArrayOf(cdImg, fieldImg, covImg, rImg, accRes, accRes, greenImg) }
-            else if (ref) longArrayOf(cdImg, cdImg, covImg, rImg, numRes, denRes, greenImg) else longArrayOf(cdImg, fieldImg, covImg, rImg, numRes, denRes, greenImg),
-            longArrayOf(SAMPLED, SAMPLED, SAMPLED, SAMPLED, total, total, SAMPLED),
+            (if (packedAcc) { if (ref) longArrayOf(cdImg, cdImg, covImg, rImg, accRes, accRes, greenImg) else longArrayOf(cdImg, fieldImg, covImg, rImg, accRes, accRes, greenImg) }
+            else if (ref) longArrayOf(cdImg, cdImg, covImg, rImg, numRes, denRes, greenImg) else longArrayOf(cdImg, fieldImg, covImg, rImg, numRes, denRes, greenImg))
+            .let { if (ref) it else it + longArrayOf(fitAcc, fitW, fitBg) },
+            longArrayOf(SAMPLED, SAMPLED, SAMPLED, SAMPLED, total, total, SAMPLED)
+                .let { if (ref) it else it + longArrayOf(if (rexture) 6 * px else 6, if (rexture) n else 1, if (rexture) 2 * px else 2) },
             push(0 to w, 1 to h, 5 to tile, 6 to scale, 7 to config.chromaScale, 8 to greenW, 10 to (if (index == 0) 1 else 0),
-                12 to ftx, 13 to outW, 14 to outH, 15 to (if (VulkanPipeline.greenKernel) 1 else 0)), outW, outH)
+                12 to ftx, 13 to outW, 14 to outH, 15 to (if (VulkanPipeline.greenKernel) 1 else 0),
+                16 to (if (rexture && index > 0) 1 else 0)), outW, outH)
         if (evening) {
             run2d("noise_acc_img", longArrayOf(rImg, evenAcc), longArrayOf(SAMPLED, 4 * n),
                 push(0 to gw, 1 to gh, 8 to greenW, 10 to (if (index == 0) 1 else 0)), gw, gh)
@@ -447,7 +466,7 @@ internal class MobileMerge(
     private fun finish(pedestal: Float, output: () -> ByteBuffer): ByteBuffer {
         if (packedAcc) {
             // Free the frame loop's images/buffers (accumulator + evening sums stay), then unpack.
-            releaseAllBut(accRes, evenAcc)
+            releaseAllBut(accRes, evenAcc, fitBg, fitAcc, fitW, cdImg, fieldImg)
             numRes = host(total)
             begin(0)
             run("mfsr_divide", mobile.acc("mfsr_divide")!!, longArrayOf(accRes, numRes), longArrayOf(total, total), push(2 to total.toInt()), total)
@@ -470,6 +489,10 @@ internal class MobileMerge(
         }
         greenFit?.let { timed("greenSolve") { it.solveResident(img, if (img == numRes) denRes else numRes,
             config.kernelAlpha[1], config.kernelBeta[1], pedestal, wb) } }
+        if (rexture && frames > 1) {
+            fit(1, cdImg, w, h, img, total)   // the step's change into fitBg.x
+            fit(2, cdImg, w, h, img, total)   // added as grey
+        }
         submit()
         timed("cpu.solveWait") { waitFor(0) }
         begin(1)
