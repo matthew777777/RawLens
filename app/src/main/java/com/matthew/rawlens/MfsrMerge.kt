@@ -627,7 +627,7 @@ internal object MfsrMerge {
         val outH = h * scale
         // MFSR Lab (Settings -> Merge): code defaults + the user's overrides.
         val tuning = MfsrTuning.resolve(context)
-        if (!fitsMemory(context, w, h, scale)) return null
+        if (!fitsMemory(context, w, h, scale, settings.rexturation)) return null
         try {
             SrpBridge.loadLibrary()
         } catch (e: UnsatisfiedLinkError) {
@@ -772,6 +772,7 @@ internal object MfsrMerge {
             // Output in native memory (see VulkanPipeline.run): released by
             // MfsrResult.release(), or below if the engine fails. Created by the engine only after
             // the merge has freed its working set, so it does not add to the peak.
+            System.setProperty("srpipeline.rexture", if (settings.rexturation && scale == 1) "1" else "0")
             val rgb = VulkanPipeline.run(
                 { first },
                 decoders.drop(1).map { decode ->
@@ -879,12 +880,14 @@ internal object MfsrMerge {
      * Checked against measured headroom before any work, so an oversized
      * merge fails cleanly (caller's MFSR ERROR path) instead.
      */
-    private fun fitsMemory(context: Context, w: Int, h: Int, scale: Int = 1): Boolean {
+    private fun fitsMemory(context: Context, w: Int, h: Int, scale: Int = 1, rexturation: Boolean = false): Boolean {
         val px = w.toDouble() * h
         // Two peaks (packed fp16 accumulators): the frame loop (working set + 12 B per output px)
         // and the finish (loop freed; fp32 num + den = 24 B per output px + evening sums 4 B/px).
         val s2 = (scale * scale).toDouble()
-        val native = px * maxOf(NATIVE_BYTES_PER_PX + ACC_BYTES_PER_PX * (s2 - 1), FINISH_BYTES_PER_PX * s2 + 4.0) *
+        // Rexturation at 1x keeps 33 B/px of sums through both peaks.
+        val rex = if (rexturation && scale == 1) 33.0 else 0.0
+        val native = px * (maxOf(NATIVE_BYTES_PER_PX + ACC_BYTES_PER_PX * (s2 - 1), FINISH_BYTES_PER_PX * s2 + 4.0) + rex) *
             MergeMemoryBudget.ESTIMATE_MARGIN
         val java = px * JAVA_BYTES_PER_PX * MergeMemoryBudget.ESTIMATE_MARGIN
         val systemBudget = MergeMemoryBudget.mergeRunHeadroomBytes(context)

@@ -44,6 +44,8 @@ data class MfsrSettings(
      */
     val zipperFix: Boolean = true,
     val greenFit: Boolean = true,
+    /** Rexturation (rawr detail fit) at 1x; on by default like rawr. */
+    val rexturation: Boolean = true,
     val rtSharpen: Boolean = false,
     /**
      * Two-band reconstruction (sr-pipeline TwoBandReconstruction on Vulkan):
@@ -123,6 +125,7 @@ data class MfsrSettings(
         "mfsr_learned_noise" to learnedNoise,
         "mfsr_zipper_fix" to zipperFix,
         "mfsr_green_fit" to greenFit,
+        "mfsr_rexturation" to rexturation,
         KEY_RT_SHARPEN to rtSharpen,
         KEY_EXPERIMENTAL_TWO_BAND to twoBand,
         "mfsr_engine" to engine.name,
@@ -166,6 +169,7 @@ data class MfsrSettings(
             learnedNoise = values["mfsr_learned_noise"] as? Boolean ?: true,
             zipperFix = values["mfsr_zipper_fix"] as? Boolean ?: true,
             greenFit = values["mfsr_green_fit"] as? Boolean ?: true,
+            rexturation = values["mfsr_rexturation"] as? Boolean ?: true,
             rtSharpen = values[KEY_RT_SHARPEN] as? Boolean ?: false,
             twoBand = values[KEY_EXPERIMENTAL_TWO_BAND] as? Boolean ?: false,
             engine = MfsrEngine.entries.firstOrNull { it.name == values["mfsr_engine"] } ?: MfsrEngine.MFSR,

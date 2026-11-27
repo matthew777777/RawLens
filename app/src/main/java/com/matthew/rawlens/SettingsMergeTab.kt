@@ -51,6 +51,17 @@ internal fun MainActivity.showMergeSettings(p: SettingsPage) {
                 }
             }
         })
+        content.addView(settingsCheck("Rexturation detail at 1×", mfsrSettings.rexturation).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.rexturation) {
+                    if (applyMfsrSettings(mfsrSettings.copy(rexturation = checked))) {
+                        setStatus(if (checked) "MFSR REXTURATION • ON" else "MFSR REXTURATION • OFF")
+                    } else {
+                        isChecked = mfsrSettings.rexturation
+                    }
+                }
+            }
+        })
         content.addView(settingsCheck("Green fit at 1×", mfsrSettings.greenFit).apply {
             setOnCheckedChangeListener { _, checked ->
                 if (checked != mfsrSettings.greenFit) {
