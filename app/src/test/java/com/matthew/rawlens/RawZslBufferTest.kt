@@ -284,6 +284,30 @@ class RawZslBufferTest {
         assertEquals(13, ZslPolicy.latencyExtraFrames(200, 60))
     }
 
+    @Test fun `realtime full ring stays eligible when exposure plus skew passes the cutoff`() {
+        // Moto front, low light: 60 ms exposure + 30 ms skew at 16.5 fps. The newest frame is
+        // in the ring (so it was delivered) but ts + exposure + skew lies after "now".
+        val buffer = RawZslBuffer(16)
+        val frameNs = 60_500_000L
+        val newest = 10_000_000_000L
+        repeat(16) { i ->
+            val item = frame(0L)
+            buffer.addSnapshot(item.image, item.result, newest - (15 - i) * frameNs, 60_000_000L, 30_000_000L, 0f)
+        }
+        val cutoff = newest + 40_000_000L
+        assertEquals(16, buffer.takeBest(cutoff, realtimeTimestamps = true, count = 16).size)
+    }
+
+    @Test fun `frame whose exposure starts after the cutoff stays ineligible`() {
+        val buffer = RawZslBuffer(2)
+        val before = frame(0L)
+        val after = frame(0L)
+        buffer.addSnapshot(before.image, before.result, 1_000L, 0L, 0L, 0f)
+        buffer.addSnapshot(after.image, after.result, 3_000L, 0L, 0L, 0f)
+        assertTrue(buffer.takeBest(2_000L, realtimeTimestamps = true, count = 2).isEmpty())
+        assertEquals(1, buffer.takeUpTo(2_000L, realtimeTimestamps = true, maxCount = 2).size)
+    }
+
     private fun frame(timestamp: Long): TestFrame {
         val image = Mockito.mock(Image::class.java)
         val result = Mockito.mock(TotalCaptureResult::class.java)

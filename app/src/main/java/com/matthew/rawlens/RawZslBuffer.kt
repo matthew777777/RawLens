@@ -145,9 +145,15 @@ internal class RawZslBuffer(private val capacity: Int) {
         cutoffNanos: Long,
         realtimeTimestamps: Boolean
     ): List<BufferedRawFrame> {
+        // Eligibility keys on the exposure START (SENSOR_TIMESTAMP), not the estimated
+        // completion. ts + exposure + skew over-estimates when a frame is ready: frames already
+        // in the ring carried negative ages against a "now" cutoff (newest back-camera frames
+        // logged age=0-4ms). At 60 ms exposure (Moto front, low light) the newest frame was
+        // ALWAYS negative, so a 16-frame ring never held 16 eligible frames and every LK-R /
+        // HDR+ take ended in ZSL NOT READY. A frame whose exposure began after the cutoff is
+        // still excluded, so press-time cutoffs keep rejecting post-press frames.
         return frames.filter { frame ->
-            val completedAt = completedAt(frame, realtimeTimestamps)
-            val ageNanos = cutoffNanos - completedAt
+            val ageNanos = cutoffNanos - frame.timestampNanos
             ageNanos in 0L..MAX_FRAME_AGE_NANOS
         }
     }
